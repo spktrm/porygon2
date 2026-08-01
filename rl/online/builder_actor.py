@@ -1,11 +1,11 @@
 import jax
 import numpy as np
 
-from rl.actor.agent import Agent
+from rl.online.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition
 from rl.environment.utils import split_rng
-from rl.learner.learner import Learner
+from rl.online.learner import Learner
 from rl.model.utils import Params, ParamsContainer
 
 

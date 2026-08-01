@@ -15,7 +15,7 @@ from typing import Literal
 
 import jax
 
-from rl.learner.learner import Porygon2PlayerTrainState
+from rl.online.artifact import Porygon2PlayerTrainState
 
 AddReason = Literal["initial", "dominant", "overdue"]
 

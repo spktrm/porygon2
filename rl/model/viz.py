@@ -16,7 +16,7 @@ import plotly.express as px
 
 from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.environment.utils import get_ex_player_step
-from rl.learner import checkpoint
+from rl import checkpoint
 from rl.model.config import get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model

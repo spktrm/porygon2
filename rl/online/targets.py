@@ -9,7 +9,7 @@ from rl.environment.interfaces import (
     PlayerTargets,
     Trajectory,
 )
-from rl.learner.config import Porygon2LearnerConfig
+from rl.online.config import Porygon2LearnerConfig
 
 
 def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax.Array:

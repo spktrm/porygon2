@@ -39,7 +39,7 @@ from flax.training import train_state
 
 import wandb
 from rl.environment.utils import get_ex_trajectory
-from rl.learner import checkpoint as checkpoint_lib
+from rl import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
 from rl.model.utils import Params, get_num_params
 from rl.offline.config import Porygon2OfflineConfig, get_offline_config
@@ -566,10 +566,17 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
             "--ensemble trains every member; drop --ensemble-index "
             "(use --ensemble-index alone to retrain one member)"
         )
-    if config.train_ensemble and config.resume_from is not None:
+    if (
+        config.train_ensemble
+        and config.resume_from is not None
+        and "{k}" not in config.resume_from
+    ):
         parser.error(
-            "--resume-from is per-member; retrain a single member "
-            "with --ensemble-index instead"
+            "--ensemble with --resume-from needs a per-member path template "
+            "containing '{k}', e.g. "
+            "'ckpts/offline/gen9randombattle-ens{k}/ckpt_best' — each member "
+            "resumes from its own artifact so the ensemble splits stay "
+            "independent"
         )
     return config, args.seed, args.debug
 
@@ -675,6 +682,21 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
         member_keys
     )
 
+    if config.resume_from is not None:
+        # Per-member resume via the '{k}' template: each member overlays
+        # its own artifact onto its fresh init slice (new modules keep
+        # fresh weights, matching the single-member path), then the trees
+        # are re-stacked. Optimiser state and the cosine LR schedule
+        # restart, as they do for single-member resumes.
+        member_params = []
+        for k in range(num_members):
+            path = config.resume_from.format(k=k)
+            restored = checkpoint_lib.load_component(path, "player", "params")
+            fresh_k = jax.tree.map(lambda x: x[k], params)
+            member_params.append(_overlay_params(fresh_k, restored))
+            print(f"member {k}: resumed params from {path}")
+        params = jax.tree.map(lambda *xs: jnp.stack(xs), *member_params)
+
     optimizer = optax.chain(
         optax.clip_by_global_norm(config.clip_gradient),
         optax.adamw(
@@ -779,6 +801,23 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
     )
 
     best_eval_loss = np.full(num_members, np.inf)
+    if config.resume_from is not None:
+        # Baseline the resumed members on this run's holdout BEFORE any
+        # in-run save: with best_eval_loss at inf, the first eval would
+        # overwrite each member's ckpt_best unconditionally — even with a
+        # worse model than the one being resumed.
+        eval_logs, member_losses = evaluate_ensemble(
+            eval_step,
+            params,
+            itertools.islice(dataset.eval_batches(), config.eval_batches),
+        )
+        if eval_logs:
+            best_eval_loss = np.asarray(member_losses, dtype=np.float64)
+            print(
+                "Resumed-member baseline eval losses: "
+                + " ".join(f"{v:.4f}" for v in best_eval_loss)
+                + " — ckpt_best only overwritten below these."
+            )
     batches = prefetch(dataset.train_batches_ensemble(seed=seed))
     print(
         f"Filling {num_members} member shuffle buffers "
@@ -923,6 +962,20 @@ def main():
     eval_step = make_eval_step(config)
 
     best_eval_loss = float("inf")
+    if config.resume_from is not None:
+        # Same protection as the ensemble path: baseline the resumed
+        # params so ckpt_best is only overwritten by a genuine improvement.
+        eval_metrics = evaluate(
+            eval_step,
+            state,
+            itertools.islice(dataset.eval_batches(), config.eval_batches),
+        )
+        if eval_metrics:
+            best_eval_loss = float(eval_metrics["eval_loss"])
+            print(
+                f"Resumed-params baseline eval loss {best_eval_loss:.4f} — "
+                "ckpt_best only overwritten below this."
+            )
     batches = prefetch(dataset.train_batches(seed=seed))
     print(
         f"Filling shuffle buffer ({config.shuffle_buffer_size} trajectories) "

@@ -13,7 +13,7 @@ from rl.environment.data import (
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import ActionEnum
-from rl.learner.config import Porygon2LearnerConfig
+from rl.online.config import Porygon2LearnerConfig
 
 T = TypeVar("T")
 

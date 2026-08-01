@@ -1,33 +1,13 @@
-import functools
-import os
-from collections.abc import Callable, Mapping
-from pprint import pprint
-from typing import Any, Literal
+from collections.abc import Callable
+from typing import Literal
 
 import chex
-import flax.linen as nn
-import jax
 import jax.numpy as jnp
-import numpy as np
-import optax
-import wandb.wandb_run
-from flax import core, struct
-from flax.training import train_state
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
-from rl.environment.interfaces import (
-    BuilderActorInput,
-    BuilderActorOutput,
-    PlayerActorInput,
-    PlayerActorOutput,
-)
-from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.learner import checkpoint
-from rl.learner.league import MAIN_KEY, League
-from rl.model.heads import HeadParams
-from rl.model.utils import Params, ParamsContainer
 
 PolicyObjectiveT = Literal["spo", "ppo"]
+
 
 
 @chex.dataclass(frozen=True)
@@ -288,8 +268,31 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     )
     # Ensemble-disagreement gate: Φ = mean * exp(-scale * std). Where the
     # members disagree (off the human data distribution) shaping goes
-    # quiet. 0 disables; irrelevant for single-member critics.
+    # quiet. 0 disables; irrelevant for single-member critics. With
+    # potential_gate_scale_learned this is only the INITIAL scale.
     potential_uncertainty_scale: float = 5.0
+    # Learn the gate scale online from the run's own outcomes: every
+    # trajectory yields (ensemble mean, ensemble std, final result)
+    # triplets on exactly the self-play state distribution the gate must
+    # serve, so the scale is a 1-parameter regression — periodically solve
+    # c* = argmin_c E[(mean·exp(-c·std) - outcome)^2] over a reservoir of
+    # triplets and EMA the live scale toward it. Replaces the hand-picked
+    # 5.0, which offline calibration suggested was over-shrinking
+    # (member std ~0.085 -> gate ~0.65 at ~78% gated sign accuracy).
+    # Judge via potential_gate_scale (the live value) vs
+    # potential_gate_scale_solved (each fit's argmin).
+    potential_gate_scale_learned: bool = True
+    potential_gate_scale_min: float = 0.0
+    potential_gate_scale_max: float = 20.0
+    # Solve cadence (learner steps), reservoir capacity (triplets), states
+    # sampled per trajectory, minimum fill before the first solve, and the
+    # per-solve EMA step toward c*. The reservoir is a ring buffer, so the
+    # fit always reflects recent policy/state distribution.
+    potential_gate_scale_interval: int = 1000
+    potential_gate_scale_buffer: int = 32768
+    potential_gate_scale_samples: int = 8
+    potential_gate_scale_min_samples: int = 4096
+    potential_gate_scale_ema: float = 0.2
     # What Φ reads off the critic's 13-bin margin distribution (training
     # stays distributional either way): "win" = P(win) − P(loss) — pure
     # outcome belief, flat across decided positions, never prefers a wider
@@ -327,412 +330,3 @@ def get_learner_config():
     return Porygon2LearnerConfig()
 
 
-class Porygon2PlayerTrainState(train_state.TrainState):
-    apply_fn: Callable[
-        [Params, PlayerActorInput, PlayerActorOutput, HeadParams], PlayerActorOutput
-    ] = struct.field(pytree_node=False)
-    init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
-
-    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-
-    # Force these to be dynamic JAX arrays (PyTree nodes) instead of static Python scalars
-    step_count: jax.Array = struct.field(
-        default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
-    )
-    frame_count: jax.Array = struct.field(
-        default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
-    )
-
-    ema_adv_mean: jax.Array = struct.field(
-        default_factory=lambda: jnp.array(0.0, dtype=jnp.float32), pytree_node=True
-    )
-    ema_adv_std: jax.Array = struct.field(
-        default_factory=lambda: jnp.array(1.0, dtype=jnp.float32), pytree_node=True
-    )
-
-
-class Porygon2BuilderTrainState(train_state.TrainState):
-    apply_fn: Callable[
-        [Params, BuilderActorInput, BuilderActorOutput, HeadParams], BuilderActorOutput
-    ] = struct.field(pytree_node=False)
-    init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
-
-    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-
-    step_count: int = 0
-    frame_count: int = 0
-
-
-def create_train_state(
-    player_network: nn.Module,
-    builder_network: nn.Module,
-    rng: jax.Array,
-    config: Porygon2LearnerConfig,
-):
-    """Creates an initial `TrainState`."""
-    ex_player_actor_inp, ex_player_actor_out = jax.tree.map(
-        lambda x: jnp.asarray(x[:, 0]), get_ex_player_step()
-    )
-    ex_builder_actor_inp, ex_builder_actor_out = jax.tree.map(
-        lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
-    )
-
-    player_params_init_fn = functools.partial(
-        player_network.init,
-        head_params=HeadParams(),
-        actor_input=ex_player_actor_inp,
-        actor_output=ex_player_actor_out,
-    )
-    initial_player_params = player_params_init_fn(rng)
-    player_optimizer = optax.chain(
-        optax.clip_by_global_norm(config.player_clip_gradient),
-        optax.adamw(
-            learning_rate=config.player_learning_rate,
-            b1=config.adam.b1,
-            b2=config.adam.b2,
-            eps=config.adam.eps,
-            weight_decay=config.adam.weight_decay,
-        ),
-    )
-    if config.gradient_accumulation_steps > 1:
-        player_optimizer = optax.MultiSteps(
-            player_optimizer, config.gradient_accumulation_steps
-        )
-
-    player_train_state = Porygon2PlayerTrainState.create(
-        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
-        init_fn=player_params_init_fn,
-        params=initial_player_params,
-        # Deep-copied: params and target_params must not share buffers, or
-        # donating the train state to the jitted train step fails with a
-        # duplicate-donation error on the first step.
-        target_params=jax.tree.map(jnp.copy, initial_player_params),
-        tx=player_optimizer,
-    )
-
-    builder_params_init_fn = functools.partial(
-        builder_network.init,
-        actor_input=ex_builder_actor_inp,
-        actor_output=ex_builder_actor_out,
-        head_params=HeadParams(),
-    )
-    builder_optimizer = optax.chain(
-        optax.clip_by_global_norm(config.builder_clip_gradient),
-        optax.adamw(
-            learning_rate=config.builder_learning_rate,
-            b1=config.adam.b1,
-            b2=config.adam.b2,
-            eps=config.adam.eps,
-            weight_decay=config.adam.weight_decay,
-        ),
-    )
-    if config.gradient_accumulation_steps > 1:
-        builder_optimizer = optax.MultiSteps(
-            builder_optimizer, config.gradient_accumulation_steps
-        )
-    inital_builder_params = builder_params_init_fn(rng)
-    builder_train_state = Porygon2BuilderTrainState.create(
-        apply_fn=jax.vmap(
-            builder_network.apply,
-            in_axes=(None, 1, 1, None),
-            out_axes=1,
-        ),
-        init_fn=builder_params_init_fn,
-        params=inital_builder_params,
-        # Deep-copied for the same donation-aliasing reason as the player state.
-        target_params=jax.tree.map(jnp.copy, inital_builder_params),
-        tx=builder_optimizer,
-    )
-
-    return player_train_state, builder_train_state
-
-
-def save_train_state(
-    wandb_run: wandb.wandb_run.Run,
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-    league: League,
-):
-    save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league
-    )
-    if learner_config.log_artifacts_online and (
-        player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
-    ):
-        wandb_run.log_artifact(
-            artifact_or_path=save_path,
-            name=f"latest-gen{learner_config.generation}",
-            type="model",
-        )
-
-
-def save_train_state_locally(
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-    league: League,
-):
-    save_path = os.path.abspath(
-        f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
-    )
-    return save_state(save_path, learner_config, player_state, builder_state, league)
-
-
-def save_state(
-    save_path: str,
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-    league: League,
-):
-    os.makedirs(save_path, exist_ok=True)
-    player_components = dict(
-        params=player_state.params,
-        target_params=player_state.target_params,
-        opt_state=player_state.opt_state,
-        scalars=dict(
-            step_count=player_state.step_count,
-            frame_count=player_state.frame_count,
-            ema_adv_mean=player_state.ema_adv_mean,
-            ema_adv_std=player_state.ema_adv_std,
-        ),
-    )
-    builder_components = dict(
-        params=builder_state.params,
-        target_params=builder_state.target_params,
-        opt_state=builder_state.opt_state,
-        scalars=dict(
-            step_count=builder_state.step_count,
-            frame_count=builder_state.frame_count,
-        ),
-    )
-    checkpoint.save_train_state(
-        save_path,
-        learner_config,
-        player_components,
-        builder_components,
-        league.serialize(),
-    )
-    return save_path
-
-
-def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
-    """Finds the most recent checkpoint folder."""
-    save_path = f"./ckpts/gen{learner_config.generation}/"
-    os.makedirs(save_path, exist_ok=True)
-    return checkpoint.most_recent_ckpt_dir(save_path)
-
-
-def _init_league(
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-) -> League:
-    """Creates a fresh League instance."""
-    return League(
-        main_player=ParamsContainer(
-            player_frame_count=np.array(player_state.frame_count).item(),
-            builder_frame_count=np.array(builder_state.frame_count).item(),
-            step_count=MAIN_KEY,
-            # Host copies, never the live state arrays: actors' device_put of
-            # an already-on-device tree is a no-op, so handing out live
-            # buffers has actors running inference on memory the donated
-            # train step deletes.
-            player_params=jax.device_get(player_state.target_params),
-            builder_params=jax.device_get(builder_state.target_params),
-        ),
-        players=[],
-        league_size=learner_config.league_size,
-        cache_size=learner_config.league_cache_size,
-        ucb_c=learner_config.league_ucb_c,
-    )
-
-
-def load_from_scratch(
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
-    """
-    No-op on state; simply initializes a fresh league.
-    """
-    print("Starting training from scratch.")
-    league = _init_league(learner_config, player_state, builder_state)
-    return player_state, builder_state, league
-
-
-def load_from_checkpoint(
-    ckpt_path: str,
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
-    """
-    Full restoration: loads params, opt_state, step counts, and league.
-    """
-    print(f"Loading checkpoint from {ckpt_path}")
-    ckpt_data = checkpoint.load_full(ckpt_path)
-
-    print("Checkpoint data:")
-    ckpt_player_state = ckpt_data["player_state"]
-    ckpt_builder_state = ckpt_data["builder_state"]
-    ckpt_league_bytes = ckpt_data["league"]
-    player_scalars = ckpt_player_state["scalars"]
-    builder_scalars = ckpt_builder_state["scalars"]
-
-    # Debug prints (scalars only — heavy arrays excluded)
-    pprint(player_scalars)
-    pprint(builder_scalars)
-
-    # Restore League
-    if ckpt_league_bytes is not None:
-        league = League.deserialize(ckpt_league_bytes)
-    else:
-        # Fallback if league is missing in ckpt
-        league = _init_league(learner_config, player_state, builder_state)
-
-    # Fully replace player state
-    player_state = player_state.replace(
-        params=ckpt_player_state["params"],
-        target_params=ckpt_player_state["target_params"],
-        opt_state=ckpt_player_state["opt_state"],
-        step_count=player_scalars["step_count"],
-        frame_count=player_scalars["frame_count"],
-        ema_adv_mean=player_scalars["ema_adv_mean"],
-        ema_adv_std=player_scalars["ema_adv_std"],
-    )
-
-    # Fully replace builder state
-    builder_state = builder_state.replace(
-        params=ckpt_builder_state["params"],
-        target_params=ckpt_builder_state["target_params"],
-        opt_state=ckpt_builder_state["opt_state"],
-        step_count=builder_scalars["step_count"],
-        frame_count=builder_scalars["frame_count"],
-    )
-
-    # The league file holds only refs + stats; install the live main player
-    # from the restored state so opponents have someone to be ranked against.
-    league.update_main_player(
-        ParamsContainer(
-            step_count=MAIN_KEY,
-            player_frame_count=int(player_scalars["frame_count"]),
-            builder_frame_count=int(builder_scalars["frame_count"]),
-            player_params=jax.device_get(player_state.target_params),
-            builder_params=jax.device_get(builder_state.target_params),
-        )
-    )
-
-    return player_state, builder_state, league
-
-
-def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
-    """Overlay checkpoint params onto a freshly initialized tree.
-
-    Keys present in both trees with matching leaf shapes take the loaded
-    (trained) value; keys only in the fresh tree (newly added modules) keep
-    their random/zero init; keys only in the checkpoint (removed modules)
-    are dropped; shape mismatches fall back to fresh init. Returns the
-    merged tree plus the paths that kept their fresh initialization, so a
-    resume across architecture changes is auditable.
-    """
-    kept_fresh: list[str] = []
-
-    def _merge(fresh_node, loaded_node, path: str):
-        if isinstance(fresh_node, Mapping):
-            out = {}
-            for key, fresh_child in fresh_node.items():
-                child_path = f"{path}/{key}"
-                if isinstance(loaded_node, Mapping) and key in loaded_node:
-                    out[key] = _merge(fresh_child, loaded_node[key], child_path)
-                else:
-                    out[key] = fresh_child
-                    kept_fresh.append(child_path)
-            return out
-        fresh_shape = getattr(fresh_node, "shape", None)
-        loaded_shape = getattr(loaded_node, "shape", None)
-        if fresh_shape is not None and fresh_shape == loaded_shape:
-            return loaded_node
-        kept_fresh.append(f"{path} (shape {loaded_shape} -> {fresh_shape})")
-        return fresh_node
-
-    return _merge(fresh, loaded, ""), kept_fresh
-
-
-def load_from_params(
-    ckpt_path: str,
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
-    """
-    Params only: merges ckpt params into the freshly initialized trees, so
-    modules added since the checkpoint keep their fresh init and everything
-    else keeps its trained weights. Sets BOTH params and target_params to
-    the merged tree. Resets opt_state and counts (by keeping the input
-    state's version of those) and starts a fresh league.
-    """
-    print(f"Loading (merging) params only from {ckpt_path}")
-    loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
-    loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
-
-    player_params, player_kept_fresh = merge_params(
-        player_state.params, loaded_player_params
-    )
-    builder_params, builder_kept_fresh = merge_params(
-        builder_state.params, loaded_builder_params
-    )
-    for name, kept in (("player", player_kept_fresh), ("builder", builder_kept_fresh)):
-        if kept:
-            print(f"{name}: {len(kept)} param subtrees kept fresh init:")
-            for path in kept:
-                print(f"  {path}")
-
-    # target_params gets the same merged tree: leaving it at fresh init
-    # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
-    # Deep-copied so params/target_params share no buffers — required for
-    # donating the train state to the jitted train step.
-    player_state = player_state.replace(
-        params=player_params,
-        target_params=jax.tree.map(jnp.copy, player_params),
-    )
-    builder_state = builder_state.replace(
-        params=builder_params,
-        target_params=jax.tree.map(jnp.copy, builder_params),
-    )
-
-    # Initialize a fresh league since we are effectively starting a new run with existing weights
-    league = _init_league(learner_config, player_state, builder_state)
-
-    return player_state, builder_state, league
-
-
-def load_train_state(
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-    mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
-
-    latest_ckpt = _get_checkpoint_path(learner_config)
-
-    # 1. Force Scratch
-    if mode == "scratch":
-        return load_from_scratch(learner_config, player_state, builder_state)
-
-    # 2. No checkpoint found -> Fallback to Scratch
-    if not latest_ckpt:
-        print("No checkpoint found. Defaulting to scratch.")
-        return load_from_scratch(learner_config, player_state, builder_state)
-
-    # 3. Load Params Only (RL checkpoints across architecture changes)
-    if mode == "params":
-        return load_from_params(
-            latest_ckpt, learner_config, player_state, builder_state
-        )
-
-    # 4. Standard Checkpoint Load (Default)
-    return load_from_checkpoint(
-        latest_ckpt, learner_config, player_state, builder_state
-    )

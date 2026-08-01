@@ -15,18 +15,14 @@ import numpy as np
 import wandb.wandb_run
 
 import wandb
-from rl.actor.agent import Agent
-from rl.actor.builder_actor import BuilderActor
-from rl.actor.player_actor import PlayerActor
+from rl.online.agent import Agent
+from rl.online.builder_actor import BuilderActor
+from rl.online.player_actor import PlayerActor
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
-from rl.learner.config import (
-    Porygon2LearnerConfig,
-    create_train_state,
-    get_learner_config,
-    load_train_state,
-)
-from rl.learner.learner import CAT_VF_SUPPORT, Learner
+from rl.online.artifact import create_train_state, load_train_state
+from rl.online.config import Porygon2LearnerConfig, get_learner_config
+from rl.online.learner import CAT_VF_SUPPORT, Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
