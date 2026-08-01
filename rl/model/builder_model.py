@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from rl.actor.agent import Agent
+from rl.online.agent import Agent
 from rl.environment.data import (
     ITOS,
     NUM_ABILITIES,
@@ -36,8 +36,8 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
-from rl.learner import checkpoint
-from rl.learner.config import get_learner_config
+from rl import checkpoint
+from rl.online.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import (
     CategoricalValueLogitHead,

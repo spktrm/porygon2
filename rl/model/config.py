@@ -35,6 +35,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.entity_size = entity_size
     cfg.dtype = DEFAULT_DTYPE
     cfg.train = train
+    # 1 = singles (one flat categorical per request — the historical path,
+    # bit-identical). 2 = doubles: two head-level decision stages per turn,
+    # slot 2 conditioned on slot 1's choice via SlotConditioning, ONE trunk
+    # pass. Setting 2 additionally requires the service to send per-slot
+    # action masks in a single request and accept two actions back (the
+    # remaining doubles workstream) — the model side is complete.
+    cfg.num_decision_slots = 1
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
@@ -132,10 +139,15 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.round.use_bias = encoder_use_bias
     cfg.encoder.round.qk_layer_norm = encoder_qk_layer_norm
 
-    # Untied src/tgt pointer head over the action-slot embeddings: one
-    # residual block per role, then separate q/k projections. Asymmetric
-    # bilinear form — transposed and diagonal grid cells are independent.
+    # Per-modality untied src/tgt pointer heads over the action-slot
+    # embeddings: each modality owns num_blocks residual blocks per role
+    # plus its own q/k projections (asymmetric bilinear form — transposed
+    # and diagonal grid cells are independent). Depth restores the
+    # November finding that deep, modality-separated action decoders were
+    # necessary; per-modality params restore independent logit scales and
+    # gradient routing.
     cfg.pi_head = ConfigDict()
+    cfg.pi_head.num_blocks = 2
     cfg.pi_head.qk_logits = ConfigDict()
     cfg.pi_head.qk_logits.num_heads = 1
     cfg.pi_head.qk_logits.use_bias = True

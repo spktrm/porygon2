@@ -23,28 +23,28 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
-from rl.learner import checkpoint
-from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
-from rl.learner.config import (
+from rl import checkpoint
+from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
+from rl.online.artifact import (
     Porygon2BuilderTrainState,
-    Porygon2LearnerConfig,
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League, PlayerRef
-from rl.learner.loss import (
+from rl.online.config import Porygon2LearnerConfig
+from rl.online.league import MAIN_KEY, League, PlayerRef
+from rl.online.loss import (
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
 )
-from rl.learner.plasticity import (
+from rl.online.plasticity import (
     AddReason,
     PlasticityController,
     shrink_and_perturb_player_state,
 )
-from rl.learner.targets import compute_builder_targets, compute_player_targets
-from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
+from rl.online.targets import compute_builder_targets, compute_player_targets
+from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
 from rl.model.heads import HeadParams, calculate_hierarchical_prior
 from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
@@ -745,6 +745,19 @@ class Learner:
         # into the train-step logs by _handle_periodic_tasks.
         self._potential_stats_lock = threading.Lock()
         self._potential_stats: dict[str, tuple[float, int]] = {}
+        # Live uncertainty-gate scale, plus the (mean, std, outcome)
+        # reservoir it is periodically refit on (ring buffer, same lock).
+        # Reads/writes of the float are GIL-atomic; the arrays are only
+        # touched under the lock. Initialised from the (possibly restored)
+        # train state so resumes keep the learned value; the reservoir
+        # itself is not persisted and refills within ~500 trajectories.
+        self._gate_scale = float(jax.device_get(self.player_state.gate_scale))
+        _gate_cap = config.potential_gate_scale_buffer
+        self._gate_fit_mean = np.zeros(_gate_cap, np.float32)
+        self._gate_fit_std = np.zeros(_gate_cap, np.float32)
+        self._gate_fit_outcome = np.zeros(_gate_cap, np.float32)
+        self._gate_fit_cursor = 0
+        self._gate_fit_count = 0
         if config.offline_critic_ckpt_path:
             from rl.offline.artifact import (
                 has_announced_states,
@@ -858,8 +871,8 @@ class Learner:
         by that factor, learner step latency no longer includes the
         ensemble forward at all, and ensemble size stops affecting step
         time. The stored value is the fully gated potential
-        (mean · exp(−uncertainty_scale · std)), so nothing about the
-        shaping signal changes."""
+        (mean · exp(−scale · std)) at the LIVE gate scale — passed as a
+        traced argument so scale updates never recompile."""
         actor_input = PlayerActorInput(
             env=traj.player_transitions.env_output,
             packed_history=traj.player_packed_history,
@@ -868,7 +881,9 @@ class Learner:
         # (T, ...) / (H, ...) leaves -> a batch of one at axis 1, matching
         # the (T, B) convention make_potential_apply vmaps over.
         batched = jax.tree.map(lambda x: np.expand_dims(x, 1), actor_input)
-        result, aux = self._potential_apply(self.potential_params, batched)
+        result, aux = self._potential_apply(
+            self.potential_params, batched, np.float32(self._gate_scale)
+        )
         phi_ann = None
         if self.config.potential_dice_excised:
             phi, phi_ann = jax.device_get(result)
@@ -931,10 +946,47 @@ class Learner:
             )
             if outcome != 0.0:
                 stats["terminal_agreement"] = float((phi[t] > 0) == (outcome > 0))
+            if self.config.potential_gate_scale_learned:
+                # Gate-fit triplets: (ungated mean, member std, outcome)
+                # from evenly spaced pre-terminal states (the terminal
+                # state itself is trivially predictable and would bias
+                # the fitted scale down). Ties are valid targets.
+                pre_terminal = np.nonzero(valid[:t])[0]
+                if pre_terminal.size:
+                    picks = pre_terminal[
+                        np.unique(
+                            np.linspace(
+                                0,
+                                pre_terminal.size - 1,
+                                min(
+                                    self.config.potential_gate_scale_samples,
+                                    pre_terminal.size,
+                                ),
+                            ).astype(int)
+                        )
+                    ]
+                    self._push_gate_fit(
+                        aux["phi_raw"][picks], aux["ensemble_std"][picks], outcome
+                    )
         with self._potential_stats_lock:
             for key, value in stats.items():
                 total, count = self._potential_stats.get(key, (0.0, 0))
                 self._potential_stats[key] = (total + value, count + 1)
+
+    def _push_gate_fit(
+        self, means: np.ndarray, stds: np.ndarray, outcome: float
+    ) -> None:
+        """Appends gate-fit triplets to the ring buffer (thread-safe)."""
+        with self._potential_stats_lock:
+            cap = self._gate_fit_mean.shape[0]
+            n = len(means)
+            for m, s in zip(means, stds):
+                i = self._gate_fit_cursor
+                self._gate_fit_mean[i] = m
+                self._gate_fit_std[i] = s
+                self._gate_fit_outcome[i] = outcome
+                self._gate_fit_cursor = (i + 1) % cap
+            self._gate_fit_count = min(self._gate_fit_count + n, cap)
 
     def _pop_potential_logs(self) -> dict[str, float]:
         """Drains the insert-time Φ accumulator: means over every trajectory
@@ -943,6 +995,44 @@ class Learner:
             stats, self._potential_stats = self._potential_stats, {}
         return {
             f"potential_{key}": total / count for key, (total, count) in stats.items()
+        }
+
+    def _update_gate_scale(self) -> dict[str, float]:
+        """Refits the uncertainty-gate scale against realised outcomes.
+
+        One-parameter regression on the reservoir:
+        c* = argmin_c E[(mean · exp(-c·std) - outcome)^2], solved by grid
+        search (the objective is cheap and possibly multi-modal, so no
+        fancy optimiser), then EMA'd into the live scale so shaping drifts
+        rather than jumps — Φ is only approximately policy-invariant while
+        the potential moves. Runs in _handle_periodic_tasks, off the
+        critical path."""
+        cfg = self.config
+        with self._potential_stats_lock:
+            count = self._gate_fit_count
+            if count < cfg.potential_gate_scale_min_samples:
+                return {"potential_gate_scale": self._gate_scale}
+            m = self._gate_fit_mean[:count].copy()
+            s = self._gate_fit_std[:count].copy()
+            y = self._gate_fit_outcome[:count].copy()
+        grid = np.linspace(
+            cfg.potential_gate_scale_min, cfg.potential_gate_scale_max, 101
+        ).astype(np.float32)
+        pred = m[None, :] * np.exp(-grid[:, None] * s[None, :])
+        mse = np.square(pred - y[None, :]).mean(axis=1)
+        solved = float(grid[int(np.argmin(mse))])
+        alpha = cfg.potential_gate_scale_ema
+        self._gate_scale = (1.0 - alpha) * self._gate_scale + alpha * solved
+        # Mirror into the train state so checkpoints persist the learned
+        # scale (safe: this runs on the train-loop thread between steps).
+        self.player_state = self.player_state.replace(
+            gate_scale=jnp.asarray(self._gate_scale, dtype=jnp.float32)
+        )
+        return {
+            "potential_gate_scale": self._gate_scale,
+            "potential_gate_scale_solved": solved,
+            "potential_gate_fit_mse": float(mse.min()),
+            "potential_gate_fit_samples": float(count),
         }
 
     # Index order matches ModalityEnum (proto/service.proto).
@@ -1239,6 +1329,11 @@ class Learner:
 
         if self._potential_apply is not None:
             logs.update(self._pop_potential_logs())
+            if (
+                self.config.potential_gate_scale_learned
+                and step % self.config.potential_gate_scale_interval == 0
+            ):
+                logs.update(self._update_gate_scale())
 
         # Hand off to the log worker; values may still be device arrays and
         # are synced there, off the critical path.

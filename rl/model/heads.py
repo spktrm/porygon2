@@ -134,6 +134,53 @@ class PairPolicyHead(nn.Module):
         return flat_logits * modality_scale[FLAT_MODALITY_MASK]
 
 
+class PerModalityPolicyHead(nn.Module):
+    """Per-modality src x tgt pointer heads over the shared trunk output.
+
+    PairPolicyHead scored every modality through one set of role
+    projections, which (a) forces move/switch/wildcard preferences into a
+    common bilinear geometry and (b) mixes their gradients through shared
+    weights — the parametric entanglement the November per-modality heads
+    did not have. Its per-modality logit-scale probe confirmed distinct
+    temperatures emerge when allowed (wildcard > move > switch). Here each
+    modality owns the whole trunk-output → logit map: a stack of
+    pre-activation residual blocks per role plus its own pointer
+    projections, restoring November's head depth AND its gradient routing
+    (the policy gradient of a taken action only touches its own modality's
+    head, since other modalities' cells don't contribute to that action's
+    log-prob). Composition, sampling and the learner interface are
+    unchanged: the heads fill disjoint cells of one flat src x tgt grid,
+    still one categorical draw. An explicit modality scale is redundant
+    here — each head's pointer projections own their scale.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, action_embeddings: jax.Array) -> jax.Array:
+        num_slots = action_embeddings.shape[0]
+        flat_logits = jnp.zeros((num_slots * num_slots,), action_embeddings.dtype)
+        for modality in range(NUM_MODALITY_FEATURES):
+            src = action_embeddings
+            tgt = action_embeddings
+            for block in range(self.cfg.num_blocks):
+                src = src + MLP(
+                    **self.cfg.src_mlp.to_dict(), name=f"src_mlp_m{modality}_b{block}"
+                )(src)
+                tgt = tgt + MLP(
+                    **self.cfg.tgt_mlp.to_dict(), name=f"tgt_mlp_m{modality}_b{block}"
+                )(tgt)
+            logits = PointerLogits(
+                **self.cfg.qk_logits.to_dict(), name=f"qk_logits_m{modality}"
+            )(src, tgt)
+            flat_logits = jnp.where(
+                FLAT_MODALITY_MASK == modality,
+                logits.squeeze(-1).reshape(-1),
+                flat_logits,
+            )
+        return flat_logits
+
+
 class MacroHead(nn.Module):
     """Modality-level (macro) logits from per-modality pooled src slots.
 
@@ -176,6 +223,35 @@ class MacroHead(nn.Module):
         # Modalities with no live src pool an arbitrary mixture; callers
         # must mask them out via legal_log_policy(macro_logits, valid).
         return logits.squeeze(-1)
+
+
+class SlotConditioning(nn.Module):
+    """Injects slot 1's chosen action into the action embeddings for
+    slot 2's head pass (doubles).
+
+    The trunk runs ONCE per turn; conditioning the second active mon's
+    decision on the first happens here at head level: the chosen action's
+    src/tgt embeddings (already computed by the same trunk forward) map
+    through a zero-initialised projection onto every action embedding, so
+    at init slot 2's policy is exactly the unconditioned one and the
+    conditioning pathway is learned from zero. This replaces the old
+    two-request scheme where the second decision re-encoded the full state
+    with prev-action tokens (a second trunk pass per doubles turn).
+    """
+
+    @nn.compact
+    def __call__(
+        self, action_embeddings: jax.Array, src_index: jax.Array, tgt_index: jax.Array
+    ) -> jax.Array:
+        chosen = jnp.concatenate(
+            [action_embeddings[src_index], action_embeddings[tgt_index]], axis=-1
+        )
+        delta = nn.Dense(
+            action_embeddings.shape[-1],
+            kernel_init=nn.initializers.zeros,
+            dtype=action_embeddings.dtype,
+        )(chosen)
+        return action_embeddings + delta[None, :]
 
 
 class PolicyQKHead(nn.Module):

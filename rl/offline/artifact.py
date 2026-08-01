@@ -30,7 +30,7 @@ import jax.numpy as jnp
 
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.features_pb2 import InfoFeature
-from rl.learner import checkpoint as checkpoint_lib
+from rl import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
 from rl.model.utils import Params
 from rl.offline.model import Porygon2OfflineCritic
@@ -143,7 +143,9 @@ def make_potential_apply(
     single = jax.vmap(apply, in_axes=(None, 1), out_axes=1)
     ensemble = jax.vmap(single, in_axes=(0, None))
 
-    def gated_readout(value_head) -> tuple[jax.Array, dict[str, jax.Array]]:
+    def gated_readout(
+        value_head, scale
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
         if readout == "win":
             probs = jnp.exp(value_head.log_probs.astype(jnp.float32))
             half = probs.shape[-1] // 2  # bins: [-6..-1, 0, +1..+6]
@@ -152,14 +154,17 @@ def make_potential_apply(
             phi = value_head.expectation.astype(jnp.float32)  # (K, T, B)
         mean = phi.mean(axis=0)
         std = phi.std(axis=0)
-        gate = (
-            jnp.exp(-uncertainty_scale * std)
-            if uncertainty_scale > 0.0
-            else jnp.ones_like(std)
-        )
+        # exp(0) == 1, so scale = 0 disables the gate exactly; kept
+        # branch-free so scale can be a traced runtime value (the RL
+        # learner fits it online against realised outcomes).
+        gate = jnp.exp(-scale * std)
         return mean * gate, {"phi_raw": mean, "ensemble_std": std, "gate": gate}
 
-    def potential(params: Params, actor_input: PlayerActorInput) -> jax.Array:
+    def potential(
+        params: Params,
+        actor_input: PlayerActorInput,
+        uncertainty_scale=uncertainty_scale,
+    ) -> jax.Array:
         if rating_conditioning and condition_rating > 0:
             info = actor_input.env.info
             info = info.at[..., InfoFeature.INFO_FEATURE__MY_RATING].set(
@@ -171,15 +176,15 @@ def make_potential_apply(
             actor_input = actor_input.replace(env=actor_input.env.replace(info=info))
         if announced:
             value_head, announced_head = ensemble(params, actor_input)
-            gated, aux = gated_readout(value_head)
-            gated_ann, ann_aux = gated_readout(announced_head)
+            gated, aux = gated_readout(value_head, uncertainty_scale)
+            gated_ann, ann_aux = gated_readout(announced_head, uncertainty_scale)
             result = jax.lax.stop_gradient((gated, gated_ann))
             if not with_aux:
                 return result
             aux.update({f"announced_{k}": v for k, v in ann_aux.items()})
             return result, jax.lax.stop_gradient(aux)
         value_head = ensemble(params, actor_input)
-        gated, aux = gated_readout(value_head)
+        gated, aux = gated_readout(value_head, uncertainty_scale)
         gated = jax.lax.stop_gradient(gated)
         if not with_aux:
             return gated

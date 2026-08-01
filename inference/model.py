@@ -3,12 +3,12 @@ import jax.numpy as jnp
 import numpy as np
 
 from inference.interfaces import ResetResponse, StepResponse
-from rl.actor.agent import Agent
+from rl.online.agent import Agent
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition, PlayerActorInput
 from rl.environment.utils import get_ex_player_step
-from rl.learner import checkpoint
-from rl.learner.config import get_learner_config
+from rl import checkpoint
+from rl.online.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
