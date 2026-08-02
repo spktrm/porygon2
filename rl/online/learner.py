@@ -15,6 +15,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
+from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import (
     Batch,
@@ -23,13 +24,14 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
-from rl import checkpoint
-from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
+from rl.model.heads import HeadParams, calculate_hierarchical_prior
+from rl.model.utils import Params, ParamsContainer
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
     save_train_state,
 )
+from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.loss import (
@@ -45,8 +47,6 @@ from rl.online.plasticity import (
 )
 from rl.online.targets import compute_builder_targets, compute_player_targets
 from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
-from rl.model.heads import HeadParams, calculate_hierarchical_prior
-from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
 logger = logging.getLogger(__name__)

@@ -16,7 +16,9 @@ One-time setup:
     pip install modal && modal setup
     modal secret create wandb-secret WANDB_API_KEY=<your key>
 
-Upload replay shards (local replays/shards/{format_id}/ -> volume):
+Refresh replays Modal-side (no local upload — scrape + export shards on
+the box): `modal run --detach scripts/modal_train.py::refresh_replays`.
+Or upload existing local shards (replays/shards/{format_id}/ -> volume):
     modal run scripts/modal_train.py::upload_replays
 
 Train the offline critic (args after --cli go verbatim to rl.offline.train):
@@ -87,6 +89,8 @@ PY_DEPS = [
     "cloudpickle==3.1.2",
     "tqdm==4.67.3",
     "plotly",
+    # replay scraper (refresh_replays)
+    "aiohttp",
 ]
 
 image = (
@@ -116,6 +120,13 @@ image = (
     )
     .add_local_dir(
         "constants", remote_path=f"{REPO_REMOTE}/constants", copy=True
+    )
+    # The scraper script is baked at the repo root (not under replays/,
+    # which the porygon2-replays volume mount shadows at runtime). Its
+    # ROOT_DIR is CWD-relative ("replays/data/"), so run from REPO_REMOTE
+    # and it writes straight onto the volume.
+    .add_local_file(
+        "replays/main.py", f"{REPO_REMOTE}/replays_main.py", copy=True
     )
     .add_local_dir(
         "service",
@@ -190,6 +201,43 @@ def _start_commit_loop() -> None:
                 print(f"ckpts volume commit failed: {err}")
 
     threading.Thread(target=loop, daemon=True, name="ckpt-commit").start()
+
+
+@app.function(
+    cpu=8.0,
+    timeout=4 * 60 * 60,
+    volumes=VOLUMES,
+)
+def refresh_replays(
+    format_id: str = "gen9randombattle",
+    scrape_cli: str = "--min-rating 1500 --limit 20000",
+    export_cli: str = "",
+):
+    """Scrapes fresh replays and exports shards entirely on Modal — no
+    local upload. Raw JSONs land in replays/data/{format_id} and shards in
+    replays/shards/{format_id} on the porygon2-replays volume, which
+    train_offline reads directly. The scraper skips already-downloaded
+    ids, so rerunning tops the corpus up with new games; the exporter
+    rewrites the shard set from the full raw corpus each time.
+
+        modal run --detach scripts/modal_train.py::refresh_replays
+        modal run --detach scripts/modal_train.py::refresh_replays \
+            --scrape-cli "--min-rating 1000 --limit 50000"
+    """
+    os.chdir(REPO_REMOTE)
+    subprocess.run(
+        [sys.executable, "replays_main.py", format_id, *shlex.split(scrape_cli)],
+        check=True,
+    )
+    # Persist raw logs before the export pass so a crash there costs
+    # nothing already downloaded.
+    replays_volume.commit()
+    subprocess.run(
+        ["node", "dist/scripts/offline.js", format_id, *shlex.split(export_cli)],
+        cwd=os.path.join(REPO_REMOTE, "service"),
+        check=True,
+    )
+    replays_volume.commit()
 
 
 @app.function(

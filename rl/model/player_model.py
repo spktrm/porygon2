@@ -10,7 +10,6 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -18,6 +17,7 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
@@ -262,8 +262,7 @@ class Porygon2PlayerModel(nn.Module):
         flat = valid_mask.reshape(-1)
         cell_modality = jnp.asarray(FLAT_MODALITY_MASK)
         a1_is_switch = (
-            jnp.take(cell_modality, action_index)
-            == ModalityEnum.MODALITY_ENUM__SWITCH
+            jnp.take(cell_modality, action_index) == ModalityEnum.MODALITY_ENUM__SWITCH
         )
         same_tgt = (jnp.arange(flat.shape[0]) % mask_width) == (
             action_index % mask_width
