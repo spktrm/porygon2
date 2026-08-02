@@ -15,19 +15,19 @@ import numpy as np
 import wandb.wandb_run
 
 import wandb
-from rl.online.agent import Agent
-from rl.online.builder_actor import BuilderActor
-from rl.online.player_actor import PlayerActor
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
-from rl.online.artifact import create_train_state, load_train_state
-from rl.online.config import Porygon2LearnerConfig, get_learner_config
-from rl.online.learner import CAT_VF_SUPPORT, Learner
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import ParamsContainer
+from rl.online.agent import Agent
+from rl.online.artifact import create_train_state, load_train_state
+from rl.online.builder_actor import BuilderActor
+from rl.online.config import Porygon2LearnerConfig, get_learner_config
+from rl.online.learner import CAT_VF_SUPPORT, Learner
+from rl.online.player_actor import PlayerActor
 
 logger = logging.getLogger(__name__)
 

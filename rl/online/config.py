@@ -9,7 +9,6 @@ from rl.config.common import AdamWConfig, BaseTrainingConfig
 PolicyObjectiveT = Literal["spo", "ppo"]
 
 
-
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
@@ -156,7 +155,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # EMA magnet chases the policy and degenerates into a short-horizon trust
     # region. The EMA target is reserved for the v-trace/IMPACT reference and
     # plays no regularization role. The coef sets the softness level.
-    player_magnet_kl_coef: float = 0.01
+    # 0.05 (up from 0.01): the per-modality policy head removed the shared
+    # grid's accidental sharpness cap, and at 0.01 the magnet lost the
+    # arm-wrestle — chocolate-silence-1307 collapsed to normalised entropy
+    # 0.27 (modality 0.17) by 190k while magnet KL climbed to 1.44, and
+    # eval strength regressed from its 56k peak. Judge by normalised
+    # entropy holding in the ~0.5-0.65 band through 100k; if a static coef
+    # can't hold it, the proper fix is a PI controller on the coef with a
+    # target-entropy schedule (same pattern as the replay-KL controller).
+    player_magnet_kl_coef: float = 0.05
 
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
@@ -216,13 +223,21 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # channel stds (coef = s/(1−s) · σ_win/σ_pot, capped below), so
     # dominance stays pinned at the target while either channel's scale
     # drifts over a long hold — a fixed coef cannot guarantee that.
-    # Schedule: hold dominant (0.8) for 500k steps so early learning
-    # follows the human-replay critic's value landscape, then anneal to
-    # zero over 100k steps so the asymptotic objective is pure win/loss.
-    # Judge via player_potential_adv_share (realised share, should track
-    # the target) and player_potential_adv_coef (the solved coef).
+    # Schedule: hold dominant (0.8) for the first ~20k steps while the
+    # policy is near-random and win/loss is uninformative, anneal to a
+    # PERMANENT 0.2 floor (reached at 65k). The old 0.8-until-500k hold meant every
+    # run trained almost entirely on the critic's value landscape — which
+    # is reactive and skill-capped — and every run plateaued at the same
+    # ~-2.6 margin; the floor regime tests whether that ceiling was the
+    # critic's landscape (PBRS invariance does not require the share to
+    # anneal to zero, and a persistent 0.2 keeps dense per-move credit
+    # without dominating the objective). Judge via
+    # player_potential_adv_share (realised share, should track the
+    # target) and player_potential_adv_coef (the solved coef).
     player_potential_target_adv_share_fn: Callable[[int], float] = (
-        lambda step: 0.8 * jnp.clip((600_000 - step) / 100_000, 0.0, 1.0)
+        lambda step: jnp.maximum(
+            0.2, 0.8 * jnp.clip((80_000 - step) / 60_000, 0.0, 1.0)
+        )
     )
     # Cap on the solved coefficient: keeps a near-silent potential channel
     # (tiny σ_pot from heavy uncertainty gating or a flat Φ) from being
@@ -263,8 +278,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # advantage channel is gated by player_potential_target_adv_share_fn.
     # A tuple of paths loads an ensemble (members trained with
     # rl.offline.train --ensemble-index k) for uncertainty-gated shaping.
-    offline_critic_ckpt_path: str | tuple[str, ...] | None = tuple(
-        f"ckpts/offline/gen9randombattle-ens{k}/ckpt_best" for k in range(4)
+    offline_critic_ckpt_path: str | tuple[str, ...] | None = (
+        "ckpts/offline/gen9randombattle/ckpt_best"
     )
     # Ensemble-disagreement gate: Φ = mean * exp(-scale * std). Where the
     # members disagree (off the human data distribution) shaping goes
@@ -328,5 +343,3 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
 def get_learner_config():
     return Porygon2LearnerConfig()
-
-

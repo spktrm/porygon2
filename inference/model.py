@@ -3,16 +3,16 @@ import jax.numpy as jnp
 import numpy as np
 
 from inference.interfaces import ResetResponse, StepResponse
-from rl.online.agent import Agent
+from rl import checkpoint
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition, PlayerActorInput
 from rl.environment.utils import get_ex_player_step
-from rl import checkpoint
-from rl.online.config import get_learner_config
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
+from rl.online.agent import Agent
+from rl.online.config import get_learner_config
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
