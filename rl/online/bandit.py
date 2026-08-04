@@ -193,9 +193,7 @@ class LambdaBandit:
         logs["bandit_rated_opponents"] = float(len(ratings) - 1)
 
         if self.prev_ratings is not None and self.prev_main is not None:
-            common = [
-                s for s in ratings if s != MAIN_KEY and s in self.prev_ratings
-            ]
+            common = [s for s in ratings if s != MAIN_KEY and s in self.prev_ratings]
             if common:
                 # Frozen snapshots move only through scale drift; the mean
                 # shift over common snapshots is that drift.

@@ -1,8 +1,6 @@
 import jax
 import numpy as np
 
-from rl.online.agent import Agent
-from rl.online.guards import should_push_trajectory
 from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import (
@@ -19,10 +17,12 @@ from rl.environment.utils import (
     clip_packed_history,
     split_rng,
 )
-from rl.online.league import MAIN_KEY, pfsp
-from rl.online.learner import Learner
 from rl.model.builder_model import get_packed_team_string
 from rl.model.utils import Params, ParamsContainer
+from rl.online.agent import Agent
+from rl.online.guards import should_push_trajectory
+from rl.online.league import MAIN_KEY, pfsp
+from rl.online.learner import Learner
 
 
 class PlayerActor:

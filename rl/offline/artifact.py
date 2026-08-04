@@ -28,9 +28,9 @@ from collections.abc import Callable, Sequence
 import jax
 import jax.numpy as jnp
 
+from rl import checkpoint as checkpoint_lib
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.features_pb2 import InfoFeature
-from rl import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
 from rl.model.utils import Params
 from rl.offline.model import Porygon2OfflineCritic
@@ -143,9 +143,7 @@ def make_potential_apply(
     single = jax.vmap(apply, in_axes=(None, 1), out_axes=1)
     ensemble = jax.vmap(single, in_axes=(0, None))
 
-    def gated_readout(
-        value_head, scale
-    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+    def gated_readout(value_head, scale) -> tuple[jax.Array, dict[str, jax.Array]]:
         if readout == "win":
             probs = jnp.exp(value_head.log_probs.astype(jnp.float32))
             half = probs.shape[-1] // 2  # bins: [-6..-1, 0, +1..+6]
