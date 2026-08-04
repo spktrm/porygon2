@@ -130,12 +130,16 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     ema_adv_std: jax.Array = struct.field(
         default_factory=lambda: jnp.array(1.0, dtype=jnp.float32), pytree_node=True
     )
-    # Live learned uncertainty-gate scale (see potential_gate_scale_learned).
-    # Carried in the train state purely so checkpoints persist it — the
-    # jitted train step passes it through untouched; the learner updates it
-    # host-side between steps.
+    # Retired uncertainty-gate scale (the offline-ensemble era); kept so
+    # existing checkpoints' scalar layout keeps loading. Unused.
     gate_scale: jax.Array = struct.field(
         default_factory=lambda: jnp.array(5.0, dtype=jnp.float32), pytree_node=True
+    )
+    # EMA of the integrated critic's terminal sign-agreement (target
+    # params), gating the shaping share: shaping is silent until the head
+    # is trustworthy. Updated in-graph each train step.
+    critic_quality: jax.Array = struct.field(
+        default_factory=lambda: jnp.array(0.0, dtype=jnp.float32), pytree_node=True
     )
 
 
@@ -191,7 +195,9 @@ def create_train_state(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
         params=initial_player_params,
-        gate_scale=jnp.array(config.potential_uncertainty_scale, dtype=jnp.float32),
+        # Retired scalar (uncertainty-gate era) kept for checkpoint
+        # scalar-layout stability.
+        gate_scale=jnp.array(0.0, dtype=jnp.float32),
         # Deep-copied: params and target_params must not share buffers, or
         # donating the train state to the jitted train step fails with a
         # duplicate-donation error on the first step.
@@ -286,6 +292,7 @@ def save_state(
             ema_adv_mean=player_state.ema_adv_mean,
             ema_adv_std=player_state.ema_adv_std,
             gate_scale=player_state.gate_scale,
+            critic_quality=player_state.critic_quality,
         ),
     )
     builder_components = dict(
@@ -396,10 +403,11 @@ def load_from_checkpoint(
         # .get: checkpoints from before the learned gate scale existed
         # restore the config's initial value.
         gate_scale=jnp.asarray(
-            player_scalars.get(
-                "gate_scale", learner_config.potential_uncertainty_scale
-            ),
+            player_scalars.get("gate_scale", 0.0),
             dtype=jnp.float32,
+        ),
+        critic_quality=jnp.asarray(
+            player_scalars.get("critic_quality", 0.0), dtype=jnp.float32
         ),
     )
 

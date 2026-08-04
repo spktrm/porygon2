@@ -9,6 +9,11 @@ checkpoints were trained with the survival aux head; CriticRunner detects
 that from the params, so no flag is needed here). Pages are cached by
 replay id (replays are immutable), so each replay is computed once, ever.
 
+The landing page is a full-page, infinite-scroll feed of the latest public
+replays for each served format, proxied live from Showdown's search API
+(/latest/{format}.json below). Listing is free — a replay is only fetched,
+exported and scored when someone actually opens it.
+
 Deploy:
     pip install modal && modal setup     # once
     modal deploy serve/modal_app.py
@@ -26,7 +31,8 @@ Cost/latency profile:
   compiles for each (time, history) shape bucket happen once across all
   containers/deploys, not per cold start.
 - Rendered pages go in a Modal Dict keyed by (model version, replay id);
-  repeat views skip everything.
+  repeat views skip everything. Entries from older page versions are
+  pruned at container start, so the Dict never accumulates dead pages.
 
 The image bakes in: this repo (exporter compiled via tsc at build time),
 the offline checkpoints under ckpts/offline/, node, and the python deps.
@@ -36,7 +42,7 @@ redeploy that could change a page's content invalidates it (names alone
 wouldn't: retrains overwrite ckpt_best in place).
 """
 
-import glob
+import json
 import os
 import re
 
@@ -50,24 +56,48 @@ MAX_LOG_BYTES = 2_000_000  # refuse absurd inputs before spending compute
 REPLAY_ID_RE = re.compile(r"[a-z0-9]+-[0-9]+(-[a-z0-9]+)?")
 
 # Served formats are whatever the deploying checkout has critics for:
-# every ckpts/offline/{format_id}[-ens{k}]/ckpt_best dir gets baked in
-# (best artifacts only — not periodic saves; discover_ckpts picks the
-# latest ckpt_* per member dir, and with ckpt_best as the sole entry
-# that's what it finds). Train a critic for a new format
+# each ckpts/offline/{format_id}[-ens{k}]/ dir contributes one artifact —
+# ckpt_best when present, else the latest periodic save — so any ensemble
+# size works, including a single un-suffixed model trained without
+# --ensemble. Train a critic for a new format
 # (rl/offline/train.py --generation N --smogon-format X) and redeploy.
 
 
 def _discover_ckpt_dirs() -> list[str]:
-    """Repo-relative ckpt_best dirs. Module-level code runs BOTH at deploy
-    time (CWD = the checkout) and inside the container (repo baked at
-    REPO_REMOTE, CWD elsewhere) — resolve against whichever root exists so
-    both contexts derive the same list."""
+    """Repo-relative artifact dirs to bake, mirroring
+    rl/offline/visualise.discover_ckpts so the image holds exactly what
+    CriticRunner will load: per member dir the lexically-last ckpt_*
+    ('ckpt_best' sorts after 'ckpt_{step:08}', so best wins when present),
+    and when a format has both -ens{k} member dirs and a plain
+    single-model dir, only the ensemble (discover_ckpts ignores the plain
+    dir in that case, so baking it would be dead weight). Module-level
+    code runs BOTH at deploy time (CWD = the checkout) and inside the
+    container (repo baked at REPO_REMOTE, CWD elsewhere) — resolve against
+    whichever root exists so both contexts derive the same list."""
     for root in (".", REPO_REMOTE):
-        dirs = sorted(
-            os.path.relpath(path, root)
-            for path in glob.glob(
-                os.path.join(root, "ckpts", "offline", "*", "ckpt_best")
+        offline_root = os.path.join(root, "ckpts", "offline")
+        if not os.path.isdir(offline_root):
+            continue
+        singles: dict[str, list[str]] = {}
+        ensembles: dict[str, list[str]] = {}
+        for name in sorted(os.listdir(offline_root)):
+            member_dir = os.path.join(offline_root, name)
+            if not os.path.isdir(member_dir):
+                continue
+            steps = sorted(
+                d for d in os.listdir(member_dir) if d.startswith("ckpt_")
             )
+            if not steps:
+                continue
+            fmt = name.split("-ens")[0]
+            group = ensembles if "-ens" in name else singles
+            group.setdefault(fmt, []).append(
+                os.path.relpath(os.path.join(member_dir, steps[-1]), root)
+            )
+        dirs = sorted(
+            path
+            for fmt in set(singles) | set(ensembles)
+            for path in ensembles.get(fmt) or singles.get(fmt, [])
         )
         if dirs:
             return dirs
@@ -77,8 +107,8 @@ def _discover_ckpt_dirs() -> list[str]:
 CKPT_DIRS = _discover_ckpt_dirs()
 if not CKPT_DIRS:
     raise RuntimeError(
-        "no ckpts/offline/*/ckpt_best found — train an offline critic "
-        "before deploying (rl/offline/train.py)"
+        "no ckpts/offline/*/ckpt_* artifacts found — train an offline "
+        "critic before deploying (rl/offline/train.py)"
     )
 SUPPORTED_FORMATS = sorted(
     {os.path.basename(os.path.dirname(d)).split("-ens")[0] for d in CKPT_DIRS}
@@ -141,7 +171,7 @@ image = (
         "rl",
         remote_path=f"{REPO_REMOTE}/rl",
         copy=True,
-        ignore=["**/__pycache__", "**/.DS_Store"],
+        ignore=["**/__pycache__", "**/.DS_Store", "**/*.log"],
     )
     .add_local_file(
         "data/data/data.json",
@@ -193,57 +223,165 @@ app = modal.App("porygon2-phi-viz", image=image)
 jax_cache = modal.Volume.from_name("porygon2-jax-cache", create_if_missing=True)
 # Rendered pages, keyed by (checkpoint version, replay id).
 page_cache = modal.Dict.from_name("porygon2-phi-pages", create_if_missing=True)
-# Reserved key holding the landing page's recently-viewed list.
-RECENT_KEY = "__recent__"
-MAX_RECENT = 24
 
 LANDING = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Game review for Pokémon Showdown</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
- body {{ font-family: system-ui, sans-serif; max-width: 640px;
-        margin: 12vh auto; padding: 0 20px; }}
- form {{ display: flex; gap: 8px; }}
- input {{ flex: 1; font-size: 16px; padding: 10px 12px;
-         box-sizing: border-box; }}
- button {{ font-size: 16px; padding: 10px 18px; cursor: pointer; }}
- p {{ color: #555; }}
- h2 {{ font-size: 13px; color: #888; margin: 32px 0 10px;
-      text-transform: uppercase; letter-spacing: 0.05em; }}
- .grid {{ display: grid; gap: 10px;
-         grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }}
- .card {{ border: 1px solid #e3e3e0; border-radius: 8px; padding: 10px 12px;
-         text-decoration: none; color: inherit; display: block; }}
- .card:hover {{ border-color: #999; }}
- .card .vs {{ font-weight: 600; font-size: 13px; margin-bottom: 4px;
+ body { font-family: system-ui, sans-serif; margin: 0; }
+ header { max-width: 720px; margin: 0 auto; padding: 48px 20px 0; }
+ main { max-width: 1400px; margin: 0 auto; padding: 8px 20px 48px; }
+ form { display: flex; gap: 8px; }
+ input { flex: 1; font-size: 16px; padding: 10px 12px;
+         box-sizing: border-box; }
+ button { font-size: 16px; padding: 10px 18px; cursor: pointer; }
+ p { color: #555; }
+ h2 { font-size: 13px; color: #888; margin: 32px 0 10px;
+      text-transform: uppercase; letter-spacing: 0.05em; }
+ .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+ .tab { font-size: 13px; padding: 5px 14px; cursor: pointer;
+        border: 1px solid #ccc; border-radius: 15px; background: #fff; }
+ .tab.active { background: #222; border-color: #222; color: #fff; }
+ .grid { display: grid; gap: 10px;
+         grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+ .card { border: 1px solid #e3e3e0; border-radius: 8px; padding: 10px 12px;
+         text-decoration: none; color: inherit; display: block; }
+ .card:hover { border-color: #999; }
+ .card .vs { font-weight: 600; font-size: 13px; margin-bottom: 4px;
              overflow: hidden; text-overflow: ellipsis;
-             white-space: nowrap; }}
- .card .meta {{ font-size: 12px; color: #777; }}
- .chip {{ display: inline-block; border-radius: 9px; padding: 0 7px;
-         font-weight: 700; color: #fff; font-size: 11px; }}
+             white-space: nowrap; }
+ .card .meta { font-size: 12px; color: #777; }
+ #status { text-align: center; color: #888; font-size: 14px;
+           padding: 24px 0; }
 </style></head><body>
+<header>
 <h1>Game review for Pokémon Showdown</h1>
-<p>Paste a <a href="https://replay.pokemonshowdown.com">replay</a> link and
-watch your battle next to a turn-by-turn review: win chances as the game
-swings, the key moments that decided it, the predicted final score, and
-which Pokémon were in danger. Works with {formats} replays.</p>
+<p>Paste a <a href="https://replay.pokemonshowdown.com">replay</a> link —
+or pick any recent battle below — and watch it next to a turn-by-turn
+review: win chances as the game swings, the key moments that decided it,
+the predicted final score, and which Pokémon were in danger. Works with
+__FORMATS__ replays.</p>
 <form id="f">
-<input id="q" placeholder="https://replay.pokemonshowdown.com/{example_format}-2654504071"
+<input id="q" placeholder="https://replay.pokemonshowdown.com/__EXAMPLE__-2654504071"
  autofocus />
 <button type="submit">Go</button>
 </form>
 <p id="err" style="color:#b33"></p>
-__RECENT__
+</header>
+<main>
+<h2>Latest replays</h2>
+<div class="tabs" id="tabs"></div>
+<div class="grid" id="grid"></div>
+<div id="status">Loading&hellip;</div>
+</main>
 <script>
-document.getElementById("f").addEventListener("submit", function (e) {{
+var FORMATS = __FORMATS_JSON__;
+
+document.getElementById("f").addEventListener("submit", function (e) {
   e.preventDefault();
   var v = document.getElementById("q").value.trim()
     .replace(/^https?:\\/\\/replay\\.pokemonshowdown\\.com\\//, "")
     .replace(/\\.(json|log|html)$/, "");
   if (/^[a-z0-9]+-[0-9]+(-[a-z0-9]+)?$/.test(v)) location.href = "/r/" + v;
   else document.getElementById("err").textContent = "That doesn't look like a replay id.";
-}});
-</script></body></html>""".format(
-    formats=", ".join(SUPPORTED_FORMATS), example_format=SUPPORTED_FORMATS[0]
+});
+
+// Infinite-scroll feed of the latest replays, one Showdown search page
+// (51 rows) at a time via /latest/{format}.json. Nothing is scored here:
+// each card is a plain link, and the model only runs when it's opened.
+var grid = document.getElementById("grid");
+var statusEl = document.getElementById("status");
+var tabsEl = document.getElementById("tabs");
+// Replaced wholesale on tab switch, so in-flight responses for the old
+// format recognise themselves as stale and drop.
+var state = {format: FORMATS[0], before: null, busy: false, done: false,
+             seen: {}};
+
+function timeAgo(ts) {
+  var s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  if (s < 129600) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+
+function addCard(r) {
+  var a = document.createElement("a");
+  a.className = "card";
+  a.href = "/r/" + encodeURIComponent(r.id);
+  var vs = document.createElement("div");
+  vs.className = "vs";
+  vs.textContent = (r.players || []).join(" vs ");
+  var meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = (r.rating ? Math.round(r.rating) + " \\u00b7 " : "") +
+    timeAgo(r.uploadtime);
+  a.appendChild(vs);
+  a.appendChild(meta);
+  grid.appendChild(a);
+}
+
+function loadMore() {
+  if (state.busy || state.done) return;
+  state.busy = true;
+  statusEl.textContent = "Loading\\u2026";
+  var requested = state;
+  var url = "/latest/" + state.format + ".json" +
+    (state.before ? "?before=" + state.before : "");
+  fetch(url).then(function (resp) {
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    return resp.json();
+  }).then(function (rows) {
+    if (requested !== state) return;
+    state.busy = false;
+    if (!rows.length) {
+      state.done = true;
+      statusEl.textContent = "No more replays.";
+      return;
+    }
+    state.before = rows[rows.length - 1].uploadtime;
+    rows.forEach(function (r) {
+      if (state.seen[r.id]) return;
+      state.seen[r.id] = true;
+      addCard(r);
+    });
+    statusEl.textContent = "";
+    // A short page can leave the sentinel visible without a new
+    // intersection event — keep filling until the viewport overflows.
+    if (statusEl.getBoundingClientRect().top < innerHeight + 1200) loadMore();
+  }).catch(function () {
+    if (requested !== state) return;
+    state.busy = false;
+    statusEl.textContent =
+      "Couldn't reach Showdown \\u2014 scroll to retry.";
+  });
+}
+
+if (FORMATS.length > 1) FORMATS.forEach(function (fmt) {
+  var b = document.createElement("button");
+  b.type = "button";
+  b.className = "tab" + (fmt === state.format ? " active" : "");
+  b.textContent = fmt;
+  b.addEventListener("click", function () {
+    if (state.format === fmt) return;
+    state = {format: fmt, before: null, busy: false, done: false, seen: {}};
+    grid.textContent = "";
+    Array.prototype.forEach.call(tabsEl.children, function (t) {
+      t.classList.toggle("active", t === b);
+    });
+    loadMore();
+  });
+  tabsEl.appendChild(b);
+});
+
+new IntersectionObserver(function (entries) {
+  if (entries.some(function (e) { return e.isIntersecting; })) loadMore();
+}, {rootMargin: "1200px"}).observe(statusEl);
+</script></body></html>"""
+LANDING = (
+    LANDING.replace("__FORMATS_JSON__", json.dumps(SUPPORTED_FORMATS))
+    .replace("__FORMATS__", ", ".join(SUPPORTED_FORMATS))
+    .replace("__EXAMPLE__", SUPPORTED_FORMATS[0])
 )
 
 
@@ -323,29 +461,20 @@ class Visualizer:
             )
         print(f"page version {self.model_version}")
 
-    def _bump_recent(self, replay_id: str, data: dict | None):
-        """Maintains the landing page's recently-viewed list (most recent
-        first, deduped, capped). Cosmetic: last-writer-wins under container
-        concurrency, and never fails a request."""
+        # Only keys for THIS page version are ever served again — anything
+        # else (older versions, the retired recently-viewed list) is dead
+        # weight in the Dict; drop it. Cosmetic and racy on purpose:
+        # during a rolling deploy an outgoing container may re-add its own
+        # entries, which the next new-version container start prunes.
         try:
-            recent = list(page_cache.get(RECENT_KEY) or [])
-            entry = next((r for r in recent if r["id"] == replay_id), None)
-            if data is not None:
-                entry = dict(
-                    id=replay_id,
-                    players=data["players"],
-                    rating=data["rating"],
-                    margin=data["actualMargin"],
-                    # First clause only ("played out", "conceded", ...).
-                    ending=data["endingLabel"].split(" — ")[0],
-                )
-            if entry is None:
-                return
-            recent = [r for r in recent if r["id"] != replay_id]
-            recent.insert(0, entry)
-            page_cache[RECENT_KEY] = recent[:MAX_RECENT]
-        except Exception as err:  # noqa: BLE001 — strictly cosmetic
-            print(f"recent-list update failed: {err}")
+            prefix = f"{self.model_version}:"
+            stale = [k for k in page_cache.keys() if not k.startswith(prefix)]
+            for key in stale:
+                page_cache.pop(key)
+            if stale:
+                print(f"pruned {len(stale)} stale cached page(s)")
+        except Exception as err:  # noqa: BLE001 — cache hygiene only
+            print(f"cache prune failed: {err}")
 
     def _render(self, replay_id: str) -> str:
         import tempfile
@@ -359,7 +488,6 @@ class Visualizer:
         key = f"{self.model_version}:{replay_id}"
         cached = page_cache.get(key)
         if cached is not None:
-            self._bump_recent(replay_id, None)
             return cached
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -374,53 +502,79 @@ class Visualizer:
                 raise ValueError("replay log too large")
             payload, stats = export_record(replay_json_path, tmpdir)
 
-        html, data = render_page(
+        html, _ = render_page(
             replay, stats, payload, runner, UNCERTAINTY_SCALE
         )
         page_cache[key] = html
-        self._bump_recent(replay_id, data)
         return html
 
     @modal.asgi_app()
     def web(self):
         import urllib.error
+        import urllib.request
 
         from fastapi import FastAPI
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import HTMLResponse, JSONResponse
+
+        from rl.offline.visualise import USER_AGENT
 
         api = FastAPI()
 
         @api.get("/", response_class=HTMLResponse)
         def landing():
-            import html as html_lib
-
-            cards = ""
-            for r in page_cache.get(RECENT_KEY) or []:
-                margin = int(r.get("margin", 0))
-                chip_color = (
-                    "#2a78d6" if margin > 0
-                    else "#e34948" if margin < 0
-                    else "#898781"
-                )
-                meta = f'<span class="chip" style="background:{chip_color}">{margin:+d}</span> '
-                meta += html_lib.escape(str(r.get("ending", "")))
-                if r.get("rating"):
-                    meta += f" · {int(r['rating'])}"
-                cards += (
-                    f'<a class="card" href="/r/{r["id"]}">'
-                    f'<div class="vs">{html_lib.escape(" vs ".join(r.get("players", [])))}</div>'
-                    f'<div class="meta">{meta}</div></a>'
-                )
-            section = (
-                f'<h2>Recently viewed</h2><div class="grid">{cards}</div>'
-                if cards
-                else ""
-            )
             return HTMLResponse(
-                LANDING.replace("__RECENT__", section),
+                LANDING,
                 # No validators are emitted, so without this browsers
                 # heuristically cache — and keep showing pre-redeploy pages.
                 headers={"Cache-Control": "no-store"},
+            )
+
+        @api.get("/latest/{format_id}.json")
+        def latest(format_id: str, before: int | None = None):
+            """One page of showdown's replay search (newest first, `before`
+            pages back by uploadtime) for the landing feed. Proxied because
+            the browser can't call showdown cross-origin, and trimmed to
+            the fields the page renders. Nothing here is scored — the
+            model only runs when a listed replay is opened."""
+            if format_id not in SUPPORTED_FORMATS:
+                return JSONResponse(
+                    {"error": "unsupported format"}, status_code=404
+                )
+            url = (
+                "https://replay.pokemonshowdown.com/search.json"
+                f"?format={format_id}"
+            )
+            if before is not None:
+                url += f"&before={before}"
+            request = urllib.request.Request(
+                url, headers={"User-Agent": USER_AGENT}
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    rows = json.load(response)
+            except (urllib.error.URLError, ValueError) as err:
+                print(f"showdown search failed: {err}")
+                return JSONResponse(
+                    {"error": "showdown search unavailable"}, status_code=502
+                )
+            return JSONResponse(
+                [
+                    dict(
+                        id=r["id"],
+                        players=r.get("players") or [],
+                        rating=r.get("rating"),
+                        uploadtime=r.get("uploadtime"),
+                    )
+                    for r in rows
+                    # Private replays 404 without their password suffix, so
+                    # a card would dead-end; drop them (and anything whose
+                    # id /r/ would reject anyway).
+                    if not r.get("private")
+                    and REPLAY_ID_RE.fullmatch(r.get("id") or "")
+                ],
+                # Fresh enough for a feed; spares showdown identical
+                # queries when several people land at once.
+                headers={"Cache-Control": "public, max-age=30"},
             )
 
         @api.get("/r/{replay_id}", response_class=HTMLResponse)

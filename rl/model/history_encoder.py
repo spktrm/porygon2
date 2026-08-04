@@ -91,6 +91,65 @@ def mask_outcome_features(edge_cache: jax.Array) -> tuple[jax.Array, jax.Array]:
     return masked, is_announcement
 
 
+def major_arg_step_mask(
+    history_field: jax.Array, edge_cache: jax.Array
+) -> jax.Array:
+    """(H,) bool: history steps that carry at least one battle major arg.
+
+    Mirrors the relevant-edge gather of PerSlotHistoryEncoder.__call__: a
+    step's edges are the cache rows named by its RELEVANT_ENTITY_IDX
+    columns, capped by NUM_RELEVANT. A step counts as major when any such
+    edge's MAJOR_ARG is a real protocol arg (anything past the
+    UNSPECIFIED/NULL/PAD sentinels — moves, switches, faints, cant, ...).
+    These are the integrated history critic's supervision points, matching
+    the offline critic's convention of scoring at decision-bearing events
+    rather than every residual/chip line.
+    """
+    relevant = history_field[:, _RELEVANT_ENTITY_FEATURES]  # (H, K)
+    num_relevant = history_field[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
+    edge_mask = np.arange(relevant.shape[1])[None] < num_relevant[:, None]
+    major = jnp.take(
+        edge_cache[:, EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG],
+        relevant,
+        axis=0,
+    )  # (H, K)
+    is_real = major > BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___PAD
+    return (edge_mask & is_real).any(axis=-1)
+
+
+def critic_step_roles(
+    history_field: jax.Array, edge_cache: jax.Array, step_valid: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """(H,) bool pair: (is_state_step, is_afterstate_step).
+
+    STATE steps carry a battle major arg — the readout there scores the
+    position as that action's fused resolution lands. AFTERSTATE steps are
+    the last valid step before the next major — the settled state (residual
+    minors resolved) the following decision is actually made from, i.e. the
+    evaluation point root search queries. A major step immediately followed
+    by another major is BOTH (no residual phase between them), so the roles
+    are independent flags, not a partition.
+    """
+    is_state = major_arg_step_mask(history_field, edge_cache) & step_valid
+
+    def _scan(carry, xs):
+        major, valid = xs
+        # Emitted value: the major-flag of the nearest VALID step strictly
+        # after this one; then fold this step into the carry.
+        out = carry
+        carry = jnp.where(valid, major, carry)
+        return carry, out
+
+    _, next_valid_is_major = jax.lax.scan(
+        _scan,
+        jnp.zeros((), dtype=jnp.bool_),
+        (is_state, step_valid),
+        reverse=True,
+    )
+    is_afterstate = step_valid & next_valid_is_major
+    return is_state, is_afterstate
+
+
 @chex.dataclass
 class PerSlotHistoryOutput:
     # Per-history-step snapshots: (H, 12, D) / (H, D).

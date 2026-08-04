@@ -86,6 +86,10 @@ class League:
         self.draws = collections.defaultdict(lambda: 0)
         self.losses = collections.defaultdict(lambda: 0)
         self.games = collections.defaultdict(lambda: 0)
+        # Opaque serialized state of the learner's mixture bandit
+        # (rl/online/bandit.py). Stored here so it rides the league pickle
+        # through every checkpoint save/restore path.
+        self.bandit_state: bytes | None = None
 
         # step_count -> materialised ParamsContainer (bounded, UCB-evicted).
         self._cache: "collections.OrderedDict[int, ParamsContainer]" = (
@@ -110,6 +114,7 @@ class League:
                 decay=self.decay,
                 cache_size=self.cache_size,
                 ucb_c=self.ucb_c,
+                bandit_state=self.bandit_state,
             )
         )
 
@@ -129,6 +134,7 @@ class League:
         league.draws = state["draws"]
         league.losses = state["losses"]
         league.games = state["games"]
+        league.bandit_state = state.get("bandit_state")
         league.print_players()
         return league
 

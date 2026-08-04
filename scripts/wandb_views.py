@@ -92,38 +92,20 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="1 · Φ-channel health",
+            name="1 · Value heads",
             is_open=True,
             panels=[
-                lp("Potential adv coef (cap = 100)", ["player_potential_adv_coef"]),
                 lp(
-                    "Adv share: realised vs target",
-                    [
-                        "player_potential_adv_share",
-                        "player_potential_target_adv_share",
-                    ],
+                    # Main gamma=1 head (feeds advantages) vs the
+                    # multi-lambda aux CE (representation shaping only).
+                    "Value losses (main + multi-lambda aux)",
+                    ["player_loss_v_win", "player_loss_v_aux"],
                 ),
                 lp(
-                    "Gate & ensemble disagreement",
-                    ["potential_gate_mean", "potential_ensemble_std_mean"],
-                ),
-                lp(
-                    "Channel loudness",
-                    [
-                        "potential_phi_abs_mean",
-                        "potential_phi_step_delta_abs",
-                        "potential_decision_step_delta_abs",
-                        "potential_dice_step_delta_abs",
-                    ],
-                ),
-                lp(
-                    "Channel quality",
-                    [
-                        "potential_terminal_agreement",
-                        "potential_decision_share",
-                        "player_potential_win_adv_corr",
-                        "player_potential_adv_sign_flip",
-                    ],
+                    # R2 of expectations vs v-trace targets: main head
+                    # and the pooled aux-gamma rows.
+                    "Value R2 (main vs aux gammas)",
+                    ["player_value_head_r2", "player_aux_value_r2"],
                 ),
             ],
         ),
@@ -141,6 +123,26 @@ def rl_sections():
                 lp(
                     "Replay reuse (controller)",
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
+                ),
+                lp(
+                    # Mixture bandit (rl/online/bandit.py): active v-trace
+                    # lambda arm. Steps, not smoothed — it's a discrete
+                    # control signal.
+                    "Bandit arm (main lambda)",
+                    ["bandit_lambda"],
+                    smooth=0,
+                ),
+                lp(
+                    # BT rating of main vs the frozen snapshot pool, and
+                    # the per-window aligned rating gain (the bandit's
+                    # reward). rating_valid drops to 0 when the pool is
+                    # unrateable.
+                    "League BT rating / bandit reward",
+                    [
+                        "bandit_bt_rating",
+                        "bandit_window_reward",
+                        "bandit_rating_valid",
+                    ],
                 ),
                 lp(
                     "Gradient / param norm",
