@@ -304,6 +304,17 @@ class PolicyQKHead(nn.Module):
         )
 
 
+# Alive-mon differential support: margins -6..+6, matching the offline
+# critic's 13-bin distributional target.
+NUM_MARGIN_BINS = 13
+
+def margin_win_mass(logits: jax.Array) -> jax.Array:
+    """P(win) − P(loss) from 13-bin margin logits (last axis)."""
+    probs = jax.nn.softmax(logits.astype(jnp.float32), axis=-1)
+    half = NUM_MARGIN_BINS // 2
+    return probs[..., half + 1 :].sum(-1) - probs[..., :half].sum(-1)
+
+
 class CategoricalValueLogitHead(nn.Module):
     cfg: ConfigDict
 
@@ -328,6 +339,27 @@ class CategoricalValueLogitHead(nn.Module):
             expectation=expectation,
             l2_norm=l2_norm,
         )
+
+
+class MultiLambdaValueLogitHead(nn.Module):
+    """Learner-only categorical value logits for K auxiliary lambdas.
+
+    Output (..., K, n_bins): row k is trained by CE against the gamma=1
+    v-trace distribution target built with player_aux_lambdas[k]
+    (rl/online/targets.py). With terminal-only reward every row estimates
+    the same win probability from a different bias/variance target
+    construction — lambda=1 is the Monte Carlo anchor (a gamma spectrum
+    would degenerate here: gamma^45 kills the signal). Representation
+    shaping only — the policy's advantages read the main v_head; these
+    rows never feed the actor loss.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, embedding: jax.Array):
+        logits = MLP(**self.cfg.mlp.to_dict())(embedding)
+        return logits.reshape(*logits.shape[:-1], self.cfg.num_heads, -1)
 
 
 class RegressionValueLogitHead(nn.Module):

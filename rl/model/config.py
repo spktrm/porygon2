@@ -171,6 +171,15 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp.layer_sizes = 3
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
+    # Multi-lambda auxiliary value head (learner-only): K categorical
+    # rows over the same win/draw/loss support as v_head, one per
+    # auxiliary lambda. num_heads must match the learner config's
+    # player_aux_lambdas length (shape mismatch fails loudly otherwise).
+    cfg.aux_v_head = ConfigDict()
+    cfg.aux_v_head.num_heads = 6
+    cfg.aux_v_head.mlp = ConfigDict()
+    cfg.aux_v_head.mlp.layer_sizes = cfg.aux_v_head.num_heads * len(CAT_VF_SUPPORT)
+
     for head in [cfg.pi_head]:
         head.train = train
 

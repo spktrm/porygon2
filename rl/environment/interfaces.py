@@ -86,6 +86,10 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    # Learner-only (cfg.train): (T, K, n_bins) categorical logits for the
+    # K auxiliary discounts (multi-gamma value aux). Actors leave this
+    # empty so replay transitions stay small.
+    aux_value_logits: ArrayLike = ()
 
 
 @dataclass

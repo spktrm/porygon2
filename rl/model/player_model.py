@@ -10,6 +10,7 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -17,7 +18,6 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
@@ -25,6 +25,7 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     MacroHead,
+    MultiLambdaValueLogitHead,
     PerModalityPolicyHead,
     SlotConditioning,
     calculate_hierarchical_prior,
@@ -42,6 +43,7 @@ class Porygon2PlayerModel(nn.Module):
         self.pi_head = PerModalityPolicyHead(self.cfg.pi_head)
         self.macro_head = MacroHead(self.cfg.macro_head)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        self.aux_v_head = MultiLambdaValueLogitHead(self.cfg.aux_v_head)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected; a future
@@ -262,7 +264,8 @@ class Porygon2PlayerModel(nn.Module):
         flat = valid_mask.reshape(-1)
         cell_modality = jnp.asarray(FLAT_MODALITY_MASK)
         a1_is_switch = (
-            jnp.take(cell_modality, action_index) == ModalityEnum.MODALITY_ENUM__SWITCH
+            jnp.take(cell_modality, action_index)
+            == ModalityEnum.MODALITY_ENUM__SWITCH
         )
         same_tgt = (jnp.arange(flat.shape[0]) % mask_width) == (
             action_index % mask_width
@@ -390,10 +393,18 @@ class Porygon2PlayerModel(nn.Module):
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
-        return jax.vmap(
+        outputs = jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
         )(action_embeddings, value_embeddings, actor_input.env, actor_output)
 
+        if self.cfg.train:
+            # Learner-only: multi-gamma auxiliary value readouts from the
+            # value tokens — (T, K, n_bins) categorical logits, one row
+            # per auxiliary discount, turned into CE losses learner-side.
+            outputs = outputs.replace(
+                aux_value_logits=self.aux_v_head(value_embeddings)
+            )
+        return outputs
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
     if config is None:

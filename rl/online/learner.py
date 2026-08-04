@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import queue
@@ -15,7 +16,6 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
-from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import (
     Batch,
@@ -24,14 +24,14 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
-from rl.model.heads import HeadParams, calculate_hierarchical_prior
-from rl.model.utils import Params, ParamsContainer
+from rl import checkpoint
+from rl.online.bandit import LambdaBandit
+from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.loss import (
@@ -45,8 +45,17 @@ from rl.online.plasticity import (
     PlasticityController,
     shrink_and_perturb_player_state,
 )
-from rl.online.targets import compute_builder_targets, compute_player_targets
+from rl.online.targets import (
+    compute_aux_value_targets,
+    compute_builder_targets,
+    compute_player_targets,
+)
 from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
+from rl.model.heads import (
+    HeadParams,
+    calculate_hierarchical_prior,
+)
+from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
@@ -72,24 +81,6 @@ def train_step(
         history=player_history,
     )
 
-    # Learned state potential: the frozen offline critic's Φ(s), computed
-    # ONCE per trajectory at buffer insert (Learner.enqueue_traj) and
-    # carried in the batch — the critic is frozen, so evaluating its
-    # ensemble here would redo identical work on every replay reuse.
-    if isinstance(batch.state_potential, tuple):
-        state_potential = jnp.zeros(
-            player_transitions.env_output.done.shape, dtype=jnp.float32
-        )
-    else:
-        state_potential = batch.state_potential.astype(jnp.float32)
-    # Announced potential Φ_ann for dice-excised shaping; falls back to the
-    # realised series (making the excision a no-op) when absent, so the
-    # config flag alone decides the arm.
-    if isinstance(batch.state_potential_announced, tuple):
-        announced_potential = state_potential
-    else:
-        announced_potential = batch.state_potential_announced.astype(jnp.float32)
-
     player_target_pred = player_state.apply_fn(
         player_state.target_params,
         player_actor_input,
@@ -106,9 +97,6 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    potential_target_adv_share = config.player_potential_target_adv_share_fn(
-        player_state.step_count
-    )
 
     training_logs = {}
 
@@ -125,14 +113,23 @@ def train_step(
         batch,
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
-        state_potential=state_potential,
-        announced_potential=announced_potential,
-        potential_target_adv_share=potential_target_adv_share,
         config=config,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
+
+    # Per-lambda v-trace distribution targets for the multi-lambda aux
+    # value heads, bootstrapped from each lambda's OWN fast-target readout
+    # so every row's target is self-consistent.
+    player_aux_targets = compute_aux_value_targets(
+        batch,
+        aux_value_log_probs=jax.nn.log_softmax(
+            player_target_pred.aux_value_logits.astype(jnp.float32), axis=-1
+        ),
+        isr=target_actor_ratio,
+        config=config,
+    )
     # Fraction of steps where the IMPACT clipped-target correction is
     # saturated at its cap — a second staleness signal alongside the actor
     # KL and ESS diagnostics.
@@ -265,19 +262,44 @@ def train_step(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
 
+        # Multi-gamma auxiliary value heads (Metamon/AMAGO-style): each
+        # row is a categorical value readout for one auxiliary discount,
+        # trained by CE against its own v-trace distribution target.
+        # Pure representation shaping across horizons — the policy's
+        # advantages read ONLY the main gamma=1 v_head; short-gamma
+        # advantages are material/tempo-greedy and not policy-invariant,
+        # so they never touch the actor loss.
+        aux_logits = learner_player_pred.aux_value_logits.astype(jnp.float32)
+        loss_v_aux = average(
+            optax.softmax_cross_entropy(
+                logits=aux_logits, labels=player_aux_targets
+            ).mean(axis=-1),
+            value_mask,
+        )
+
+        aux_value_r2 = calculate_r2(
+            value_prediction=jax.nn.softmax(aux_logits, axis=-1)
+            @ cat_vf_support.astype(jnp.float32),
+            value_target=player_aux_targets @ cat_vf_support.astype(jnp.float32),
+            mask=jnp.broadcast_to(value_mask[..., None], aux_logits.shape[:-1]),
+        )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + config.player_magnet_kl_coef * loss_magnet_kl
+            + config.player_aux_value_coef * loss_v_aux
         )
 
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
+            player_loss_v_aux=loss_v_aux,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
+            player_aux_value_r2=aux_value_r2,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
@@ -334,7 +356,6 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_potential_target_adv_share=potential_target_adv_share,
             # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
@@ -680,6 +701,28 @@ class Learner:
             cooldown_frames=config.plasticity_cooldown_frames,
         )
 
+        # Policy-target mixture bandit (rl/online/bandit.py): retunes the
+        # main v-trace lambda each window, rewarded by the BT-rating gain
+        # against the frozen league pool. Per-arm configs are prebuilt so
+        # each arm hits one stable jit-cache entry of train_step; the
+        # active arm's config simply becomes self.config.
+        self.bandit: LambdaBandit | None = None
+        if config.bandit_enabled and len(config.bandit_lambdas) > 1:
+            self.bandit = LambdaBandit(
+                arms=config.bandit_lambdas,
+                default_arm=config.bandit_default_arm,
+                ucb_c=config.bandit_ucb_c,
+                discount=config.bandit_discount,
+                min_games_per_opponent=config.bandit_min_games_per_opponent,
+                min_rated_opponents=config.bandit_min_rated_opponents,
+            )
+            if league.bandit_state is not None:
+                self.bandit.restore(league.bandit_state)
+            self._arm_configs = tuple(
+                config.replace(player_lambda=lam) for lam in config.bandit_lambdas
+            )
+            self.config = self._arm_configs[self.bandit.current_arm]
+
         self.done = False
         self.builder_replay = BuilderTrajectoryStore(
             max_size=self.config.builder_replay_buffer_capacity,
@@ -738,73 +781,6 @@ class Learner:
         # trajectory in enqueue_traj (the critic is frozen, so the values
         # are immutable data) and carried through the replay buffer —
         # train_step never runs the ensemble.
-        self.potential_params: Params | None = None
-        self._potential_apply = None
-        # Insert-time Φ diagnostics, accumulated as (sum, count) per metric
-        # under a lock (enqueue_traj runs on many actor threads) and drained
-        # into the train-step logs by _handle_periodic_tasks.
-        self._potential_stats_lock = threading.Lock()
-        self._potential_stats: dict[str, tuple[float, int]] = {}
-        # Live uncertainty-gate scale, plus the (mean, std, outcome)
-        # reservoir it is periodically refit on (ring buffer, same lock).
-        # Reads/writes of the float are GIL-atomic; the arrays are only
-        # touched under the lock. Initialised from the (possibly restored)
-        # train state so resumes keep the learned value; the reservoir
-        # itself is not persisted and refills within ~500 trajectories.
-        self._gate_scale = float(jax.device_get(self.player_state.gate_scale))
-        _gate_cap = config.potential_gate_scale_buffer
-        self._gate_fit_mean = np.zeros(_gate_cap, np.float32)
-        self._gate_fit_std = np.zeros(_gate_cap, np.float32)
-        self._gate_fit_outcome = np.zeros(_gate_cap, np.float32)
-        self._gate_fit_cursor = 0
-        self._gate_fit_count = 0
-        if config.offline_critic_ckpt_path:
-            from rl.offline.artifact import (
-                has_announced_states,
-                has_rating_conditioning,
-                load_critic_params,
-                make_potential_apply,
-            )
-
-            if config.potential_dice_excised and not has_announced_states(
-                config.offline_critic_ckpt_path
-            ):
-                # Φ_ann adds no params, so an un-announced artifact would
-                # silently produce untrained (off-distribution) announced
-                # values — refuse rather than shape on garbage.
-                raise ValueError(
-                    "potential_dice_excised requires every offline critic "
-                    "artifact to be announced-trained (manifest "
-                    "announced_states: true); got "
-                    f"{config.offline_critic_ckpt_path}"
-                )
-            critic_params = load_critic_params(config.offline_critic_ckpt_path)
-            self.potential_params = jax.device_put(critic_params)
-            # Jitted once: actor trajectories arrive with fixed shapes
-            # (unroll_length time axis, fixed-capacity history buffers).
-            # Architecture flags come from the artifact itself, so old and
-            # Elo-conditioned critics both load.
-            self._potential_apply = jax.jit(
-                make_potential_apply(
-                    config.generation,
-                    config.potential_uncertainty_scale,
-                    config.potential_readout,
-                    with_aux=True,
-                    rating_conditioning=has_rating_conditioning(critic_params),
-                    condition_rating=config.potential_condition_rating,
-                    announced=config.potential_dice_excised,
-                )
-            )
-            logging.info(
-                "Loaded offline critic potential from %s%s",
-                config.offline_critic_ckpt_path,
-                (
-                    " (dice-excised: announced states enabled)"
-                    if config.potential_dice_excised
-                    else ""
-                ),
-            )
-
         # JIT Compile
         if debug:
             self._train_step_jit = train_step
@@ -859,211 +835,8 @@ class Learner:
 
         return jax.jit(probe)
 
-    def _compute_state_potential(
-        self, traj: Trajectory
-    ) -> tuple[np.ndarray, np.ndarray | None]:
-        """Frozen-critic Φ(s) for one trajectory, shape (T,) — plus
-        Φ_ann(s) when dice-excised shaping is on, else None.
-
-        Runs the offline critic ensemble exactly once per trajectory —
-        here, at insert — instead of inside every train step: with
-        player_replay_ratio reuses per trajectory the ensemble cost drops
-        by that factor, learner step latency no longer includes the
-        ensemble forward at all, and ensemble size stops affecting step
-        time. The stored value is the fully gated potential
-        (mean · exp(−scale · std)) at the LIVE gate scale — passed as a
-        traced argument so scale updates never recompile."""
-        actor_input = PlayerActorInput(
-            env=traj.player_transitions.env_output,
-            packed_history=traj.player_packed_history,
-            history=traj.player_history,
-        )
-        # (T, ...) / (H, ...) leaves -> a batch of one at axis 1, matching
-        # the (T, B) convention make_potential_apply vmaps over.
-        batched = jax.tree.map(lambda x: np.expand_dims(x, 1), actor_input)
-        result, aux = self._potential_apply(
-            self.potential_params, batched, np.float32(self._gate_scale)
-        )
-        phi_ann = None
-        if self.config.potential_dice_excised:
-            phi, phi_ann = jax.device_get(result)
-            phi_ann = np.asarray(phi_ann)[:, 0]
-        else:
-            phi = jax.device_get(result)
-        phi = np.asarray(phi)[:, 0]
-        aux = {k: np.asarray(v)[:, 0] for k, v in jax.device_get(aux).items()}
-        self._record_potential_stats(traj, phi, aux, phi_ann)
-        # Stored bf16, upcast to f32 at use (compute_player_targets). The
-        # quantisation (~2^-9 absolute on Φ ∈ [-1, 1]) lands on the PBRS
-        # deltas γΦ_[ann](s')−Φ(s); insert-time stats above use the
-        # full-precision values, so potential_phi_step_delta_abs bounds the
-        # relative noise.
-        return phi.astype(jnp.bfloat16), (
-            phi_ann.astype(jnp.bfloat16) if phi_ann is not None else None
-        )
-
-    def _record_potential_stats(
-        self,
-        traj: Trajectory,
-        phi: np.ndarray,
-        aux: dict[str, np.ndarray],
-        phi_ann: np.ndarray | None = None,
-    ) -> None:
-        """Accumulates insert-time Φ diagnostics over one trajectory's valid
-        steps: shaping loudness (|Φ| after gating), the ensemble confidence
-        gate and raw disagreement, the dense per-step signal a low-λ
-        potential channel would consume, and whether the critic's terminal
-        sign matches the actual outcome (skipping ties). With dice-excised
-        shaping, also the live decision/dice split of the per-step signal —
-        the same decomposition rl.offline.diagnose --martingale audits, now
-        measured on self-play states."""
-        dones = np.asarray(traj.player_transitions.env_output.done)
-        valid = (np.cumsum(dones) - dones) == 0
-        if not valid.any():
-            return
-        stats = {
-            "phi_abs_mean": float(np.abs(phi[valid]).mean()),
-            "gate_mean": float(aux["gate"][valid].mean()),
-            "ensemble_std_mean": float(aux["ensemble_std"][valid].mean()),
-        }
-        step_pairs = valid[:-1] & valid[1:]
-        if step_pairs.any():
-            stats["phi_step_delta_abs"] = float(np.abs(np.diff(phi))[step_pairs].mean())
-            if phi_ann is not None:
-                decision = np.abs(phi_ann[1:] - phi[:-1])[step_pairs]
-                dice = np.abs(phi[1:] - phi_ann[1:])[step_pairs]
-                stats["decision_step_delta_abs"] = float(decision.mean())
-                stats["dice_step_delta_abs"] = float(dice.mean())
-                stats["decision_share"] = float(
-                    decision.sum() / max(decision.sum() + dice.sum(), 1e-9)
-                )
-        terminal_idx = np.nonzero(dones & valid)[0]
-        if terminal_idx.size:
-            t = int(terminal_idx[0])
-            outcome = float(
-                np.asarray(traj.player_transitions.env_output.win_reward)[t]
-                @ CAT_VF_SUPPORT
-            )
-            if outcome != 0.0:
-                stats["terminal_agreement"] = float((phi[t] > 0) == (outcome > 0))
-            if self.config.potential_gate_scale_learned:
-                # Gate-fit triplets: (ungated mean, member std, outcome)
-                # from evenly spaced pre-terminal states (the terminal
-                # state itself is trivially predictable and would bias
-                # the fitted scale down). Ties are valid targets.
-                pre_terminal = np.nonzero(valid[:t])[0]
-                if pre_terminal.size:
-                    picks = pre_terminal[
-                        np.unique(
-                            np.linspace(
-                                0,
-                                pre_terminal.size - 1,
-                                min(
-                                    self.config.potential_gate_scale_samples,
-                                    pre_terminal.size,
-                                ),
-                            ).astype(int)
-                        )
-                    ]
-                    self._push_gate_fit(
-                        aux["phi_raw"][picks], aux["ensemble_std"][picks], outcome
-                    )
-        with self._potential_stats_lock:
-            for key, value in stats.items():
-                total, count = self._potential_stats.get(key, (0.0, 0))
-                self._potential_stats[key] = (total + value, count + 1)
-
-    def _push_gate_fit(
-        self, means: np.ndarray, stds: np.ndarray, outcome: float
-    ) -> None:
-        """Appends gate-fit triplets to the ring buffer (thread-safe)."""
-        with self._potential_stats_lock:
-            cap = self._gate_fit_mean.shape[0]
-            n = len(means)
-            for m, s in zip(means, stds):
-                i = self._gate_fit_cursor
-                self._gate_fit_mean[i] = m
-                self._gate_fit_std[i] = s
-                self._gate_fit_outcome[i] = outcome
-                self._gate_fit_cursor = (i + 1) % cap
-            self._gate_fit_count = min(self._gate_fit_count + n, cap)
-
-    def _pop_potential_logs(self) -> dict[str, float]:
-        """Drains the insert-time Φ accumulator: means over every trajectory
-        recorded since the last drain, keyed potential_*."""
-        with self._potential_stats_lock:
-            stats, self._potential_stats = self._potential_stats, {}
-        return {
-            f"potential_{key}": total / count for key, (total, count) in stats.items()
-        }
-
-    def _update_gate_scale(self) -> dict[str, float]:
-        """Refits the uncertainty-gate scale against realised outcomes.
-
-        One-parameter regression on the reservoir:
-        c* = argmin_c E[(mean · exp(-c·std) - outcome)^2], solved by grid
-        search (the objective is cheap and possibly multi-modal, so no
-        fancy optimiser), then EMA'd into the live scale so shaping drifts
-        rather than jumps — Φ is only approximately policy-invariant while
-        the potential moves. Runs in _handle_periodic_tasks, off the
-        critical path."""
-        cfg = self.config
-        with self._potential_stats_lock:
-            count = self._gate_fit_count
-            if count < cfg.potential_gate_scale_min_samples:
-                return {"potential_gate_scale": self._gate_scale}
-            m = self._gate_fit_mean[:count].copy()
-            s = self._gate_fit_std[:count].copy()
-            y = self._gate_fit_outcome[:count].copy()
-        grid = np.linspace(
-            cfg.potential_gate_scale_min, cfg.potential_gate_scale_max, 101
-        ).astype(np.float32)
-        pred = m[None, :] * np.exp(-grid[:, None] * s[None, :])
-        mse = np.square(pred - y[None, :]).mean(axis=1)
-        solved = float(grid[int(np.argmin(mse))])
-        alpha = cfg.potential_gate_scale_ema
-        self._gate_scale = (1.0 - alpha) * self._gate_scale + alpha * solved
-        # Mirror into the train state so checkpoints persist the learned
-        # scale (safe: this runs on the train-loop thread between steps).
-        self.player_state = self.player_state.replace(
-            gate_scale=jnp.asarray(self._gate_scale, dtype=jnp.float32)
-        )
-        return {
-            "potential_gate_scale": self._gate_scale,
-            "potential_gate_scale_solved": solved,
-            "potential_gate_fit_mse": float(mse.min()),
-            "potential_gate_fit_samples": float(count),
-        }
-
-    # Index order matches ModalityEnum (proto/service.proto).
-    _MODALITY_NAMES = ("unspecified", "move", "switch", "wildcard", "other")
-
-    def _get_modality_scales(self) -> dict[str, jax.Array]:
-        """Per-modality micro-logit scales from the pi head (init 1.0).
-
-        Divergence between these is the direct readout of the
-        logit-scale-separation hypothesis: the shared bilinear grid ties
-        within-modality sharpness across modalities unless these learn
-        different values. Values may be device arrays; the log worker syncs.
-        """
-        pi_head = self.player_state.params.get("params", {}).get("pi_head", {})
-        scale = pi_head.get("modality_scale")
-        if scale is None:
-            return {}
-        return {
-            f"pi_head_modality_scale_{name}": scale[i]
-            for i, name in enumerate(self._MODALITY_NAMES)
-        }
-
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
-        if self._potential_apply is not None:
-            # Computed before taking the store lock — GPU work must not
-            # block concurrent samplers/producers.
-            phi, phi_ann = self._compute_state_potential(traj)
-            traj = traj.replace(state_potential=phi)
-            if phi_ann is not None:
-                traj = traj.replace(state_potential_announced=phi_ann)
         add_cond = self.player_replay._add_cv
         with add_cond:
             add_cond.wait_for(lambda: self.done or self.player_replay.ready_to_add())
@@ -1325,15 +1098,16 @@ class Learner:
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
             logs.update(self.plasticity.logs())
-            logs.update(self._get_modality_scales())
 
-        if self._potential_apply is not None:
-            logs.update(self._pop_potential_logs())
-            if (
-                self.config.potential_gate_scale_learned
-                and step % self.config.potential_gate_scale_interval == 0
-            ):
-                logs.update(self._update_gate_scale())
+        # Mixture-bandit window boundary: reward the live arm with the
+        # BT-rating gain vs the frozen pool, pick the next arm, and swap
+        # in its config (only player_lambda differs; a new arm's first
+        # window pays a one-off jit recompile). State is stashed on the
+        # league so the next checkpoint persists it.
+        if self.bandit is not None and step % self.config.bandit_window_steps == 0:
+            logs.update(self.bandit.update(self.league))
+            self.config = self._arm_configs[self.bandit.current_arm]
+            self.league.bandit_state = self.bandit.serialize()
 
         # Hand off to the log worker; values may still be device arrays and
         # are synced there, off the critical path.

@@ -9,6 +9,7 @@ from rl.config.common import AdamWConfig, BaseTrainingConfig
 PolicyObjectiveT = Literal["spo", "ppo"]
 
 
+
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
@@ -194,14 +195,29 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_gamma: float = 1.0
     player_alpha: float = 1.0
     player_lambda: float = 0.99
-    # λ for the potential advantage channel ONLY (win channel keeps
-    # player_lambda). Kept low so the channel's advantage stays close to
-    # the one-step PBRS signal γΦ(s')−Φ(s): dense per-move credit from the
-    # frozen critic. At λ→1 the channel telescopes to Φ(s_T)−Φ(s_t) ≈
-    # outcome − baseline — a rescaled copy of the win channel that adds no
-    # action-level information (the observed no-op shaping regime,
-    # player_potential_win_adv_corr ≈ 0.6 with zero winrate effect).
-    player_potential_lambda: float = 0.2
+
+    # Learning-progress bandit over the main v-trace lambda (the
+    # policy-target mixture meta-controller; rl/online/bandit.py). Every
+    # bandit_window_steps the learner fits a Bradley-Terry rating for
+    # main against the frozen league snapshots from the payoff table the
+    # league already keeps, rewards the live arm with the (scale-aligned)
+    # rating gain over the window, and picks the next arm by discounted
+    # UCB. Pure self-play signal: mirror games carry no reward and the
+    # scripted eval baselines are never consulted. Before
+    # bandit_min_rated_opponents snapshots have
+    # bandit_min_games_per_opponent effective games against main, no
+    # reward exists — the bandit idles on bandit_default_arm (the current
+    # production lambda) and re-baselines at the first valid fit. Each
+    # distinct arm costs one extra jit compile of train_step (config is a
+    # static argument).
+    bandit_enabled: bool = True
+    bandit_lambdas: tuple[float, ...] = (0.90, 0.99, 1.0)
+    bandit_default_arm: int = 1
+    bandit_window_steps: int = 20_000
+    bandit_ucb_c: float = 0.25
+    bandit_discount: float = 0.9
+    bandit_min_games_per_opponent: float = 20.0
+    bandit_min_rated_opponents: int = 2
 
     builder_gamma: float = 1.0
     builder_alpha: float = 1.0
@@ -217,45 +233,30 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # the EMA statistics keep updating either way so re-enabling is smooth.
     player_advantage_ema_enabled: bool = True
 
-    # Potential-based shaping (requires offline_critic_ckpt_path): target
-    # share of the combined advantage magnitude held by the potential
-    # channel. The channel coefficient is solved per batch from measured
-    # channel stds (coef = s/(1−s) · σ_win/σ_pot, capped below), so
-    # dominance stays pinned at the target while either channel's scale
-    # drifts over a long hold — a fixed coef cannot guarantee that.
-    # Schedule: hold dominant (0.8) for the first ~20k steps while the
-    # policy is near-random and win/loss is uninformative, anneal to a
-    # PERMANENT 0.2 floor (reached at 65k). The old 0.8-until-500k hold meant every
-    # run trained almost entirely on the critic's value landscape — which
-    # is reactive and skill-capped — and every run plateaued at the same
-    # ~-2.6 margin; the floor regime tests whether that ceiling was the
-    # critic's landscape (PBRS invariance does not require the share to
-    # anneal to zero, and a persistent 0.2 keeps dense per-move credit
-    # without dominating the objective). Judge via
-    # player_potential_adv_share (realised share, should track the
-    # target) and player_potential_adv_coef (the solved coef).
-    player_potential_target_adv_share_fn: Callable[[int], float] = (
-        lambda step: jnp.maximum(
-            0.2, 0.8 * jnp.clip((80_000 - step) / 60_000, 0.0, 1.0)
-        )
-    )
-    # Cap on the solved coefficient: keeps a near-silent potential channel
-    # (tiny σ_pot from heavy uncertainty gating or a flat Φ) from being
-    # amplified into pure noise to hit the share target. Must sit above the
-    # coefficients the solver actually needs, or the share mechanism is
-    # inert: at 30 the cap bound 100% of steps in the July 2026 run and
-    # realised adv_share ran ~0.55 against the 0.8 target, while the
-    # channel's quality signals stayed healthy (terminal_agreement 1.0,
-    # win_adv_corr ≈ 0). Judge via player_potential_adv_coef staying below
-    # the cap, with player_potential_adv_sign_flip and actor-KL as the
-    # noise guardrails.
-    player_potential_coef_max: float = 100.0
-
     # Loss coefficients
     ## Player
     player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
+    # Multi-lambda auxiliary value heads: K extra categorical value
+    # readouts trained by CE against per-lambda v-trace targets at the
+    # main gamma — a target bias/variance spectrum that shapes the shared
+    # representation (the main head keeps sole ownership of the policy's
+    # advantages). See player_aux_lambdas. Coefficient kept modest — the
+    # grad-norm lesson from the integrated-critic era: heavy aux gradient
+    # globally clips everything.
+    # Multi-lambda aux value heads: all at the main gamma (=1, win prob),
+    # differing in target construction — lambda=1 is the Monte Carlo
+    # anchor, low lambda leans on the critic. A gamma spectrum would
+    # degenerate here (terminal-only reward: gamma^45 kills the signal).
+    # Spectrum chosen ~geometric in effective horizon 1/(1-lambda):
+    # 1.25, 2, 5, 10, 20, inf turns against a ~45-turn mean game (the
+    # 20->inf gap is covered by the main head's lambda=0.99 ~ 100).
+    # Fixed, independent of config.player_lambda, which the mixture
+    # bandit varies per window. Length must match the model config's
+    # aux_v_head.num_heads.
+    player_aux_lambdas: tuple = (0.2, 0.5, 0.8, 0.9, 0.95, 1.0)
+    player_aux_value_coef: float = 0.5
 
     ## Builder
     builder_value_loss_coef: float = 0.5
@@ -270,76 +271,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Human
     builder_human_loss_coef: float = 1e-2
 
-    # Standalone offline critic (rl/offline/train.py artifact) used as the
-    # learned state potential in compute_player_targets. Loaded once at
-    # learner startup and held OUTSIDE the train state: its params never
-    # enter the optimizer or the RL network, so the RL model trains fully
-    # from scratch with no frozen or warm-started subtrees. The potential
-    # advantage channel is gated by player_potential_target_adv_share_fn.
-    # A tuple of paths loads an ensemble (members trained with
-    # rl.offline.train --ensemble-index k) for uncertainty-gated shaping.
-    offline_critic_ckpt_path: str | tuple[str, ...] | None = (
-        "ckpts/offline/gen9randombattle/ckpt_best"
-    )
-    # Ensemble-disagreement gate: Φ = mean * exp(-scale * std). Where the
-    # members disagree (off the human data distribution) shaping goes
-    # quiet. 0 disables; irrelevant for single-member critics. With
-    # potential_gate_scale_learned this is only the INITIAL scale.
-    potential_uncertainty_scale: float = 5.0
-    # Learn the gate scale online from the run's own outcomes: every
-    # trajectory yields (ensemble mean, ensemble std, final result)
-    # triplets on exactly the self-play state distribution the gate must
-    # serve, so the scale is a 1-parameter regression — periodically solve
-    # c* = argmin_c E[(mean·exp(-c·std) - outcome)^2] over a reservoir of
-    # triplets and EMA the live scale toward it. Replaces the hand-picked
-    # 5.0, which offline calibration suggested was over-shrinking
-    # (member std ~0.085 -> gate ~0.65 at ~78% gated sign accuracy).
-    # Judge via potential_gate_scale (the live value) vs
-    # potential_gate_scale_solved (each fit's argmin).
-    potential_gate_scale_learned: bool = True
-    potential_gate_scale_min: float = 0.0
-    potential_gate_scale_max: float = 20.0
-    # Solve cadence (learner steps), reservoir capacity (triplets), states
-    # sampled per trajectory, minimum fill before the first solve, and the
-    # per-solve EMA step toward c*. The reservoir is a ring buffer, so the
-    # fit always reflects recent policy/state distribution.
-    potential_gate_scale_interval: int = 1000
-    potential_gate_scale_buffer: int = 32768
-    potential_gate_scale_samples: int = 8
-    potential_gate_scale_min_samples: int = 4096
-    potential_gate_scale_ema: float = 0.2
-    # What Φ reads off the critic's 13-bin margin distribution (training
-    # stays distributional either way): "win" = P(win) − P(loss) — pure
-    # outcome belief, flat across decided positions, never prefers a wider
-    # win over a likelier one; "margin" = expected margin — also grades
-    # decisiveness, denser shaping inside decided positions but can
-    # transiently reward margin-seeking over win-optimal lines.
-    potential_readout: str = "win"
-    # With an Elo-conditioned critic (auto-detected from the artifact),
-    # condition Φ at this rating: shaping then reflects how games between
-    # players of that strength resolve, not ladder-average conversion.
-    # 0 = leave the inputs alone (self-play carries no ratings, so the
-    # critic uses its unknown-rating bucket). Ignored for pre-rating
-    # artifacts. Conditioning far above the data's rating support makes
-    # ensemble members disagree, which the uncertainty gate then quiets.
-    potential_condition_rating: int = 1800
-    # Dice-excised PBRS: the potential channel's next-step bootstrap uses
-    # Φ_ann(t+1) — the critic read at the announced state, where both
-    # players' choices for the turn are revealed but chance is unresolved —
-    # in place of the realised Φ(t+1). Φ_ann = E[Φ | announcement] (tower
-    # property ⇒ same expected shaping, verified conditionally unbiased by
-    # rl.offline.diagnose --martingale), so the channel stops paying the
-    # agent for crits, misses and damage rolls: measured on the July 2026
-    # critic, ~85% of the channel's per-turn variance was resolved chance.
-    # Expect potential_adv_coef to rise ~σ-ratio at unchanged adv_share
-    # (denser signal, same loudness). Requires every artifact in
-    # offline_critic_ckpt_path to be announced-trained (manifest
-    # announced_states — Φ_ann adds no params, so this is checked from the
-    # manifests at startup and fails loudly). A/B off vs on, judged by
-    # actor-KL (~0.045 reference) and strength-per-step; False is the
-    # realised-PBRS comparison arm.
-    potential_dice_excised: bool = True
 
 
 def get_learner_config():
     return Porygon2LearnerConfig()
+
+

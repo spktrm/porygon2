@@ -106,7 +106,7 @@ image = (
         "rl",
         remote_path=f"{REPO_REMOTE}/rl",
         copy=True,
-        ignore=["**/__pycache__", "**/.DS_Store"],
+        ignore=["**/__pycache__", "**/.DS_Store", "**/*.log"],
     )
     # Whole data tree (unlike the serve app's minimal picks): training
     # touches the embedding .npy tables AND the service's runtime data
