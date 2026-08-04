@@ -1,13 +1,10 @@
-from collections.abc import Callable
 from typing import Literal
 
 import chex
-import jax.numpy as jnp
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
 
 PolicyObjectiveT = Literal["spo", "ppo"]
-
 
 
 @chex.dataclass(frozen=True)
@@ -272,8 +269,5 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_human_loss_coef: float = 1e-2
 
 
-
 def get_learner_config():
     return Porygon2LearnerConfig()
-
-

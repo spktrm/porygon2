@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 from ml_collections import ConfigDict
 
-from rl.online.agent import Agent
+from rl import checkpoint
 from rl.environment.data import (
     ITOS,
     NUM_ABILITIES,
@@ -36,8 +36,6 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import get_ex_builder_step
-from rl import checkpoint
-from rl.online.config import get_learner_config
 from rl.model.config import get_builder_model_config
 from rl.model.heads import (
     CategoricalValueLogitHead,
@@ -47,6 +45,8 @@ from rl.model.heads import (
 )
 from rl.model.modules import MLP, RMSNorm, TransformerEncoder
 from rl.model.utils import get_num_params
+from rl.online.agent import Agent
+from rl.online.config import get_learner_config
 
 
 class Porygon2BuilderModel(nn.Module):
