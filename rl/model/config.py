@@ -166,9 +166,16 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.macro_head.mlp = ConfigDict()
     cfg.macro_head.mlp.layer_sizes = entity_size
 
+    # Deep value readout (Aug 2026): the previous single linear layer made
+    # the value head the thinnest module in the model while the action
+    # decoder kept the depth the November experiments proved necessary —
+    # forcing the trunk itself to linearise win probability, in direct
+    # competition with policy features. Two hidden layers on the pooled
+    # 4*entity_size value embedding mirror the pi_head's per-modality
+    # block depth.
     cfg.v_head = ConfigDict()
     cfg.v_head.mlp = ConfigDict()
-    cfg.v_head.mlp.layer_sizes = 3
+    cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
     # Multi-lambda auxiliary value head (learner-only): K categorical
@@ -178,7 +185,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.aux_v_head = ConfigDict()
     cfg.aux_v_head.num_heads = 6
     cfg.aux_v_head.mlp = ConfigDict()
-    cfg.aux_v_head.mlp.layer_sizes = cfg.aux_v_head.num_heads * len(CAT_VF_SUPPORT)
+    # Same depth as v_head (see comment there); final width = one
+    # categorical row per aux lambda.
+    cfg.aux_v_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.aux_v_head.num_heads * len(CAT_VF_SUPPORT),
+    )
 
     for head in [cfg.pi_head]:
         head.train = train

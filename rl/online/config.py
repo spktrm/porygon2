@@ -1,10 +1,13 @@
+from collections.abc import Callable
 from typing import Literal
 
 import chex
+import jax.numpy as jnp
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
 
 PolicyObjectiveT = Literal["spo", "ppo"]
+
 
 
 @chex.dataclass(frozen=True)
@@ -186,6 +189,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (R-NaD likewise keeps a 1e-3 target purely for v-trace stability,
     # separate from its slow anchors.)
     player_ema_update_rate: float = 1e-3
+    # Advantage-normaliser statistics EMA — deliberately much faster than
+    # the target-params EMA above (the stats are per-batch scalars, not
+    # parameters): ~100-step time constant so PG mis-scaling after a
+    # distribution shift (bandit arm switch, plasticity event) lasts ~0.5%
+    # of a bandit window instead of ~10%.
+    player_adv_ema_rate: float = 1e-2
+    # Floor for the normaliser's std divisor: below this, stop rescaling
+    # so converged-policy noise is not amplified into the actor. Sized
+    # ~10-15% of the healthy running adv-std (0.34-0.6 observed).
+    player_adv_std_floor: float = 0.05
     builder_ema_update_rate: float = 1e-3
 
     # Advantage estimation params
@@ -204,12 +217,19 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # bandit_min_rated_opponents snapshots have
     # bandit_min_games_per_opponent effective games against main, no
     # reward exists — the bandit idles on bandit_default_arm (the current
-    # production lambda) and re-baselines at the first valid fit. Each
-    # distinct arm costs one extra jit compile of train_step (config is a
-    # static argument).
+    # production lambda) and re-baselines at the first valid fit. The
+    # live arm's lambda reaches train_step as a RUNTIME scalar, so arm
+    # switches never recompile — lambda-as-static-config retained ~5GB of
+    # host RAM per arm's executable and 1326 died to the OOM killer
+    # mid-compile at its second arm switch.
     bandit_enabled: bool = True
-    bandit_lambdas: tuple[float, ...] = (0.90, 0.99, 1.0)
-    bandit_default_arm: int = 1
+    # Arm horizons 1/(1-lambda): 2, 5, 10, 100, inf turns. The low arms
+    # inject critic bias into the actor while live — they are cheap to
+    # KEEP (runtime lambda, no recompile) but each initial exploration
+    # window trains on them for real; discounted UCB parks them if they
+    # measure badly.
+    bandit_lambdas: tuple[float, ...] = (0.5, 0.8, 0.9, 0.99, 1.0)
+    bandit_default_arm: int = 3
     bandit_window_steps: int = 20_000
     bandit_ucb_c: float = 0.25
     bandit_discount: float = 0.9
@@ -269,5 +289,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_human_loss_coef: float = 1e-2
 
 
+
 def get_learner_config():
     return Porygon2LearnerConfig()
+
+

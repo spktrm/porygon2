@@ -41,6 +41,7 @@ def compute_player_targets(
     value_log_probs: jax.Array,
     isr: jax.Array,
     config: Porygon2LearnerConfig,
+    lambda_override: jax.Array | float | None = None,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes v-trace returns and advantages on the win/loss channel.
 
@@ -54,6 +55,12 @@ def compute_player_targets(
     estimates the target policy's values with off-policy correction — stable
     under replay reuse because the fast target tracks the learner within ~1k
     steps.
+
+    ``lambda_override`` (a RUNTIME scalar) replaces config.player_lambda
+    when given. The mixture bandit switches lambda per window this way so
+    every arm shares ONE compiled train_step — lambda-as-static-config
+    recompiled per arm, and each recompile retained ~5GB host RAM (run
+    1326 died to the OOM killer mid-compile at its second arm switch).
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
@@ -77,7 +84,10 @@ def compute_player_targets(
 
     td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
 
-    lambda_ = jnp.asarray(config.player_lambda, dtype=isr.dtype)
+    lambda_ = jnp.asarray(
+        config.player_lambda if lambda_override is None else lambda_override,
+        dtype=isr.dtype,
+    )
     errors = vtrace(td_errors, discount_t, c_t * lambda_)
 
     targets_tm1 = (errors + v_tm1) * mask_expanded

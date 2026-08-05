@@ -91,7 +91,9 @@ def mask_outcome_features(edge_cache: jax.Array) -> tuple[jax.Array, jax.Array]:
     return masked, is_announcement
 
 
-def major_arg_step_mask(history_field: jax.Array, edge_cache: jax.Array) -> jax.Array:
+def major_arg_step_mask(
+    history_field: jax.Array, edge_cache: jax.Array
+) -> jax.Array:
     """(H,) bool: history steps that carry at least one battle major arg.
 
     Mirrors the relevant-edge gather of PerSlotHistoryEncoder.__call__: a
