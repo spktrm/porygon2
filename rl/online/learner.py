@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import queue
@@ -15,7 +16,6 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
-from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import (
     Batch,
@@ -24,15 +24,14 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
-from rl.model.heads import HeadParams, calculate_hierarchical_prior
-from rl.model.utils import Params, ParamsContainer
+from rl import checkpoint
+from rl.online.bandit import LambdaBandit
+from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.online.bandit import LambdaBandit
-from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.loss import (
@@ -52,6 +51,11 @@ from rl.online.targets import (
     compute_player_targets,
 )
 from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
+from rl.model.heads import (
+    HeadParams,
+    calculate_hierarchical_prior,
+)
+from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
@@ -62,8 +66,14 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
+    player_lambda: jax.Array | None = None,
 ):
-    """Train for a single step."""
+    """Train for a single step.
+
+    ``player_lambda`` is a RUNTIME scalar (traced, not static) so the
+    mixture bandit's arm switches never recompile — see
+    compute_player_targets for the OOM history behind this.
+    """
 
     player_transitions = batch.player_transitions
     player_history = batch.player_history
@@ -110,6 +120,7 @@ def train_step(
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
         config=config,
+        lambda_override=player_lambda,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
@@ -159,9 +170,14 @@ def train_step(
     player_targets = promote_map(player_targets, float_dtype)
 
     if config.player_advantage_ema_enabled:
-        player_advantages = (player_targets.advantages - player_state.ema_adv_mean) / (
-            player_state.ema_adv_std + 1e-8
-        )
+        # Floor on the std divisor: as the policy converges true
+        # advantages shrink, and dividing by a vanishing std amplifies
+        # value-estimation noise into the actor precisely when the real
+        # signal is weakest. Below the floor, normalisation stops
+        # rescaling and the gradient is allowed to get small.
+        player_advantages = (
+            player_targets.advantages - player_state.ema_adv_mean
+        ) / jnp.maximum(player_state.ema_adv_std, config.player_adv_std_floor)
     else:
         player_advantages = player_targets.advantages
 
@@ -273,12 +289,31 @@ def train_step(
             value_mask,
         )
 
+        aux_expectations = jax.nn.softmax(aux_logits, axis=-1) @ cat_vf_support.astype(
+            jnp.float32
+        )
+        aux_target_expectations = player_aux_targets @ cat_vf_support.astype(
+            jnp.float32
+        )
         aux_value_r2 = calculate_r2(
-            value_prediction=jax.nn.softmax(aux_logits, axis=-1)
-            @ cat_vf_support.astype(jnp.float32),
-            value_target=player_aux_targets @ cat_vf_support.astype(jnp.float32),
+            value_prediction=aux_expectations,
+            value_target=aux_target_expectations,
             mask=jnp.broadcast_to(value_mask[..., None], aux_logits.shape[:-1]),
         )
+        # Per-row R2, keyed by lambda. The lambda=1.0 (Monte Carlo) row is
+        # the calibration anchor: its gap to the main head is a direct
+        # bootstrap-bias readout — large/growing gap means the critic is
+        # drifting off the data (replay staleness, self-referential
+        # low-lambda targets); tiny gap during a strength plateau points
+        # at transfer saturation instead.
+        aux_row_r2 = {
+            f"player_aux_r2_lam{round(lam * 100):03d}": calculate_r2(
+                value_prediction=aux_expectations[..., k],
+                value_target=aux_target_expectations[..., k],
+                mask=value_mask,
+            )
+            for k, lam in enumerate(config.player_aux_lambdas)
+        }
 
         loss = (
             config.player_policy_loss_coef * loss_pg
@@ -296,6 +331,7 @@ def train_step(
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_aux_value_r2=aux_value_r2,
+            **aux_row_r2,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
@@ -334,15 +370,20 @@ def train_step(
             player_state.target_params,
             config.player_ema_update_rate,
         ),
+        # Advantage stats use their own, much faster EMA rate: they are
+        # scalars estimated from ~180 samples per batch (well-averaged at
+        # a 100-step time constant), and a slow EMA mis-scales the policy
+        # gradient for ~1k steps after every distribution shift — bandit
+        # arm switches most visibly.
         ema_adv_mean=optax.incremental_update(
             player_targets.advantages.mean(where=policy_mask),
             player_state.ema_adv_mean,
-            config.player_ema_update_rate,
+            config.player_adv_ema_rate,
         ),
         ema_adv_std=optax.incremental_update(
             player_targets.advantages.std(where=policy_mask),
             player_state.ema_adv_std,
-            config.player_ema_update_rate,
+            config.player_adv_ema_rate,
         ),
     )
 
@@ -699,9 +740,11 @@ class Learner:
 
         # Policy-target mixture bandit (rl/online/bandit.py): retunes the
         # main v-trace lambda each window, rewarded by the BT-rating gain
-        # against the frozen league pool. Per-arm configs are prebuilt so
-        # each arm hits one stable jit-cache entry of train_step; the
-        # active arm's config simply becomes self.config.
+        # against the frozen league pool. Lambda reaches train_step as a
+        # RUNTIME scalar, so arm switches share one compiled executable —
+        # lambda-as-static-config recompiled per arm and each recompile
+        # retained ~5GB host RAM (1326 died to the OOM killer mid-compile).
+        self._current_lambda = float(config.player_lambda)
         self.bandit: LambdaBandit | None = None
         if config.bandit_enabled and len(config.bandit_lambdas) > 1:
             self.bandit = LambdaBandit(
@@ -714,10 +757,7 @@ class Learner:
             )
             if league.bandit_state is not None:
                 self.bandit.restore(league.bandit_state)
-            self._arm_configs = tuple(
-                config.replace(player_lambda=lam) for lam in config.bandit_lambdas
-            )
-            self.config = self._arm_configs[self.bandit.current_arm]
+            self._current_lambda = float(self.bandit.arms[self.bandit.current_arm])
 
         self.done = False
         self.builder_replay = BuilderTrajectoryStore(
@@ -1075,6 +1115,7 @@ class Learner:
             self.builder_state,
             batch,
             self.config,
+            np.float32(self._current_lambda),
         )
 
         return logs
@@ -1096,13 +1137,13 @@ class Learner:
             logs.update(self.plasticity.logs())
 
         # Mixture-bandit window boundary: reward the live arm with the
-        # BT-rating gain vs the frozen pool, pick the next arm, and swap
-        # in its config (only player_lambda differs; a new arm's first
-        # window pays a one-off jit recompile). State is stashed on the
-        # league so the next checkpoint persists it.
+        # BT-rating gain vs the frozen pool, pick the next arm, and point
+        # the runtime lambda at it — no recompile, all arms share one
+        # executable. State is stashed on the league so the next
+        # checkpoint persists it.
         if self.bandit is not None and step % self.config.bandit_window_steps == 0:
             logs.update(self.bandit.update(self.league))
-            self.config = self._arm_configs[self.bandit.current_arm]
+            self._current_lambda = float(self.bandit.arms[self.bandit.current_arm])
             self.league.bandit_state = self.bandit.serialize()
 
         # Hand off to the log worker; values may still be device arrays and

@@ -13,13 +13,21 @@ Everything here is per-timestep pure math; the model-side orchestration
 lives in Porygon2PlayerModel.act_search.
 """
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
-from rl.environment.data import ALLY_SWITCH_INDICES, MOVE_INDICES, NUM_ACTION_FEATURES
+import jax
+import jax.numpy as jnp
+
+from rl.environment.data import (
+    ALLY_SWITCH_INDICES,
+    MOVE_INDICES,
+    NUM_ACTION_FEATURES,
+)
 from rl.environment.protos.enums_pb2 import BattlemajorargsEnum
-from rl.environment.protos.features_pb2 import EntityEdgeFeature, MovesetFeature
+from rl.environment.protos.features_pb2 import (
+    EntityEdgeFeature,
+    MovesetFeature,
+)
 
 # --- Static src-slot -> announcement tables (singles; ally 1 acts) -------
 # my_moveset row r feeds action src slot MOVE_INDICES[r] (encoder builds

@@ -168,11 +168,6 @@ class LambdaBandit:
             "bandit_arm": float(self.current_arm),
             "bandit_rating_valid": 0.0,
         }
-        for i, lam in enumerate(self.arms):
-            logs[f"bandit_arm{i}_count"] = float(self.counts[i])
-            logs[f"bandit_arm{i}_mean"] = float(
-                self.sums[i] / self.counts[i] if self.counts[i] > 0 else 0.0
-            )
 
         if len(snap_keys) < self.min_rated_opponents:
             # Unrateable pool (cold start / pure mirror): no reward exists.
@@ -180,20 +175,22 @@ class LambdaBandit:
             # credited with progress made during the gap.
             self.prev_ratings = None
             self.prev_main = None
-            return logs
+            return self._log_arm_stats(logs)
 
         ratings = bt_ratings([MAIN_KEY] + snap_keys, wins, draws, games)
         if MAIN_KEY not in ratings:
             self.prev_ratings = None
             self.prev_main = None
-            return logs
+            return self._log_arm_stats(logs)
 
         logs["bandit_rating_valid"] = 1.0
         logs["bandit_bt_rating"] = ratings[MAIN_KEY]
         logs["bandit_rated_opponents"] = float(len(ratings) - 1)
 
         if self.prev_ratings is not None and self.prev_main is not None:
-            common = [s for s in ratings if s != MAIN_KEY and s in self.prev_ratings]
+            common = [
+                s for s in ratings if s != MAIN_KEY and s in self.prev_ratings
+            ]
             if common:
                 # Frozen snapshots move only through scale drift; the mean
                 # shift over common snapshots is that drift.
@@ -224,4 +221,14 @@ class LambdaBandit:
             self.current_arm = int(np.argmax(ucb))
 
         logs["bandit_next_lambda"] = self.arms[self.current_arm]
+        return self._log_arm_stats(logs)
+
+    def _log_arm_stats(self, logs: dict[str, float]) -> dict[str, float]:
+        """Per-arm stats AFTER this window's reward and selection, so the
+        logged counts reflect the update the same row reports."""
+        for i in range(len(self.arms)):
+            logs[f"bandit_arm{i}_count"] = float(self.counts[i])
+            logs[f"bandit_arm{i}_mean"] = float(
+                self.sums[i] / self.counts[i] if self.counts[i] > 0 else 0.0
+            )
         return logs

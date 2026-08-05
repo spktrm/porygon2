@@ -103,9 +103,19 @@ def rl_sections():
                 ),
                 lp(
                     # R2 of expectations vs v-trace targets: main head
-                    # and the pooled aux-gamma rows.
-                    "Value R2 (main vs aux gammas)",
+                    # and the pooled aux-lambda rows.
+                    "Value R2 (main vs aux lambdas)",
                     ["player_value_head_r2", "player_aux_value_r2"],
+                ),
+                lp(
+                    # Per-lambda aux R2. The lam100 (Monte Carlo) row vs
+                    # the main head is the bootstrap-bias readout: a
+                    # large/growing gap = critic drifting off the data; a
+                    # tiny gap during a margin plateau = transfer
+                    # saturation, not value miscalibration.
+                    "Aux value R2 per lambda",
+                    [],
+                    regex="^player_aux_r2_lam",
                 ),
             ],
         ),
@@ -432,7 +442,15 @@ def offline_sections():
     ]
 
 
-def save_view(entity, project, name, sections, update_url, settings=None):
+def save_view(entity, project, name, sections, update_url, settings=None, force_x=None):
+    # Panel-level x overrides the workspace-level x_axis setting, and the
+    # save/round-trip path materialises the default "Step" (wandb's row
+    # counter) onto every panel that doesn't set one — silently defeating
+    # WorkspaceSettings(x_axis=...). Force the axis per panel instead.
+    if force_x:
+        for section in sections:
+            for panel in section.panels:
+                panel.x = force_x
     if update_url:
         workspace = ws.Workspace.from_url(update_url)
         workspace.name = name
@@ -464,7 +482,10 @@ def main():
         # carry training_step (rl/learner/learner.py, rl/main.py), and it is
         # comparable across runs unlike wandb's _step row counter. The
         # offline project does not log this key, so it keeps the default.
+        # force_x pins it per panel — the workspace-level setting alone is
+        # overridden by the "Step" default materialised onto each panel.
         settings=ws.WorkspaceSettings(x_axis="training_step"),
+        force_x="training_step",
     )
     save_view(
         args.entity,

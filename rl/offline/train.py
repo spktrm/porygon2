@@ -38,8 +38,8 @@ import optax
 from flax.training import train_state
 
 import wandb
-from rl import checkpoint as checkpoint_lib
 from rl.environment.utils import get_ex_trajectory
+from rl import checkpoint as checkpoint_lib
 from rl.model.config import get_player_model_config
 from rl.model.utils import Params, get_num_params
 from rl.offline.config import Porygon2OfflineConfig, get_offline_config
