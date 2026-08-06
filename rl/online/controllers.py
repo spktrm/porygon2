@@ -99,6 +99,25 @@ class LambdaGapController:
             out["lambda_ctrl_gap_ema"] = float(self._gap_ema)
         return out
 
+    def state_dict(self) -> dict:
+        return dict(
+            log_h=self._log_h,
+            gap_ema=self._gap_ema,
+            prev_err=self._prev_err,
+            ticks=self._ticks,
+        )
+
+    def load_state_dict(self, state: dict) -> None:
+        # Re-clip: the band moves when lambda_ctrl_min/max change between
+        # runs, and a restored actuator outside the new band would be
+        # stuck until the integral walked it back.
+        self._log_h = float(
+            np.clip(state["log_h"], self.log_h_min, self.log_h_max)
+        )
+        self._gap_ema = state["gap_ema"]
+        self._prev_err = state["prev_err"]
+        self._ticks = int(state["ticks"])
+
 
 class EntropyRateController:
     """Caps the RATE of policy-entropy decline by scaling the magnet KL
@@ -176,3 +195,15 @@ class EntropyRateController:
         if self._fast is not None and self._slow is not None:
             out["entropy_ctrl_decline"] = float(self._slow - self._fast)
         return out
+
+    def state_dict(self) -> dict:
+        return dict(fast=self._fast, slow=self._slow, log_coef=self._log_coef)
+
+    def load_state_dict(self, state: dict) -> None:
+        self._fast = state["fast"]
+        self._slow = state["slow"]
+        # Re-clip against the current baseline/max_scale, which move when
+        # player_magnet_kl_coef or entropy_ctrl_max_scale change.
+        self._log_coef = float(
+            np.clip(state["log_coef"], self.baseline_log, self.max_log)
+        )

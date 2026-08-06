@@ -234,9 +234,10 @@ def save_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
+    controller_bytes: bytes | None = None,
 ):
     save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league
+        learner_config, player_state, builder_state, league, controller_bytes
     )
     if learner_config.log_artifacts_online and (
         player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
@@ -253,11 +254,19 @@ def save_train_state_locally(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
+    controller_bytes: bytes | None = None,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
     )
-    return save_state(save_path, learner_config, player_state, builder_state, league)
+    return save_state(
+        save_path,
+        learner_config,
+        player_state,
+        builder_state,
+        league,
+        controller_bytes,
+    )
 
 
 def save_state(
@@ -266,6 +275,7 @@ def save_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
+    controller_bytes: bytes | None = None,
 ):
     os.makedirs(save_path, exist_ok=True)
     player_components = dict(
@@ -294,6 +304,7 @@ def save_state(
         player_components,
         builder_components,
         league.serialize(),
+        controller_bytes,
     )
     write_manifest(save_path, learner_config, player_state)
     return save_path
@@ -335,13 +346,15 @@ def load_from_scratch(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[
+    Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None
+]:
     """
     No-op on state; simply initializes a fresh league.
     """
     print("Starting training from scratch.")
     league = _init_league(learner_config, player_state, builder_state)
-    return player_state, builder_state, league
+    return player_state, builder_state, league, None
 
 
 def load_from_checkpoint(
@@ -349,9 +362,12 @@ def load_from_checkpoint(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[
+    Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None
+]:
     """
-    Full restoration: loads params, opt_state, step counts, and league.
+    Full restoration: loads params, opt_state, step counts, league, and the
+    host-side controller/plasticity state.
     """
     print(f"Loading checkpoint from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=True)
@@ -407,7 +423,7 @@ def load_from_checkpoint(
         )
     )
 
-    return player_state, builder_state, league
+    return player_state, builder_state, league, ckpt_data.get("controllers")
 
 
 def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
@@ -489,7 +505,9 @@ def load_from_params(
     # Initialize a fresh league since we are effectively starting a new run with existing weights
     league = _init_league(learner_config, player_state, builder_state)
 
-    return player_state, builder_state, league
+    # Controllers start fresh too: params-mode is a new run whose training
+    # dynamics (lambda anneal, plasticity stall clock) do not carry over.
+    return player_state, builder_state, league, None
 
 
 def load_train_state(
@@ -497,7 +515,9 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[
+    Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None
+]:
 
     latest_ckpt = _get_checkpoint_path(learner_config)
 

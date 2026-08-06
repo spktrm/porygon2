@@ -133,6 +133,28 @@ class PlasticityController:
             self.recovering = False
             self.recovery_ref_step = None
 
+    def state_dict(self) -> dict:
+        return dict(
+            consecutive_overdue=self.consecutive_overdue,
+            perturbation_count=self.perturbation_count,
+            recovering=self.recovering,
+            recovery_ref_step=self.recovery_ref_step,
+            last_perturb_frame=self.last_perturb_frame,
+            last_recovery_winrate=self.last_recovery_winrate,
+        )
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore the stall/recovery bookkeeping. Without this a resume
+        forgets an in-flight recovery, which clears the perturbation
+        cooldown and lets a second shrink-and-perturb land on a network
+        still convalescing from the first."""
+        self.consecutive_overdue = int(state["consecutive_overdue"])
+        self.perturbation_count = int(state["perturbation_count"])
+        self.recovering = bool(state["recovering"])
+        self.recovery_ref_step = state["recovery_ref_step"]
+        self.last_perturb_frame = state["last_perturb_frame"]
+        self.last_recovery_winrate = float(state["last_recovery_winrate"])
+
     def logs(self) -> dict:
         return {
             "plasticity_consecutive_overdue": self.consecutive_overdue,
