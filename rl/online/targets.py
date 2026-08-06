@@ -41,7 +41,7 @@ def compute_player_targets(
     value_log_probs: jax.Array,
     isr: jax.Array,
     config: Porygon2LearnerConfig,
-    lambda_override: jax.Array | float | None = None,
+    adv_lambda: jax.Array | float | None = None,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes v-trace returns and advantages on the win/loss channel.
 
@@ -56,11 +56,14 @@ def compute_player_targets(
     under replay reuse because the fast target tracks the learner within ~1k
     steps.
 
-    ``lambda_override`` (a RUNTIME scalar) replaces config.player_lambda
-    when given. The mixture bandit switches lambda per window this way so
-    every arm shares ONE compiled train_step — lambda-as-static-config
-    recompiled per arm, and each recompile retained ~5GB host RAM (run
-    1326 died to the OOM killer mid-compile at its second arm switch).
+    Split lambdas (Ataraxos-style td/gae): value targets always use
+    config.player_lambda, so the critic's objective — and the MC-anchor
+    calibration signal built on it — never drifts. ``adv_lambda`` (a
+    RUNTIME scalar; traced, not static — lambda-as-static-config
+    recompiled per value and each recompile retained ~5GB host RAM,
+    killing run 1326) controls ONLY the advantage path, so the lambda
+    controller/bandit tunes the actor's bias/variance trade without
+    touching what the value heads learn.
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
@@ -84,16 +87,19 @@ def compute_player_targets(
 
     td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
 
-    lambda_ = jnp.asarray(
-        config.player_lambda if lambda_override is None else lambda_override,
+    td_lambda = jnp.asarray(config.player_lambda, dtype=isr.dtype)
+    errors = vtrace(td_errors, discount_t, c_t * td_lambda)
+    targets_tm1 = (errors + v_tm1) * mask_expanded
+
+    gae_lambda = jnp.asarray(
+        config.player_adv_lambda if adv_lambda is None else adv_lambda,
         dtype=isr.dtype,
     )
-    errors = vtrace(td_errors, discount_t, c_t * lambda_)
-
-    targets_tm1 = (errors + v_tm1) * mask_expanded
+    adv_errors = vtrace(td_errors, discount_t, c_t * gae_lambda)
+    adv_targets = (adv_errors + v_tm1) * mask_expanded
     q_bootstrap = jnp.concatenate(
         [
-            lambda_ * targets_tm1[1:] + (1 - lambda_) * v_tm1[1:],
+            gae_lambda * adv_targets[1:] + (1 - gae_lambda) * v_tm1[1:],
             v_t[-1:],
         ],
         axis=0,

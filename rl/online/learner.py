@@ -25,8 +25,9 @@ from rl.environment.interfaces import (
 )
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
 from rl import checkpoint
-from rl.online.bandit import LambdaBandit
+from rl.online.bandit import LambdaBandit, rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
+from rl.online.controllers import EntropyRateController, LambdaGapController
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
@@ -66,13 +67,15 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
-    player_lambda: jax.Array | None = None,
+    adv_lambda: jax.Array | None = None,
+    magnet_coef: jax.Array | None = None,
 ):
     """Train for a single step.
 
-    ``player_lambda`` is a RUNTIME scalar (traced, not static) so the
-    mixture bandit's arm switches never recompile — see
-    compute_player_targets for the OOM history behind this.
+    ``adv_lambda`` and ``magnet_coef`` are RUNTIME scalars (traced, not
+    static) driven by the lambda/entropy controllers — runtime values
+    never recompile; see compute_player_targets for the OOM history
+    behind this rule.
     """
 
     player_transitions = batch.player_transitions
@@ -120,7 +123,7 @@ def train_step(
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
         config=config,
-        lambda_override=player_lambda,
+        adv_lambda=adv_lambda,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
@@ -300,6 +303,20 @@ def train_step(
             value_target=aux_target_expectations,
             mask=jnp.broadcast_to(value_mask[..., None], aux_logits.shape[:-1]),
         )
+        # Sensor for the lambda controller: mean absolute gap between the
+        # main head's value and the lambda=1.0 Monte Carlo anchor row —
+        # the live per-batch bootstrap-bias estimate. Blind spot: trunk
+        # errors shared by both readouts cancel here, which is why the
+        # controller keeps a lambda floor.
+        mc_row = config.player_aux_lambdas.index(1.0)
+        bootstrap_gap = average(
+            jnp.abs(
+                learner_value_head.expectation.astype(jnp.float32)
+                - aux_expectations[..., mc_row]
+            ),
+            value_mask,
+        )
+
         # Per-row R2, keyed by lambda. The lambda=1.0 (Monte Carlo) row is
         # the calibration anchor: its gap to the main head is a direct
         # bootstrap-bias readout — large/growing gap means the critic is
@@ -319,7 +336,10 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            + config.player_magnet_kl_coef * loss_magnet_kl
+            + (
+                config.player_magnet_kl_coef if magnet_coef is None else magnet_coef
+            )
+            * loss_magnet_kl
             + config.player_aux_value_coef * loss_v_aux
         )
 
@@ -331,6 +351,7 @@ def train_step(
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
             player_aux_value_r2=aux_value_r2,
+            player_bootstrap_gap=bootstrap_gap,
             **aux_row_r2,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
@@ -667,16 +688,6 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, min_length=player_history_min_length
         ),
-        state_potential=(
-            ()
-            if isinstance(stacked_trajectory.state_potential, tuple)
-            else stacked_trajectory.state_potential[:num_valid]
-        ),
-        state_potential_announced=(
-            ()
-            if isinstance(stacked_trajectory.state_potential_announced, tuple)
-            else stacked_trajectory.state_potential_announced[:num_valid]
-        ),
         reuse_count=(
             ()
             if isinstance(stacked_trajectory.reuse_count, tuple)
@@ -738,15 +749,48 @@ class Learner:
             cooldown_frames=config.plasticity_cooldown_frames,
         )
 
-        # Policy-target mixture bandit (rl/online/bandit.py): retunes the
-        # main v-trace lambda each window, rewarded by the BT-rating gain
-        # against the frozen league pool. Lambda reaches train_step as a
-        # RUNTIME scalar, so arm switches share one compiled executable —
-        # lambda-as-static-config recompiled per arm and each recompile
-        # retained ~5GB host RAM (1326 died to the OOM killer mid-compile).
-        self._current_lambda = float(config.player_lambda)
+        # Advantage-lambda and magnet-coef runtime scalars (traced into
+        # train_step — never static config: each static value's recompile
+        # retained ~5GB host RAM and OOM-killed 1326). Driven by the
+        # controllers below, or by the bandit if it is enabled instead.
+        self._current_lambda = float(config.player_adv_lambda)
+        self._current_magnet_coef = float(config.player_magnet_kl_coef)
+
+        self.lambda_ctrl: LambdaGapController | None = None
+        if config.lambda_ctrl_enabled:
+            self.lambda_ctrl = LambdaGapController(
+                initial_lambda=config.player_adv_lambda,
+                gap_target=config.lambda_ctrl_gap_target,
+                kp=config.lambda_ctrl_kp,
+                ki=config.lambda_ctrl_ki,
+                interval=config.lambda_ctrl_interval,
+                lambda_min=config.lambda_ctrl_min,
+                lambda_max=config.lambda_ctrl_max,
+                sensor_ema=config.lambda_ctrl_sensor_ema,
+            )
+
+        self.entropy_ctrl: EntropyRateController | None = None
+        if config.entropy_ctrl_enabled:
+            self.entropy_ctrl = EntropyRateController(
+                baseline_coef=config.player_magnet_kl_coef,
+                max_decline=config.entropy_ctrl_max_decline,
+                entropy_floor=config.entropy_ctrl_floor,
+                gain=config.entropy_ctrl_gain,
+                decay=config.entropy_ctrl_decay,
+                max_scale=config.entropy_ctrl_max_scale,
+                fast_ema=config.entropy_ctrl_fast_ema,
+                slow_ema=config.entropy_ctrl_slow_ema,
+            )
+
+        # Strength-grounded bandit over adv-lambda arms — kept as the
+        # audit tool, off by default in favour of the gap controller.
         self.bandit: LambdaBandit | None = None
         if config.bandit_enabled and len(config.bandit_lambdas) > 1:
+            if config.lambda_ctrl_enabled:
+                raise ValueError(
+                    "bandit_enabled and lambda_ctrl_enabled both set: two "
+                    "drivers for the advantage lambda — enable exactly one."
+                )
             self.bandit = LambdaBandit(
                 arms=config.bandit_lambdas,
                 default_arm=config.bandit_default_arm,
@@ -810,13 +854,6 @@ class Learner:
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
-        # Frozen offline critic supplying the learned state potential. Its
-        # params are held here, outside the train states — they are never
-        # donated and never touched by the optimizer, so the critic stays
-        # frozen for the lifetime of the run. Φ is evaluated once per
-        # trajectory in enqueue_traj (the critic is frozen, so the values
-        # are immutable data) and carried through the replay buffer —
-        # train_step never runs the ensemble.
         # JIT Compile
         if debug:
             self._train_step_jit = train_step
@@ -951,9 +988,31 @@ class Learner:
             try:
                 host_logs = jax.device_get(logs)
                 self._update_replay_controller(host_logs)
+                self._update_hyper_controllers(host_logs)
                 self.wandb_run.log(host_logs)
             except Exception:
                 logger.exception("wandb logging failed")
+
+    def _update_hyper_controllers(self, host_logs: dict) -> None:
+        """Lambda and entropy controllers (rl/online/controllers.py).
+        Runs on the log worker like the replay controller — the sensors
+        are host-side per-step logs, and the actuators are plain floats
+        the train thread reads on its next step (GIL-atomic swap)."""
+        if self.lambda_ctrl is not None:
+            gap = host_logs.get("player_bootstrap_gap")
+            host_logs.update(
+                self.lambda_ctrl.update(
+                    None if gap is None else float(gap),
+                    recovering=self.plasticity.recovering,
+                )
+            )
+            self._current_lambda = self.lambda_ctrl.value
+        if self.entropy_ctrl is not None:
+            ent = host_logs.get("player_action_normalized_entropy")
+            host_logs.update(
+                self.entropy_ctrl.update(None if ent is None else float(ent))
+            )
+            self._current_magnet_coef = self.entropy_ctrl.value
 
     def _update_replay_controller(self, host_logs: dict) -> None:
         """Velocity-form PI loop holding the replayed-batch actor KL at
@@ -1116,6 +1175,7 @@ class Learner:
             batch,
             self.config,
             np.float32(self._current_lambda),
+            np.float32(self._current_magnet_coef),
         )
 
         return logs
@@ -1136,15 +1196,26 @@ class Learner:
             logs.update(self._get_league_winrates())
             logs.update(self.plasticity.logs())
 
-        # Mixture-bandit window boundary: reward the live arm with the
-        # BT-rating gain vs the frozen pool, pick the next arm, and point
-        # the runtime lambda at it — no recompile, all arms share one
-        # executable. State is stashed on the league so the next
-        # checkpoint persists it.
-        if self.bandit is not None and step % self.config.bandit_window_steps == 0:
-            logs.update(self.bandit.update(self.league))
-            self._current_lambda = float(self.bandit.arms[self.bandit.current_arm])
-            self.league.bandit_state = self.bandit.serialize()
+        # Rating window boundary. Bandit enabled: reward the live arm
+        # with the BT-rating gain vs the frozen pool and point the
+        # runtime lambda at the next arm. Bandit disabled (default —
+        # the lambda controller drives instead): still fit and log the
+        # BT rating, the only strength-grounded progress telemetry.
+        if step % self.config.bandit_window_steps == 0:
+            if self.bandit is not None:
+                logs.update(self.bandit.update(self.league))
+                self._current_lambda = float(
+                    self.bandit.arms[self.bandit.current_arm]
+                )
+                self.league.bandit_state = self.bandit.serialize()
+            else:
+                logs.update(
+                    rating_logs(
+                        self.league,
+                        self.config.bandit_min_games_per_opponent,
+                        self.config.bandit_min_rated_opponents,
+                    )
+                )
 
         # Hand off to the log worker; values may still be device arrays and
         # are synced there, off the critical path.

@@ -204,7 +204,48 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Advantage estimation params
     player_gamma: float = 1.0
     player_alpha: float = 1.0
+    # Value-target (td) lambda — pinned; the critic's objective and the
+    # MC-anchor calibration signal never drift.
     player_lambda: float = 0.99
+    # Advantage (gae) lambda — the actor's bias/variance knob; the
+    # lambda controller (rl/online/controllers.py) drives it at runtime
+    # when enabled, this is the starting/static value otherwise.
+    player_adv_lambda: float = 0.99
+
+    # Lambda PI controller: holds the measured bootstrap bias
+    # (player_bootstrap_gap: main head vs lambda=1.0 MC-anchor value gap)
+    # at lambda_ctrl_gap_target by adjusting the advantage lambda in
+    # log(1-lambda) space. Gap under target -> lambda anneals down;
+    # over -> backs off toward outcomes. During plasticity recovery
+    # lambda is forced to lambda_ctrl_max (bootstrap untrustworthy) and
+    # re-anneals afterwards. gap_target is on the +-1 value scale —
+    # calibrate from the first run's player_bootstrap_gap telemetry.
+    lambda_ctrl_enabled: bool = True
+    lambda_ctrl_gap_target: float = 0.05
+    # Gains sized from the 1329 trace: a sustained full-scale error moves
+    # log(1-lambda) ~0.05/tick -> the 0.99 -> 0.95 traverse (~+2.0 in
+    # log space) takes ~30-40k steps. The original ki=0.01 needed
+    # 100-200k — most of a run spent mid-anneal.
+    lambda_ctrl_kp: float = 0.2
+    lambda_ctrl_ki: float = 0.05
+    lambda_ctrl_interval: int = 500
+    lambda_ctrl_min: float = 0.5
+    lambda_ctrl_max: float = 1.0
+    lambda_ctrl_sensor_ema: float = 0.01
+
+    # Entropy rate limiter: scales the magnet KL coef (runtime scalar,
+    # baseline player_magnet_kl_coef) when normalised action entropy
+    # falls faster than entropy_ctrl_max_decline per fast-vs-slow EMA
+    # gap, or below the hard floor. Asymmetric: never resists entropy
+    # rising; coef decays back to baseline when calm.
+    entropy_ctrl_enabled: bool = True
+    entropy_ctrl_max_decline: float = 0.02
+    entropy_ctrl_floor: float = 0.40
+    entropy_ctrl_gain: float = 0.02
+    entropy_ctrl_decay: float = 0.002
+    entropy_ctrl_max_scale: float = 10.0
+    entropy_ctrl_fast_ema: float = 0.005
+    entropy_ctrl_slow_ema: float = 0.0005
 
     # Learning-progress bandit over the main v-trace lambda (the
     # policy-target mixture meta-controller; rl/online/bandit.py). Every
@@ -222,7 +263,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # switches never recompile — lambda-as-static-config retained ~5GB of
     # host RAM per arm's executable and 1326 died to the OOM killer
     # mid-compile at its second arm switch.
-    bandit_enabled: bool = True
+    # Off by default since the lambda gap-controller took over the
+    # advantage lambda; the bandit remains the strength-grounded audit
+    # tool (mutually exclusive with lambda_ctrl_enabled). BT-rating
+    # telemetry is logged every window regardless.
+    bandit_enabled: bool = False
     # Arm horizons 1/(1-lambda): 2, 5, 10, 100, inf turns. The low arms
     # inject critic bias into the actor while live — they are cheap to
     # KEEP (runtime lambda, no recompile) but each initial exploration
