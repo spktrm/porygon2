@@ -1,13 +1,10 @@
-from collections.abc import Callable
 from typing import Literal
 
 import chex
-import jax.numpy as jnp
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
 
 PolicyObjectiveT = Literal["spo", "ppo"]
-
 
 
 @chex.dataclass(frozen=True)
@@ -234,9 +231,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     lambda_ctrl_sensor_ema: float = 0.01
 
     # Entropy rate limiter: scales the magnet KL coef (runtime scalar,
-    # baseline player_magnet_kl_coef) when normalised action entropy
-    # falls faster than entropy_ctrl_max_decline per fast-vs-slow EMA
-    # gap, or below the hard floor. Asymmetric: never resists entropy
+    # baseline player_magnet_kl_coef) when the min of the overall action
+    # entropy and the macro modality entropy falls faster than
+    # entropy_ctrl_max_decline per fast-vs-slow EMA gap, or below the
+    # hard floor. The min lets it catch a per-modality collapse (e.g.
+    # switch → ~0) that total entropy alone hides (see learner
+    # _update_hyper_controllers). Asymmetric: never resists entropy
     # rising; coef decays back to baseline when calm.
     entropy_ctrl_enabled: bool = True
     entropy_ctrl_max_decline: float = 0.02
@@ -334,8 +334,5 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_human_loss_coef: float = 1e-2
 
 
-
 def get_learner_config():
     return Porygon2LearnerConfig()
-
-

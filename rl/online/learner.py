@@ -1,4 +1,3 @@
-import functools
 import logging
 import os
 import queue
@@ -16,6 +15,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
+from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import (
     Batch,
@@ -24,16 +24,17 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
-from rl import checkpoint
-from rl.online.bandit import LambdaBandit, rating_logs
-from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
-from rl.online.controllers import EntropyRateController, LambdaGapController
+from rl.model.heads import HeadParams, calculate_hierarchical_prior
+from rl.model.utils import Params, ParamsContainer
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
     save_train_state,
 )
+from rl.online.bandit import LambdaBandit, rating_logs
+from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
+from rl.online.controllers import EntropyRateController, LambdaGapController
 from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.loss import (
     backward_kl_loss,
@@ -52,11 +53,6 @@ from rl.online.targets import (
     compute_player_targets,
 )
 from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
-from rl.model.heads import (
-    HeadParams,
-    calculate_hierarchical_prior,
-)
-from rl.model.utils import Params, ParamsContainer
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
@@ -336,9 +332,7 @@ def train_step(
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            + (
-                config.player_magnet_kl_coef if magnet_coef is None else magnet_coef
-            )
+            + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
             * loss_magnet_kl
             + config.player_aux_value_coef * loss_v_aux
         )
@@ -1008,10 +1002,26 @@ class Learner:
             )
             self._current_lambda = self.lambda_ctrl.value
         if self.entropy_ctrl is not None:
-            ent = host_logs.get("player_action_normalized_entropy")
+            # Sensor: the min of the overall action entropy and the macro
+            # modality entropy. Total entropy alone is blind to a per-modality
+            # collapse (e.g. the switch modality → ~0 while moves still keep
+            # total entropy ~0.5), which is how run 1330 lost proactive
+            # switching without tripping the limiter. Taking the min makes the
+            # controller respond to whichever axis is most collapsed, so the
+            # magnet coef scales up while the switch modality is going extinct.
+            action_ent = host_logs.get("player_action_normalized_entropy")
+            modal_ent = host_logs.get("player_normalized_modality_entropy")
+            sensors = [
+                e
+                for e in (action_ent, modal_ent)
+                if e is not None and np.isfinite(float(e))
+            ]
+            ent = min(sensors) if sensors else None
             host_logs.update(
                 self.entropy_ctrl.update(None if ent is None else float(ent))
             )
+            if ent is not None:
+                host_logs["entropy_ctrl_sensor"] = ent
             self._current_magnet_coef = self.entropy_ctrl.value
 
     def _update_replay_controller(self, host_logs: dict) -> None:
@@ -1204,9 +1214,7 @@ class Learner:
         if step % self.config.bandit_window_steps == 0:
             if self.bandit is not None:
                 logs.update(self.bandit.update(self.league))
-                self._current_lambda = float(
-                    self.bandit.arms[self.bandit.current_arm]
-                )
+                self._current_lambda = float(self.bandit.arms[self.bandit.current_arm])
                 self.league.bandit_state = self.bandit.serialize()
             else:
                 logs.update(
