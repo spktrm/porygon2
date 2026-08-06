@@ -23,14 +23,18 @@ import wandb_workspaces.reports.v2 as wr
 import wandb_workspaces.workspaces as ws
 
 
-def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False):
+def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
     """Line plot with time-weighted EMA smoothing by default (smooth=0
-    disables it — use for counters, where smoothing only misleads)."""
+    disables it — use for counters, where smoothing only misleads).
+    range_y pins the y-axis, e.g. (-1, 1) for R2 panels where rare huge
+    negatives otherwise blow out the scale."""
     kwargs = dict(title=title, y=y or [], log_y=log_y or None)
     if x:
         kwargs["x"] = x
     if regex:
         kwargs["metric_regex"] = regex
+    if range_y is not None:
+        kwargs["range_y"] = range_y
     if smooth:
         kwargs["smoothing_factor"] = smooth
         kwargs["smoothing_type"] = "exponentialTimeWeighted"
@@ -106,6 +110,7 @@ def rl_sections():
                     # and the pooled aux-lambda rows.
                     "Value R2 (main vs aux lambdas)",
                     ["player_value_head_r2", "player_aux_value_r2"],
+                    range_y=(-1, 1),
                 ),
                 lp(
                     # Per-lambda aux R2. The lam100 (Monte Carlo) row vs
@@ -116,6 +121,7 @@ def rl_sections():
                     "Aux value R2 per lambda",
                     [],
                     regex="^player_aux_r2_lam",
+                    range_y=(-1, 1),
                 ),
             ],
         ),
@@ -135,11 +141,24 @@ def rl_sections():
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
                 ),
                 lp(
-                    # Mixture bandit (rl/online/bandit.py): active v-trace
-                    # lambda arm. Steps, not smoothed — it's a discrete
-                    # control signal.
-                    "Bandit arm (main lambda)",
-                    ["bandit_lambda"],
+                    # Advantage-lambda: the gap controller's continuous
+                    # output (default driver) or the bandit arm if that
+                    # is enabled instead. Control signals — not smoothed.
+                    "Advantage lambda (controller / bandit)",
+                    ["lambda_ctrl_lambda", "bandit_lambda"],
+                    smooth=0,
+                ),
+                lp(
+                    # Lambda controller sensor: bootstrap bias = |main
+                    # head - MC anchor| value gap, raw and EMA.
+                    "Bootstrap gap (lambda ctrl sensor)",
+                    ["player_bootstrap_gap", "lambda_ctrl_gap_ema"],
+                ),
+                lp(
+                    # Entropy rate limiter: magnet coef scale-up when
+                    # entropy declines faster than the allowed rate.
+                    "Entropy controller (magnet coef)",
+                    ["entropy_ctrl_coef", "entropy_ctrl_decline"],
                     smooth=0,
                 ),
                 lp(
@@ -166,7 +185,7 @@ def rl_sections():
                         "player_normalized_modality_entropy",
                     ],
                 ),
-                lp("Value head R²", ["player_value_head_r2"]),
+                lp("Value head R²", ["player_value_head_r2"], range_y=(-1, 1)),
             ],
         ),
         ws.Section(

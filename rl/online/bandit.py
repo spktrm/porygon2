@@ -82,6 +82,39 @@ def bt_ratings(
     return {k: float(np.log(max(pi[idx[k]], 1e-12))) for k in keys if played[idx[k]]}
 
 
+def rating_logs(
+    league: League,
+    min_games_per_opponent: float,
+    min_rated_opponents: int,
+) -> dict[str, float]:
+    """BT-rating telemetry without any arm machinery — used when the
+    bandit is disabled so the strength-vs-frozen-pool signal (the only
+    self-play-pure absolute progress measure) stays on the dashboard."""
+    with league.lock:
+        snap_keys = [
+            s
+            for s in league.players.keys()
+            if s != MAIN_KEY
+            and league.games.get((MAIN_KEY, s), 0.0)
+            + league.games.get((s, MAIN_KEY), 0.0)
+            >= min_games_per_opponent
+        ]
+        wins = dict(league.wins)
+        draws = dict(league.draws)
+        games = dict(league.games)
+
+    if len(snap_keys) < min_rated_opponents:
+        return {"bandit_rating_valid": 0.0}
+    ratings = bt_ratings([MAIN_KEY] + snap_keys, wins, draws, games)
+    if MAIN_KEY not in ratings:
+        return {"bandit_rating_valid": 0.0}
+    return {
+        "bandit_rating_valid": 1.0,
+        "bandit_bt_rating": ratings[MAIN_KEY],
+        "bandit_rated_opponents": float(len(ratings) - 1),
+    }
+
+
 class LambdaBandit:
     """Discounted-UCB bandit whose arms are main-target lambda values."""
 

@@ -205,21 +205,6 @@ class Trajectory:
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
 
-    # Frozen offline critic potential Φ(s), (T,) per trajectory — (T, B)
-    # once batched. Precomputed at buffer insert (Learner.enqueue_traj):
-    # the critic never changes during RL, so computing Φ per train step
-    # would redo identical work replay_ratio × ensemble-size times per
-    # trajectory. () when no offline critic is configured.
-    state_potential: ArrayLike = ()
-
-    # Announced-state potential Φ_ann(s): the same critic read at each
-    # step's announced view (pre-turn state + both players' outcome-masked
-    # choices for the turn entering s). Consumed by dice-excised PBRS
-    # (config.potential_dice_excised) as the potential channel's next-step
-    # bootstrap. Same insert-time precompute and () sentinel conventions
-    # as state_potential; () whenever the flag is off.
-    state_potential_announced: ArrayLike = ()
-
     # How many times this trajectory had been sampled BEFORE this one, shape
     # (1,) per trajectory — (1, B) once batched. Attached at sample time by
     # PlayerTrajectoryStore (0 = first visit) and consumed by the
