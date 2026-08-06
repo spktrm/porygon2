@@ -261,7 +261,7 @@ def main(args: argparse.Namespace):
     # weights; opt_state/league reset) — use for the first launch after an
     # architecture change instead of restarting from scratch.
     load_mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
-    player_state, builder_state, league = load_train_state(
+    player_state, builder_state, league, controller_bytes = load_train_state(
         learner_config, player_state, builder_state, mode=load_mode
     )
 
@@ -294,6 +294,7 @@ def main(args: argparse.Namespace):
         gpu_lock=gpu_lock,
         player_network=learner_player_network,
         debug=debug,
+        controller_bytes=controller_bytes,
     )
 
     env_func = functools.partial(

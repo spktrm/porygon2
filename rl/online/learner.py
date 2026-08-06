@@ -1,5 +1,6 @@
 import logging
 import os
+import pickle
 import queue
 import random
 import threading
@@ -728,6 +729,7 @@ class Learner:
         gpu_lock: LockType | None = None,
         player_network=None,
         debug: bool = False,
+        controller_bytes: bytes | None = None,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
@@ -863,6 +865,10 @@ class Learner:
                 donate_argnames=["player_state", "builder_state"],
             )
 
+        # Last: the controllers and the plasticity controller must already
+        # exist before their checkpointed state is applied.
+        self.restore_controller_state(controller_bytes)
+
     def _make_plasticity_probe(self, network):
         """Builds the jitted plasticity probe: an encoder-only forward on
         the current batch, returning dormant-unit fraction and srank@0.99
@@ -987,6 +993,34 @@ class Learner:
             except Exception:
                 logger.exception("wandb logging failed")
 
+    def controller_state_bytes(self) -> bytes:
+        """Host-side training dynamics for the checkpoint: controllers and
+        plasticity bookkeeping. Not parameters, but resuming without them
+        silently resets an in-flight plasticity recovery and re-anneals
+        lambda from scratch."""
+        state = {"plasticity": self.plasticity.state_dict()}
+        if self.lambda_ctrl is not None:
+            state["lambda_ctrl"] = self.lambda_ctrl.state_dict()
+        if self.entropy_ctrl is not None:
+            state["entropy_ctrl"] = self.entropy_ctrl.state_dict()
+        return pickle.dumps(state)
+
+    def restore_controller_state(self, data: bytes | None) -> None:
+        """Counterpart to controller_state_bytes. Missing sections (older
+        checkpoints, or a controller disabled at save time) leave the
+        corresponding controller freshly initialised."""
+        if not data:
+            return
+        state = pickle.loads(data)
+        if "plasticity" in state:
+            self.plasticity.load_state_dict(state["plasticity"])
+        if self.lambda_ctrl is not None and "lambda_ctrl" in state:
+            self.lambda_ctrl.load_state_dict(state["lambda_ctrl"])
+            self._current_lambda = self.lambda_ctrl.value
+        if self.entropy_ctrl is not None and "entropy_ctrl" in state:
+            self.entropy_ctrl.load_state_dict(state["entropy_ctrl"])
+            self._current_magnet_coef = self.entropy_ctrl.value
+
     def _update_hyper_controllers(self, host_logs: dict) -> None:
         """Lambda and entropy controllers (rl/online/controllers.py).
         Runs on the log worker like the replay controller — the sensors
@@ -1009,11 +1043,25 @@ class Learner:
             # switching without tripping the limiter. Taking the min makes the
             # controller respond to whichever axis is most collapsed, so the
             # magnet coef scales up while the switch modality is going extinct.
+            # The two axes have different healthy levels: modality entropy
+            # sits structurally lower than total action entropy (0.47 vs
+            # 0.77 in 1331), so a single shared floor pins the controller
+            # in permanent hard-floor breach on the modality axis — which
+            # is what held the magnet coef at 2-4x baseline for all of
+            # 1331. Rescale modality into action-entropy units by the
+            # ratio of their floors, so entropy_ctrl_floor applies to
+            # action entropy directly and to modality entropy at its own
+            # (lower) floor. Declines on the modality axis are scaled by
+            # the same ratio, which is intended: it is the fragile axis,
+            # so a given absolute drop there should count for more.
             action_ent = host_logs.get("player_action_normalized_entropy")
             modal_ent = host_logs.get("player_normalized_modality_entropy")
+            modality_scale = self.config.entropy_ctrl_floor / max(
+                self.config.entropy_ctrl_modality_floor, 1e-6
+            )
             sensors = [
-                e
-                for e in (action_ent, modal_ent)
+                e * scale
+                for e, scale in ((action_ent, 1.0), (modal_ent, modality_scale))
                 if e is not None and np.isfinite(float(e))
             ]
             ent = min(sensors) if sensors else None
@@ -1132,6 +1180,7 @@ class Learner:
                     jax.device_get(self.player_state),
                     jax.device_get(self.builder_state),
                     self.league,
+                    self.controller_state_bytes(),
                 )
             except RuntimeError:
                 # An interrupt that lands mid train-step catches the state
@@ -1240,6 +1289,7 @@ class Learner:
                 jax.device_get(self.player_state),
                 jax.device_get(self.builder_state),
                 self.league,
+                self.controller_state_bytes(),
             )
 
         if step % self.config.manage_league_interval == 0:

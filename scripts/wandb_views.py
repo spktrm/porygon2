@@ -162,6 +162,19 @@ def rl_sections():
                     smooth=0,
                 ),
                 lp(
+                    # Collapse guards: the controller's combined sensor
+                    # (min of action entropy and floor-rescaled modality
+                    # entropy) against the raw axes and the switch rate
+                    # the modality axis governs.
+                    "Entropy axes & switch rate",
+                    [
+                        "entropy_ctrl_sensor",
+                        "player_action_normalized_entropy",
+                        "player_normalized_modality_entropy",
+                        "switch_ratio",
+                    ],
+                ),
+                lp(
                     # BT rating of main vs the frozen snapshot pool, and
                     # the per-window aligned rating gain (the bandit's
                     # reward). rating_valid drops to 0 when the pool is

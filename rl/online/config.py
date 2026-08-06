@@ -241,6 +241,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     entropy_ctrl_enabled: bool = True
     entropy_ctrl_max_decline: float = 0.02
     entropy_ctrl_floor: float = 0.40
+    # Hard floor for the MACRO MODALITY entropy axis, which sits
+    # structurally lower than total action entropy. 1328 gained strength
+    # through a stretch at 0.18-0.26, so holding 0.40 there (as the
+    # shared floor did in 1331) mandates more switching than the game
+    # rewards; 0.20 still trips hard on a real collapse (1330 died at
+    # 0.08). The learner rescales this axis into action-entropy units.
+    entropy_ctrl_modality_floor: float = 0.20
     entropy_ctrl_gain: float = 0.02
     entropy_ctrl_decay: float = 0.002
     entropy_ctrl_max_scale: float = 10.0
