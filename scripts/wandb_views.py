@@ -142,10 +142,9 @@ def rl_sections():
                 ),
                 lp(
                     # Advantage-lambda: the gap controller's continuous
-                    # output (default driver) or the bandit arm if that
-                    # is enabled instead. Control signals — not smoothed.
-                    "Advantage lambda (controller / bandit)",
-                    ["lambda_ctrl_lambda", "bandit_lambda"],
+                    # output. Control signal — not smoothed.
+                    "Advantage lambda (gap controller)",
+                    ["lambda_ctrl_lambda"],
                     smooth=0,
                 ),
                 lp(
@@ -176,15 +175,27 @@ def rl_sections():
                     range_y=(-1, 1),
                 ),
                 lp(
-                    # Auditors for the controller, never controlled on:
-                    # worst-matchup drift and BT non-transitivity are the
-                    # exploitability signature of under-regularisation.
-                    "Exploitability auditors",
+                    # Slow BT-fit auditors, never controlled on (hundreds
+                    # of games per point): worst-matchup drift and BT
+                    # non-transitivity are the exploitability signature
+                    # of under-regularisation.
+                    "Exploitability auditors (BT-fit, slow)",
                     [
                         "league_main_winrate_min",
                         "league_main_winrate_mean",
                         "league_bt_residual",
                     ],
+                ),
+                lp(
+                    # Exploit controller: PI on the raw win-rate table
+                    # (not the BT-fit auditors above), reacting every
+                    # manage_league_interval call. Scale is applied to
+                    # the OTHER controllers' targets — see
+                    # learner._apply_exploit_scale — not a runtime
+                    # scalar of its own.
+                    "Exploitability controller (caution scale)",
+                    ["exploit_ctrl_scale", "exploit_ctrl_exploitability_ema"],
+                    smooth=0,
                 ),
                 lp(
                     # Collapse guards: the controller's combined sensor
@@ -199,16 +210,10 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # BT rating of main vs the frozen snapshot pool, and
-                    # the per-window aligned rating gain (the bandit's
-                    # reward). rating_valid drops to 0 when the pool is
-                    # unrateable.
-                    "League BT rating / bandit reward",
-                    [
-                        "bandit_bt_rating",
-                        "bandit_window_reward",
-                        "bandit_rating_valid",
-                    ],
+                    # BT rating of main vs the frozen snapshot pool.
+                    # rating_valid drops to 0 when the pool is unrateable.
+                    "League BT rating (auditor)",
+                    ["bandit_bt_rating", "bandit_rating_valid"],
                 ),
                 lp(
                     "Gradient / param norm",

@@ -62,8 +62,8 @@ def compute_player_targets(
     RUNTIME scalar; traced, not static — lambda-as-static-config
     recompiled per value and each recompile retained ~5GB host RAM,
     killing run 1326) controls ONLY the advantage path, so the lambda
-    controller/bandit tunes the actor's bias/variance trade without
-    touching what the value heads learn.
+    controller tunes the actor's bias/variance trade without touching
+    what the value heads learn.
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
@@ -164,11 +164,10 @@ def compute_aux_value_targets(
     spectrum varies the bias/variance of the TARGET instead: lambda=1 is
     the Monte Carlo anchor (its gap to the main lambda=0.99 head is a
     direct bootstrap-bias readout), low lambda leans on the critic. The
-    spectrum is deliberately independent of config.player_lambda, which
-    the mixture bandit (rl/online/bandit.py) varies per window — aux
-    target semantics must not drift with the live arm. Targets only —
-    the aux heads never produce advantages; the policy reads the main
-    head exclusively.
+    spectrum is deliberately independent of the advantage lambda, which
+    the lambda controller varies at runtime — aux target semantics must
+    not drift with the live value. Targets only — the aux heads never
+    produce advantages; the policy reads the main head exclusively.
 
     aux_value_log_probs: (T, B, K, n_bins) from the fast EMA target.
     Returns (T, B, K, n_bins) distribution targets.
