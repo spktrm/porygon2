@@ -346,9 +346,7 @@ def load_from_scratch(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[
-    Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None
-]:
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
     """
     No-op on state; simply initializes a fresh league.
     """
@@ -362,9 +360,7 @@ def load_from_checkpoint(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[
-    Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None
-]:
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
     """
     Full restoration: loads params, opt_state, step counts, league, and the
     host-side controller/plasticity state.
@@ -515,9 +511,7 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
-) -> tuple[
-    Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None
-]:
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
 
     latest_ckpt = _get_checkpoint_path(learner_config)
 

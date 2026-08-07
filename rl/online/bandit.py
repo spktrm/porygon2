@@ -141,9 +141,7 @@ def _exploitability_logs(
         w = wins.get((MAIN_KEY, s), 0.0) + 0.5 * draws.get((MAIN_KEY, s), 0.0)
         obs.append(w / (0.5 * n))
         # Bradley-Terry: P(main beats s) = pi_main / (pi_main + pi_s).
-        pred.append(
-            1.0 / (1.0 + float(np.exp(rating - ratings[MAIN_KEY])))
-        )
+        pred.append(1.0 / (1.0 + float(np.exp(rating - ratings[MAIN_KEY]))))
     if not obs:
         return {}
     obs_arr = np.asarray(obs, dtype=float)
@@ -265,9 +263,7 @@ class LambdaBandit:
         logs["bandit_rated_opponents"] = float(len(ratings) - 1)
 
         if self.prev_ratings is not None and self.prev_main is not None:
-            common = [
-                s for s in ratings if s != MAIN_KEY and s in self.prev_ratings
-            ]
+            common = [s for s in ratings if s != MAIN_KEY and s in self.prev_ratings]
             if common:
                 # Frozen snapshots move only through scale drift; the mean
                 # shift over common snapshots is that drift.
