@@ -189,8 +189,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Advantage-normaliser statistics EMA — deliberately much faster than
     # the target-params EMA above (the stats are per-batch scalars, not
     # parameters): ~100-step time constant so PG mis-scaling after a
-    # distribution shift (bandit arm switch, plasticity event) lasts ~0.5%
-    # of a bandit window instead of ~10%.
+    # distribution shift (plasticity event, league addition) lasts ~0.5%
+    # of a rating window instead of ~10%.
     player_adv_ema_rate: float = 1e-2
     # Floor for the normaliser's std divisor: below this, stop rescaling
     # so converged-policy noise is not amplified into the actor. Sized
@@ -274,39 +274,49 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     entropy_ctrl_max_scale: float = 10.0
     entropy_ctrl_min_scale: float = 0.2
 
-    # Learning-progress bandit over the main v-trace lambda (the
-    # policy-target mixture meta-controller; rl/online/bandit.py). Every
-    # bandit_window_steps the learner fits a Bradley-Terry rating for
-    # main against the frozen league snapshots from the payoff table the
-    # league already keeps, rewards the live arm with the (scale-aligned)
-    # rating gain over the window, and picks the next arm by discounted
-    # UCB. Pure self-play signal: mirror games carry no reward and the
-    # scripted eval baselines are never consulted. Before
-    # bandit_min_rated_opponents snapshots have
+    # BT-rating telemetry (rl/online/bandit.py): every bandit_window_steps
+    # the learner fits a Bradley-Terry rating for main against the frozen
+    # league snapshots from the payoff table the league already keeps,
+    # and logs it plus the exploitability auditors (worst-matchup drift,
+    # BT non-transitivity residual). Pure self-play signal: mirror games
+    # carry no reward and the scripted eval baselines are never
+    # consulted. Before bandit_min_rated_opponents snapshots have
     # bandit_min_games_per_opponent effective games against main, no
-    # reward exists — the bandit idles on bandit_default_arm (the current
-    # production lambda) and re-baselines at the first valid fit. The
-    # live arm's lambda reaches train_step as a RUNTIME scalar, so arm
-    # switches never recompile — lambda-as-static-config retained ~5GB of
-    # host RAM per arm's executable and 1326 died to the OOM killer
-    # mid-compile at its second arm switch.
-    # Off by default since the lambda gap-controller took over the
-    # advantage lambda; the bandit remains the strength-grounded audit
-    # tool (mutually exclusive with lambda_ctrl_enabled). BT-rating
-    # telemetry is logged every window regardless.
-    bandit_enabled: bool = False
-    # Arm horizons 1/(1-lambda): 2, 5, 10, 100, inf turns. The low arms
-    # inject critic bias into the actor while live — they are cheap to
-    # KEEP (runtime lambda, no recompile) but each initial exploration
-    # window trains on them for real; discounted UCB parks them if they
-    # measure badly.
-    bandit_lambdas: tuple[float, ...] = (0.5, 0.8, 0.9, 0.99, 1.0)
-    bandit_default_arm: int = 3
+    # rating exists and rating_logs reports bandit_rating_valid=0.
+    # These fields used to also configure LambdaBandit, a discounted-UCB
+    # bandit that retuned the advantage lambda from this same rating —
+    # retired in favour of the lambda gap-controller and the
+    # exploitability controller (both react every manage_league_interval
+    # call; the rating itself needs hundreds of games per point, so it
+    # stays an auditor, never a control signal — see bandit.py).
     bandit_window_steps: int = 20_000
-    bandit_ucb_c: float = 0.25
-    bandit_discount: float = 0.9
     bandit_min_games_per_opponent: float = 20.0
     bandit_min_rated_opponents: int = 2
+
+    # Exploitability controller (rl/online/controllers.py): PI on
+    # 1 - (main's win-rate vs its worst historical league snapshot),
+    # measured every manage_league_interval call from the same win-rate
+    # table _should_add_new_player already reads (not the slower
+    # BT-rating auditors above) — no bandit-style exploration tax, so it
+    # reacts as fast as the underlying win-rate signal allows. Output is
+    # a caution-scale multiplier (baseline 1.0) applied to the OTHER
+    # controllers' targets — lambda_ctrl_gap_target shrinks and
+    # adapt_ctrl_commit_target grows as exploitability rises, both
+    # pushing toward more caution; it does not drive a runtime scalar of
+    # its own. exploit_ctrl_target=0.3 mirrors the existing "dominant"
+    # league-addition threshold (win-rate > 0.7).
+    exploit_ctrl_enabled: bool = True
+    exploit_ctrl_target: float = 0.3
+    exploit_ctrl_kp: float = 0.2
+    exploit_ctrl_ki: float = 0.05
+    exploit_ctrl_interval: int = 1
+    exploit_ctrl_sensor_ema: float = 0.3
+    exploit_ctrl_min_scale: float = 0.5
+    exploit_ctrl_max_scale: float = 2.0
+    # Historical snapshots required before trusting the win-rate-min
+    # reading — a lone freshly-added snapshot's win-rate is still
+    # Bayesian-prior-dominated (League._win_rate_by_steps).
+    exploit_ctrl_min_historical: int = 2
 
     builder_gamma: float = 1.0
     builder_alpha: float = 1.0
@@ -341,9 +351,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Spectrum chosen ~geometric in effective horizon 1/(1-lambda):
     # 1.25, 2, 5, 10, 20, inf turns against a ~45-turn mean game (the
     # 20->inf gap is covered by the main head's lambda=0.99 ~ 100).
-    # Fixed, independent of config.player_lambda, which the mixture
-    # bandit varies per window. Length must match the model config's
-    # aux_v_head.num_heads.
+    # Fixed, independent of the advantage lambda, which the lambda
+    # controller (or a bandit, historically) varies at runtime. Length
+    # must match the model config's aux_v_head.num_heads.
     player_aux_lambdas: tuple = (0.2, 0.5, 0.8, 0.9, 0.95, 1.0)
     player_aux_value_coef: float = 0.5
 

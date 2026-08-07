@@ -32,10 +32,15 @@ from rl.online.artifact import (
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.online.bandit import LambdaBandit, rating_logs
+from rl.online.bandit import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.controllers import AdaptivityController, LambdaGapController
+from rl.online.controllers import (
+    AdaptivityController,
+    ExploitabilityController,
+    LambdaGapController,
+    PILogController,
+)
 from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.loss import (
     backward_kl_loss,
@@ -780,7 +785,7 @@ class Learner:
         # Advantage-lambda and magnet-coef runtime scalars (traced into
         # train_step — never static config: each static value's recompile
         # retained ~5GB host RAM and OOM-killed 1326). Driven by the
-        # controllers below, or by the bandit if it is enabled instead.
+        # controllers below.
         self._current_lambda = float(config.player_adv_lambda)
         self._current_magnet_coef = float(config.player_magnet_kl_coef)
 
@@ -814,26 +819,24 @@ class Learner:
                 event_bump=config.adapt_ctrl_event_bump,
             )
 
-        # Strength-grounded bandit over adv-lambda arms — kept as the
-        # audit tool, off by default in favour of the gap controller.
-        self.bandit: LambdaBandit | None = None
-        if config.bandit_enabled and len(config.bandit_lambdas) > 1:
-            if config.lambda_ctrl_enabled:
-                raise ValueError(
-                    "bandit_enabled and lambda_ctrl_enabled both set: two "
-                    "drivers for the advantage lambda — enable exactly one."
-                )
-            self.bandit = LambdaBandit(
-                arms=config.bandit_lambdas,
-                default_arm=config.bandit_default_arm,
-                ucb_c=config.bandit_ucb_c,
-                discount=config.bandit_discount,
-                min_games_per_opponent=config.bandit_min_games_per_opponent,
-                min_rated_opponents=config.bandit_min_rated_opponents,
+        self.exploit_ctrl: ExploitabilityController | None = None
+        if config.exploit_ctrl_enabled:
+            self.exploit_ctrl = ExploitabilityController(
+                target=config.exploit_ctrl_target,
+                kp=config.exploit_ctrl_kp,
+                ki=config.exploit_ctrl_ki,
+                interval=config.exploit_ctrl_interval,
+                min_scale=config.exploit_ctrl_min_scale,
+                max_scale=config.exploit_ctrl_max_scale,
+                sensor_ema=config.exploit_ctrl_sensor_ema,
             )
-            if league.bandit_state is not None:
-                self.bandit.restore(league.bandit_state)
-            self._current_lambda = float(self.bandit.arms[self.bandit.current_arm])
+        # Un-scaled targets the exploitability controller scales away
+        # from — stored once so each tick's adjustment is always relative
+        # to the configured baseline, never compounding on the previous
+        # tick's already-scaled value.
+        self._base_lambda_gap_target = float(config.lambda_ctrl_gap_target)
+        self._base_commit_target = float(config.adapt_ctrl_commit_target)
+        self._base_replay_kl_target = float(config.player_replay_kl_target)
 
         self.done = False
         self.builder_replay = BuilderTrajectoryStore(
@@ -861,10 +864,23 @@ class Learner:
         # Owned by the wandb log worker thread, which already device-syncs
         # every step's logs — the controller reads the actor KL there and
         # drives player_replay.set_max_reuses, so the train loop never pays
-        # for it. Velocity form on log(cap): only the previous error and the
-        # clamped control value are state.
-        self._replay_ctrl_log_cap = float(np.log(self.config.player_replay_ratio))
-        self._replay_ctrl_prev_err = 0.0
+        # for it. Actuator is the shared PILogController (rl/online/
+        # controllers.py); the sensor here is a fixed-window mean of the
+        # actor KL rather than an EMA, since the per-batch measurement is
+        # noisy and the window is the smoother — a deliberate difference
+        # from the lambda/entropy controllers' EMA sensors, not an
+        # oversight.
+        self._replay_pi = PILogController(
+            initial_log=float(np.log(self.config.player_replay_ratio)),
+            log_min=float(np.log(self.config.player_replay_ratio_min)),
+            log_max=float(np.log(self.config.player_replay_ratio_max)),
+            kp=self.config.player_replay_ctrl_kp,
+            ki=self.config.player_replay_ctrl_ki,
+        )
+        # Mutable copy of the KL target: the exploitability controller
+        # scales this away from _base_replay_kl_target, so the PI loop
+        # below must read the live value, not config directly.
+        self._replay_kl_target = self._base_replay_kl_target
         self._replay_ctrl_kl_sum = 0.0
         self._replay_ctrl_kl_count = 0
         # Store-counter snapshots for the realised replay ratio
@@ -1039,6 +1055,8 @@ class Learner:
             state["lambda_ctrl"] = self.lambda_ctrl.state_dict()
         if self.entropy_ctrl is not None:
             state["entropy_ctrl"] = self.entropy_ctrl.state_dict()
+        if self.exploit_ctrl is not None:
+            state["exploit_ctrl"] = self.exploit_ctrl.state_dict()
         return pickle.dumps(state)
 
     def restore_controller_state(self, data: bytes | None) -> None:
@@ -1080,6 +1098,12 @@ class Learner:
         if self.entropy_ctrl is not None:
             _restore("entropy_ctrl", self.entropy_ctrl.load_state_dict)
             self._current_magnet_coef = self.entropy_ctrl.value
+        if self.exploit_ctrl is not None:
+            _restore("exploit_ctrl", self.exploit_ctrl.load_state_dict)
+            # Reapply the restored scale immediately rather than leaving
+            # the other controllers' targets at their un-scaled baseline
+            # until the next manage_league_interval tick.
+            self._apply_exploit_scale()
 
     def _update_hyper_controllers(self, host_logs: dict) -> None:
         """Lambda and entropy controllers (rl/online/controllers.py).
@@ -1117,14 +1141,18 @@ class Learner:
 
     def _update_replay_controller(self, host_logs: dict) -> None:
         """Velocity-form PI loop holding the replayed-batch actor KL at
-        player_replay_kl_target by adjusting the store's reuse cap.
+        _replay_kl_target by adjusting the store's reuse cap.
 
         The KL is averaged over player_replay_ctrl_interval steps per tick
         (the per-batch measurement is noisy; the window is the smoother).
         Working on log(cap) makes the control multiplicative, and clamping
         log(cap) itself gives anti-windup for free: the integral action
         cannot accumulate past the bounds. Adds the current cap to
-        host_logs so every wandb step carries it."""
+        host_logs so every wandb step carries it.
+
+        _replay_kl_target starts at config.player_replay_kl_target but the
+        exploitability controller may since have scaled it — read the live
+        value, not config, so that adjustment actually takes effect."""
         config = self.config
         if not config.player_replay_ctrl_enabled:
             return
@@ -1138,22 +1166,10 @@ class Learner:
             self._replay_ctrl_kl_sum = 0.0
             self._replay_ctrl_kl_count = 0
 
-            err = (config.player_replay_kl_target - kl_mean) / (
-                config.player_replay_kl_target
-            )
-            self._replay_ctrl_log_cap += (
-                config.player_replay_ctrl_kp * (err - self._replay_ctrl_prev_err)
-                + config.player_replay_ctrl_ki * err
-            )
-            self._replay_ctrl_prev_err = err
-            self._replay_ctrl_log_cap = float(
-                np.clip(
-                    self._replay_ctrl_log_cap,
-                    np.log(config.player_replay_ratio_min),
-                    np.log(config.player_replay_ratio_max),
-                )
-            )
-            cap = int(round(np.exp(self._replay_ctrl_log_cap)))
+            err = (self._replay_kl_target - kl_mean) / self._replay_kl_target
+            self._replay_pi.step(err)
+
+            cap = int(round(np.exp(self._replay_pi.log)))
             if cap != self.player_replay.max_reuses:
                 self.player_replay.set_max_reuses(cap)
 
@@ -1297,25 +1313,24 @@ class Learner:
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
             logs.update(self.plasticity.logs())
+            if self.exploit_ctrl is not None:
+                logs.update(self.exploit_ctrl.logs())
 
-        # Rating window boundary. Bandit enabled: reward the live arm
-        # with the BT-rating gain vs the frozen pool and point the
-        # runtime lambda at the next arm. Bandit disabled (default —
-        # the lambda controller drives instead): still fit and log the
-        # BT rating, the only strength-grounded progress telemetry.
+        # Rating window boundary: fit and log the BT rating and its
+        # exploitability auditors — the only strength-grounded absolute
+        # progress telemetry, logged every window regardless of which
+        # controller is driving (see bandit.py; these need hundreds of
+        # games per point, so they stay an auditor, never a control
+        # signal — the exploit controller above uses the raw win-rate
+        # table instead, which is available much sooner).
         if step % self.config.bandit_window_steps == 0:
-            if self.bandit is not None:
-                logs.update(self.bandit.update(self.league))
-                self._current_lambda = float(self.bandit.arms[self.bandit.current_arm])
-                self.league.bandit_state = self.bandit.serialize()
-            else:
-                logs.update(
-                    rating_logs(
-                        self.league,
-                        self.config.bandit_min_games_per_opponent,
-                        self.config.bandit_min_rated_opponents,
-                    )
+            logs.update(
+                rating_logs(
+                    self.league,
+                    self.config.bandit_min_games_per_opponent,
+                    self.config.bandit_min_rated_opponents,
                 )
+            )
 
         # Hand off to the log worker; values may still be device arrays and
         # are synced there, off the critical path.
@@ -1355,6 +1370,55 @@ class Learner:
                 self.entropy_ctrl.bump()
 
         self._update_plasticity(step)
+        self._update_exploit_controller()
+
+    def _measure_exploitability(self) -> float | None:
+        """1 - main's win-rate against its worst historical league
+        snapshot — the same win_rates.min() _should_add_new_player already
+        computes for the "dominant" gate, reused here as a control sensor
+        rather than a one-shot threshold. Requires
+        exploit_ctrl_min_historical snapshots so a lone freshly-added one
+        (still Bayesian-prior-dominated at low game counts, see
+        League._win_rate_by_steps) cannot swing the reading."""
+        current = self.league.get_main_player()
+        historical_players = [
+            v for k, v in self.league.players.items() if k != MAIN_KEY
+        ]
+        if len(historical_players) < self.config.exploit_ctrl_min_historical:
+            return None
+        win_rates = self.league.get_winrate((current, historical_players))
+        return float(1.0 - np.min(win_rates))
+
+    def _update_exploit_controller(self) -> None:
+        """Ticks the exploitability controller and reapplies its scale.
+        Separated from _apply_exploit_scale so a checkpoint restore can
+        reapply a just-loaded scale without re-stepping the PI loop."""
+        if self.exploit_ctrl is None:
+            return
+        self.exploit_ctrl.update(self._measure_exploitability())
+        self._apply_exploit_scale()
+
+    def _apply_exploit_scale(self) -> None:
+        """Scales the lambda/adaptivity/replay controllers' TARGETS (not
+        their actuators) by the exploitability controller's caution
+        scale. The sign of the adjustment differs per target because
+        "more cautious" means something different for each: shrinking
+        lambda_ctrl_gap_target makes the lambda controller less willing
+        to trust the critic's bootstrap (lambda drifts toward the MC
+        anchor); growing adapt_ctrl_commit_target makes the adaptivity
+        controller's bar harder to clear, so diversity pressure stays
+        elevated; shrinking the replay KL target allows less reuse,
+        keeping training data fresher — all three read as "become more
+        conservative" even though the multiplier itself only ever grows
+        or shrinks uniformly."""
+        if self.exploit_ctrl is None:
+            return
+        scale = self.exploit_ctrl.value
+        if self.lambda_ctrl is not None:
+            self.lambda_ctrl.gap_target = self._base_lambda_gap_target / scale
+        if self.entropy_ctrl is not None:
+            self.entropy_ctrl.commit_target = self._base_commit_target * scale
+        self._replay_kl_target = self._base_replay_kl_target / scale
 
     def _should_add_new_player(self) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.
