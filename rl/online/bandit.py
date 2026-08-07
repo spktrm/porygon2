@@ -108,10 +108,54 @@ def rating_logs(
     ratings = bt_ratings([MAIN_KEY] + snap_keys, wins, draws, games)
     if MAIN_KEY not in ratings:
         return {"bandit_rating_valid": 0.0}
-    return {
+    logs = {
         "bandit_rating_valid": 1.0,
         "bandit_bt_rating": ratings[MAIN_KEY],
         "bandit_rated_opponents": float(len(ratings) - 1),
+    }
+    logs.update(_exploitability_logs(ratings, wins, draws, games))
+    return logs
+
+
+def _exploitability_logs(
+    ratings: dict[int, float], wins: dict, draws: dict, games: dict
+) -> dict[str, float]:
+    """Auditor metrics for the adaptivity controller — logged, never
+    controlled on (they need hundreds of games per point, far slower than
+    the covariance loop).
+
+    An under-regularised policy is EXPLOITABLE, which shows up two ways
+    in the payoff table: main's worst matchup drifts toward (or below)
+    even while its mean stays healthy, and the population stops being a
+    transitive strength ladder. The BT model assumes transitivity, so the
+    mean absolute gap between its predicted winrates and the observed
+    ones is a non-transitivity (rock-paper-scissors) index.
+    """
+    obs, pred = [], []
+    for s, rating in ratings.items():
+        if s == MAIN_KEY:
+            continue
+        n = games.get((MAIN_KEY, s), 0.0) + games.get((s, MAIN_KEY), 0.0)
+        if n <= 0:
+            continue
+        w = wins.get((MAIN_KEY, s), 0.0) + 0.5 * draws.get((MAIN_KEY, s), 0.0)
+        obs.append(w / (0.5 * n))
+        # Bradley-Terry: P(main beats s) = pi_main / (pi_main + pi_s).
+        pred.append(
+            1.0 / (1.0 + float(np.exp(rating - ratings[MAIN_KEY])))
+        )
+    if not obs:
+        return {}
+    obs_arr = np.asarray(obs, dtype=float)
+    return {
+        "league_main_winrate_min": float(obs_arr.min()),
+        "league_main_winrate_mean": float(obs_arr.mean()),
+        # Healthy dominance keeps this small; a big spread means one
+        # opponent has found a hole.
+        "league_winrate_spread": float(obs_arr.mean() - obs_arr.min()),
+        "league_bt_residual": float(
+            np.abs(obs_arr - np.asarray(pred, dtype=float)).mean()
+        ),
     }
 
 

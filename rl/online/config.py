@@ -230,16 +230,32 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     lambda_ctrl_max: float = 1.0
     lambda_ctrl_sensor_ema: float = 0.01
 
-    # Entropy rate limiter: scales the magnet KL coef (runtime scalar,
-    # baseline player_magnet_kl_coef) when the min of the overall action
-    # entropy and the macro modality entropy falls faster than
-    # entropy_ctrl_max_decline per fast-vs-slow EMA gap, or below the
-    # hard floor. The min lets it catch a per-modality collapse (e.g.
-    # switch → ~0) that total entropy alone hides (see learner
-    # _update_hyper_controllers). Asymmetric: never resists entropy
-    # rising; coef decays back to baseline when calm.
+    # Master switch for the adaptivity controller (the magnet KL coef
+    # loop; name kept for checkpoint/config continuity).
     entropy_ctrl_enabled: bool = True
-    entropy_ctrl_max_decline: float = 0.02
+    # Adaptivity controller (rl/online/controllers.py): PI on the magnet
+    # KL coef holding the COMMITMENT CORRELATION (player_commit_cov:
+    # batch corr of log pi(taken action) with its advantage) at target.
+    # It falls when confident choices stop paying — a new league
+    # opponent, a perturbation — so pressure rises exactly on the events
+    # a schedule cannot see, and decays as the policy re-validates.
+    # Bounded [-1, 1] (normalised, so it does not drift with entropy or
+    # advantage scale): the target reads as "hold the confidence/payoff
+    # correlation at X". 0.1 is a weak-but-real relationship; check the
+    # first run's player_commit_cov before trusting it. Event bumps are
+    # added to log(coef) directly (0.7 ~ a 2x step, 1.4 ~ 4x).
+    adapt_ctrl_commit_target: float = 0.1
+    adapt_ctrl_kp: float = 0.1
+    adapt_ctrl_ki: float = 0.02
+    adapt_ctrl_interval: int = 200
+    adapt_ctrl_sensor_ema: float = 0.005
+    adapt_ctrl_floor_gain: float = 2.0
+    adapt_ctrl_event_bump: float = 0.7
+    adapt_ctrl_perturb_bump: float = 1.4
+    # Hard floors — backstops, not the mechanism: the commitment
+    # covariance is blind to actions the policy never takes, so a
+    # modality going extinct (1330: switching to 0.002) must trip
+    # something the loop cannot miss. A breach overrides the PI action.
     entropy_ctrl_floor: float = 0.40
     # Hard floor for the MACRO MODALITY entropy axis, which sits
     # structurally lower than total action entropy. 1328 gained strength
@@ -248,11 +264,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # rewards; 0.20 still trips hard on a real collapse (1330 died at
     # 0.08). The learner rescales this axis into action-entropy units.
     entropy_ctrl_modality_floor: float = 0.20
-    entropy_ctrl_gain: float = 0.02
-    entropy_ctrl_decay: float = 0.002
+    # Range the controller may drive the magnet coef over, as multiples
+    # of the player_magnet_kl_coef baseline. min_scale < 1 lets a
+    # well-validated policy shed regularisation and commit — with a
+    # stationary uniform magnet a fixed coef c leaves an O(c) equilibrium
+    # bias, and Ataraxos anneals its KL coef downward over training — but
+    # stays well above zero, since c -> 0 against a fixed magnet loses
+    # the stable fixed point.
     entropy_ctrl_max_scale: float = 10.0
-    entropy_ctrl_fast_ema: float = 0.005
-    entropy_ctrl_slow_ema: float = 0.0005
+    entropy_ctrl_min_scale: float = 0.2
 
     # Learning-progress bandit over the main v-trace lambda (the
     # policy-target mixture meta-controller; rl/online/bandit.py). Every
