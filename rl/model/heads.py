@@ -308,6 +308,7 @@ class PolicyQKHead(nn.Module):
 # critic's 13-bin distributional target.
 NUM_MARGIN_BINS = 13
 
+
 def margin_win_mass(logits: jax.Array) -> jax.Array:
     """P(win) − P(loss) from 13-bin margin logits (last axis)."""
     probs = jax.nn.softmax(logits.astype(jnp.float32), axis=-1)

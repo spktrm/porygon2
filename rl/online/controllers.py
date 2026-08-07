@@ -121,9 +121,7 @@ class LambdaGapController:
         # and a restored actuator outside it would be stuck until the
         # integral walked it back.
         if "log_h" in state:
-            self._log_h = float(
-                np.clip(state["log_h"], self.log_h_min, self.log_h_max)
-            )
+            self._log_h = float(np.clip(state["log_h"], self.log_h_min, self.log_h_max))
         self._gap_ema = state.get("gap_ema")
         self._prev_err = float(state.get("prev_err", 0.0))
         self._ticks = int(state.get("ticks", 0))
