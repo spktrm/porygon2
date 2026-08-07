@@ -35,7 +35,7 @@ from rl.online.artifact import (
 from rl.online.bandit import LambdaBandit, rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.controllers import EntropyRateController, LambdaGapController
+from rl.online.controllers import AdaptivityController, LambdaGapController
 from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.loss import (
     backward_kl_loss,
@@ -274,6 +274,37 @@ def train_step(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
 
+        # Commitment sensor for the adaptivity controller: batch
+        # CORRELATION between how much probability the policy put on the
+        # action it took and the advantage that action earned. Positive
+        # means the policy's confidence is being validated (safe to
+        # sharpen); near zero or negative means it is confidently
+        # choosing actions that are not paying (hold entropy). Drops on a
+        # league addition (habitual actions stop working against an
+        # unfamiliar opponent) and after a perturbation (preferences
+        # scrambled), which is what makes the controller event-responsive
+        # without a schedule.
+        #
+        # Correlation, not covariance: cov = corr * sd(log pi) * sd(adv),
+        # and sd(log pi) shrinks as the policy sharpens — i.e. the raw
+        # covariance partly measures the entropy the controller itself
+        # actuates, coupling sensor to actuator and making the target
+        # depend on the current entropy level. Normalising leaves the
+        # relationship alone, bounded in [-1, 1], so commit_target reads
+        # as "keep the confidence/payoff correlation above X".
+        #
+        # Blind to actions the policy never takes — hence the entropy
+        # floors remain the hard backstop for modality collapse.
+        commit_lp = learner_log_prob
+        commit_adv = player_advantages
+        lp_dev = commit_lp - average(commit_lp, policy_mask)
+        adv_dev = commit_adv - average(commit_adv, policy_mask)
+        lp_sd = jnp.sqrt(average(jnp.square(lp_dev), policy_mask))
+        adv_sd = jnp.sqrt(average(jnp.square(adv_dev), policy_mask))
+        commit_cov = average(lp_dev * adv_dev, policy_mask) / jnp.maximum(
+            lp_sd * adv_sd, 1e-6
+        )
+
         # Multi-gamma auxiliary value heads (Metamon/AMAGO-style): each
         # row is a categorical value readout for one auxiliary discount,
         # trained by CE against its own v-trace distribution target.
@@ -352,6 +383,7 @@ def train_step(
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
+            player_commit_cov=commit_cov,
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
@@ -765,17 +797,21 @@ class Learner:
                 sensor_ema=config.lambda_ctrl_sensor_ema,
             )
 
-        self.entropy_ctrl: EntropyRateController | None = None
+        self.entropy_ctrl: AdaptivityController | None = None
         if config.entropy_ctrl_enabled:
-            self.entropy_ctrl = EntropyRateController(
+            self.entropy_ctrl = AdaptivityController(
                 baseline_coef=config.player_magnet_kl_coef,
-                max_decline=config.entropy_ctrl_max_decline,
-                entropy_floor=config.entropy_ctrl_floor,
-                gain=config.entropy_ctrl_gain,
-                decay=config.entropy_ctrl_decay,
+                commit_target=config.adapt_ctrl_commit_target,
+                kp=config.adapt_ctrl_kp,
+                ki=config.adapt_ctrl_ki,
+                interval=config.adapt_ctrl_interval,
                 max_scale=config.entropy_ctrl_max_scale,
-                fast_ema=config.entropy_ctrl_fast_ema,
-                slow_ema=config.entropy_ctrl_slow_ema,
+                min_scale=config.entropy_ctrl_min_scale,
+                sensor_ema=config.adapt_ctrl_sensor_ema,
+                action_floor=config.entropy_ctrl_floor,
+                modality_floor=config.entropy_ctrl_modality_floor,
+                floor_gain=config.adapt_ctrl_floor_gain,
+                event_bump=config.adapt_ctrl_event_bump,
             )
 
         # Strength-grounded bandit over adv-lambda arms — kept as the
@@ -1008,17 +1044,41 @@ class Learner:
     def restore_controller_state(self, data: bytes | None) -> None:
         """Counterpart to controller_state_bytes. Missing sections (older
         checkpoints, or a controller disabled at save time) leave the
-        corresponding controller freshly initialised."""
+        corresponding controller freshly initialised.
+
+        Never fatal: this state only saves a controller some re-warmup,
+        so a blob written by a superseded controller revision must not
+        be able to fail a resume. Run 1333 died at startup on exactly
+        that (KeyError 'cov_ema' restoring EntropyRateController state
+        into AdaptivityController) — each section is now isolated and a
+        bad one is logged and skipped."""
         if not data:
             return
-        state = pickle.loads(data)
-        if "plasticity" in state:
-            self.plasticity.load_state_dict(state["plasticity"])
-        if self.lambda_ctrl is not None and "lambda_ctrl" in state:
-            self.lambda_ctrl.load_state_dict(state["lambda_ctrl"])
+        try:
+            state = pickle.loads(data)
+        except Exception:
+            logger.exception("controller state unreadable — starting fresh")
+            return
+
+        def _restore(name: str, apply):
+            section = state.get(name)
+            if section is None:
+                return
+            try:
+                apply(section)
+            except Exception:
+                logger.exception(
+                    "controller state for %r incompatible — that controller "
+                    "starts fresh",
+                    name,
+                )
+
+        _restore("plasticity", self.plasticity.load_state_dict)
+        if self.lambda_ctrl is not None:
+            _restore("lambda_ctrl", self.lambda_ctrl.load_state_dict)
             self._current_lambda = self.lambda_ctrl.value
-        if self.entropy_ctrl is not None and "entropy_ctrl" in state:
-            self.entropy_ctrl.load_state_dict(state["entropy_ctrl"])
+        if self.entropy_ctrl is not None:
+            _restore("entropy_ctrl", self.entropy_ctrl.load_state_dict)
             self._current_magnet_coef = self.entropy_ctrl.value
 
     def _update_hyper_controllers(self, host_logs: dict) -> None:
@@ -1036,40 +1096,23 @@ class Learner:
             )
             self._current_lambda = self.lambda_ctrl.value
         if self.entropy_ctrl is not None:
-            # Sensor: the min of the overall action entropy and the macro
-            # modality entropy. Total entropy alone is blind to a per-modality
-            # collapse (e.g. the switch modality → ~0 while moves still keep
-            # total entropy ~0.5), which is how run 1330 lost proactive
-            # switching without tripping the limiter. Taking the min makes the
-            # controller respond to whichever axis is most collapsed, so the
-            # magnet coef scales up while the switch modality is going extinct.
-            # The two axes have different healthy levels: modality entropy
-            # sits structurally lower than total action entropy (0.47 vs
-            # 0.77 in 1331), so a single shared floor pins the controller
-            # in permanent hard-floor breach on the modality axis — which
-            # is what held the magnet coef at 2-4x baseline for all of
-            # 1331. Rescale modality into action-entropy units by the
-            # ratio of their floors, so entropy_ctrl_floor applies to
-            # action entropy directly and to modality entropy at its own
-            # (lower) floor. Declines on the modality axis are scaled by
-            # the same ratio, which is intended: it is the fragile axis,
-            # so a given absolute drop there should count for more.
+            # Commitment covariance drives the loop: it falls when the
+            # policy's confident choices stop paying — exactly what a new
+            # league opponent or a perturbation causes — and recovers as
+            # the policy re-adapts. The two entropy axes are passed as
+            # hard backstops inside the controller, because the
+            # covariance is blind to actions the policy never takes
+            # (which is how 1330 lost switching while looking healthy).
+            cov = host_logs.get("player_commit_cov")
             action_ent = host_logs.get("player_action_normalized_entropy")
             modal_ent = host_logs.get("player_normalized_modality_entropy")
-            modality_scale = self.config.entropy_ctrl_floor / max(
-                self.config.entropy_ctrl_modality_floor, 1e-6
-            )
-            sensors = [
-                e * scale
-                for e, scale in ((action_ent, 1.0), (modal_ent, modality_scale))
-                if e is not None and np.isfinite(float(e))
-            ]
-            ent = min(sensors) if sensors else None
             host_logs.update(
-                self.entropy_ctrl.update(None if ent is None else float(ent))
+                self.entropy_ctrl.update(
+                    None if cov is None else float(cov),
+                    None if action_ent is None else float(action_ent),
+                    None if modal_ent is None else float(modal_ent),
+                )
             )
-            if ent is not None:
-                host_logs["entropy_ctrl_sensor"] = ent
             self._current_magnet_coef = self.entropy_ctrl.value
 
     def _update_replay_controller(self, host_logs: dict) -> None:
@@ -1303,6 +1346,13 @@ class Learner:
             self._add_player_to_league(step)
             self.player_replay.reset_usage_counts()
             self.plasticity.on_player_added(reason)
+            # A new opponent shifts the state distribution before any
+            # batch reflects it: raise diversity pressure now so the
+            # policy can adapt instead of defending habitual lines. The
+            # commitment covariance decays it back once the new lines
+            # start paying.
+            if self.entropy_ctrl is not None:
+                self.entropy_ctrl.bump()
 
         self._update_plasticity(step)
 
@@ -1389,6 +1439,12 @@ class Learner:
             module_shrink=self.config.plasticity_module_shrink,
         )
         self.plasticity.on_perturbation(latest.step_count, frame_count)
+        # Perturbation scrambles the policy's preferences: hold its
+        # options open (a larger bump than a league addition) while it
+        # re-forms them. Mirrors the lambda controller being pinned at
+        # its ceiling for the same reason.
+        if self.entropy_ctrl is not None:
+            self.entropy_ctrl.bump(self.config.adapt_ctrl_perturb_bump)
 
     def _update_main_player_in_league(self):
         self.league.update_main_player(self._create_params_container(MAIN_KEY))

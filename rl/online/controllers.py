@@ -6,11 +6,17 @@ clamping the actuator itself) and both actuate RUNTIME scalars passed
 into the jitted train_step — never static config, which recompiles (and
 whose retained executables OOM-killed run 1326).
 
-Timescale separation across the four loops: replay controller (fast,
-actor-KL -> reuse cap), entropy rate limiter (fast safety valve,
-entropy -> magnet coef), lambda controller (slow, calibration gap ->
-advantage lambda), plasticity (episodic; pushes lambda to its ceiling
-during recovery).
+Timescale separation across the loops: replay controller (fast,
+actor-KL -> reuse cap), adaptivity controller (commitment covariance ->
+magnet KL coef, with entropy floors as hard backstops), lambda
+controller (slow, calibration gap -> advantage lambda), plasticity
+(episodic; pushes lambda to its ceiling during recovery and bumps the
+magnet coef).
+
+The two feedback controllers are deliberately symmetric: one measures
+whether the CRITIC deserves trust (bootstrap gap -> how much to
+bootstrap), the other whether the POLICY's commitments deserve trust
+(commitment covariance -> how much to let it commit).
 """
 
 import numpy as np
@@ -108,102 +114,178 @@ class LambdaGapController:
         )
 
     def load_state_dict(self, state: dict) -> None:
-        # Re-clip: the band moves when lambda_ctrl_min/max change between
-        # runs, and a restored actuator outside the new band would be
-        # stuck until the integral walked it back.
-        self._log_h = float(
-            np.clip(state["log_h"], self.log_h_min, self.log_h_max)
-        )
-        self._gap_ema = state["gap_ema"]
-        self._prev_err = state["prev_err"]
-        self._ticks = int(state["ticks"])
+        # Tolerant by key: a checkpoint written by an older controller
+        # revision must never be able to fail a resume — the state is an
+        # optimisation (skip the re-anneal), not a correctness input.
+        # Re-clip too: the band moves when lambda_ctrl_min/max change,
+        # and a restored actuator outside it would be stuck until the
+        # integral walked it back.
+        if "log_h" in state:
+            self._log_h = float(
+                np.clip(state["log_h"], self.log_h_min, self.log_h_max)
+            )
+        self._gap_ema = state.get("gap_ema")
+        self._prev_err = float(state.get("prev_err", 0.0))
+        self._ticks = int(state.get("ticks", 0))
 
 
-class EntropyRateController:
-    """Caps the RATE of policy-entropy decline by scaling the magnet KL
-    coefficient — a rate limiter, deliberately not a setpoint: entropy
-    should fall over training, it just must not cliff (run 1328 lost
-    0.18 normalised entropy in one 20k-step window under lambda=0.5).
+class AdaptivityController:
+    """Adapts the magnet KL coefficient by holding the policy's measured
+    COMMITMENT VALIDATION at a target — the entropy counterpart of the
+    lambda controller.
 
-    Sensor: fast-vs-slow EMA gap of normalised action entropy — positive
-    when declining, with the slow EMA's horizon defining "recent".
-    Asymmetric actuation on log(coef): decline beyond the allowed rate
-    (or entropy under the hard floor) scales the magnet coefficient up;
-    otherwise the coefficient decays back toward its baseline, so the
-    controller only ever ADDS diversity pressure and its quiescent state
-    is exactly the config value.
+    Sensor: player_commit_cov, the batch CORRELATION between log pi(a)
+    of the action taken and the advantage it earned (bounded [-1, 1];
+    normalised so it does not drift with entropy or advantage scale —
+    the raw covariance would partly measure the entropy this controller
+    actuates, coupling sensor to actuator). High means the policy's
+    confidence is being validated, so diversity pressure can decay and
+    the policy is allowed to sharpen. Near zero (or negative) means it is
+    confidently choosing actions that are not paying, so pressure rises
+    and the policy holds its options open.
+
+    Why feedback and not an anneal: the covariance falls exactly when the
+    world changes under the policy — a new league snapshot whose style
+    breaks habitual lines, or a shrink-and-perturb that scrambles
+    preferences — and recovers as the policy re-adapts. A monotone
+    schedule cannot see either event. Discrete shocks additionally call
+    ``bump()`` so pressure rises the instant the event is known rather
+    than a controller tick later.
+
+    Backstops, not mechanism: the covariance can only see actions the
+    policy actually takes, so a modality going extinct is invisible to it
+    (run 1330 lost switching at a healthy-looking covariance). The
+    entropy floors below are hard overrides for that failure mode.
+
+    Actuator is log(coef), clamped to
+    [baseline*min_scale, baseline*max_scale] — pressure can decay BELOW
+    the configured baseline once commitment is well validated, which is
+    how the loop expresses an anneal endogenously; clamping is
+    anti-windup.
     """
 
     def __init__(
         self,
         baseline_coef: float,
-        max_decline: float,
-        entropy_floor: float,
-        gain: float,
-        decay: float,
+        commit_target: float,
+        kp: float,
+        ki: float,
+        interval: int,
         max_scale: float,
-        fast_ema: float,
-        slow_ema: float,
+        min_scale: float,
+        sensor_ema: float,
+        action_floor: float,
+        modality_floor: float,
+        floor_gain: float,
+        event_bump: float,
     ):
         self.baseline_log = float(np.log(baseline_coef))
-        self.max_decline = max_decline
-        self.entropy_floor = entropy_floor
-        self.gain = gain
-        self.decay = decay
         self.max_log = self.baseline_log + float(np.log(max_scale))
-        self.fast_ema = fast_ema
-        self.slow_ema = slow_ema
+        # Lower bound is BELOW baseline: with a stationary uniform magnet
+        # a fixed coefficient c converges to the QRE of the regularised
+        # game, which is O(c) away from the unregularised equilibrium, so
+        # a well-validated policy should be allowed to shed pressure and
+        # commit (Ataraxos anneals its KL coef downward for the same
+        # reason). Bounded well above zero: c -> 0 with a fixed magnet
+        # loses the stable fixed point and invites cycling.
+        self.min_log = self.baseline_log + float(np.log(min_scale))
+        self.commit_target = commit_target
+        self.kp = kp
+        self.ki = ki
+        self.interval = interval
+        self.sensor_ema = sensor_ema
+        self.action_floor = action_floor
+        self.modality_floor = modality_floor
+        self.floor_gain = floor_gain
+        self.event_bump = event_bump
 
-        self._fast: float | None = None
-        self._slow: float | None = None
         self._log_coef = self.baseline_log
+        self._cov_ema: float | None = None
+        self._prev_err = 0.0
+        self._ticks = 0
 
     @property
     def value(self) -> float:
         return float(np.exp(self._log_coef))
 
-    def update(self, entropy: float | None) -> dict[str, float]:
-        if entropy is not None and np.isfinite(entropy):
-            self._fast = (
-                entropy
-                if self._fast is None
-                else (1 - self.fast_ema) * self._fast + self.fast_ema * entropy
+    def bump(self, scale: float | None = None) -> None:
+        """Immediate pressure step for a known shock (perturbation, new
+        league opponent). Feedback decays it once the policy re-validates."""
+        self._log_coef = float(
+            np.clip(
+                self._log_coef + (self.event_bump if scale is None else scale),
+                self.min_log,
+                self.max_log,
             )
-            self._slow = (
-                entropy
-                if self._slow is None
-                else (1 - self.slow_ema) * self._slow + self.slow_ema * entropy
+        )
+
+    def update(
+        self,
+        commit_cov: float | None,
+        action_entropy: float | None,
+        modality_entropy: float | None,
+    ) -> dict[str, float]:
+        if commit_cov is not None and np.isfinite(commit_cov):
+            self._cov_ema = (
+                commit_cov
+                if self._cov_ema is None
+                else (1 - self.sensor_ema) * self._cov_ema
+                + self.sensor_ema * commit_cov
             )
+            self._ticks += 1
 
-        if self._fast is None or self._slow is None:
-            return self.logs()
-
-        decline = self._slow - self._fast  # positive while entropy falls
-        breach = max(decline - self.max_decline, 0.0) / self.max_decline
-        if self._fast < self.entropy_floor:
-            breach = max(breach, 1.0)
+        # Hard floors first: a collapsed modality is invisible to the
+        # covariance, so these override the PI action entirely.
+        breach = 0.0
+        if action_entropy is not None and np.isfinite(action_entropy):
+            breach = max(breach, self.action_floor - action_entropy)
+        if modality_entropy is not None and np.isfinite(modality_entropy):
+            breach = max(breach, self.modality_floor - modality_entropy)
 
         if breach > 0.0:
-            self._log_coef += self.gain * breach
-        else:
-            self._log_coef -= self.decay
-        self._log_coef = float(np.clip(self._log_coef, self.baseline_log, self.max_log))
-        return self.logs()
+            self._log_coef += self.floor_gain * breach
+            self._prev_err = 0.0
+            self._ticks = 0
+        elif self._ticks >= self.interval and self._cov_ema is not None:
+            self._ticks = 0
+            # err > 0: commitment under-validated -> raise pressure.
+            err = (self.commit_target - self._cov_ema) / max(
+                abs(self.commit_target), 1e-6
+            )
+            self._log_coef += self.kp * (err - self._prev_err) + self.ki * err
+            self._prev_err = err
 
-    def logs(self) -> dict[str, float]:
-        out = {"entropy_ctrl_coef": self.value}
-        if self._fast is not None and self._slow is not None:
-            out["entropy_ctrl_decline"] = float(self._slow - self._fast)
+        self._log_coef = float(np.clip(self._log_coef, self.min_log, self.max_log))
+        return self.logs(breach)
+
+    def logs(self, breach: float = 0.0) -> dict[str, float]:
+        out = {
+            "adapt_ctrl_coef": self.value,
+            "adapt_ctrl_floor_breach": float(breach),
+        }
+        if self._cov_ema is not None:
+            out["adapt_ctrl_commit_ema"] = float(self._cov_ema)
         return out
 
     def state_dict(self) -> dict:
-        return dict(fast=self._fast, slow=self._slow, log_coef=self._log_coef)
+        return dict(
+            log_coef=self._log_coef,
+            cov_ema=self._cov_ema,
+            prev_err=self._prev_err,
+            ticks=self._ticks,
+        )
 
     def load_state_dict(self, state: dict) -> None:
-        self._fast = state["fast"]
-        self._slow = state["slow"]
-        # Re-clip against the current baseline/max_scale, which move when
-        # player_magnet_kl_coef or entropy_ctrl_max_scale change.
-        self._log_coef = float(
-            np.clip(state["log_coef"], self.baseline_log, self.max_log)
-        )
+        # Tolerant by key: checkpoints written by the superseded
+        # EntropyRateController carry {fast, slow, log_coef}. The
+        # actuator (log_coef) means the same thing in both and is worth
+        # keeping; the old entropy EMAs have no counterpart here, so the
+        # commitment sensor simply starts fresh. Re-clip because
+        # baseline/min_scale/max_scale move when the config changes.
+        if "log_coef" in state:
+            self._log_coef = float(
+                np.clip(state["log_coef"], self.min_log, self.max_log)
+            )
+        self._cov_ema = state.get("cov_ema")
+        self._prev_err = float(state.get("prev_err", 0.0))
+        self._ticks = int(state.get("ticks", 0))

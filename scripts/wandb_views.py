@@ -155,11 +155,36 @@ def rl_sections():
                     ["player_bootstrap_gap", "lambda_ctrl_gap_ema"],
                 ),
                 lp(
-                    # Entropy rate limiter: magnet coef scale-up when
-                    # entropy declines faster than the allowed rate.
-                    "Entropy controller (magnet coef)",
-                    ["entropy_ctrl_coef", "entropy_ctrl_decline"],
+                    # Adaptivity controller: magnet KL coef, its
+                    # commitment-covariance sensor, and whether an
+                    # entropy floor is currently overriding the loop.
+                    "Adaptivity controller (magnet coef)",
+                    [
+                        "adapt_ctrl_coef",
+                        "adapt_ctrl_commit_ema",
+                        "adapt_ctrl_floor_breach",
+                    ],
                     smooth=0,
+                ),
+                lp(
+                    # Raw commitment sensor: corr(log pi(a), advantage),
+                    # bounded [-1, 1]. Falls on league additions and
+                    # perturbations — what makes the controller
+                    # event-responsive.
+                    "Commitment correlation (sensor)",
+                    ["player_commit_cov", "adapt_ctrl_commit_ema"],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    # Auditors for the controller, never controlled on:
+                    # worst-matchup drift and BT non-transitivity are the
+                    # exploitability signature of under-regularisation.
+                    "Exploitability auditors",
+                    [
+                        "league_main_winrate_min",
+                        "league_main_winrate_mean",
+                        "league_bt_residual",
+                    ],
                 ),
                 lp(
                     # Collapse guards: the controller's combined sensor
@@ -168,7 +193,6 @@ def rl_sections():
                     # the modality axis governs.
                     "Entropy axes & switch rate",
                     [
-                        "entropy_ctrl_sensor",
                         "player_action_normalized_entropy",
                         "player_normalized_modality_entropy",
                         "switch_ratio",

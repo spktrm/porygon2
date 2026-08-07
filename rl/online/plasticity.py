@@ -148,12 +148,12 @@ class PlasticityController:
         forgets an in-flight recovery, which clears the perturbation
         cooldown and lets a second shrink-and-perturb land on a network
         still convalescing from the first."""
-        self.consecutive_overdue = int(state["consecutive_overdue"])
-        self.perturbation_count = int(state["perturbation_count"])
-        self.recovering = bool(state["recovering"])
-        self.recovery_ref_step = state["recovery_ref_step"]
-        self.last_perturb_frame = state["last_perturb_frame"]
-        self.last_recovery_winrate = float(state["last_recovery_winrate"])
+        self.consecutive_overdue = int(state.get("consecutive_overdue", 0))
+        self.perturbation_count = int(state.get("perturbation_count", 0))
+        self.recovering = bool(state.get("recovering", False))
+        self.recovery_ref_step = state.get("recovery_ref_step")
+        self.last_perturb_frame = state.get("last_perturb_frame")
+        self.last_recovery_winrate = float(state.get("last_recovery_winrate", 0.0))
 
     def logs(self) -> dict:
         return {
