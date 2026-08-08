@@ -12,6 +12,7 @@ low-level serialisation beneath both.
 
 import functools
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from pprint import pprint
@@ -42,6 +43,8 @@ from rl.online.config import Porygon2LearnerConfig
 from rl.online.league import MAIN_KEY, League
 
 MANIFEST_NAME = "manifest.json"
+
+logger = logging.getLogger(__name__)
 
 
 def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
@@ -519,18 +522,20 @@ def load_train_state(
     if mode == "scratch":
         return load_from_scratch(learner_config, player_state, builder_state)
 
-    # 2. No checkpoint found, but a resume was expected (mode is "checkpoint" or
-    # "params" — "scratch" already returned above). Silently falling back to
-    # scratch here is how 1335's ~300k-step lineage and its league got lost
-    # between it and 1336: nothing logged above print() level, no exception,
-    # just a fresh run indistinguishable from an intentional one. Raise so the
-    # ambiguous "expected a resume, found nothing" case can't be missed.
+    # 2. No checkpoint found -> fall back to scratch, loudly. A bare print()
+    # here is how 1335's ~300k-step lineage and its league got lost between
+    # it and 1336 without anyone noticing — mode was "checkpoint" (a resume
+    # was expected) and it silently became a fresh run instead. Still
+    # auto-falls back (the launch entry point doesn't set LOAD_STATE_MODE
+    # per-run), but now at warning level so it can't scroll by unnoticed.
     if not latest_ckpt:
-        raise FileNotFoundError(
-            f"LOAD_STATE_MODE={mode!r} but no checkpoint found under "
-            f"./ckpts/gen{learner_config.generation}/ — pass "
-            f"LOAD_STATE_MODE=scratch to start fresh intentionally."
+        logger.warning(
+            "LOAD_STATE_MODE=%r but no checkpoint found under ./ckpts/gen%s/ "
+            "— starting from scratch.",
+            mode,
+            learner_config.generation,
         )
+        return load_from_scratch(learner_config, player_state, builder_state)
 
     # 3. Load Params Only (RL checkpoints across architecture changes)
     if mode == "params":
