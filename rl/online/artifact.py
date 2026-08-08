@@ -519,10 +519,18 @@ def load_train_state(
     if mode == "scratch":
         return load_from_scratch(learner_config, player_state, builder_state)
 
-    # 2. No checkpoint found -> Fallback to Scratch
+    # 2. No checkpoint found, but a resume was expected (mode is "checkpoint" or
+    # "params" — "scratch" already returned above). Silently falling back to
+    # scratch here is how 1335's ~300k-step lineage and its league got lost
+    # between it and 1336: nothing logged above print() level, no exception,
+    # just a fresh run indistinguishable from an intentional one. Raise so the
+    # ambiguous "expected a resume, found nothing" case can't be missed.
     if not latest_ckpt:
-        print("No checkpoint found. Defaulting to scratch.")
-        return load_from_scratch(learner_config, player_state, builder_state)
+        raise FileNotFoundError(
+            f"LOAD_STATE_MODE={mode!r} but no checkpoint found under "
+            f"./ckpts/gen{learner_config.generation}/ — pass "
+            f"LOAD_STATE_MODE=scratch to start fresh intentionally."
+        )
 
     # 3. Load Params Only (RL checkpoints across architecture changes)
     if mode == "params":

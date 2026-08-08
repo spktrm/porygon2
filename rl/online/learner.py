@@ -817,6 +817,7 @@ class Learner:
                 modality_floor=config.entropy_ctrl_modality_floor,
                 floor_gain=config.adapt_ctrl_floor_gain,
                 event_bump=config.adapt_ctrl_event_bump,
+                warmup_ticks=config.adapt_ctrl_warmup_ticks,
             )
 
         self.exploit_ctrl: ExploitabilityController | None = None
@@ -1376,17 +1377,30 @@ class Learner:
         """1 - main's win-rate against its worst historical league
         snapshot — the same win_rates.min() _should_add_new_player already
         computes for the "dominant" gate, reused here as a control sensor
-        rather than a one-shot threshold. Requires
-        exploit_ctrl_min_historical snapshots so a lone freshly-added one
-        (still Bayesian-prior-dominated at low game counts, see
-        League._win_rate_by_steps) cannot swing the reading."""
+        rather than a one-shot threshold.
+
+        Snapshots only count once they clear exploit_ctrl_min_games_per_
+        opponent effective games against main — mirrors bandit.py's
+        _rateable_snapshot_keys, applied here because a freshly-added (or
+        lightly-played) snapshot reads near 0.5 by construction (main vs.
+        a near-identical recent self), which looks exactly like a real
+        exploitability hole otherwise. exploit_ctrl_min_historical then
+        gates on how many such rateable snapshots exist, so a lone one
+        (still Bayesian-prior-dominated even past the games bar, see
+        League._win_rate_by_steps) cannot swing the reading alone."""
         current = self.league.get_main_player()
-        historical_players = [
-            v for k, v in self.league.players.items() if k != MAIN_KEY
+        min_games = self.config.exploit_ctrl_min_games_per_opponent
+        rateable = [
+            v
+            for k, v in self.league.players.items()
+            if k != MAIN_KEY
+            and self.league.games.get((MAIN_KEY, k), 0.0)
+            + self.league.games.get((k, MAIN_KEY), 0.0)
+            >= min_games
         ]
-        if len(historical_players) < self.config.exploit_ctrl_min_historical:
+        if len(rateable) < self.config.exploit_ctrl_min_historical:
             return None
-        win_rates = self.league.get_winrate((current, historical_players))
+        win_rates = self.league.get_winrate((current, rateable))
         return float(1.0 - np.min(win_rates))
 
     def _update_exploit_controller(self) -> None:
