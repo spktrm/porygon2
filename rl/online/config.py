@@ -252,6 +252,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     adapt_ctrl_floor_gain: float = 2.0
     adapt_ctrl_event_bump: float = 0.7
     adapt_ctrl_perturb_bump: float = 1.4
+    # Ticks to accumulate (EMA keeps smoothing throughout) before the
+    # covariance-driven PI action is allowed to fire — does NOT gate the
+    # hard floor overrides or bump() below, only this. A cold-started
+    # commit_cov has nothing to correlate against yet and can read
+    # persistently negative for a long stretch on pure noise (1338:
+    # pinned at the coef ceiling for ~50k steps from step 1, stalling the
+    # lambda controller's anneal for reasons unrelated to any real
+    # commitment problem). 25 ticks x adapt_ctrl_interval =~ 5k steps is a
+    # starting default — recalibrate from the next run's adapt_ctrl_coef
+    # trace.
+    adapt_ctrl_warmup_ticks: int = 25
     # Hard floors — backstops, not the mechanism: the commitment
     # covariance is blind to actions the policy never takes, so a
     # modality going extinct (1330: switching to 0.002) must trip
@@ -317,6 +328,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # reading — a lone freshly-added snapshot's win-rate is still
     # Bayesian-prior-dominated (League._win_rate_by_steps).
     exploit_ctrl_min_historical: int = 2
+    # A snapshot must ALSO have this many effective games against main
+    # before counting toward win_rates.min() — same reliability bar as
+    # bandit_min_games_per_opponent, applied here for a different reason:
+    # a freshly-added (or lightly-played) snapshot reads near 0.5 by
+    # construction (main vs. a near-identical recent self), which looks
+    # exactly like a real exploitability hole to this controller (1338:
+    # two snapshots 5.5k/26.9k steps old, win-rate never left 0.48-0.54,
+    # pinned the caution scale at its ceiling from a false positive).
+    exploit_ctrl_min_games_per_opponent: float = 20.0
 
     builder_gamma: float = 1.0
     builder_alpha: float = 1.0

@@ -230,6 +230,15 @@ class AdaptivityController:
     the configured baseline once commitment is well validated, which is
     how the loop expresses an anneal endogenously; clamping is
     anti-windup.
+
+    warmup_ticks delays the covariance-driven PI action (not the floor
+    overrides or bump()) for that many ticks after construction: a
+    cold-started covariance has nothing to correlate against yet and can
+    read persistently negative on pure noise, pinning pressure at the
+    ceiling for reasons unrelated to any real commitment problem (1338:
+    ~50k steps pinned at the ceiling from step 1, stalling the lambda
+    controller's anneal). The sensor keeps smoothing throughout warm-up —
+    only the actuator move is delayed.
     """
 
     def __init__(
@@ -246,6 +255,7 @@ class AdaptivityController:
         modality_floor: float,
         floor_gain: float,
         event_bump: float,
+        warmup_ticks: int = 0,
     ):
         baseline_log = float(np.log(baseline_coef))
         # Lower bound is BELOW baseline: with a stationary uniform magnet
@@ -263,9 +273,11 @@ class AdaptivityController:
         self.modality_floor = modality_floor
         self.floor_gain = floor_gain
         self.event_bump = event_bump
+        self.warmup_ticks = warmup_ticks
 
         self._pi = PILogController(baseline_log, log_min, log_max, kp, ki)
         self._sensor = EmaSensor(sensor_ema, interval)
+        self._ticks_elapsed = 0
 
     @property
     def value(self) -> float:
@@ -298,11 +310,19 @@ class AdaptivityController:
             self._sensor.reset()
         elif self._sensor.ready():
             self._sensor.consume()
-            # err > 0: commitment under-validated -> raise pressure.
-            err = (self.commit_target - self._sensor.ema) / max(
-                abs(self.commit_target), 1e-6
-            )
-            self._pi.step(err)
+            self._ticks_elapsed += 1
+            # Warm-up: let the EMA accumulate real signal before trusting
+            # it to move the actuator — a cold-started covariance has
+            # nothing to correlate against yet and can read persistently
+            # negative for a long stretch on pure noise, pinning pressure
+            # at the ceiling for reasons unrelated to any real commitment
+            # problem. Floor overrides above are never gated by this.
+            if self._ticks_elapsed > self.warmup_ticks:
+                # err > 0: commitment under-validated -> raise pressure.
+                err = (self.commit_target - self._sensor.ema) / max(
+                    abs(self.commit_target), 1e-6
+                )
+                self._pi.step(err)
 
         return self.logs(breach)
 
@@ -321,6 +341,7 @@ class AdaptivityController:
             cov_ema=self._sensor.ema,
             prev_err=self._pi.prev_err,
             ticks=self._sensor.ticks,
+            ticks_elapsed=self._ticks_elapsed,
         )
 
     def load_state_dict(self, state: dict) -> None:
@@ -335,6 +356,11 @@ class AdaptivityController:
         self._sensor.ema = state.get("cov_ema")
         self._pi.prev_err = float(state.get("prev_err", 0.0))
         self._sensor.ticks = int(state.get("ticks", 0))
+        # Missing key (checkpoint predates warm-up) -> assume already past
+        # it: training has been running for a while by the time anyone
+        # resumes, so re-entering a cold-start warm-up on every restart
+        # would defeat the point.
+        self._ticks_elapsed = int(state.get("ticks_elapsed", self.warmup_ticks))
 
 
 class ExploitabilityController:
