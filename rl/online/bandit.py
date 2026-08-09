@@ -154,4 +154,3 @@ def _rating_exploitability_logs(
             np.abs(obs_arr - np.asarray(pred, dtype=float)).mean()
         ),
     }
-

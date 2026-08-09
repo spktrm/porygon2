@@ -47,7 +47,9 @@ class PILogController:
     about the actuator.
     """
 
-    def __init__(self, initial_log: float, log_min: float, log_max: float, kp: float, ki: float):
+    def __init__(
+        self, initial_log: float, log_min: float, log_max: float, kp: float, ki: float
+    ):
         self.log_min = log_min
         self.log_max = log_max
         self.kp = kp
