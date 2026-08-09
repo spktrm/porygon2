@@ -1,5 +1,6 @@
 import logging
 import os
+import pickle
 import queue
 import random
 import threading
@@ -15,6 +16,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
+from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import (
     Batch,
@@ -23,30 +25,40 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
-from rl.learner import checkpoint
-from rl.learner.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
-from rl.learner.config import (
+from rl.model.heads import HeadParams, calculate_hierarchical_prior
+from rl.model.utils import Params, ParamsContainer
+from rl.online.artifact import (
     Porygon2BuilderTrainState,
-    Porygon2LearnerConfig,
     Porygon2PlayerTrainState,
     save_train_state,
 )
-from rl.learner.league import MAIN_KEY, League, PlayerRef
-from rl.learner.loss import (
+from rl.online.bandit import rating_logs
+from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
+from rl.online.config import Porygon2LearnerConfig
+from rl.online.controllers import (
+    AdaptivityController,
+    ExploitabilityController,
+    LambdaGapController,
+    PILogController,
+)
+from rl.online.league import MAIN_KEY, League, PlayerRef
+from rl.online.loss import (
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
 )
-from rl.learner.plasticity import (
+from rl.online.plasticity import (
     AddReason,
     PlasticityController,
     shrink_and_perturb_player_state,
 )
-from rl.learner.targets import compute_builder_targets, compute_player_targets
-from rl.learner.utils import calculate_r2, collect_batch_telemetry_data, promote_map
-from rl.model.heads import HeadParams, calculate_hierarchical_prior
-from rl.model.utils import Params, ParamsContainer
+from rl.online.targets import (
+    compute_aux_value_targets,
+    compute_builder_targets,
+    compute_player_targets,
+)
+from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
@@ -57,8 +69,16 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
+    adv_lambda: jax.Array | None = None,
+    magnet_coef: jax.Array | None = None,
 ):
-    """Train for a single step."""
+    """Train for a single step.
+
+    ``adv_lambda`` and ``magnet_coef`` are RUNTIME scalars (traced, not
+    static) driven by the lambda/entropy controllers — runtime values
+    never recompile; see compute_player_targets for the OOM history
+    behind this rule.
+    """
 
     player_transitions = batch.player_transitions
     player_history = batch.player_history
@@ -71,17 +91,6 @@ def train_step(
         packed_history=player_packed_history,
         history=player_history,
     )
-
-    # Learned state potential: the frozen offline critic's Φ(s), computed
-    # ONCE per trajectory at buffer insert (Learner.enqueue_traj) and
-    # carried in the batch — the critic is frozen, so evaluating its
-    # ensemble here would redo identical work on every replay reuse.
-    if isinstance(batch.state_potential, tuple):
-        state_potential = jnp.zeros(
-            player_transitions.env_output.done.shape, dtype=jnp.float32
-        )
-    else:
-        state_potential = batch.state_potential.astype(jnp.float32)
 
     player_target_pred = player_state.apply_fn(
         player_state.target_params,
@@ -99,9 +108,6 @@ def train_step(
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=float_dtype)
 
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
-    potential_target_adv_share = config.player_potential_target_adv_share_fn(
-        player_state.step_count
-    )
 
     training_logs = {}
 
@@ -118,13 +124,24 @@ def train_step(
         batch,
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
-        state_potential=state_potential,
-        potential_target_adv_share=potential_target_adv_share,
         config=config,
+        adv_lambda=adv_lambda,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
+
+    # Per-lambda v-trace distribution targets for the multi-lambda aux
+    # value heads, bootstrapped from each lambda's OWN fast-target readout
+    # so every row's target is self-consistent.
+    player_aux_targets = compute_aux_value_targets(
+        batch,
+        aux_value_log_probs=jax.nn.log_softmax(
+            player_target_pred.aux_value_logits.astype(jnp.float32), axis=-1
+        ),
+        isr=target_actor_ratio,
+        config=config,
+    )
     # Fraction of steps where the IMPACT clipped-target correction is
     # saturated at its cap — a second staleness signal alongside the actor
     # KL and ESS diagnostics.
@@ -158,9 +175,14 @@ def train_step(
     player_targets = promote_map(player_targets, float_dtype)
 
     if config.player_advantage_ema_enabled:
-        player_advantages = (player_targets.advantages - player_state.ema_adv_mean) / (
-            player_state.ema_adv_std + 1e-8
-        )
+        # Floor on the std divisor: as the policy converges true
+        # advantages shrink, and dividing by a vanishing std amplifies
+        # value-estimation noise into the actor precisely when the real
+        # signal is weakest. Below the floor, normalisation stops
+        # rescaling and the gradient is allowed to get small.
+        player_advantages = (
+            player_targets.advantages - player_state.ema_adv_mean
+        ) / jnp.maximum(player_state.ema_adv_std, config.player_adv_std_floor)
     else:
         player_advantages = player_targets.advantages
 
@@ -257,23 +279,114 @@ def train_step(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
 
+        # player_commit_cov: batch CORRELATION between how much
+        # probability the policy put on the action it took and the
+        # advantage that action earned. Positive means the policy's
+        # confidence is being validated; near zero or negative means it
+        # is confidently choosing actions that are not paying. Telemetry
+        # only now — it used to drive the adaptivity controller's PI
+        # action, removed after repeated bugs (see AdaptivityController's
+        # class docstring). Still logged because it's a real, informative
+        # signal to watch, just not acted on by anything anymore.
+        #
+        # Correlation, not covariance: cov = corr * sd(log pi) * sd(adv),
+        # and sd(log pi) shrinks as the policy sharpens — i.e. the raw
+        # covariance partly measures policy entropy, coupling it to
+        # whatever might read it. Normalising leaves the relationship
+        # alone, bounded in [-1, 1].
+        #
+        # Blind to actions the policy never takes — this is exactly why
+        # it was never trusted alone; the entropy floors are the hard
+        # backstop for modality collapse, independent of this signal.
+        commit_lp = learner_log_prob
+        commit_adv = player_advantages
+        lp_dev = commit_lp - average(commit_lp, policy_mask)
+        adv_dev = commit_adv - average(commit_adv, policy_mask)
+        lp_sd = jnp.sqrt(average(jnp.square(lp_dev), policy_mask))
+        adv_sd = jnp.sqrt(average(jnp.square(adv_dev), policy_mask))
+        commit_cov = average(lp_dev * adv_dev, policy_mask) / jnp.maximum(
+            lp_sd * adv_sd, 1e-6
+        )
+
+        # Multi-gamma auxiliary value heads (Metamon/AMAGO-style): each
+        # row is a categorical value readout for one auxiliary discount,
+        # trained by CE against its own v-trace distribution target.
+        # Pure representation shaping across horizons — the policy's
+        # advantages read ONLY the main gamma=1 v_head; short-gamma
+        # advantages are material/tempo-greedy and not policy-invariant,
+        # so they never touch the actor loss.
+        aux_logits = learner_player_pred.aux_value_logits.astype(jnp.float32)
+        loss_v_aux = average(
+            optax.softmax_cross_entropy(
+                logits=aux_logits, labels=player_aux_targets
+            ).mean(axis=-1),
+            value_mask,
+        )
+
+        aux_expectations = jax.nn.softmax(aux_logits, axis=-1) @ cat_vf_support.astype(
+            jnp.float32
+        )
+        aux_target_expectations = player_aux_targets @ cat_vf_support.astype(
+            jnp.float32
+        )
+        aux_value_r2 = calculate_r2(
+            value_prediction=aux_expectations,
+            value_target=aux_target_expectations,
+            mask=jnp.broadcast_to(value_mask[..., None], aux_logits.shape[:-1]),
+        )
+        # Sensor for the lambda controller: mean absolute gap between the
+        # main head's value and the lambda=1.0 Monte Carlo anchor row —
+        # the live per-batch bootstrap-bias estimate. Blind spot: trunk
+        # errors shared by both readouts cancel here, which is why the
+        # controller keeps a lambda floor.
+        mc_row = config.player_aux_lambdas.index(1.0)
+        bootstrap_gap = average(
+            jnp.abs(
+                learner_value_head.expectation.astype(jnp.float32)
+                - aux_expectations[..., mc_row]
+            ),
+            value_mask,
+        )
+
+        # Per-row R2, keyed by lambda. The lambda=1.0 (Monte Carlo) row is
+        # the calibration anchor: its gap to the main head is a direct
+        # bootstrap-bias readout — large/growing gap means the critic is
+        # drifting off the data (replay staleness, self-referential
+        # low-lambda targets); tiny gap during a strength plateau points
+        # at transfer saturation instead.
+        aux_row_r2 = {
+            f"player_aux_r2_lam{round(lam * 100):03d}": calculate_r2(
+                value_prediction=aux_expectations[..., k],
+                value_target=aux_target_expectations[..., k],
+                mask=value_mask,
+            )
+            for k, lam in enumerate(config.player_aux_lambdas)
+        }
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            + config.player_magnet_kl_coef * loss_magnet_kl
+            + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
+            * loss_magnet_kl
+            + config.player_aux_value_coef * loss_v_aux
         )
 
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_v_win=loss_v_win,
+            player_loss_v_aux=loss_v_aux,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
+            player_aux_value_r2=aux_value_r2,
+            player_bootstrap_gap=bootstrap_gap,
+            **aux_row_r2,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
+            player_commit_cov=commit_cov,
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
@@ -308,15 +421,20 @@ def train_step(
             player_state.target_params,
             config.player_ema_update_rate,
         ),
+        # Advantage stats use their own, much faster EMA rate: they are
+        # scalars estimated from ~180 samples per batch (well-averaged at
+        # a 100-step time constant), and a slow EMA mis-scales the policy
+        # gradient for ~1k steps after every distribution shift — bandit
+        # arm switches most visibly.
         ema_adv_mean=optax.incremental_update(
             player_targets.advantages.mean(where=policy_mask),
             player_state.ema_adv_mean,
-            config.player_ema_update_rate,
+            config.player_adv_ema_rate,
         ),
         ema_adv_std=optax.incremental_update(
             player_targets.advantages.std(where=policy_mask),
             player_state.ema_adv_std,
-            config.player_ema_update_rate,
+            config.player_adv_ema_rate,
         ),
     )
 
@@ -326,7 +444,6 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_potential_target_adv_share=potential_target_adv_share,
             # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
@@ -601,11 +718,6 @@ def _stack_and_pad_batch(
         player_history=clip_history(
             stacked_trajectory.player_history, min_length=player_history_min_length
         ),
-        state_potential=(
-            ()
-            if isinstance(stacked_trajectory.state_potential, tuple)
-            else stacked_trajectory.state_potential[:num_valid]
-        ),
         reuse_count=(
             ()
             if isinstance(stacked_trajectory.reuse_count, tuple)
@@ -652,6 +764,7 @@ class Learner:
         gpu_lock: LockType | None = None,
         player_network=None,
         debug: bool = False,
+        controller_bytes: bytes | None = None,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
@@ -666,6 +779,56 @@ class Learner:
             recovery_winrate=config.plasticity_recovery_winrate,
             cooldown_frames=config.plasticity_cooldown_frames,
         )
+
+        # Advantage-lambda and magnet-coef runtime scalars (traced into
+        # train_step — never static config: each static value's recompile
+        # retained ~5GB host RAM and OOM-killed 1326). Driven by the
+        # controllers below.
+        self._current_lambda = float(config.player_adv_lambda)
+        self._current_magnet_coef = float(config.player_magnet_kl_coef)
+
+        self.lambda_ctrl: LambdaGapController | None = None
+        if config.lambda_ctrl_enabled:
+            self.lambda_ctrl = LambdaGapController(
+                initial_lambda=config.player_adv_lambda,
+                gap_target=config.lambda_ctrl_gap_target,
+                kp=config.lambda_ctrl_kp,
+                ki=config.lambda_ctrl_ki,
+                interval=config.lambda_ctrl_interval,
+                lambda_min=config.lambda_ctrl_min,
+                lambda_max=config.lambda_ctrl_max,
+                sensor_ema=config.lambda_ctrl_sensor_ema,
+            )
+
+        self.entropy_ctrl: AdaptivityController | None = None
+        if config.entropy_ctrl_enabled:
+            self.entropy_ctrl = AdaptivityController(
+                baseline_coef=config.player_magnet_kl_coef,
+                max_scale=config.entropy_ctrl_max_scale,
+                min_scale=config.entropy_ctrl_min_scale,
+                action_floor=config.entropy_ctrl_floor,
+                modality_floor=config.entropy_ctrl_modality_floor,
+                floor_gain=config.adapt_ctrl_floor_gain,
+                event_bump=config.adapt_ctrl_event_bump,
+            )
+
+        self.exploit_ctrl: ExploitabilityController | None = None
+        if config.exploit_ctrl_enabled:
+            self.exploit_ctrl = ExploitabilityController(
+                target=config.exploit_ctrl_target,
+                kp=config.exploit_ctrl_kp,
+                ki=config.exploit_ctrl_ki,
+                interval=config.exploit_ctrl_interval,
+                min_scale=config.exploit_ctrl_min_scale,
+                max_scale=config.exploit_ctrl_max_scale,
+                sensor_ema=config.exploit_ctrl_sensor_ema,
+            )
+        # Un-scaled targets the exploitability controller scales away
+        # from — stored once so each tick's adjustment is always relative
+        # to the configured baseline, never compounding on the previous
+        # tick's already-scaled value.
+        self._base_lambda_gap_target = float(config.lambda_ctrl_gap_target)
+        self._base_replay_kl_target = float(config.player_replay_kl_target)
 
         self.done = False
         self.builder_replay = BuilderTrajectoryStore(
@@ -693,10 +856,23 @@ class Learner:
         # Owned by the wandb log worker thread, which already device-syncs
         # every step's logs — the controller reads the actor KL there and
         # drives player_replay.set_max_reuses, so the train loop never pays
-        # for it. Velocity form on log(cap): only the previous error and the
-        # clamped control value are state.
-        self._replay_ctrl_log_cap = float(np.log(self.config.player_replay_ratio))
-        self._replay_ctrl_prev_err = 0.0
+        # for it. Actuator is the shared PILogController (rl/online/
+        # controllers.py); the sensor here is a fixed-window mean of the
+        # actor KL rather than an EMA, since the per-batch measurement is
+        # noisy and the window is the smoother — a deliberate difference
+        # from the lambda/entropy controllers' EMA sensors, not an
+        # oversight.
+        self._replay_pi = PILogController(
+            initial_log=float(np.log(self.config.player_replay_ratio)),
+            log_min=float(np.log(self.config.player_replay_ratio_min)),
+            log_max=float(np.log(self.config.player_replay_ratio_max)),
+            kp=self.config.player_replay_ctrl_kp,
+            ki=self.config.player_replay_ctrl_ki,
+        )
+        # Mutable copy of the KL target: the exploitability controller
+        # scales this away from _base_replay_kl_target, so the PI loop
+        # below must read the live value, not config directly.
+        self._replay_kl_target = self._base_replay_kl_target
         self._replay_ctrl_kl_sum = 0.0
         self._replay_ctrl_kl_count = 0
         # Store-counter snapshots for the realised replay ratio
@@ -718,48 +894,6 @@ class Learner:
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
         self.train_progress = tqdm(desc="batches", smoothing=0.1)
 
-        # Frozen offline critic supplying the learned state potential. Its
-        # params are held here, outside the train states — they are never
-        # donated and never touched by the optimizer, so the critic stays
-        # frozen for the lifetime of the run. Φ is evaluated once per
-        # trajectory in enqueue_traj (the critic is frozen, so the values
-        # are immutable data) and carried through the replay buffer —
-        # train_step never runs the ensemble.
-        self.potential_params: Params | None = None
-        self._potential_apply = None
-        # Insert-time Φ diagnostics, accumulated as (sum, count) per metric
-        # under a lock (enqueue_traj runs on many actor threads) and drained
-        # into the train-step logs by _handle_periodic_tasks.
-        self._potential_stats_lock = threading.Lock()
-        self._potential_stats: dict[str, tuple[float, int]] = {}
-        if config.offline_critic_ckpt_path:
-            from rl.offline.artifact import (
-                has_rating_conditioning,
-                load_critic_params,
-                make_potential_apply,
-            )
-
-            critic_params = load_critic_params(config.offline_critic_ckpt_path)
-            self.potential_params = jax.device_put(critic_params)
-            # Jitted once: actor trajectories arrive with fixed shapes
-            # (unroll_length time axis, fixed-capacity history buffers).
-            # Architecture flags come from the artifact itself, so old and
-            # Elo-conditioned critics both load.
-            self._potential_apply = jax.jit(
-                make_potential_apply(
-                    config.generation,
-                    config.potential_uncertainty_scale,
-                    config.potential_readout,
-                    with_aux=True,
-                    rating_conditioning=has_rating_conditioning(critic_params),
-                    condition_rating=config.potential_condition_rating,
-                )
-            )
-            logging.info(
-                "Loaded offline critic potential from %s",
-                config.offline_critic_ckpt_path,
-            )
-
         # JIT Compile
         if debug:
             self._train_step_jit = train_step
@@ -774,6 +908,10 @@ class Learner:
                 static_argnames=["config"],
                 donate_argnames=["player_state", "builder_state"],
             )
+
+        # Last: the controllers and the plasticity controller must already
+        # exist before their checkpointed state is applied.
+        self.restore_controller_state(controller_bytes)
 
     def _make_plasticity_probe(self, network):
         """Builds the jitted plasticity probe: an encoder-only forward on
@@ -814,84 +952,8 @@ class Learner:
 
         return jax.jit(probe)
 
-    def _compute_state_potential(self, traj: Trajectory) -> np.ndarray:
-        """Frozen-critic Φ(s) for one trajectory, shape (T,).
-
-        Runs the offline critic ensemble exactly once per trajectory —
-        here, at insert — instead of inside every train step: with
-        player_replay_ratio reuses per trajectory the ensemble cost drops
-        by that factor, learner step latency no longer includes the
-        ensemble forward at all, and ensemble size stops affecting step
-        time. The stored value is the fully gated potential
-        (mean · exp(−uncertainty_scale · std)), so nothing about the
-        shaping signal changes."""
-        actor_input = PlayerActorInput(
-            env=traj.player_transitions.env_output,
-            packed_history=traj.player_packed_history,
-            history=traj.player_history,
-        )
-        # (T, ...) / (H, ...) leaves -> a batch of one at axis 1, matching
-        # the (T, B) convention make_potential_apply vmaps over.
-        batched = jax.tree.map(lambda x: np.expand_dims(x, 1), actor_input)
-        phi, aux = self._potential_apply(self.potential_params, batched)
-        phi = np.asarray(jax.device_get(phi))[:, 0]
-        aux = {k: np.asarray(v)[:, 0] for k, v in jax.device_get(aux).items()}
-        self._record_potential_stats(traj, phi, aux)
-        # Stored bf16, upcast to f32 at use (compute_player_targets). The
-        # quantisation (~2^-9 absolute on Φ ∈ [-1, 1]) lands on the PBRS
-        # deltas γΦ(s')−Φ(s); insert-time stats above use the full-precision
-        # values, so potential_phi_step_delta_abs bounds the relative noise.
-        return phi.astype(jnp.bfloat16)
-
-    def _record_potential_stats(
-        self, traj: Trajectory, phi: np.ndarray, aux: dict[str, np.ndarray]
-    ) -> None:
-        """Accumulates insert-time Φ diagnostics over one trajectory's valid
-        steps: shaping loudness (|Φ| after gating), the ensemble confidence
-        gate and raw disagreement, the dense per-step signal a low-λ
-        potential channel would consume, and whether the critic's terminal
-        sign matches the actual outcome (skipping ties)."""
-        dones = np.asarray(traj.player_transitions.env_output.done)
-        valid = (np.cumsum(dones) - dones) == 0
-        if not valid.any():
-            return
-        stats = {
-            "phi_abs_mean": float(np.abs(phi[valid]).mean()),
-            "gate_mean": float(aux["gate"][valid].mean()),
-            "ensemble_std_mean": float(aux["ensemble_std"][valid].mean()),
-        }
-        step_pairs = valid[:-1] & valid[1:]
-        if step_pairs.any():
-            stats["phi_step_delta_abs"] = float(np.abs(np.diff(phi))[step_pairs].mean())
-        terminal_idx = np.nonzero(dones & valid)[0]
-        if terminal_idx.size:
-            t = int(terminal_idx[0])
-            outcome = float(
-                np.asarray(traj.player_transitions.env_output.win_reward)[t]
-                @ CAT_VF_SUPPORT
-            )
-            if outcome != 0.0:
-                stats["terminal_agreement"] = float((phi[t] > 0) == (outcome > 0))
-        with self._potential_stats_lock:
-            for key, value in stats.items():
-                total, count = self._potential_stats.get(key, (0.0, 0))
-                self._potential_stats[key] = (total + value, count + 1)
-
-    def _pop_potential_logs(self) -> dict[str, float]:
-        """Drains the insert-time Φ accumulator: means over every trajectory
-        recorded since the last drain, keyed potential_*."""
-        with self._potential_stats_lock:
-            stats, self._potential_stats = self._potential_stats, {}
-        return {
-            f"potential_{key}": total / count for key, (total, count) in stats.items()
-        }
-
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data."""
-        if self._potential_apply is not None:
-            # Computed before taking the store lock — GPU work must not
-            # block concurrent samplers/producers.
-            traj = traj.replace(state_potential=self._compute_state_potential(traj))
         add_cond = self.player_replay._add_cv
         with add_cond:
             add_cond.wait_for(lambda: self.done or self.player_replay.ready_to_add())
@@ -970,20 +1032,116 @@ class Learner:
             try:
                 host_logs = jax.device_get(logs)
                 self._update_replay_controller(host_logs)
+                self._update_hyper_controllers(host_logs)
                 self.wandb_run.log(host_logs)
             except Exception:
                 logger.exception("wandb logging failed")
 
+    def controller_state_bytes(self) -> bytes:
+        """Host-side training dynamics for the checkpoint: controllers and
+        plasticity bookkeeping. Not parameters, but resuming without them
+        silently resets an in-flight plasticity recovery and re-anneals
+        lambda from scratch."""
+        state = {"plasticity": self.plasticity.state_dict()}
+        if self.lambda_ctrl is not None:
+            state["lambda_ctrl"] = self.lambda_ctrl.state_dict()
+        if self.entropy_ctrl is not None:
+            state["entropy_ctrl"] = self.entropy_ctrl.state_dict()
+        if self.exploit_ctrl is not None:
+            state["exploit_ctrl"] = self.exploit_ctrl.state_dict()
+        return pickle.dumps(state)
+
+    def restore_controller_state(self, data: bytes | None) -> None:
+        """Counterpart to controller_state_bytes. Missing sections (older
+        checkpoints, or a controller disabled at save time) leave the
+        corresponding controller freshly initialised.
+
+        Never fatal: this state only saves a controller some re-warmup,
+        so a blob written by a superseded controller revision must not
+        be able to fail a resume. Run 1333 died at startup on exactly
+        that (KeyError 'cov_ema' restoring EntropyRateController state
+        into AdaptivityController) — each section is now isolated and a
+        bad one is logged and skipped."""
+        if not data:
+            return
+        try:
+            state = pickle.loads(data)
+        except Exception:
+            logger.exception("controller state unreadable — starting fresh")
+            return
+
+        def _restore(name: str, apply):
+            section = state.get(name)
+            if section is None:
+                return
+            try:
+                apply(section)
+            except Exception:
+                logger.exception(
+                    "controller state for %r incompatible — that controller "
+                    "starts fresh",
+                    name,
+                )
+
+        _restore("plasticity", self.plasticity.load_state_dict)
+        if self.lambda_ctrl is not None:
+            _restore("lambda_ctrl", self.lambda_ctrl.load_state_dict)
+            self._current_lambda = self.lambda_ctrl.value
+        if self.entropy_ctrl is not None:
+            _restore("entropy_ctrl", self.entropy_ctrl.load_state_dict)
+            self._current_magnet_coef = self.entropy_ctrl.value
+        if self.exploit_ctrl is not None:
+            _restore("exploit_ctrl", self.exploit_ctrl.load_state_dict)
+            # Reapply the restored scale immediately rather than leaving
+            # the other controllers' targets at their un-scaled baseline
+            # until the next manage_league_interval tick.
+            self._apply_exploit_scale()
+
+    def _update_hyper_controllers(self, host_logs: dict) -> None:
+        """Lambda and entropy controllers (rl/online/controllers.py).
+        Runs on the log worker like the replay controller — the sensors
+        are host-side per-step logs, and the actuators are plain floats
+        the train thread reads on its next step (GIL-atomic swap)."""
+        if self.lambda_ctrl is not None:
+            gap = host_logs.get("player_bootstrap_gap")
+            host_logs.update(
+                self.lambda_ctrl.update(
+                    None if gap is None else float(gap),
+                    recovering=self.plasticity.recovering,
+                )
+            )
+            self._current_lambda = self.lambda_ctrl.value
+        if self.entropy_ctrl is not None:
+            # Floor-only now (see AdaptivityController's class docstring
+            # for the removal history) — player_commit_cov is no longer
+            # consumed here at all, only the two hard entropy backstops,
+            # because a collapsed modality is invisible to the covariance
+            # (which is how 1330 lost switching while looking healthy) —
+            # the same reason those floors were never optional.
+            action_ent = host_logs.get("player_action_normalized_entropy")
+            modal_ent = host_logs.get("player_normalized_modality_entropy")
+            host_logs.update(
+                self.entropy_ctrl.update(
+                    None if action_ent is None else float(action_ent),
+                    None if modal_ent is None else float(modal_ent),
+                )
+            )
+            self._current_magnet_coef = self.entropy_ctrl.value
+
     def _update_replay_controller(self, host_logs: dict) -> None:
         """Velocity-form PI loop holding the replayed-batch actor KL at
-        player_replay_kl_target by adjusting the store's reuse cap.
+        _replay_kl_target by adjusting the store's reuse cap.
 
         The KL is averaged over player_replay_ctrl_interval steps per tick
         (the per-batch measurement is noisy; the window is the smoother).
         Working on log(cap) makes the control multiplicative, and clamping
         log(cap) itself gives anti-windup for free: the integral action
         cannot accumulate past the bounds. Adds the current cap to
-        host_logs so every wandb step carries it."""
+        host_logs so every wandb step carries it.
+
+        _replay_kl_target starts at config.player_replay_kl_target but the
+        exploitability controller may since have scaled it — read the live
+        value, not config, so that adjustment actually takes effect."""
         config = self.config
         if not config.player_replay_ctrl_enabled:
             return
@@ -997,22 +1155,10 @@ class Learner:
             self._replay_ctrl_kl_sum = 0.0
             self._replay_ctrl_kl_count = 0
 
-            err = (config.player_replay_kl_target - kl_mean) / (
-                config.player_replay_kl_target
-            )
-            self._replay_ctrl_log_cap += (
-                config.player_replay_ctrl_kp * (err - self._replay_ctrl_prev_err)
-                + config.player_replay_ctrl_ki * err
-            )
-            self._replay_ctrl_prev_err = err
-            self._replay_ctrl_log_cap = float(
-                np.clip(
-                    self._replay_ctrl_log_cap,
-                    np.log(config.player_replay_ratio_min),
-                    np.log(config.player_replay_ratio_max),
-                )
-            )
-            cap = int(round(np.exp(self._replay_ctrl_log_cap)))
+            err = (self._replay_kl_target - kl_mean) / self._replay_kl_target
+            self._replay_pi.step(err)
+
+            cap = int(round(np.exp(self._replay_pi.log)))
             if cap != self.player_replay.max_reuses:
                 self.player_replay.set_max_reuses(cap)
 
@@ -1082,6 +1228,7 @@ class Learner:
                     jax.device_get(self.player_state),
                     jax.device_get(self.builder_state),
                     self.league,
+                    self.controller_state_bytes(),
                 )
             except RuntimeError:
                 # An interrupt that lands mid train-step catches the state
@@ -1134,6 +1281,8 @@ class Learner:
             self.builder_state,
             batch,
             self.config,
+            np.float32(self._current_lambda),
+            np.float32(self._current_magnet_coef),
         )
 
         return logs
@@ -1153,9 +1302,24 @@ class Learner:
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
             logs.update(self.plasticity.logs())
+            if self.exploit_ctrl is not None:
+                logs.update(self.exploit_ctrl.logs())
 
-        if self._potential_apply is not None:
-            logs.update(self._pop_potential_logs())
+        # Rating window boundary: fit and log the BT rating and its
+        # exploitability auditors — the only strength-grounded absolute
+        # progress telemetry, logged every window regardless of which
+        # controller is driving (see bandit.py; these need hundreds of
+        # games per point, so they stay an auditor, never a control
+        # signal — the exploit controller above uses the raw win-rate
+        # table instead, which is available much sooner).
+        if step % self.config.bandit_window_steps == 0:
+            logs.update(
+                rating_logs(
+                    self.league,
+                    self.config.bandit_min_games_per_opponent,
+                    self.config.bandit_min_rated_opponents,
+                )
+            )
 
         # Hand off to the log worker; values may still be device arrays and
         # are synced there, off the critical path.
@@ -1172,6 +1336,7 @@ class Learner:
                 jax.device_get(self.player_state),
                 jax.device_get(self.builder_state),
                 self.league,
+                self.controller_state_bytes(),
             )
 
         if step % self.config.manage_league_interval == 0:
@@ -1185,8 +1350,76 @@ class Learner:
             self._add_player_to_league(step)
             self.player_replay.reset_usage_counts()
             self.plasticity.on_player_added(reason)
+            # A new opponent shifts the state distribution before any
+            # batch reflects it: raise diversity pressure now so the
+            # policy can adapt instead of defending habitual lines. The
+            # commitment covariance decays it back once the new lines
+            # start paying.
+            if self.entropy_ctrl is not None:
+                self.entropy_ctrl.bump()
 
         self._update_plasticity(step)
+        self._update_exploit_controller()
+
+    def _measure_exploitability(self) -> float | None:
+        """1 - main's win-rate against its worst historical league
+        snapshot — the same win_rates.min() _should_add_new_player already
+        computes for the "dominant" gate, reused here as a control sensor
+        rather than a one-shot threshold.
+
+        Snapshots only count once they clear exploit_ctrl_min_games_per_
+        opponent effective games against main — mirrors bandit.py's
+        _rateable_snapshot_keys, applied here because a freshly-added (or
+        lightly-played) snapshot reads near 0.5 by construction (main vs.
+        a near-identical recent self), which looks exactly like a real
+        exploitability hole otherwise. exploit_ctrl_min_historical then
+        gates on how many such rateable snapshots exist, so a lone one
+        (still Bayesian-prior-dominated even past the games bar, see
+        League._win_rate_by_steps) cannot swing the reading alone."""
+        current = self.league.get_main_player()
+        min_games = self.config.exploit_ctrl_min_games_per_opponent
+        rateable = [
+            v
+            for k, v in self.league.players.items()
+            if k != MAIN_KEY
+            and self.league.games.get((MAIN_KEY, k), 0.0)
+            + self.league.games.get((k, MAIN_KEY), 0.0)
+            >= min_games
+        ]
+        if len(rateable) < self.config.exploit_ctrl_min_historical:
+            return None
+        win_rates = self.league.get_winrate((current, rateable))
+        return float(1.0 - np.min(win_rates))
+
+    def _update_exploit_controller(self) -> None:
+        """Ticks the exploitability controller and reapplies its scale.
+        Separated from _apply_exploit_scale so a checkpoint restore can
+        reapply a just-loaded scale without re-stepping the PI loop."""
+        if self.exploit_ctrl is None:
+            return
+        self.exploit_ctrl.update(self._measure_exploitability())
+        self._apply_exploit_scale()
+
+    def _apply_exploit_scale(self) -> None:
+        """Scales the lambda/replay controllers' TARGETS (not their
+        actuators) by the exploitability controller's caution scale.
+        Used to also scale the adaptivity controller's commit_target,
+        but that target no longer exists — AdaptivityController is
+        floor-only now (see its class docstring for why). The sign of
+        the adjustment differs per remaining target because "more
+        cautious" means something different for each: shrinking
+        lambda_ctrl_gap_target makes the lambda controller less willing
+        to trust the critic's bootstrap (lambda drifts toward the MC
+        anchor); shrinking the replay KL target allows less reuse,
+        keeping training data fresher — both read as "become more
+        conservative" even though the multiplier itself only ever grows
+        or shrinks uniformly."""
+        if self.exploit_ctrl is None:
+            return
+        scale = self.exploit_ctrl.value
+        if self.lambda_ctrl is not None:
+            self.lambda_ctrl.gap_target = self._base_lambda_gap_target / scale
+        self._replay_kl_target = self._base_replay_kl_target / scale
 
     def _should_add_new_player(self) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.
@@ -1271,6 +1504,12 @@ class Learner:
             module_shrink=self.config.plasticity_module_shrink,
         )
         self.plasticity.on_perturbation(latest.step_count, frame_count)
+        # Perturbation scrambles the policy's preferences: hold its
+        # options open (a larger bump than a league addition) while it
+        # re-forms them. Mirrors the lambda controller being pinned at
+        # its ceiling for the same reason.
+        if self.entropy_ctrl is not None:
+            self.entropy_ctrl.bump(self.config.adapt_ctrl_perturb_bump)
 
     def _update_main_player_in_league(self):
         self.league.update_main_player(self._create_params_container(MAIN_KEY))

@@ -21,7 +21,8 @@ import numpy as np
 from jaxtyping import ArrayLike
 from ml_collections import ConfigDict
 
-from rl.environment.protos.features_pb2 import FieldFeature
+from rl.environment.protos.enums_pb2 import BattlemajorargsEnum
+from rl.environment.protos.features_pb2 import EntityEdgeFeature, FieldFeature
 from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
 
 NUM_PUBLIC_SLOTS = 12
@@ -38,6 +39,113 @@ _RELEVANT_ENTITY_FEATURES = np.array(
         FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX3,
     ]
 )
+
+# Announcement/outcome partition for announced states (Φ_ann): edge columns
+# that identify WHAT was chosen survive; every other column is an outcome
+# of chance (damage rolls, crits/secondary bits, boosts, procs) or a
+# consequence deterministically implied by the announcement. Asymmetry
+# rule: over-masking a deterministic consequence is harmless (the estimand
+# is unchanged); under-masking leaks dice into the decision term — so the
+# default for any ambiguous column is mask.
+_ANNOUNCEMENT_EDGE_COLUMNS = np.array(
+    [
+        EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG,
+        EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN,
+        EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX,
+    ]
+)
+
+# Step-level exceptions: edges whose MAJOR occurrence is itself chance or
+# forced (full para/sleep, the faint, phazing drag-ins, replace) carry no
+# announcement — the whole edge is dropped from the announced state.
+_OUTCOME_MAJOR_ARGS = np.array(
+    [
+        BattlemajorargsEnum.BATTLEMAJORARGS_ENUM__CANT,
+        BattlemajorargsEnum.BATTLEMAJORARGS_ENUM__FAINT,
+        BattlemajorargsEnum.BATTLEMAJORARGS_ENUM__DRAG,
+        BattlemajorargsEnum.BATTLEMAJORARGS_ENUM__REPLACE,
+    ]
+)
+
+
+def mask_outcome_features(edge_cache: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Outcome-mask the packed edge cache for announced-state evaluation.
+
+    Returns (masked cache with every non-announcement column set to
+    _UNSPECIFIED, per-row bool: this edge is an announcement). Minor-only
+    edges (residual chip, item/ability procs with no major arg) and the
+    _OUTCOME_MAJOR_ARGS edges are outcome events: excluded entirely. The
+    mask is model-side and applied identically to replay shards and live
+    self-play packed streams, so the two can never drift on semantics.
+    """
+    keep = np.zeros(int(edge_cache.shape[-1]), dtype=bool)
+    keep[_ANNOUNCEMENT_EDGE_COLUMNS] = True
+    masked = jnp.where(jnp.asarray(keep)[None, :], edge_cache, 0)
+    major = edge_cache[:, EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG]
+    is_outcome_major = jnp.zeros_like(major, dtype=jnp.bool_)
+    for arg in _OUTCOME_MAJOR_ARGS:
+        is_outcome_major = is_outcome_major | (major == arg)
+    is_announcement = (
+        major != BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___UNSPECIFIED
+    ) & ~is_outcome_major
+    return masked, is_announcement
+
+
+def major_arg_step_mask(history_field: jax.Array, edge_cache: jax.Array) -> jax.Array:
+    """(H,) bool: history steps that carry at least one battle major arg.
+
+    Mirrors the relevant-edge gather of PerSlotHistoryEncoder.__call__: a
+    step's edges are the cache rows named by its RELEVANT_ENTITY_IDX
+    columns, capped by NUM_RELEVANT. A step counts as major when any such
+    edge's MAJOR_ARG is a real protocol arg (anything past the
+    UNSPECIFIED/NULL/PAD sentinels — moves, switches, faints, cant, ...).
+    These are the integrated history critic's supervision points, matching
+    the offline critic's convention of scoring at decision-bearing events
+    rather than every residual/chip line.
+    """
+    relevant = history_field[:, _RELEVANT_ENTITY_FEATURES]  # (H, K)
+    num_relevant = history_field[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
+    edge_mask = np.arange(relevant.shape[1])[None] < num_relevant[:, None]
+    major = jnp.take(
+        edge_cache[:, EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG],
+        relevant,
+        axis=0,
+    )  # (H, K)
+    is_real = major > BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___PAD
+    return (edge_mask & is_real).any(axis=-1)
+
+
+def critic_step_roles(
+    history_field: jax.Array, edge_cache: jax.Array, step_valid: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """(H,) bool pair: (is_state_step, is_afterstate_step).
+
+    STATE steps carry a battle major arg — the readout there scores the
+    position as that action's fused resolution lands. AFTERSTATE steps are
+    the last valid step before the next major — the settled state (residual
+    minors resolved) the following decision is actually made from, i.e. the
+    evaluation point root search queries. A major step immediately followed
+    by another major is BOTH (no residual phase between them), so the roles
+    are independent flags, not a partition.
+    """
+    is_state = major_arg_step_mask(history_field, edge_cache) & step_valid
+
+    def _scan(carry, xs):
+        major, valid = xs
+        # Emitted value: the major-flag of the nearest VALID step strictly
+        # after this one; then fold this step into the carry.
+        out = carry
+        carry = jnp.where(valid, major, carry)
+        return carry, out
+
+    _, next_valid_is_major = jax.lax.scan(
+        _scan,
+        jnp.zeros((), dtype=jnp.bool_),
+        (is_state, step_valid),
+        reverse=True,
+    )
+    is_afterstate = step_valid & next_valid_is_major
+    return is_state, is_afterstate
 
 
 @chex.dataclass
@@ -383,3 +491,164 @@ class PerSlotHistoryEncoder(nn.Module):
             return slots, field, nodes
 
         return jax.vmap(gather_one)(request_counts)
+
+    def announced_states_at_requests(
+        self,
+        history_output: PerSlotHistoryOutput,
+        history_field: jax.Array,
+        announced_edge_embedding_cache: jax.Array,
+        edge_slot_ids: jax.Array,
+        node_sides: jax.Array,
+        row_is_announcement: jax.Array,
+        field_step_embeddings: jax.Array,
+        request_counts: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """Announced state per request: both players' revealed choices, no
+        resolved chance. For request count c, the pre-turn recurrent state
+        (last step with request_count < c — exactly the previous request's
+        state) is advanced ONE extra step with the outcome-masked messages
+        of the steps stamped c. No second scan and no per-turn re-encoding:
+        the per-step masked slot messages are pooled per request with a
+        selection product, and a single batched `_advance` covers every
+        request at once.
+
+        Announced-state semantics (all deliberate):
+        - node snapshots stay at PRE-turn values — the per-edge cache rows
+          are post-event snapshots and would leak outcomes, so each edge's
+          node component is the pre-turn latest snapshot of its slot;
+        - the turn's own field rows are never fed (post-event); the field
+          component reuses the pre-turn step's field embedding;
+        - a request whose turn has no announcement edges (fully forced /
+          all-outcome turns) keeps the pre-turn state verbatim — nothing
+          is imputed.
+
+        Args:
+            history_output: the scan output of __call__ (same call).
+            history_field: (H, NUM_FIELD_FEATURES) raw int history rows.
+            announced_edge_embedding_cache: (P, D) embeddings of the
+                outcome-masked edge cache (see mask_outcome_features).
+            edge_slot_ids / node_sides: (P,) as in __call__.
+            row_is_announcement: (P,) bool from mask_outcome_features.
+            field_step_embeddings: (H, D) — source of the PRE-turn field
+                vector only.
+            request_counts: (T,).
+
+        Returns ((T, 12, D) announced slot states, (T, D) announced field
+        state, (T, 12, D) pre-turn node snapshots).
+        """
+        relevant = history_field[:, _RELEVANT_ENTITY_FEATURES]  # (H, K)
+        num_relevant = history_field[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
+        edge_mask = jnp.arange(relevant.shape[1])[None] < num_relevant[:, None]
+
+        edge_embeddings = jnp.take(
+            announced_edge_embedding_cache, relevant, axis=0
+        )  # (H, K, D)
+        slot_ids = jnp.take(edge_slot_ids, relevant, axis=0).clip(
+            0, NUM_PUBLIC_SLOTS - 1
+        )
+        announced = jnp.take(row_is_announcement, relevant, axis=0)  # (H, K)
+        edge_ok = edge_mask & announced & history_output.step_valid[:, None]
+        side_onehot = jax.nn.one_hot(
+            jnp.take(node_sides, relevant, axis=0), 2, dtype=edge_embeddings.dtype
+        )
+
+        # message_projection is bias-free, hence linear over its
+        # [node ; edge ; field ; side] input blocks: the edge+side part is
+        # projected once per cache-referenced edge, while the node and
+        # field parts — which depend on the REQUEST's pre-turn state, not
+        # the edge — are projected once per request and added per
+        # contributing edge (× count). This keeps the work at
+        # O(H·K + T·12) projections instead of O(T·H·K).
+        def project(node, edge, field, side):
+            return self.message_projection(
+                jnp.concatenate((node, edge, field, side), axis=-1)
+            )
+
+        zeros_hkd = jnp.zeros_like(edge_embeddings)
+        edge_messages = project(
+            zeros_hkd, edge_embeddings, zeros_hkd, side_onehot
+        )  # (H, K, D)
+
+        seg = jnp.where(edge_ok, slot_ids, NUM_PUBLIC_SLOTS)
+        step_slot_messages = jax.vmap(
+            lambda m, s: jax.ops.segment_sum(m, s, num_segments=NUM_PUBLIC_SLOTS + 1)[
+                :-1
+            ]
+        )(
+            edge_messages, seg
+        )  # (H, 12, D)
+        step_counts = jax.vmap(
+            lambda ok, s: jax.ops.segment_sum(
+                ok.astype(jnp.int32), s, num_segments=NUM_PUBLIC_SLOTS + 1
+            )[:-1]
+        )(
+            edge_ok, seg
+        )  # (H, 12)
+
+        h0_slots, h0_field = self.initial_state()
+        step_indices = jnp.arange(history_output.step_valid.shape[0])
+        msg_dtype = step_slot_messages.dtype
+
+        def gather_one(request_count: jax.Array):
+            # Pure gathers only — module calls happen batched, below.
+            pre_ok = history_output.step_valid & (
+                history_output.step_request_count < request_count
+            )
+            idx = jnp.where(pre_ok, step_indices, -1).max()
+            has_history = idx >= 0
+            safe_idx = jnp.maximum(idx, 0)
+            slots = jnp.where(
+                has_history, history_output.slot_snapshots[safe_idx], h0_slots
+            )
+            field = jnp.where(
+                has_history, history_output.field_snapshots[safe_idx], h0_field
+            )
+            nodes = jnp.where(
+                has_history,
+                history_output.node_snapshots[safe_idx],
+                jnp.zeros_like(h0_slots),
+            )
+            field_vec = jnp.where(
+                has_history,
+                field_step_embeddings[safe_idx],
+                jnp.zeros_like(field_step_embeddings[0]),
+            )
+            turn = (
+                history_output.step_valid
+                & (history_output.step_request_count == request_count)
+            ).astype(msg_dtype)
+            slot_messages = jnp.einsum("h,hsd->sd", turn, step_slot_messages)
+            counts = jnp.einsum("h,hs->s", turn, step_counts.astype(msg_dtype))
+            return slots, field, nodes, field_vec, slot_messages, counts
+
+        pre_slots, pre_field, pre_nodes, pre_field_vec, slot_messages, counts = (
+            jax.vmap(gather_one)(request_counts)
+        )
+
+        zeros_tsd = jnp.zeros_like(pre_nodes)
+        zeros_side = jnp.zeros(pre_nodes.shape[:-1] + (2,), dtype=pre_nodes.dtype)
+        node_component = project(
+            pre_nodes, zeros_tsd, zeros_tsd, zeros_side
+        )  # (T, 12, D)
+        zeros_td = jnp.zeros_like(pre_field_vec)
+        field_component = project(
+            zeros_td,
+            zeros_td,
+            pre_field_vec,
+            jnp.zeros(pre_field_vec.shape[:-1] + (2,), dtype=pre_field_vec.dtype),
+        )  # (T, D)
+        slot_messages = slot_messages + counts[..., None] * (
+            node_component + field_component[:, None, :]
+        )
+
+        touched = counts > 0
+        valid = touched.any(axis=-1)
+        ann_slots, ann_field = self._advance(
+            pre_slots,
+            pre_field,
+            slot_messages,
+            touched.astype(pre_slots.dtype),
+            pre_field_vec,
+            valid.astype(pre_slots.dtype),
+        )
+        return ann_slots, ann_field, pre_nodes

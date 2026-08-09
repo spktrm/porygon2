@@ -5,7 +5,7 @@ from typing import Literal, NamedTuple
 import cloudpickle as pickle
 import numpy as np
 
-from rl.learner import checkpoint
+from rl import checkpoint
 from rl.model.utils import ParamsContainer
 
 _psfp_weightings = {

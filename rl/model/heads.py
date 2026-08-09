@@ -117,7 +117,68 @@ class PairPolicyHead(nn.Module):
         src = action_embeddings + MLP(**self.cfg.src_mlp.to_dict())(action_embeddings)
         tgt = action_embeddings + MLP(**self.cfg.tgt_mlp.to_dict())(action_embeddings)
         logits = PointerLogits(**self.cfg.qk_logits.to_dict())(src, tgt)
-        return logits.squeeze(-1).reshape(-1)
+        flat_logits = logits.squeeze(-1).reshape(-1)
+        # Per-modality logit scale. The shared bilinear grid ties
+        # within-modality logit SPREAD across modalities (one set of
+        # src/tgt projections must express move-choice and switch-choice
+        # sharpness at once); the November per-modality heads had
+        # independent scales, and beat this head in competition. The
+        # downstream within-modality logsumexp removes any per-modality
+        # shift, so this parameter controls sharpness only — it cannot
+        # move the modality contest, which MacroHead owns. Init 1.0
+        # reproduces the unscaled head exactly, preserving
+        # calculate_hierarchical_prior as the init-policy anchor.
+        modality_scale = self.param(
+            "modality_scale", nn.initializers.ones, (NUM_MODALITY_FEATURES,)
+        ).astype(flat_logits.dtype)
+        return flat_logits * modality_scale[FLAT_MODALITY_MASK]
+
+
+class PerModalityPolicyHead(nn.Module):
+    """Per-modality src x tgt pointer heads over the shared trunk output.
+
+    PairPolicyHead scored every modality through one set of role
+    projections, which (a) forces move/switch/wildcard preferences into a
+    common bilinear geometry and (b) mixes their gradients through shared
+    weights — the parametric entanglement the November per-modality heads
+    did not have. Its per-modality logit-scale probe confirmed distinct
+    temperatures emerge when allowed (wildcard > move > switch). Here each
+    modality owns the whole trunk-output → logit map: a stack of
+    pre-activation residual blocks per role plus its own pointer
+    projections, restoring November's head depth AND its gradient routing
+    (the policy gradient of a taken action only touches its own modality's
+    head, since other modalities' cells don't contribute to that action's
+    log-prob). Composition, sampling and the learner interface are
+    unchanged: the heads fill disjoint cells of one flat src x tgt grid,
+    still one categorical draw. An explicit modality scale is redundant
+    here — each head's pointer projections own their scale.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, action_embeddings: jax.Array) -> jax.Array:
+        num_slots = action_embeddings.shape[0]
+        flat_logits = jnp.zeros((num_slots * num_slots,), action_embeddings.dtype)
+        for modality in range(NUM_MODALITY_FEATURES):
+            src = action_embeddings
+            tgt = action_embeddings
+            for block in range(self.cfg.num_blocks):
+                src = src + MLP(
+                    **self.cfg.src_mlp.to_dict(), name=f"src_mlp_m{modality}_b{block}"
+                )(src)
+                tgt = tgt + MLP(
+                    **self.cfg.tgt_mlp.to_dict(), name=f"tgt_mlp_m{modality}_b{block}"
+                )(tgt)
+            logits = PointerLogits(
+                **self.cfg.qk_logits.to_dict(), name=f"qk_logits_m{modality}"
+            )(src, tgt)
+            flat_logits = jnp.where(
+                FLAT_MODALITY_MASK == modality,
+                logits.squeeze(-1).reshape(-1),
+                flat_logits,
+            )
+        return flat_logits
 
 
 class MacroHead(nn.Module):
@@ -162,6 +223,35 @@ class MacroHead(nn.Module):
         # Modalities with no live src pool an arbitrary mixture; callers
         # must mask them out via legal_log_policy(macro_logits, valid).
         return logits.squeeze(-1)
+
+
+class SlotConditioning(nn.Module):
+    """Injects slot 1's chosen action into the action embeddings for
+    slot 2's head pass (doubles).
+
+    The trunk runs ONCE per turn; conditioning the second active mon's
+    decision on the first happens here at head level: the chosen action's
+    src/tgt embeddings (already computed by the same trunk forward) map
+    through a zero-initialised projection onto every action embedding, so
+    at init slot 2's policy is exactly the unconditioned one and the
+    conditioning pathway is learned from zero. This replaces the old
+    two-request scheme where the second decision re-encoded the full state
+    with prev-action tokens (a second trunk pass per doubles turn).
+    """
+
+    @nn.compact
+    def __call__(
+        self, action_embeddings: jax.Array, src_index: jax.Array, tgt_index: jax.Array
+    ) -> jax.Array:
+        chosen = jnp.concatenate(
+            [action_embeddings[src_index], action_embeddings[tgt_index]], axis=-1
+        )
+        delta = nn.Dense(
+            action_embeddings.shape[-1],
+            kernel_init=nn.initializers.zeros,
+            dtype=action_embeddings.dtype,
+        )(chosen)
+        return action_embeddings + delta[None, :]
 
 
 class PolicyQKHead(nn.Module):
@@ -214,6 +304,18 @@ class PolicyQKHead(nn.Module):
         )
 
 
+# Alive-mon differential support: margins -6..+6, matching the offline
+# critic's 13-bin distributional target.
+NUM_MARGIN_BINS = 13
+
+
+def margin_win_mass(logits: jax.Array) -> jax.Array:
+    """P(win) − P(loss) from 13-bin margin logits (last axis)."""
+    probs = jax.nn.softmax(logits.astype(jnp.float32), axis=-1)
+    half = NUM_MARGIN_BINS // 2
+    return probs[..., half + 1 :].sum(-1) - probs[..., :half].sum(-1)
+
+
 class CategoricalValueLogitHead(nn.Module):
     cfg: ConfigDict
 
@@ -238,6 +340,27 @@ class CategoricalValueLogitHead(nn.Module):
             expectation=expectation,
             l2_norm=l2_norm,
         )
+
+
+class MultiLambdaValueLogitHead(nn.Module):
+    """Learner-only categorical value logits for K auxiliary lambdas.
+
+    Output (..., K, n_bins): row k is trained by CE against the gamma=1
+    v-trace distribution target built with player_aux_lambdas[k]
+    (rl/online/targets.py). With terminal-only reward every row estimates
+    the same win probability from a different bias/variance target
+    construction — lambda=1 is the Monte Carlo anchor (a gamma spectrum
+    would degenerate here: gamma^45 kills the signal). Representation
+    shaping only — the policy's advantages read the main v_head; these
+    rows never feed the actor loss.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, embedding: jax.Array):
+        logits = MLP(**self.cfg.mlp.to_dict())(embedding)
+        return logits.reshape(*logits.shape[:-1], self.cfg.num_heads, -1)
 
 
 class RegressionValueLogitHead(nn.Module):

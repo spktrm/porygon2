@@ -9,7 +9,7 @@ from rl.environment.interfaces import (
     PlayerTargets,
     Trajectory,
 )
-from rl.learner.config import Porygon2LearnerConfig
+from rl.online.config import Porygon2LearnerConfig
 
 
 def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax.Array:
@@ -40,34 +40,32 @@ def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
     isr: jax.Array,
-    state_potential: jax.Array,
-    potential_target_adv_share: jax.Array,
     config: Porygon2LearnerConfig,
+    adv_lambda: jax.Array | float | None = None,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
-    """Computes v-trace returns and advantages over stacked reward channels.
+    """Computes v-trace returns and advantages on the win/loss channel.
 
-    Also returns a logs dict of per-channel advantage diagnostics: the win
-    and potential channel stds, their correlation (high correlation means
-    the potential channel is a rescaled copy of the outcome signal and adds
-    no credit-assignment information), and the potential channel's share of
-    the combined advantage magnitude.
-
-    Channels: [0:n_bins] categorical win reward, [n_bins] learned potential
-    (``state_potential``, the frozen offline critic's Φ(s) in [-1, 1];
-    terminal-only reward). The potential channel's coefficient is solved
-    per batch so its share of the combined advantage magnitude equals
-    ``potential_target_adv_share``.
+    PBRS/potential shaping retired (Aug 2026): the shaped-advantage era's
+    channel machinery lived here; the win channel is now the sole reward.
+    Multi-gamma auxiliary value targets (compute_aux_value_targets)
+    supply the dense representation-shaping signal instead.
 
     IMPACT-style: ``value_log_probs`` are the *fast* EMA target's predictions
     and ``isr = pi_target/mu`` its ratio to the behavior policy, so v-trace
     estimates the target policy's values with off-policy correction — stable
     under replay reuse because the fast target tracks the learner within ~1k
     steps.
+
+    Split lambdas (Ataraxos-style td/gae): value targets always use
+    config.player_lambda, so the critic's objective — and the MC-anchor
+    calibration signal built on it — never drifts. ``adv_lambda`` (a
+    RUNTIME scalar; traced, not static — lambda-as-static-config
+    recompiled per value and each recompile retained ~5GB host RAM,
+    killing run 1326) controls ONLY the advantage path, so the lambda
+    controller tunes the actor's bias/variance trade without touching
+    what the value heads learn.
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
-
-    dones = batch.player_transitions.env_output.done
-    state_potential = state_potential.astype(isr.dtype)
 
     dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
     mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
@@ -81,39 +79,27 @@ def compute_player_targets(
     c_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
     c_t = jnp.expand_dims(c_t, axis=-1)
 
-    player_reward = batch.player_transitions.env_output.win_reward
+    r_t = batch.player_transitions.env_output.win_reward
 
-    terminal_potential_reward = jnp.where(dones, state_potential, 0.0)
-    r_t = jnp.concatenate(
-        (player_reward, terminal_potential_reward[..., None]), axis=-1
-    )
-
-    value_probs = jnp.exp(value_log_probs)
-
-    n_bins = value_probs.shape[-1]
-    v_tm1 = jnp.concatenate((value_probs, state_potential[..., None]), axis=-1)
+    v_tm1 = jnp.exp(value_log_probs)
     last_values = v_tm1[-1:]
-
     v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
+
     td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
 
-    # Per-channel λ: the win channel keeps the long player_lambda horizon;
-    # the potential channel uses its own short player_potential_lambda so
-    # its advantage stays near the one-step PBRS signal γΦ(s')−Φ(s)
-    # instead of telescoping into a copy of the outcome signal.
-    lambda_ = jnp.concatenate(
-        [
-            jnp.full((n_bins,), config.player_lambda),
-            jnp.array([config.player_potential_lambda]),
-        ]
-    ).astype(isr.dtype)
-
-    errors = vtrace(td_errors, discount_t, c_t * lambda_)
-
+    td_lambda = jnp.asarray(config.player_lambda, dtype=isr.dtype)
+    errors = vtrace(td_errors, discount_t, c_t * td_lambda)
     targets_tm1 = (errors + v_tm1) * mask_expanded
+
+    gae_lambda = jnp.asarray(
+        config.player_adv_lambda if adv_lambda is None else adv_lambda,
+        dtype=isr.dtype,
+    )
+    adv_errors = vtrace(td_errors, discount_t, c_t * gae_lambda)
+    adv_targets = (adv_errors + v_tm1) * mask_expanded
     q_bootstrap = jnp.concatenate(
         [
-            lambda_ * targets_tm1[1:] + (1 - lambda_) * v_tm1[1:],
+            gae_lambda * adv_targets[1:] + (1 - gae_lambda) * v_tm1[1:],
             v_t[-1:],
         ],
         axis=0,
@@ -122,10 +108,8 @@ def compute_player_targets(
 
     pg_advantages = rho_t * (q_estimate - v_tm1)
 
-    win_advantages = pg_advantages[..., :n_bins] @ cat_vf_support
-    potential_advantages = pg_advantages[..., n_bins]
-
-    win_returns = targets_tm1[..., :n_bins]
+    win_advantages = pg_advantages @ cat_vf_support
+    win_returns = targets_tm1
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
 
@@ -139,26 +123,6 @@ def compute_player_targets(
         & (num_actions > 1)
     )
 
-    win_adv_mean = win_advantages.mean(where=policy_mask)
-    pot_adv_mean = potential_advantages.mean(where=policy_mask)
-    win_adv_std = win_advantages.std(where=policy_mask)
-    pot_adv_std = potential_advantages.std(where=policy_mask)
-    adv_cov = (
-        (win_advantages - win_adv_mean) * (potential_advantages - pot_adv_mean)
-    ).mean(where=policy_mask)
-
-    # Solve the channel coefficient from the target share s of combined
-    # advantage magnitude: coef·σ_pot = s/(1−s)·σ_win. The stds don't
-    # depend on the coef, so this is a direct solve, not a feedback loop.
-    share = jnp.clip(potential_target_adv_share, 0.0, 0.99).astype(isr.dtype)
-    potential_advantage_coef = jnp.minimum(
-        share / (1.0 - share) * win_adv_std / (pot_adv_std + 1e-8),
-        config.player_potential_coef_max,
-    )
-    combined_advantage = (
-        win_advantages + potential_advantage_coef * potential_advantages
-    )
-
     # Off-policyness of the replayed batch: normalised effective sample
     # size of the raw importance ratios (1 = fully on-policy; low means the
     # truncated estimator is living off a few samples) and the fraction of
@@ -167,34 +131,70 @@ def compute_player_targets(
     isr_mean = isr.mean(where=policy_mask)
     isr_sq_mean = jnp.square(isr).mean(where=policy_mask)
 
-    scaled_pot_adv_std = potential_advantage_coef * pot_adv_std
     channel_logs = {
         "player_isr_ess": isr_mean * isr_mean / (isr_sq_mean + 1e-8),
         "player_rho_clip_frac": (isr > 1.0).mean(where=policy_mask),
-        "player_win_adv_std": win_adv_std,
-        "player_potential_adv_std": pot_adv_std,
-        "player_potential_adv_coef": potential_advantage_coef,
-        "player_potential_win_adv_corr": adv_cov / (win_adv_std * pot_adv_std + 1e-8),
-        "player_potential_adv_share": scaled_pot_adv_std
-        / (win_adv_std + scaled_pot_adv_std + 1e-8),
-        # Fraction of steps where the potential channel flips the advantage
-        # sign: shaping can only change which actions get pushed up vs down
-        # where this is nonzero, so ~0 means the channel decorates
-        # already-correct advantages and cannot move the policy.
-        "player_potential_adv_sign_flip": (
-            jnp.sign(combined_advantage) != jnp.sign(win_advantages)
-        ).mean(where=policy_mask),
+        "player_win_adv_std": win_advantages.std(where=policy_mask),
     }
 
     return (
         PlayerTargets(
             win_returns=win_returns,
-            advantages=combined_advantage,
+            advantages=win_advantages,
             policy_mask=policy_mask,
             value_mask=value_mask,
         ),
         channel_logs,
     )
+
+
+def compute_aux_value_targets(
+    batch: Batch,
+    aux_value_log_probs: jax.Array,
+    isr: jax.Array,
+    config: Porygon2LearnerConfig,
+) -> jax.Array:
+    """Per-lambda v-trace distribution targets for the multi-lambda
+    auxiliary value heads.
+
+    Mirrors compute_player_targets bin-space v-trace at the main gamma,
+    vectorised over config.player_aux_lambdas, with each lambda
+    bootstrapping from its OWN head's readout. With terminal-only reward
+    a gamma spectrum degenerates (gamma^45 kills the signal), so the aux
+    spectrum varies the bias/variance of the TARGET instead: lambda=1 is
+    the Monte Carlo anchor (its gap to the main lambda=0.99 head is a
+    direct bootstrap-bias readout), low lambda leans on the critic. The
+    spectrum is deliberately independent of the advantage lambda, which
+    the lambda controller varies at runtime — aux target semantics must
+    not drift with the live value. Targets only — the aux heads never
+    produce advantages; the policy reads the main head exclusively.
+
+    aux_value_log_probs: (T, B, K, n_bins) from the fast EMA target.
+    Returns (T, B, K, n_bins) distribution targets.
+    """
+    lambdas = jnp.asarray(config.player_aux_lambdas, dtype=isr.dtype)
+
+    dones = jnp.expand_dims(
+        batch.player_transitions.env_output.done, axis=(-2, -1)
+    )  # (T, B, 1, 1)
+    mask_expanded = 1 - (jnp.cumsum(dones, axis=0) - dones)
+    discount_t = (1 - dones) * config.player_gamma * mask_expanded
+
+    alpha = config.player_alpha
+    rho_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
+    rho_t = jnp.expand_dims(rho_t, axis=(-2, -1))
+    c_t = rho_t
+
+    r_t = batch.player_transitions.env_output.win_reward[:, :, None, :]
+
+    v_tm1 = jnp.exp(aux_value_log_probs)  # (T, B, K, n_bins)
+    v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
+
+    td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
+
+    errors = vtrace(td_errors, discount_t, c_t * lambdas[None, None, :, None])
+
+    return (errors + v_tm1) * mask_expanded
 
 
 def compute_builder_targets(

@@ -717,7 +717,11 @@ function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
         try {
             return IndexValueFromEnum(enumDatum, key);
         } catch (err) {
-            console.log(err);
+            // Expected for unmapped cosmetic formes (e.g. Vivillon
+            // patterns) — the next key in the chain is the base species.
+            // One quiet line, not a stack trace: this is a fallback, not
+            // a failure.
+            console.warn(`enum fallback: ${(err as Error).message}`);
             continue;
         }
     }

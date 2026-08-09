@@ -387,9 +387,7 @@ def _survival_targets(
         run = np.where(fainted[t], 0.0, run + 1.0)
         dist[t] = run
 
-    target = _discounted_bin_targets(
-        dist, np.zeros_like(fainted), ending, discount
-    )
+    target = _discounted_bin_targets(dist, np.zeros_like(fainted), ending, discount)
     mask = (revealed & ~fainted).astype(np.float32)
     return target, mask
 
@@ -468,9 +466,10 @@ def _action_targets(
         np.take_along_axis(move_ids, event_move_slot[..., None], axis=-1)[..., 0],
         -1,
     )
-    used_is_reveal = has_event & np.take_along_axis(
-        reveal_event, event_move_slot[..., None], axis=-1
-    )[..., 0]
+    used_is_reveal = (
+        has_event
+        & np.take_along_axis(reveal_event, event_move_slot[..., None], axis=-1)[..., 0]
+    )
 
     # Next usage strictly after t, and requests until the next reveal
     # (= first use of a then-unseen move) strictly after t.
@@ -662,9 +661,7 @@ def collate(
         unseen_masks=stack_time("unseen_mask"),
         set_eventual=np.stack([e.set_eventual for e in examples], axis=0),
         set_reveal_steps=np.stack([e.set_reveal_step for e in examples], axis=0),
-        set_fully_observed=np.stack(
-            [e.set_fully_observed for e in examples], axis=0
-        ),
+        set_fully_observed=np.stack([e.set_fully_observed for e in examples], axis=0),
         set_masks=stack_time("set_mask"),
     )
 

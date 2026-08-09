@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import NamedTuple, TypeVar
 
 import chex
@@ -76,10 +76,13 @@ def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
     def calculate_params(key: str, vars: Params) -> int:
         total = 0
         for key, value in vars.items():
-            if isinstance(value, jax.Array):
-                total += math.prod(value.shape)
-            else:
+            # Recurse on mappings, count everything else as an array leaf:
+            # checkpoint-restored trees carry numpy arrays, which fail an
+            # isinstance(value, jax.Array) check and would be recursed into.
+            if isinstance(value, Mapping):
                 total += calculate_params(key, value)
+            else:
+                total += math.prod(value.shape)
         return total
 
     def build_param_dict(
@@ -87,7 +90,7 @@ def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
     ) -> dict[str, dict[str, float]]:
         param_dict = {}
         for key, value in vars.items():
-            if isinstance(value, jax.Array):
+            if not isinstance(value, Mapping):
                 num_params = math.prod(value.shape)
                 param_dict[key] = {
                     "num_params": num_params,

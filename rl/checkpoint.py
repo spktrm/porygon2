@@ -16,6 +16,7 @@ component is stored as its own file:
         builder/opt_state
         builder/scalars
         league                    # league.serialize() bytes (refs + stats)
+        controllers               # host-side controller/plasticity state
 
 Storing components separately means an opponent can be materialised by reading
 only ``player/target_params`` (+ ``builder/target_params``) — the large
@@ -63,6 +64,7 @@ def save_train_state(
     player_state_components: dict[str, Any],
     builder_state_components: dict[str, Any],
     league_bytes: bytes,
+    controller_bytes: bytes | None = None,
 ) -> str:
     """Write a full train state as a folder of per-component files.
 
@@ -86,6 +88,12 @@ def save_train_state(
 
     # League bytes are already serialised (refs + stats only); store verbatim.
     _dump(os.path.join(ckpt_dir, "league"), league_bytes)
+    # Host-side controller + plasticity state: not parameters, but training
+    # dynamics that a resume must not silently reset (a forgotten
+    # plasticity recovery clears the perturbation cooldown; a forgotten
+    # lambda controller re-anneals from scratch).
+    if controller_bytes is not None:
+        _dump(os.path.join(ckpt_dir, "controllers"), controller_bytes)
     return ckpt_dir
 
 
@@ -130,6 +138,15 @@ def load_league_bytes(ckpt_dir: str) -> bytes | None:
     return _load(path)
 
 
+def load_controller_bytes(ckpt_dir: str) -> bytes | None:
+    """Controller/plasticity state; None for checkpoints written before it
+    was persisted (those resume with freshly initialised controllers)."""
+    path = os.path.join(ckpt_dir, "controllers")
+    if not os.path.exists(path):
+        return None
+    return _load(path)
+
+
 def load_full(ckpt_dir: str) -> dict[str, Any]:
     """Rebuild the legacy ``ckpt_data`` shape for full-restore code paths."""
 
@@ -145,6 +162,7 @@ def load_full(ckpt_dir: str) -> dict[str, Any]:
         player_state=_read_dir("player"),
         builder_state=_read_dir("builder"),
         league=load_league_bytes(ckpt_dir),
+        controllers=load_controller_bytes(ckpt_dir),
     )
 
 

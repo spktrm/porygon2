@@ -13,6 +13,9 @@ ignore:
 clean:
 	find . -type d -name "__pycache__" -print -exec rm -r {} +
 
+build:
+	npm --prefix service run compile-base
+
 kill:
 	-tmux kill-server 2>/dev/null
 	-killall -9 python 2>/dev/null

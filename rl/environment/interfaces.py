@@ -86,6 +86,10 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    # Learner-only (cfg.train): (T, K, n_bins) categorical logits for the
+    # K auxiliary discounts (multi-gamma value aux). Actors leave this
+    # empty so replay transitions stay small.
+    aux_value_logits: ArrayLike = ()
 
 
 @dataclass
@@ -200,13 +204,6 @@ class Trajectory:
         default_factory=PlayerPackedHistoryOutput
     )
     player_history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
-
-    # Frozen offline critic potential Φ(s), (T,) per trajectory — (T, B)
-    # once batched. Precomputed at buffer insert (Learner.enqueue_traj):
-    # the critic never changes during RL, so computing Φ per train step
-    # would redo identical work replay_ratio × ensemble-size times per
-    # trajectory. () when no offline critic is configured.
-    state_potential: ArrayLike = ()
 
     # How many times this trajectory had been sampled BEFORE this one, shape
     # (1,) per trajectory — (1, B) once batched. Attached at sample time by

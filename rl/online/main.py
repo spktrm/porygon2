@@ -15,19 +15,25 @@ import numpy as np
 import wandb.wandb_run
 
 import wandb
-from rl.actor.agent import Agent
-from rl.actor.builder_actor import BuilderActor
-from rl.actor.player_actor import PlayerActor
 from rl.environment.env import SinglePlayerSyncEnvironment
-from rl.learner.config import create_train_state, get_learner_config, load_train_state
-from rl.learner.learner import CAT_VF_SUPPORT, Learner
+from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import ParamsContainer
+from rl.online.agent import Agent
+from rl.online.artifact import create_train_state, load_train_state
+from rl.online.builder_actor import BuilderActor
+from rl.online.config import Porygon2LearnerConfig, get_learner_config
+from rl.online.learner import CAT_VF_SUPPORT, Learner
+from rl.online.player_actor import PlayerActor
 
 logger = logging.getLogger(__name__)
+
+# Wandb metric-key names for the service's evalActionMapping indices
+# (service/src/server/eval.ts).
+EVAL_BASELINE_NAMES = {0: "random", 1: "default", 2: "simpleheuristic"}
 
 
 def run_training_actor_pair(
@@ -76,6 +82,7 @@ def run_eval_heuristic(
     executor: concurrent.futures.ThreadPoolExecutor,
     stop_signal: list[bool],
     wandb_run: wandb.wandb_run.Run,
+    learner_config: Porygon2LearnerConfig,
 ):
     """Runs an actor to produce num_trajectories trajectories."""
     learner = actor._learner
@@ -84,10 +91,18 @@ def run_eval_heuristic(
         step_count = np.array(learner.player_state.step_count).item()
 
     # Metric identity comes from the eval thread's name (set at spawn:
-    # EvalActor-full-0, ...), not the env username, so renaming or reusing
-    # envs never renames the wandb series.
+    # EvalActor-simpleheuristic-0, ...), not the env username, so renaming
+    # or reusing envs never renames the wandb series.
     session_id = threading.current_thread().name
-    swap = True
+
+    games = 0
+    # Bias-corrected exponential smoothing over the EMA-params series: the
+    # raw per-game values are 0/1 (win) and -6..6 (margin), far too noisy
+    # to read per checkpoint.
+    smooth_decay = 0.5 ** (1.0 / max(learner_config.eval_smoothing_halflife, 1))
+    smooth_wr = 0.0
+    smooth_margin = 0.0
+    smooth_weight = 0.0
 
     while not stop_signal[0]:
         try:
@@ -95,11 +110,19 @@ def run_eval_heuristic(
                 new_step_count = np.array(learner.player_state.step_count).item()
             if new_step_count > step_count:
                 step_count = new_step_count
+                games += 1
 
                 # Snapshot params to host under the lock: the learner's train
                 # step donates its state buffers, so holding live device
                 # references across an unroll would read deleted arrays.
-                if swap:
+                # EMA target params by default — the deployment/league
+                # params — with an occasional main-params game as a
+                # divergence check (the two lag by only ~1/ema_rate steps).
+                use_main = (
+                    learner_config.eval_main_params_every > 0
+                    and games % learner_config.eval_main_params_every == 0
+                )
+                if use_main:
                     prefix = "main"
                     with learner.gpu_lock:
                         player_params = jax.device_get(learner.player_state.params)
@@ -122,8 +145,6 @@ def run_eval_heuristic(
                     builder_params=builder_params,
                 )
 
-                swap = not swap
-
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
 
@@ -132,13 +153,37 @@ def run_eval_heuristic(
                     @ CAT_VF_SUPPORT
                 )
 
-                wandb_run.log(
-                    {
-                        "training_step": step_count,
-                        f"{prefix}-payoff-{session_id}": payoff,
-                        f"{prefix}-wr-{session_id}": payoff > 0,
-                    }
+                # Final alive-mon differential, a continuous signal that
+                # moves before winrate does. Rows 0-5 of public_team are the
+                # agent's side, 6-11 the opponent's (state.ts getPublicTeam
+                # orders [playerIndex, 1 - playerIndex]); unrevealed
+                # opponents count as alive (FAINTED defaults to 0).
+                final_public = np.asarray(
+                    eval_trajectory.player_transitions.env_output.public_team[-1]
                 )
+                fainted = final_public[
+                    :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
+                ]
+                margin = float(fainted[6:].sum() - fainted[:6].sum())
+
+                logs = {
+                    "training_step": step_count,
+                    f"{prefix}-payoff-{session_id}": float(payoff),
+                    # float, not bool: the wandb UI renders boolean series
+                    # as NaN in line plots.
+                    f"{prefix}-wr-{session_id}": float(payoff > 0),
+                    f"{prefix}-margin-{session_id}": margin,
+                    f"games-{session_id}": games,
+                }
+                if not use_main:
+                    smooth_wr = smooth_decay * smooth_wr + float(payoff > 0)
+                    smooth_margin = smooth_decay * smooth_margin + margin
+                    smooth_weight = smooth_decay * smooth_weight + 1.0
+                    logs[f"smoothed-wr-{session_id}"] = smooth_wr / smooth_weight
+                    logs[f"smoothed-margin-{session_id}"] = (
+                        smooth_margin / smooth_weight
+                    )
+                wandb_run.log(logs)
 
         except Exception:
             logger.error("Error running eval heuristic", exc_info=True)
@@ -216,7 +261,7 @@ def main(args: argparse.Namespace):
     # weights; opt_state/league reset) — use for the first launch after an
     # architecture change instead of restarting from scratch.
     load_mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
-    player_state, builder_state, league = load_train_state(
+    player_state, builder_state, league, controller_bytes = load_train_state(
         learner_config, player_state, builder_state, mode=load_mode
     )
 
@@ -249,6 +294,7 @@ def main(args: argparse.Namespace):
         gpu_lock=gpu_lock,
         player_network=learner_player_network,
         debug=debug,
+        controller_bytes=controller_bytes,
     )
 
     env_func = functools.partial(
@@ -259,7 +305,7 @@ def main(args: argparse.Namespace):
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=(
-            learner_config.num_player_actors + 2 * learner_config.num_eval_actors
+            learner_config.num_player_actors + 2 * len(learner_config.eval_baselines)
         )
     ) as executor:
         if "randombattle" not in learner_config.smogon_format:
@@ -305,32 +351,38 @@ def main(args: argparse.Namespace):
             )
 
         # Thread names carry the wandb series identity (run_eval_heuristic
-        # reads the current thread's name).
-        eval_variants = (("full", eval_agent),)
+        # reads the current thread's name), including the baseline being
+        # played, so metric keys stay meaningful if the eval allocation
+        # changes.
         logger.info(
-            f"Initializing {learner_config.num_eval_actors} evaluation actor pairs "
-            f"({' + '.join(name for name, _ in eval_variants)})..."
+            f"Initializing {len(learner_config.eval_baselines)} evaluation actors "
+            f"(baseline indices: {learner_config.eval_baselines})..."
         )
-        for eval_id in range(learner_config.num_eval_actors):
-            for variant_name, agent in eval_variants:
-                actor = PlayerActor(
-                    agent=agent,
-                    # The username MUST start with "eval-heuristic": the
-                    # service routes clients into games against the heuristic
-                    # bot by that prefix (service/src/server/utils.ts).
-                    env=env_func(f"eval-heuristic-{variant_name}:{eval_id:04d}"),
-                    unroll_length=learner_config.unroll_length,
-                    learner=learner,
-                    rng_seed=len(actor_threads) + salt,
-                    is_eval=True,
+        for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
+            baseline_name = EVAL_BASELINE_NAMES[baseline_index]
+            actor = PlayerActor(
+                agent=eval_agent,
+                # The username MUST start with "eval-heuristic" (the service
+                # routes such clients into games against a baseline bot by
+                # that prefix, service/src/server/utils.ts) and its ":<n>"
+                # suffix selects which baseline: the service parses the
+                # trailing number into an evalActionMapping index
+                # (service/src/server/runner.ts).
+                env=env_func(
+                    f"eval-heuristic-{baseline_name}-{eval_id}:{baseline_index:04d}"
+                ),
+                unroll_length=learner_config.unroll_length,
+                learner=learner,
+                rng_seed=len(actor_threads) + salt,
+                is_eval=True,
+            )
+            actor_threads.append(
+                threading.Thread(
+                    target=run_eval_heuristic,
+                    args=(actor, executor, stop_signal, wandb_run, learner_config),
+                    name=f"EvalActor-{baseline_name}-{eval_id}",
                 )
-                actor_threads.append(
-                    threading.Thread(
-                        target=run_eval_heuristic,
-                        args=(actor, executor, stop_signal, wandb_run),
-                        name=f"EvalActor-{variant_name}-{eval_id}",
-                    )
-                )
+            )
 
         # Start the actors and learner.
         for t in actor_threads:

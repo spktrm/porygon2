@@ -15,7 +15,7 @@ from typing import Literal
 
 import jax
 
-from rl.learner.learner import Porygon2PlayerTrainState
+from rl.online.artifact import Porygon2PlayerTrainState
 
 AddReason = Literal["initial", "dominant", "overdue"]
 
@@ -61,10 +61,9 @@ def shrink_and_perturb_player_state(
     )
     return player_state.replace(
         params=new_params,
-        # Adam moments are stale for the perturbed weights; the entropy jump
-        # after perturbation also invalidates the alpha controller's moments.
+        # Adam moments (including b1's momentum buffer) are stale for the
+        # perturbed weights.
         opt_state=player_state.tx.init(new_params),
-        alpha_opt_state=player_state.alpha_tx.init(player_state.alpha_params),
     )
 
 
@@ -133,6 +132,28 @@ class PlasticityController:
         if cooled_down and winrate_vs_ref >= self.recovery_winrate:
             self.recovering = False
             self.recovery_ref_step = None
+
+    def state_dict(self) -> dict:
+        return dict(
+            consecutive_overdue=self.consecutive_overdue,
+            perturbation_count=self.perturbation_count,
+            recovering=self.recovering,
+            recovery_ref_step=self.recovery_ref_step,
+            last_perturb_frame=self.last_perturb_frame,
+            last_recovery_winrate=self.last_recovery_winrate,
+        )
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore the stall/recovery bookkeeping. Without this a resume
+        forgets an in-flight recovery, which clears the perturbation
+        cooldown and lets a second shrink-and-perturb land on a network
+        still convalescing from the first."""
+        self.consecutive_overdue = int(state.get("consecutive_overdue", 0))
+        self.perturbation_count = int(state.get("perturbation_count", 0))
+        self.recovering = bool(state.get("recovering", False))
+        self.recovery_ref_step = state.get("recovery_ref_step")
+        self.last_perturb_frame = state.get("last_perturb_frame")
+        self.last_recovery_winrate = float(state.get("last_recovery_winrate", 0.0))
 
     def logs(self) -> dict:
         return {

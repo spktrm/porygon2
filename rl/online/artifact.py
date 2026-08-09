@@ -1,10 +1,23 @@
+"""RL train-state lifecycle and checkpoint artifacts.
+
+The online mirror of rl/offline/artifact.py: the single boundary through
+which trained RL products are created, saved, restored and merged.
+Checkpoints are written with a manifest.json capturing the architecture
+capabilities (entity size, decision slots, policy-head variant) so loads
+across architecture changes fail with a sentence instead of a pytree
+error — the same fail-loudly convention as the offline critic's
+announced-states manifest flag. rl/checkpoint.py stays the shared
+low-level serialisation beneath both.
+"""
+
 import functools
+import json
+import logging
 import os
 from collections.abc import Callable, Mapping
 from pprint import pprint
 from typing import Any, Literal
 
-import chex
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -14,7 +27,8 @@ import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
 
-from rl.config.common import AdamWConfig, BaseTrainingConfig
+from rl import checkpoint
+from rl.config.common import AdamWConfig  # noqa: F401 (re-export convenience)
 from rl.environment.interfaces import (
     BuilderActorInput,
     BuilderActorOutput,
@@ -22,240 +36,79 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
 )
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
-from rl.learner import checkpoint
-from rl.learner.league import MAIN_KEY, League
+from rl.model.config import get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
+from rl.online.config import Porygon2LearnerConfig
+from rl.online.league import MAIN_KEY, League
 
-PolicyObjectiveT = Literal["spo", "ppo"]
+MANIFEST_NAME = "manifest.json"
+
+logger = logging.getLogger(__name__)
 
 
-@chex.dataclass(frozen=True)
-class Porygon2LearnerConfig(BaseTrainingConfig):
-    num_steps = 5_000_000
-    num_player_actors: int = 12
-    num_builder_actors: int = 4
-    num_eval_actors: int = 3
-    unroll_length: int = 128
-
-    # Batch iteration params
-    batch_size: int = 4
-
-    # Replay buffer params
-    # Kept small on purpose: steady-state throughput is set entirely by
-    # replay_ratio (samples per trajectory), so capacity only controls how
-    # stale a trajectory is when sampled. 256 keeps mean sample age well
-    # inside one EMA-target time constant (1/player_ema_update_rate steps).
-    player_replay_buffer_capacity: int = 256
-    player_replay_ratio: int = 8
-    builder_replay_buffer_capacity: int = 512
-    builder_replay_ratio: int = 10
-    # Fraction of replay buffer capacity that must be filled before training
-    # starts. Valid range: [0.0, 1.0]. The formula works out to
-    # replay_ratio * batch_size trajectories — enough sample budget for the
-    # learner's first few batches without waiting on a full buffer.
-    replay_buffer_min_fill_fraction: float = (
-        player_replay_ratio * batch_size / player_replay_buffer_capacity
+def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
+    """Architecture facts a checkpoint consumer must agree on. pi_head is a
+    literal because the variant is a code fact, not a config value — bump
+    it when the head class changes."""
+    model_cfg = get_player_model_config(learner_config.generation, train=True)
+    return dict(
+        generation=learner_config.generation,
+        smogon_format=learner_config.smogon_format,
+        entity_size=int(model_cfg.entity_size),
+        num_decision_slots=int(model_cfg.num_decision_slots),
+        pi_head="per_modality",
+        pi_head_num_blocks=int(model_cfg.pi_head.num_blocks),
     )
 
-    # Dynamic replay-ratio control: a PI loop (PID-Lagrangian style — the
-    # reuse cap plays the dual variable of a staleness constraint) holds the
-    # measured learner-vs-behaviour KL on replayed batches at a setpoint by
-    # adjusting the store's per-trajectory reuse cap between the bounds
-    # below. player_replay_ratio above is only the initial cap. The
-    # controller runs off the critical path in the wandb log worker and
-    # works in velocity form on log(cap) — clamping the output is then
-    # inherently anti-windup. Buffer capacity independently bounds sample
-    # age (state-distribution staleness), which no ratio control fixes.
-    player_replay_ctrl_enabled: bool = True
-    # Ceiling: the actor-KL level the buffer-capacity plateau diagnosis
-    # identified as the healthy/stale boundary. This is a pathology
-    # threshold, NOT a desirable operating point — hence the asymmetric
-    # bounds below: the controller throttles the cap below the nominal
-    # player_replay_ratio when KL exceeds this, and recovers back to
-    # nominal when it drops, but never raises reuse above nominal chasing
-    # the ceiling (staler data per learner step is never a win under a
-    # strength-per-step objective).
-    player_replay_kl_target: float = 0.045
-    player_replay_ratio_min: int = 1
-    # Upper bound of the controlled cap. Kept at the nominal ratio so the
-    # controller is purely protective; raise above player_replay_ratio
-    # only if learner throughput (not strength-per-step) is the priority.
-    player_replay_ratio_max: int = 8
-    # Velocity-form PI gains on log(cap) per controller tick, applied to the
-    # normalised error (kl_target − kl)/kl_target. At ki=0.02 and one tick
-    # per player_replay_ctrl_interval steps, a sustained 2× KL overshoot
-    # halves the cap in ~35 ticks.
-    player_replay_ctrl_kp: float = 0.1
-    player_replay_ctrl_ki: float = 0.02
-    player_replay_ctrl_interval: int = 100
 
-    # Self-play evaluation params
-    save_interval_steps: int = 20_000
-    cloud_save_interval_steps: int = 100_000
-    league_winrate_log_steps: int = 1_000
-    main_player_update_steps: int = 10
-    add_player_min_frames: int = int(2e5)
-    add_player_max_frames: int = int(3e6)
-    minimum_historical_player_steps: int = int(1e6)
-    league_size: int = 16
-    manage_league_interval: int = 10
-    # Disk-backed league: max materialised opponents held in RAM at once, and
-    # the UCB exploration coefficient governing which stay hot.
-    league_cache_size: int = 16
-    league_ucb_c: float = 1.0
-
-    # Plasticity (shrink-and-perturb) params. Triggered when the main player
-    # keeps failing to dominate its own league history: after
-    # `plasticity_overdue_trigger` consecutive overdue-only league additions,
-    # player params are interpolated toward a fresh init draw.
-    plasticity_enabled: bool = True
-    plasticity_overdue_trigger: int = 1
-    # Fraction of the old weights kept (lambda). Higher = milder perturbation.
-    plasticity_default_shrink: float = 0.5
-    # Per top-level module overrides; the encoder holds expensive
-    # representations, so it is perturbed more gently than the heads.
-    plasticity_module_shrink: tuple[tuple[str, float], ...] = (("encoder", 0.5),)
-    # Recovery gate: no further perturbations until the main player beats the
-    # pre-perturbation snapshot at this winrate and the cooldown has elapsed.
-    plasticity_recovery_winrate: float = 0.6
-    plasticity_cooldown_frames: int = int(1e6)
-    # Plasticity instrumentation: every N learner steps, run an
-    # encoder-only forward on the current batch and log trunk
-    # representation health — dormant-unit fraction (ReDo criterion) and
-    # srank@0.99 — alongside the per-step fresh-vs-replayed value-error
-    # gap. Together these say whether a plateau is actually plasticity
-    # loss (dormant/rank degrading, memorisation gap opening) before a
-    # league-stagnation trigger fires a perturbation. 0 disables the
-    # probe (the value-error gap is always on).
-    plasticity_probe_interval: int = 1000
-
-    # Player magnet regularization (MMD-style). The policy is pulled toward a
-    # fixed hierarchical magnet over legal actions (uniform over valid
-    # modalities, uniform within each modality — the composed head's init
-    # policy), so the KL is per-state entropy regularization that is
-    # invariant to per-modality option counts. The
-    # magnet is deliberately stationary — a fixed anchor is what gives the
-    # regularized self-play dynamics a stable fixed point (QRE), whereas an
-    # EMA magnet chases the policy and degenerates into a short-horizon trust
-    # region. The EMA target is reserved for the v-trace/IMPACT reference and
-    # plays no regularization role. The coef sets the softness level.
-    player_magnet_kl_coef: float = 0.01
-
-    # Learning params
-    adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
-    player_learning_rate: float = 3e-5
-    builder_learning_rate: float = 3e-5
-    player_clip_gradient: float = 10.0
-    builder_clip_gradient: float = 10.0
-    gradient_accumulation_steps: int = 1
-    # Fast EMA target (IMPACT-style): supplies the clipped-target ratio in
-    # the surrogate, the v-trace reference policy, and the value bootstraps,
-    # so it must track the learner closely for stability under replay reuse.
-    # (R-NaD likewise keeps a 1e-3 target purely for v-trace stability,
-    # separate from its slow anchors.)
-    player_ema_update_rate: float = 1e-3
-    builder_ema_update_rate: float = 1e-3
-
-    # Advantage estimation params
-    player_gamma: float = 1.0
-    player_alpha: float = 1.0
-    player_lambda: float = 0.99
-    # λ for the potential advantage channel ONLY (win channel keeps
-    # player_lambda). Kept low so the channel's advantage stays close to
-    # the one-step PBRS signal γΦ(s')−Φ(s): dense per-move credit from the
-    # frozen critic. At λ→1 the channel telescopes to Φ(s_T)−Φ(s_t) ≈
-    # outcome − baseline — a rescaled copy of the win channel that adds no
-    # action-level information (the observed no-op shaping regime,
-    # player_potential_win_adv_corr ≈ 0.6 with zero winrate effect).
-    player_potential_lambda: float = 0.2
-
-    builder_gamma: float = 1.0
-    builder_alpha: float = 1.0
-    builder_lambda: float = 0.99
-
-    # Player policy objective: ratio-based surrogates with a trust region.
-    player_policy_objective: PolicyObjectiveT = "spo"
-
-    player_ppo_clip_threshold: float = 0.3
-    builder_ppo_clip_threshold: float = 0.3
-
-    # Advantage EMA normalization. When disabled, raw advantages are used;
-    # the EMA statistics keep updating either way so re-enabling is smooth.
-    player_advantage_ema_enabled: bool = True
-
-    # Potential-based shaping (requires offline_critic_ckpt_path): target
-    # share of the combined advantage magnitude held by the potential
-    # channel. The channel coefficient is solved per batch from measured
-    # channel stds (coef = s/(1−s) · σ_win/σ_pot, capped below), so
-    # dominance stays pinned at the target while either channel's scale
-    # drifts over a long hold — a fixed coef cannot guarantee that.
-    # Schedule: hold dominant (0.8) for 500k steps so early learning
-    # follows the human-replay critic's value landscape, then anneal to
-    # zero over 100k steps so the asymptotic objective is pure win/loss.
-    # Judge via player_potential_adv_share (realised share, should track
-    # the target) and player_potential_adv_coef (the solved coef).
-    player_potential_target_adv_share_fn: Callable[[int], float] = (
-        lambda step: 0.8 * jnp.clip((600_000 - step) / 100_000, 0.0, 1.0)
+def write_manifest(save_path: str, learner_config, player_state) -> None:
+    manifest = dict(
+        step_count=int(np.asarray(player_state.step_count)),
+        frame_count=int(np.asarray(player_state.frame_count)),
+        **_model_capabilities(learner_config),
     )
-    # Cap on the solved coefficient: keeps a near-silent potential channel
-    # (tiny σ_pot from heavy uncertainty gating or a flat Φ) from being
-    # amplified into pure noise to hit the share target.
-    player_potential_coef_max: float = 30.0
+    with open(os.path.join(save_path, MANIFEST_NAME), "w") as f:
+        json.dump(manifest, f, indent=2)
 
-    # Loss coefficients
-    ## Player
-    player_policy_loss_coef: float = 1.0
-    player_kl_loss_coef: float = 0.05
-    player_value_head_loss_coef: float = 1.0
 
-    ## Builder
-    builder_value_loss_coef: float = 0.5
-    builder_policy_loss_coef: float = 1.0
-    builder_kl_loss_coef: float = 0.1
-    builder_entropy_loss_coef: float = 0.01
-    builder_conditional_entropy_loss_coef: float = 1.0
-    builder_entropy_coef: float = 0.01
-    builder_entropy_prediction_normalising_constant: float = 100
-    builder_entropy_advantage_scale: float = 1e-3
+def read_manifest(ckpt_path: str) -> dict | None:
+    """The checkpoint's manifest, or None for pre-manifest checkpoints."""
+    try:
+        with open(os.path.join(ckpt_path, MANIFEST_NAME)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
-    # Human
-    builder_human_loss_coef: float = 1e-2
 
-    # Standalone offline critic (rl/offline/train.py artifact) used as the
-    # learned state potential in compute_player_targets. Loaded once at
-    # learner startup and held OUTSIDE the train state: its params never
-    # enter the optimizer or the RL network, so the RL model trains fully
-    # from scratch with no frozen or warm-started subtrees. The potential
-    # advantage channel is gated by player_potential_target_adv_share_fn.
-    # A tuple of paths loads an ensemble (members trained with
-    # rl.offline.train --ensemble-index k) for uncertainty-gated shaping.
-    offline_critic_ckpt_path: str | tuple[str, ...] | None = tuple(
-        f"ckpts/offline/gen9randombattle-ens{k}/ckpt_best" for k in range(4)
+def check_manifest(ckpt_path: str, learner_config, strict: bool) -> None:
+    """Compares a checkpoint manifest against the current architecture.
+
+    strict (checkpoint-mode resume): any mismatch raises — a full state
+    restore requires an identical architecture. Non-strict (params-mode):
+    mismatches print, since merge_params handles them field by field.
+    Pre-manifest checkpoints pass silently either way."""
+    manifest = read_manifest(ckpt_path)
+    if manifest is None:
+        return
+    expected = _model_capabilities(learner_config)
+    mismatched = {
+        key: (manifest.get(key), value)
+        for key, value in expected.items()
+        if key in manifest and manifest[key] != value
+    }
+    if not mismatched:
+        return
+    detail = ", ".join(
+        f"{k}: ckpt={ckpt!r} current={cur!r}" for k, (ckpt, cur) in mismatched.items()
     )
-    # Ensemble-disagreement gate: Φ = mean * exp(-scale * std). Where the
-    # members disagree (off the human data distribution) shaping goes
-    # quiet. 0 disables; irrelevant for single-member critics.
-    potential_uncertainty_scale: float = 5.0
-    # What Φ reads off the critic's 13-bin margin distribution (training
-    # stays distributional either way): "win" = P(win) − P(loss) — pure
-    # outcome belief, flat across decided positions, never prefers a wider
-    # win over a likelier one; "margin" = expected margin — also grades
-    # decisiveness, denser shaping inside decided positions but can
-    # transiently reward margin-seeking over win-optimal lines.
-    potential_readout: str = "win"
-    # With an Elo-conditioned critic (auto-detected from the artifact),
-    # condition Φ at this rating: shaping then reflects how games between
-    # players of that strength resolve, not ladder-average conversion.
-    # 0 = leave the inputs alone (self-play carries no ratings, so the
-    # critic uses its unknown-rating bucket). Ignored for pre-rating
-    # artifacts. Conditioning far above the data's rating support makes
-    # ensemble members disagree, which the uncertainty gate then quiets.
-    potential_condition_rating: int = 1800
-
-
-def get_learner_config():
-    return Porygon2LearnerConfig()
+    if strict:
+        raise ValueError(
+            f"checkpoint at {ckpt_path} was written by a different "
+            f"architecture ({detail}); resume with load mode 'params' to "
+            "merge, or start from scratch"
+        )
+    print(f"manifest deltas vs current architecture ({detail}) — merging params")
 
 
 class Porygon2PlayerTrainState(train_state.TrainState):
@@ -384,9 +237,10 @@ def save_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
+    controller_bytes: bytes | None = None,
 ):
     save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league
+        learner_config, player_state, builder_state, league, controller_bytes
     )
     if learner_config.log_artifacts_online and (
         player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
@@ -403,11 +257,19 @@ def save_train_state_locally(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
+    controller_bytes: bytes | None = None,
 ):
     save_path = os.path.abspath(
         f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
     )
-    return save_state(save_path, learner_config, player_state, builder_state, league)
+    return save_state(
+        save_path,
+        learner_config,
+        player_state,
+        builder_state,
+        league,
+        controller_bytes,
+    )
 
 
 def save_state(
@@ -416,6 +278,7 @@ def save_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     league: League,
+    controller_bytes: bytes | None = None,
 ):
     os.makedirs(save_path, exist_ok=True)
     player_components = dict(
@@ -444,7 +307,9 @@ def save_state(
         player_components,
         builder_components,
         league.serialize(),
+        controller_bytes,
     )
+    write_manifest(save_path, learner_config, player_state)
     return save_path
 
 
@@ -484,13 +349,13 @@ def load_from_scratch(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
     """
     No-op on state; simply initializes a fresh league.
     """
     print("Starting training from scratch.")
     league = _init_league(learner_config, player_state, builder_state)
-    return player_state, builder_state, league
+    return player_state, builder_state, league, None
 
 
 def load_from_checkpoint(
@@ -498,11 +363,13 @@ def load_from_checkpoint(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
     """
-    Full restoration: loads params, opt_state, step counts, and league.
+    Full restoration: loads params, opt_state, step counts, league, and the
+    host-side controller/plasticity state.
     """
     print(f"Loading checkpoint from {ckpt_path}")
+    check_manifest(ckpt_path, learner_config, strict=True)
     ckpt_data = checkpoint.load_full(ckpt_path)
 
     print("Checkpoint data:")
@@ -555,7 +422,7 @@ def load_from_checkpoint(
         )
     )
 
-    return player_state, builder_state, league
+    return player_state, builder_state, league, ckpt_data.get("controllers")
 
 
 def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
@@ -605,6 +472,7 @@ def load_from_params(
     state's version of those) and starts a fresh league.
     """
     print(f"Loading (merging) params only from {ckpt_path}")
+    check_manifest(ckpt_path, learner_config, strict=False)
     loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
     loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
 
@@ -636,7 +504,9 @@ def load_from_params(
     # Initialize a fresh league since we are effectively starting a new run with existing weights
     league = _init_league(learner_config, player_state, builder_state)
 
-    return player_state, builder_state, league
+    # Controllers start fresh too: params-mode is a new run whose training
+    # dynamics (lambda anneal, plasticity stall clock) do not carry over.
+    return player_state, builder_state, league, None
 
 
 def load_train_state(
@@ -644,7 +514,7 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
 
     latest_ckpt = _get_checkpoint_path(learner_config)
 
@@ -652,9 +522,19 @@ def load_train_state(
     if mode == "scratch":
         return load_from_scratch(learner_config, player_state, builder_state)
 
-    # 2. No checkpoint found -> Fallback to Scratch
+    # 2. No checkpoint found -> fall back to scratch, loudly. A bare print()
+    # here is how 1335's ~300k-step lineage and its league got lost between
+    # it and 1336 without anyone noticing — mode was "checkpoint" (a resume
+    # was expected) and it silently became a fresh run instead. Still
+    # auto-falls back (the launch entry point doesn't set LOAD_STATE_MODE
+    # per-run), but now at warning level so it can't scroll by unnoticed.
     if not latest_ckpt:
-        print("No checkpoint found. Defaulting to scratch.")
+        logger.warning(
+            "LOAD_STATE_MODE=%r but no checkpoint found under ./ckpts/gen%s/ "
+            "— starting from scratch.",
+            mode,
+            learner_config.generation,
+        )
         return load_from_scratch(learner_config, player_state, builder_state)
 
     # 3. Load Params Only (RL checkpoints across architecture changes)

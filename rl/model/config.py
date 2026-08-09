@@ -35,6 +35,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.entity_size = entity_size
     cfg.dtype = DEFAULT_DTYPE
     cfg.train = train
+    # 1 = singles (one flat categorical per request — the historical path,
+    # bit-identical). 2 = doubles: two head-level decision stages per turn,
+    # slot 2 conditioned on slot 1's choice via SlotConditioning, ONE trunk
+    # pass. Setting 2 additionally requires the service to send per-slot
+    # action masks in a single request and accept two actions back (the
+    # remaining doubles workstream) — the model side is complete.
+    cfg.num_decision_slots = 1
 
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
@@ -132,10 +139,15 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.round.use_bias = encoder_use_bias
     cfg.encoder.round.qk_layer_norm = encoder_qk_layer_norm
 
-    # Untied src/tgt pointer head over the action-slot embeddings: one
-    # residual block per role, then separate q/k projections. Asymmetric
-    # bilinear form — transposed and diagonal grid cells are independent.
+    # Per-modality untied src/tgt pointer heads over the action-slot
+    # embeddings: each modality owns num_blocks residual blocks per role
+    # plus its own q/k projections (asymmetric bilinear form — transposed
+    # and diagonal grid cells are independent). Depth restores the
+    # November finding that deep, modality-separated action decoders were
+    # necessary; per-modality params restore independent logit scales and
+    # gradient routing.
     cfg.pi_head = ConfigDict()
+    cfg.pi_head.num_blocks = 2
     cfg.pi_head.qk_logits = ConfigDict()
     cfg.pi_head.qk_logits.num_heads = 1
     cfg.pi_head.qk_logits.use_bias = True
@@ -154,10 +166,32 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.macro_head.mlp = ConfigDict()
     cfg.macro_head.mlp.layer_sizes = entity_size
 
+    # Deep value readout (Aug 2026): the previous single linear layer made
+    # the value head the thinnest module in the model while the action
+    # decoder kept the depth the November experiments proved necessary —
+    # forcing the trunk itself to linearise win probability, in direct
+    # competition with policy features. Two hidden layers on the pooled
+    # 4*entity_size value embedding mirror the pi_head's per-modality
+    # block depth.
     cfg.v_head = ConfigDict()
     cfg.v_head.mlp = ConfigDict()
-    cfg.v_head.mlp.layer_sizes = 3
+    cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+
+    # Multi-lambda auxiliary value head (learner-only): K categorical
+    # rows over the same win/draw/loss support as v_head, one per
+    # auxiliary lambda. num_heads must match the learner config's
+    # player_aux_lambdas length (shape mismatch fails loudly otherwise).
+    cfg.aux_v_head = ConfigDict()
+    cfg.aux_v_head.num_heads = 6
+    cfg.aux_v_head.mlp = ConfigDict()
+    # Same depth as v_head (see comment there); final width = one
+    # categorical row per aux lambda.
+    cfg.aux_v_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.aux_v_head.num_heads * len(CAT_VF_SUPPORT),
+    )
 
     for head in [cfg.pi_head]:
         head.train = train

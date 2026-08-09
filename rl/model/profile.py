@@ -2,11 +2,11 @@ import flax.linen as nn
 import jax
 
 from inference.model import get_player_model_config
-from rl.actor.agent import PlayerActorOutput
+from rl import checkpoint
 from rl.environment.utils import get_ex_player_step
-from rl.learner import checkpoint
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
+from rl.online.agent import PlayerActorOutput
 
 
 def main(generation: int = 9):
