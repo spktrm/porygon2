@@ -279,27 +279,25 @@ def train_step(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
 
-        # Commitment sensor for the adaptivity controller: batch
-        # CORRELATION between how much probability the policy put on the
-        # action it took and the advantage that action earned. Positive
-        # means the policy's confidence is being validated (safe to
-        # sharpen); near zero or negative means it is confidently
-        # choosing actions that are not paying (hold entropy). Drops on a
-        # league addition (habitual actions stop working against an
-        # unfamiliar opponent) and after a perturbation (preferences
-        # scrambled), which is what makes the controller event-responsive
-        # without a schedule.
+        # player_commit_cov: batch CORRELATION between how much
+        # probability the policy put on the action it took and the
+        # advantage that action earned. Positive means the policy's
+        # confidence is being validated; near zero or negative means it
+        # is confidently choosing actions that are not paying. Telemetry
+        # only now — it used to drive the adaptivity controller's PI
+        # action, removed after repeated bugs (see AdaptivityController's
+        # class docstring). Still logged because it's a real, informative
+        # signal to watch, just not acted on by anything anymore.
         #
         # Correlation, not covariance: cov = corr * sd(log pi) * sd(adv),
         # and sd(log pi) shrinks as the policy sharpens — i.e. the raw
-        # covariance partly measures the entropy the controller itself
-        # actuates, coupling sensor to actuator and making the target
-        # depend on the current entropy level. Normalising leaves the
-        # relationship alone, bounded in [-1, 1], so commit_target reads
-        # as "keep the confidence/payoff correlation above X".
+        # covariance partly measures policy entropy, coupling it to
+        # whatever might read it. Normalising leaves the relationship
+        # alone, bounded in [-1, 1].
         #
-        # Blind to actions the policy never takes — hence the entropy
-        # floors remain the hard backstop for modality collapse.
+        # Blind to actions the policy never takes — this is exactly why
+        # it was never trusted alone; the entropy floors are the hard
+        # backstop for modality collapse, independent of this signal.
         commit_lp = learner_log_prob
         commit_adv = player_advantages
         lp_dev = commit_lp - average(commit_lp, policy_mask)
@@ -806,18 +804,12 @@ class Learner:
         if config.entropy_ctrl_enabled:
             self.entropy_ctrl = AdaptivityController(
                 baseline_coef=config.player_magnet_kl_coef,
-                commit_target=config.adapt_ctrl_commit_target,
-                kp=config.adapt_ctrl_kp,
-                ki=config.adapt_ctrl_ki,
-                interval=config.adapt_ctrl_interval,
                 max_scale=config.entropy_ctrl_max_scale,
                 min_scale=config.entropy_ctrl_min_scale,
-                sensor_ema=config.adapt_ctrl_sensor_ema,
                 action_floor=config.entropy_ctrl_floor,
                 modality_floor=config.entropy_ctrl_modality_floor,
                 floor_gain=config.adapt_ctrl_floor_gain,
                 event_bump=config.adapt_ctrl_event_bump,
-                warmup_ticks=config.adapt_ctrl_warmup_ticks,
             )
 
         self.exploit_ctrl: ExploitabilityController | None = None
@@ -836,7 +828,6 @@ class Learner:
         # to the configured baseline, never compounding on the previous
         # tick's already-scaled value.
         self._base_lambda_gap_target = float(config.lambda_ctrl_gap_target)
-        self._base_commit_target = float(config.adapt_ctrl_commit_target)
         self._base_replay_kl_target = float(config.player_replay_kl_target)
 
         self.done = False
@@ -1121,19 +1112,16 @@ class Learner:
             )
             self._current_lambda = self.lambda_ctrl.value
         if self.entropy_ctrl is not None:
-            # Commitment covariance drives the loop: it falls when the
-            # policy's confident choices stop paying — exactly what a new
-            # league opponent or a perturbation causes — and recovers as
-            # the policy re-adapts. The two entropy axes are passed as
-            # hard backstops inside the controller, because the
-            # covariance is blind to actions the policy never takes
-            # (which is how 1330 lost switching while looking healthy).
-            cov = host_logs.get("player_commit_cov")
+            # Floor-only now (see AdaptivityController's class docstring
+            # for the removal history) — player_commit_cov is no longer
+            # consumed here at all, only the two hard entropy backstops,
+            # because a collapsed modality is invisible to the covariance
+            # (which is how 1330 lost switching while looking healthy) —
+            # the same reason those floors were never optional.
             action_ent = host_logs.get("player_action_normalized_entropy")
             modal_ent = host_logs.get("player_normalized_modality_entropy")
             host_logs.update(
                 self.entropy_ctrl.update(
-                    None if cov is None else float(cov),
                     None if action_ent is None else float(action_ent),
                     None if modal_ent is None else float(modal_ent),
                 )
@@ -1413,16 +1401,17 @@ class Learner:
         self._apply_exploit_scale()
 
     def _apply_exploit_scale(self) -> None:
-        """Scales the lambda/adaptivity/replay controllers' TARGETS (not
-        their actuators) by the exploitability controller's caution
-        scale. The sign of the adjustment differs per target because
-        "more cautious" means something different for each: shrinking
+        """Scales the lambda/replay controllers' TARGETS (not their
+        actuators) by the exploitability controller's caution scale.
+        Used to also scale the adaptivity controller's commit_target,
+        but that target no longer exists — AdaptivityController is
+        floor-only now (see its class docstring for why). The sign of
+        the adjustment differs per remaining target because "more
+        cautious" means something different for each: shrinking
         lambda_ctrl_gap_target makes the lambda controller less willing
         to trust the critic's bootstrap (lambda drifts toward the MC
-        anchor); growing adapt_ctrl_commit_target makes the adaptivity
-        controller's bar harder to clear, so diversity pressure stays
-        elevated; shrinking the replay KL target allows less reuse,
-        keeping training data fresher — all three read as "become more
+        anchor); shrinking the replay KL target allows less reuse,
+        keeping training data fresher — both read as "become more
         conservative" even though the multiplier itself only ever grows
         or shrinks uniformly."""
         if self.exploit_ctrl is None:
@@ -1430,8 +1419,6 @@ class Learner:
         scale = self.exploit_ctrl.value
         if self.lambda_ctrl is not None:
             self.lambda_ctrl.gap_target = self._base_lambda_gap_target / scale
-        if self.entropy_ctrl is not None:
-            self.entropy_ctrl.commit_target = self._base_commit_target * scale
         self._replay_kl_target = self._base_replay_kl_target / scale
 
     def _should_add_new_player(self) -> AddReason | None:
