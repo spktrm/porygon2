@@ -233,40 +233,29 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Master switch for the adaptivity controller (the magnet KL coef
     # loop; name kept for checkpoint/config continuity).
     entropy_ctrl_enabled: bool = True
-    # Adaptivity controller (rl/online/controllers.py): PI on the magnet
-    # KL coef holding the COMMITMENT CORRELATION (player_commit_cov:
-    # batch corr of log pi(taken action) with its advantage) at target.
-    # It falls when confident choices stop paying — a new league
-    # opponent, a perturbation — so pressure rises exactly on the events
-    # a schedule cannot see, and decays as the policy re-validates.
-    # Bounded [-1, 1] (normalised, so it does not drift with entropy or
-    # advantage scale): the target reads as "hold the confidence/payoff
-    # correlation at X". 0.1 is a weak-but-real relationship; check the
-    # first run's player_commit_cov before trusting it. Event bumps are
-    # added to log(coef) directly (0.7 ~ a 2x step, 1.4 ~ 4x).
-    adapt_ctrl_commit_target: float = 0.1
-    adapt_ctrl_kp: float = 0.1
-    adapt_ctrl_ki: float = 0.02
-    adapt_ctrl_interval: int = 200
-    adapt_ctrl_sensor_ema: float = 0.005
+    # Adaptivity controller (rl/online/controllers.py) is floor-only now.
+    # It used to also hold player_commit_cov's EMA at adapt_ctrl_
+    # commit_target via a PI loop — removed after repeated bugs (an
+    # unreachable target pinning pressure at the ceiling for ~50k steps
+    # in 1338/1339, then a divide-by-near-zero once the target was
+    # recalibrated toward 0.0 in 1341, then a second bug in how
+    # exploit_ctrl scaled that same target). None of those bugs ever
+    # touched the floors below, which is why they're what's left. See
+    # AdaptivityController's class docstring for the full removal
+    # history. Pressure now only ever rises (bump() below, or a floor
+    # breach) — there is no automatic decay back toward baseline.
     adapt_ctrl_floor_gain: float = 2.0
+    # Event bumps, added to log(coef) directly (0.7 ~ a 2x step,
+    # 1.4 ~ 4x) — the only source of a deliberate pressure increase now
+    # that the PI action is gone.
     adapt_ctrl_event_bump: float = 0.7
     adapt_ctrl_perturb_bump: float = 1.4
-    # Ticks to accumulate (EMA keeps smoothing throughout) before the
-    # covariance-driven PI action is allowed to fire — does NOT gate the
-    # hard floor overrides or bump() below, only this. A cold-started
-    # commit_cov has nothing to correlate against yet and can read
-    # persistently negative for a long stretch on pure noise (1338:
-    # pinned at the coef ceiling for ~50k steps from step 1, stalling the
-    # lambda controller's anneal for reasons unrelated to any real
-    # commitment problem). 25 ticks x adapt_ctrl_interval =~ 5k steps is a
-    # starting default — recalibrate from the next run's adapt_ctrl_coef
-    # trace.
-    adapt_ctrl_warmup_ticks: int = 25
     # Hard floors — backstops, not the mechanism: the commitment
     # covariance is blind to actions the policy never takes, so a
     # modality going extinct (1330: switching to 0.002) must trip
-    # something the loop cannot miss. A breach overrides the PI action.
+    # something the loop cannot miss. This is now the only way pressure
+    # rises besides bump() — there is no PI action left for a breach to
+    # override.
     entropy_ctrl_floor: float = 0.40
     # Hard floor for the MACRO MODALITY entropy axis, which sits
     # structurally lower than total action entropy. 1328 gained strength
@@ -276,12 +265,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # 0.08). The learner rescales this axis into action-entropy units.
     entropy_ctrl_modality_floor: float = 0.20
     # Range the controller may drive the magnet coef over, as multiples
-    # of the player_magnet_kl_coef baseline. min_scale < 1 lets a
-    # well-validated policy shed regularisation and commit — with a
-    # stationary uniform magnet a fixed coef c leaves an O(c) equilibrium
-    # bias, and Ataraxos anneals its KL coef downward over training — but
-    # stays well above zero, since c -> 0 against a fixed magnet loses
-    # the stable fixed point.
+    # of the player_magnet_kl_coef baseline. Nothing currently pushes the
+    # coefficient below baseline (bump()/floor breaches only ever add) —
+    # min_scale is a defensive lower clamp, not an exercised anneal path,
+    # now that the PI action that used to decay pressure below baseline
+    # is gone. Kept well above zero regardless: c -> 0 against a fixed
+    # magnet loses the stable fixed point.
     entropy_ctrl_max_scale: float = 10.0
     entropy_ctrl_min_scale: float = 0.2
 
@@ -310,12 +299,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # table _should_add_new_player already reads (not the slower
     # BT-rating auditors above) — no bandit-style exploration tax, so it
     # reacts as fast as the underlying win-rate signal allows. Output is
-    # a caution-scale multiplier (baseline 1.0) applied to the OTHER
-    # controllers' targets — lambda_ctrl_gap_target shrinks and
-    # adapt_ctrl_commit_target grows as exploitability rises, both
-    # pushing toward more caution; it does not drive a runtime scalar of
-    # its own. exploit_ctrl_target=0.3 mirrors the existing "dominant"
-    # league-addition threshold (win-rate > 0.7).
+    # a caution-scale multiplier (baseline 1.0) applied to the lambda and
+    # replay controllers' targets — lambda_ctrl_gap_target and the replay
+    # KL target both shrink as exploitability rises, pushing toward more
+    # caution; it does not drive a runtime scalar of its own. Used to
+    # also grow the adaptivity controller's commit_target, but that
+    # target no longer exists (AdaptivityController is floor-only now —
+    # see its class docstring). exploit_ctrl_target=0.3 mirrors the
+    # existing "dominant" league-addition threshold (win-rate > 0.7).
     exploit_ctrl_enabled: bool = True
     exploit_ctrl_target: float = 0.3
     exploit_ctrl_kp: float = 0.2

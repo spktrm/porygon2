@@ -14,25 +14,22 @@ windowed-mean sensor, since averaging the actor-KL over a fixed window
 rather than decaying it is a deliberate, different smoothing choice.
 
 Timescale separation across the loops: replay controller (fast,
-actor-KL -> reuse cap), adaptivity controller (commitment covariance ->
-magnet KL coef, with entropy floors as hard backstops), lambda
-controller (slow, calibration gap -> advantage lambda), plasticity
-(episodic; pushes lambda to its ceiling during recovery and bumps the
-magnet coef), exploitability controller (slowest — league win-rate ->
-a shared caution scale applied to the OTHER controllers' targets, not a
-runtime scalar of its own).
+actor-KL -> reuse cap), lambda controller (slow, calibration gap ->
+advantage lambda), plasticity (episodic; pushes lambda to its ceiling
+during recovery and bumps the magnet coef), exploitability controller
+(slowest — league win-rate -> a shared caution scale applied to the
+lambda and replay controllers' targets, not a runtime scalar of its
+own).
 
-The two per-batch feedback controllers are deliberately symmetric: one
-measures whether the CRITIC deserves trust (bootstrap gap -> how much to
-bootstrap), the other whether the POLICY's commitments deserve trust
-(commitment covariance -> how much to let it commit). The exploitability
-controller measures what both of those are ultimately proxies for —
-whether the LEAGUE still finds a hole — but only every
-manage_league_interval call, since win-rate data cannot arrive any
-faster than games are played; it is a slow outer loop over the two fast
-inner ones' setpoints, not a replacement for them (see run 1330: a
-modality collapse that a coarse win-rate signal would see only after
-the damage was already done).
+The adaptivity controller is the odd one out, deliberately: it used to
+be a per-batch PI loop symmetric with the lambda controller (commitment
+covariance -> how much to let the policy commit), but every bug found in
+it traced back to that PI action specifically, never to its hard entropy
+floors — see the class docstring for the removal history. It is now
+floor-only: pressure only ever rises (bump() on a known shock, or a hard
+entropy-floor breach), never decays on its own. `exploit_ctrl` no longer
+scales anything on this controller as a result — there is no target
+left to scale.
 """
 
 import numpy as np
@@ -198,86 +195,58 @@ class LambdaGapController:
 
 
 class AdaptivityController:
-    """Adapts the magnet KL coefficient by holding the policy's measured
-    COMMITMENT VALIDATION at a target — the entropy counterpart of the
-    lambda controller.
+    """Hard-floor-only diversity guard for the magnet KL coefficient.
 
-    Sensor: player_commit_cov, the batch CORRELATION between log pi(a)
-    of the action taken and the advantage it earned (bounded [-1, 1];
-    normalised so it does not drift with entropy or advantage scale —
-    the raw covariance would partly measure the entropy this controller
-    actuates, coupling sensor to actuator). High means the policy's
-    confidence is being validated, so diversity pressure can decay and
-    the policy is allowed to sharpen. Near zero (or negative) means it is
-    confidently choosing actions that are not paying, so pressure rises
-    and the policy holds its options open.
+    This used to also hold a covariance-driven PI action (hold
+    player_commit_cov's EMA at a target, decay pressure below baseline
+    once validated — the entropy counterpart of the lambda controller).
+    Removed: every bug found in this controller, across several runs,
+    traced back to that mechanism specifically — an unreachable target
+    pinning pressure at the ceiling for ~50k steps (1338/1339), then a
+    divide-by-near-zero once the target was recalibrated toward 0.0
+    (1341: ordinary sensor noise producing err ~ O(1e4), saturating the
+    coefficient to a bound every tick), then a second bug in how
+    exploit_ctrl scaled that same target. None of those bugs ever
+    touched the floors below — they're what's left, because they're the
+    actual safety mechanism (the removed PI action was explicitly
+    documented as backstopped BY these floors, not the other way
+    around) and a precondition for the exploiter-phase plan
+    (docs/exploiter-phase-plan.md) working at all: an exploiter with no
+    floor protection is just as likely to collapse to a degenerate
+    strategy as main is.
 
-    Why feedback and not an anneal: the covariance falls exactly when the
-    world changes under the policy — a new league snapshot whose style
-    breaks habitual lines, or a shrink-and-perturb that scrambles
-    preferences — and recovers as the policy re-adapts. A monotone
-    schedule cannot see either event. Discrete shocks additionally call
-    ``bump()`` so pressure rises the instant the event is known rather
-    than a controller tick later.
+    Consequence of the removal: pressure only ever RISES now, via
+    bump() (a discrete shock: new league opponent, perturbation) or a
+    hard entropy-floor breach. There is no automatic decay back toward
+    baseline — that was the removed mechanism's job. If a future run
+    needs pressure relieved after a shock, that requires deliberately
+    reintroducing some form of decay, not just waiting.
 
-    Backstops, not mechanism: the covariance can only see actions the
-    policy actually takes, so a modality going extinct is invisible to it
-    (run 1330 lost switching at a healthy-looking covariance). The
-    entropy floors below are hard overrides for that failure mode.
-
-    Actuator is log(coef), clamped to
-    [baseline*min_scale, baseline*max_scale] — pressure can decay BELOW
-    the configured baseline once commitment is well validated, which is
-    how the loop expresses an anneal endogenously; clamping is
-    anti-windup.
-
-    warmup_ticks delays the covariance-driven PI action (not the floor
-    overrides or bump()) for that many ticks after construction: a
-    cold-started covariance has nothing to correlate against yet and can
-    read persistently negative on pure noise, pinning pressure at the
-    ceiling for reasons unrelated to any real commitment problem (1338:
-    ~50k steps pinned at the ceiling from step 1, stalling the lambda
-    controller's anneal). The sensor keeps smoothing throughout warm-up —
-    only the actuator move is delayed.
+    Actuator is log(coef), clamped to [baseline*min_scale,
+    baseline*max_scale] — clamping is anti-windup for bump()/floor
+    breaches, same as always.
     """
 
     def __init__(
         self,
         baseline_coef: float,
-        commit_target: float,
-        kp: float,
-        ki: float,
-        interval: int,
         max_scale: float,
         min_scale: float,
-        sensor_ema: float,
         action_floor: float,
         modality_floor: float,
         floor_gain: float,
         event_bump: float,
-        warmup_ticks: int = 0,
     ):
         baseline_log = float(np.log(baseline_coef))
-        # Lower bound is BELOW baseline: with a stationary uniform magnet
-        # a fixed coefficient c converges to the QRE of the regularised
-        # game, which is O(c) away from the unregularised equilibrium, so
-        # a well-validated policy should be allowed to shed pressure and
-        # commit (Ataraxos anneals its KL coef downward for the same
-        # reason). Bounded well above zero: c -> 0 with a fixed magnet
-        # loses the stable fixed point and invites cycling.
         log_min = baseline_log + float(np.log(min_scale))
         log_max = baseline_log + float(np.log(max_scale))
 
-        self.commit_target = commit_target
         self.action_floor = action_floor
         self.modality_floor = modality_floor
         self.floor_gain = floor_gain
         self.event_bump = event_bump
-        self.warmup_ticks = warmup_ticks
 
-        self._pi = PILogController(baseline_log, log_min, log_max, kp, ki)
-        self._sensor = EmaSensor(sensor_ema, interval)
-        self._ticks_elapsed = 0
+        self._pi = PILogController(baseline_log, log_min, log_max, kp=0.0, ki=0.0)
 
     @property
     def value(self) -> float:
@@ -285,19 +254,14 @@ class AdaptivityController:
 
     def bump(self, scale: float | None = None) -> None:
         """Immediate pressure step for a known shock (perturbation, new
-        league opponent). Feedback decays it once the policy re-validates."""
+        league opponent). Nothing decays this automatically anymore."""
         self._pi.bump(self.event_bump if scale is None else scale)
 
     def update(
         self,
-        commit_cov: float | None,
         action_entropy: float | None,
         modality_entropy: float | None,
     ) -> dict[str, float]:
-        self._sensor.observe(commit_cov)
-
-        # Hard floors first: a collapsed modality is invisible to the
-        # covariance, so these override the PI action entirely.
         breach = 0.0
         if action_entropy is not None and np.isfinite(action_entropy):
             breach = max(breach, self.action_floor - action_entropy)
@@ -306,73 +270,41 @@ class AdaptivityController:
 
         if breach > 0.0:
             self._pi.bump(self.floor_gain * breach)
-            self._pi.prev_err = 0.0
-            self._sensor.reset()
-        elif self._sensor.ready():
-            self._sensor.consume()
-            self._ticks_elapsed += 1
-            # Warm-up: let the EMA accumulate real signal before trusting
-            # it to move the actuator — a cold-started covariance has
-            # nothing to correlate against yet and can read persistently
-            # negative for a long stretch on pure noise, pinning pressure
-            # at the ceiling for reasons unrelated to any real commitment
-            # problem. Floor overrides above are never gated by this.
-            if self._ticks_elapsed > self.warmup_ticks:
-                # err > 0: commitment under-validated -> raise pressure.
-                err = (self.commit_target - self._sensor.ema) / max(
-                    abs(self.commit_target), 1e-6
-                )
-                self._pi.step(err)
 
         return self.logs(breach)
 
     def logs(self, breach: float = 0.0) -> dict[str, float]:
-        out = {
+        return {
             "adapt_ctrl_coef": self.value,
             "adapt_ctrl_floor_breach": float(breach),
         }
-        if self._sensor.ema is not None:
-            out["adapt_ctrl_commit_ema"] = float(self._sensor.ema)
-        return out
 
     def state_dict(self) -> dict:
-        return dict(
-            log_coef=self._pi.log,
-            cov_ema=self._sensor.ema,
-            prev_err=self._pi.prev_err,
-            ticks=self._sensor.ticks,
-            ticks_elapsed=self._ticks_elapsed,
-        )
+        return dict(log_coef=self._pi.log)
 
     def load_state_dict(self, state: dict) -> None:
-        # Tolerant by key: checkpoints written by the superseded
-        # EntropyRateController carry {fast, slow, log_coef}. The
-        # actuator (log_coef) means the same thing in both and is worth
-        # keeping; the old entropy EMAs have no counterpart here, so the
-        # commitment sensor simply starts fresh. Re-clip because
-        # baseline/min_scale/max_scale move when the config changes.
+        # Tolerant by key: checkpoints from before this simplification
+        # carry extra keys (cov_ema, prev_err, ticks, ticks_elapsed,
+        # kp/ki-derived state) with no counterpart now — ignored, not an
+        # error. Re-clip because min_scale/max_scale move when config
+        # changes.
         if "log_coef" in state:
             self._pi.set_log(state["log_coef"])
-        self._sensor.ema = state.get("cov_ema")
-        self._pi.prev_err = float(state.get("prev_err", 0.0))
-        self._sensor.ticks = int(state.get("ticks", 0))
-        # Missing key (checkpoint predates warm-up) -> assume already past
-        # it: training has been running for a while by the time anyone
-        # resumes, so re-entering a cold-start warm-up on every restart
-        # would defeat the point.
-        self._ticks_elapsed = int(state.get("ticks_elapsed", self.warmup_ticks))
 
 
 class ExploitabilityController:
     """Adapts a shared CAUTION SCALE by holding league exploitability —
     1 minus main's win-rate against its worst historical snapshot — at a
-    target, then applies that scale to the OTHER controllers' targets
-    (lambda_ctrl_gap_target, adapt_ctrl_commit_target, the replay KL
-    target) rather than driving a runtime scalar of its own. Callers own
-    applying the scale — see learner._update_exploit_controller — since
-    the sign of the adjustment differs per target (shrink some, grow
-    others) depending on which direction means "more cautious" for that
-    controller.
+    target, then applies that scale to the lambda and replay
+    controllers' targets (lambda_ctrl_gap_target, the replay KL target)
+    rather than driving a runtime scalar of its own. Callers own
+    applying the scale — see learner._apply_exploit_scale — since the
+    sign of the adjustment differs per target (shrink some, grow others)
+    depending on which direction means "more cautious" for that
+    controller. Used to also scale adapt_ctrl_commit_target, but that
+    target no longer exists — the adaptivity controller's PI action was
+    removed (see its class docstring), so this only touches two targets
+    now, not three.
 
     Sign convention is flipped relative to the other controllers: the
     actuator (log(scale)) rises when the sensor is ABOVE target (more
