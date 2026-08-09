@@ -31,6 +31,7 @@ from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
     save_train_state,
+    save_train_state_locally,
 )
 from rl.online.bandit import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -53,6 +54,7 @@ from rl.online.plasticity import (
     PlasticityController,
     shrink_and_perturb_player_state,
 )
+from rl.online.promote_exploiter import check_promotion_bar, write_promoted_snapshot
 from rl.online.targets import (
     compute_aux_value_targets,
     compute_builder_targets,
@@ -62,6 +64,37 @@ from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
+
+
+class ExploiterPhaseRequested(Exception):
+    """Raised by main (never by an exploiter itself — see
+    Learner._check_auto_exploiter_transitions) when
+    config.auto_exploiter_enabled and the plasticity controller's overdue
+    trigger fires. A full checkpoint has already been written by the time
+    this is raised; rl.online.main's orchestration loop is what actually
+    forks an exploiter from it — this is a pure signal, not an action."""
+
+    def __init__(self, checkpoint_path: str):
+        super().__init__(checkpoint_path)
+        self.checkpoint_path = checkpoint_path
+
+
+class ExploiterPromoted(Exception):
+    """Raised by a running exploiter (config.pin_opponent_steps set) once
+    it clears check_promotion_bar against every pinned opponent. The
+    promoted snapshot has already been written by the time this is
+    raised — see write_promoted_snapshot."""
+
+    def __init__(self, snapshot_dir: str):
+        super().__init__(snapshot_dir)
+        self.snapshot_dir = snapshot_dir
+
+
+class ExploiterBudgetExhausted(Exception):
+    """Raised by a running exploiter that used up
+    config.auto_exploiter_frame_budget without clearing the promotion
+    bar. Nothing is written — the exploiter's params are simply discarded
+    by the orchestration loop moving on to the next ladder rung."""
 
 
 def train_step(
@@ -765,6 +798,7 @@ class Learner:
         player_network=None,
         debug: bool = False,
         controller_bytes: bytes | None = None,
+        run_subdir: str | None = None,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
@@ -772,12 +806,38 @@ class Learner:
         self.wandb_run = wandb_run
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
+        # Set only on an exploiter-phase run (docs/exploiter-phase-plan.md);
+        # namespaces every path this learner writes to under
+        # ckpts/gen{N}/exploiters/{run_subdir}/ so it can never collide with
+        # main's own checkpoint/players trees — see artifact._ckpt_root.
+        self._run_subdir = run_subdir
 
         self.plasticity = PlasticityController(
             enabled=config.plasticity_enabled,
             overdue_trigger=config.plasticity_overdue_trigger,
             recovery_winrate=config.plasticity_recovery_winrate,
             cooldown_frames=config.plasticity_cooldown_frames,
+            # auto_exploiter_enabled implies deferring perturbation — a user
+            # who turns on full automation shouldn't also have to remember
+            # to separately flip plasticity_defer_to_exploiter, or the old
+            # shrink-and-perturb path would race the new automatic one.
+            defer_to_exploiter=(
+                config.plasticity_defer_to_exploiter or config.auto_exploiter_enabled
+            ),
+        )
+
+        # Exploiter-phase bookkeeping (docs/exploiter-phase-plan.md). Only
+        # ever set on a run with pin_opponent_steps — main itself is never
+        # "the exploiter". An exploiter never recurses into requesting its
+        # OWN nested exploiter phase (_check_auto_exploiter_transitions
+        # branches on this), it just runs out its budget and gets marked
+        # failed if it stalls, which is the correct outcome for a bounded
+        # search that isn't panning out.
+        self._is_exploiter = config.pin_opponent_steps is not None
+        self._exploiter_start_frame = (
+            int(jax.device_get(player_state.frame_count))
+            if self._is_exploiter
+            else None
         )
 
         # Advantage-lambda and magnet-coef runtime scalars (traced into
@@ -1229,6 +1289,7 @@ class Learner:
                     jax.device_get(self.builder_state),
                     self.league,
                     self.controller_state_bytes(),
+                    run_subdir=self._run_subdir,
                 )
             except RuntimeError:
                 # An interrupt that lands mid train-step catches the state
@@ -1239,6 +1300,13 @@ class Learner:
                     "Skipping interrupt checkpoint: train state was donated "
                     "mid-step. Latest periodic checkpoint is unaffected."
                 )
+            raise
+        except (ExploiterPhaseRequested, ExploiterPromoted, ExploiterBudgetExhausted):
+            # Not a crash — a deliberate phase transition
+            # (docs/exploiter-phase-plan.md). rl.online.main's
+            # orchestration loop catches this to decide what runs next;
+            # everything relevant to that decision is already on the
+            # exception (checkpoint path / promoted snapshot dir).
             raise
         except Exception as e:
             logger.error(f"Learner training crashed: {e}")
@@ -1337,10 +1405,14 @@ class Learner:
                 jax.device_get(self.builder_state),
                 self.league,
                 self.controller_state_bytes(),
+                run_subdir=self._run_subdir,
             )
 
         if step % self.config.manage_league_interval == 0:
             self._manage_league(step)
+
+        if self.config.auto_exploiter_enabled:
+            self._check_auto_exploiter_transitions(step)
 
     def _manage_league(self, step: int):
         """Checks if a new player should be added to the league."""
@@ -1360,6 +1432,68 @@ class Learner:
 
         self._update_plasticity(step)
         self._update_exploit_controller()
+
+    def _check_auto_exploiter_transitions(self, step: int) -> None:
+        """Full automation of the exploiter-phase lifecycle
+        (docs/exploiter-phase-plan.md). Only ever detects and signals via a
+        control-flow exception — rl.online.main's orchestration loop is
+        what actually acts on it (forking an exploiter, resuming main),
+        since that has to happen between phases, not mid train_step.
+        """
+        if not self._is_exploiter:
+            # Main: pause and hand off the moment a stagnation episode is
+            # recommended, instead of letting shrink-and-perturb fire (the
+            # PlasticityController constructor already wired
+            # defer_to_exploiter=True for us whenever this flag is on, so
+            # should_perturb never fires while this path is live).
+            if self.plasticity.exploiter_phase_recommended:
+                save_path = save_train_state_locally(
+                    self.config,
+                    jax.device_get(self.player_state),
+                    jax.device_get(self.builder_state),
+                    self.league,
+                    self.controller_state_bytes(),
+                    run_subdir=self._run_subdir,
+                )
+                raise ExploiterPhaseRequested(save_path)
+            return
+
+        # Exploiter: periodically self-check the promotion bar against our
+        # OWN live league (real win/loss/games accumulated by this run's
+        # own games) — no checkpoint round-trip needed, unlike the manual
+        # promote_exploiter.py CLI path which only has a saved checkpoint
+        # to read from.
+        if step % self.config.auto_exploiter_check_interval != 0:
+            return
+
+        failures = check_promotion_bar(
+            self.league,
+            self.config.pin_opponent_steps,
+            self.config.exploiter_promote_winrate,
+            self.config.exploiter_promote_min_games,
+        )
+        if not failures:
+            snapshot_dir = write_promoted_snapshot(
+                generation=self.config.generation,
+                step=int(jax.device_get(self.player_state.step_count)),
+                player_params=jax.device_get(self.player_state.params),
+                player_target_params=jax.device_get(self.player_state.target_params),
+                builder_params=jax.device_get(self.builder_state.params),
+                builder_target_params=jax.device_get(
+                    self.builder_state.target_params
+                ),
+                pin_opponent_steps=self.config.pin_opponent_steps,
+                player_frame_count=jax.device_get(self.player_state.frame_count).item(),
+                builder_frame_count=jax.device_get(
+                    self.builder_state.frame_count
+                ).item(),
+                promoted_from=f"auto (EXPLOITER_RUN_ID={self._run_subdir})",
+            )
+            raise ExploiterPromoted(snapshot_dir)
+
+        frame_count = int(jax.device_get(self.player_state.frame_count))
+        if frame_count - self._exploiter_start_frame >= self.config.auto_exploiter_frame_budget:
+            raise ExploiterBudgetExhausted()
 
     def _measure_exploitability(self) -> float | None:
         """1 - main's win-rate against its worst historical league
@@ -1530,9 +1664,13 @@ class Learner:
         the lightweight ref and materialises the params lazily when this player
         is actually drawn as an opponent.
         """
-        snapshot_dir = os.path.abspath(
-            f"./ckpts/gen{self.config.generation}/players/p_{step:08}"
+        players_root = (
+            f"./ckpts/gen{self.config.generation}/exploiters/"
+            f"{self._run_subdir}/players"
+            if self._run_subdir
+            else f"./ckpts/gen{self.config.generation}/players"
         )
+        snapshot_dir = os.path.abspath(f"{players_root}/p_{step:08}")
         checkpoint.save_param_snapshot(
             snapshot_dir,
             player_components=dict(

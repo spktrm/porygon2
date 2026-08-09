@@ -14,6 +14,7 @@ import functools
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Mapping
 from pprint import pprint
 from typing import Any, Literal
@@ -40,7 +41,7 @@ from rl.model.config import get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.league import MAIN_KEY, League
+from rl.online.league import MAIN_KEY, League, PlayerRef
 
 MANIFEST_NAME = "manifest.json"
 
@@ -231,6 +232,23 @@ def create_train_state(
     return player_train_state, builder_train_state
 
 
+def _ckpt_root(learner_config: Porygon2LearnerConfig, run_subdir: str | None = None) -> str:
+    """Root directory for this process's own checkpoints.
+
+    ``run_subdir`` namespaces an exploiter phase (docs/exploiter-phase-
+    plan.md) under its own subtree, ``./ckpts/gen{N}/exploiters/{run_subdir}/``
+    — required, not cosmetic: an exploiter forks from a historical main
+    step and its own step_count then keeps counting up from that same
+    point while main is paused. Without a separate root, the exploiter's
+    ``ckpt_{step:08}`` and ``players/p_{step:08}`` directories would
+    eventually collide with — and silently overwrite — main's own, once
+    main resumes and its step_count catches back up past the fork point.
+    """
+    if run_subdir:
+        return f"./ckpts/gen{learner_config.generation}/exploiters/{run_subdir}/"
+    return f"./ckpts/gen{learner_config.generation}/"
+
+
 def save_train_state(
     wandb_run: wandb.wandb_run.Run,
     learner_config: Porygon2LearnerConfig,
@@ -238,12 +256,19 @@ def save_train_state(
     builder_state: Porygon2BuilderTrainState,
     league: League,
     controller_bytes: bytes | None = None,
+    run_subdir: str | None = None,
 ):
     save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league, controller_bytes
+        learner_config, player_state, builder_state, league, controller_bytes, run_subdir
     )
-    if learner_config.log_artifacts_online and (
-        player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
+    # Exploiter checkpoints never contest main's "latest" cloud artifact —
+    # they're a specialist, deliberately-narrowed policy, not a candidate
+    # for "the next real main lineage" (docs/exploiter-phase-plan.md open
+    # question 3: keep exploiter runs visually/artifactually distinct).
+    if (
+        run_subdir is None
+        and learner_config.log_artifacts_online
+        and player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
     ):
         wandb_run.log_artifact(
             artifact_or_path=save_path,
@@ -258,9 +283,13 @@ def save_train_state_locally(
     builder_state: Porygon2BuilderTrainState,
     league: League,
     controller_bytes: bytes | None = None,
+    run_subdir: str | None = None,
 ):
     save_path = os.path.abspath(
-        f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
+        os.path.join(
+            _ckpt_root(learner_config, run_subdir),
+            f"ckpt_{player_state.step_count:08}",
+        )
     )
     return save_state(
         save_path,
@@ -313,9 +342,11 @@ def save_state(
     return save_path
 
 
-def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
-    """Finds the most recent checkpoint folder."""
-    save_path = f"./ckpts/gen{learner_config.generation}/"
+def _get_checkpoint_path(
+    learner_config: Porygon2LearnerConfig, run_subdir: str | None = None
+) -> str | None:
+    """Finds the most recent checkpoint folder under this process's root."""
+    save_path = _ckpt_root(learner_config, run_subdir)
     os.makedirs(save_path, exist_ok=True)
     return checkpoint.most_recent_ckpt_dir(save_path)
 
@@ -514,9 +545,27 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
+    fork_from_ckpt: str | None = None,
+    run_subdir: str | None = None,
 ) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
 
-    latest_ckpt = _get_checkpoint_path(learner_config)
+    # 0. Exploiter-phase fork (docs/exploiter-phase-plan.md piece 1): an
+    # explicit, one-time source checkpoint, bypassing "most recent"
+    # entirely — this is what lets a launch fork from an arbitrary
+    # historical step instead of always resuming the latest. Deliberately
+    # ignores `mode`: seeding a fresh exploiter phase is always a full
+    # params+opt_state+league restore. Only pass this on the launch that
+    # actually creates the fork; a later resume of that same in-progress
+    # exploiter run should leave it unset so `run_subdir`'s own
+    # "most recent" search below picks up its OWN latest checkpoint
+    # instead of re-forking from the original point and losing whatever
+    # it learned since.
+    if fork_from_ckpt is not None:
+        return load_from_checkpoint(
+            fork_from_ckpt, learner_config, player_state, builder_state
+        )
+
+    latest_ckpt = _get_checkpoint_path(learner_config, run_subdir)
 
     # 1. Force Scratch
     if mode == "scratch":
@@ -530,10 +579,10 @@ def load_train_state(
     # per-run), but now at warning level so it can't scroll by unnoticed.
     if not latest_ckpt:
         logger.warning(
-            "LOAD_STATE_MODE=%r but no checkpoint found under ./ckpts/gen%s/ "
+            "LOAD_STATE_MODE=%r but no checkpoint found under %s "
             "— starting from scratch.",
             mode,
-            learner_config.generation,
+            _ckpt_root(learner_config, run_subdir),
         )
         return load_from_scratch(learner_config, player_state, builder_state)
 
@@ -547,3 +596,63 @@ def load_train_state(
     return load_from_checkpoint(
         latest_ckpt, learner_config, player_state, builder_state
     )
+
+
+_EXPLOITER_SNAPSHOT_DIR_RE = re.compile(r"p_(\d+)$")
+
+
+def merge_pending_exploiter_promotions(
+    learner_config: Porygon2LearnerConfig, league: League
+) -> int:
+    """Merges any promoted exploiter snapshots into a freshly loaded league.
+
+    docs/exploiter-phase-plan.md piece 5: an exploiter phase runs as a
+    separate process, forked from — and independent of — main. The only
+    way a promoted exploiter reaches main's LIVE league is for main to
+    pick it up on its own next restart, from a well-known on-disk
+    location (``rl/online/promote_exploiter.py`` writes here after
+    re-verifying the promotion bar). Idempotent: already-merged step
+    counts are skipped, so calling this on every startup is safe.
+    """
+    root = f"./ckpts/gen{learner_config.generation}/exploiters/promoted/"
+    if not os.path.isdir(root):
+        return 0
+
+    merged = 0
+    for name in sorted(os.listdir(root)):
+        match = _EXPLOITER_SNAPSHOT_DIR_RE.match(name)
+        snapshot_dir = os.path.abspath(os.path.join(root, name))
+        if not match or not os.path.isdir(snapshot_dir):
+            continue
+        step = int(match.group(1))
+        if step in league.players:
+            continue
+
+        meta_path = os.path.join(snapshot_dir, "meta.json")
+        if not os.path.exists(meta_path):
+            logger.warning(
+                "skipping promoted exploiter snapshot %s: missing meta.json "
+                "(was this written by promote_exploiter.py?)",
+                snapshot_dir,
+            )
+            continue
+        with open(meta_path) as f:
+            meta = json.load(f)
+
+        league.add_player(
+            PlayerRef(
+                step_count=step,
+                snapshot_dir=snapshot_dir,
+                player_frame_count=int(meta["player_frame_count"]),
+                builder_frame_count=int(meta["builder_frame_count"]),
+                player_key="params",
+                builder_key="params",
+            )
+        )
+        merged += 1
+        logger.info(
+            "merged promoted exploiter snapshot %s (step %d) into the league",
+            snapshot_dir,
+            step,
+        )
+    return merged

@@ -171,11 +171,14 @@ class PlayerActor:
         league = self._learner.league
         return league.get_main_player()
 
-    def _pfsp_branch(self) -> ParamsContainer | None:
+    def _pfsp_branch(
+        self, allowed_steps: frozenset[int] | None = None
+    ) -> ParamsContainer | None:
         historical = [
             player
             for player in self._learner.league.players.values()
             if player.step_count != MAIN_KEY
+            and (allowed_steps is None or player.step_count in allowed_steps)
         ]
         if not historical:  # No historical players to play against
             return None
@@ -189,6 +192,23 @@ class PlayerActor:
         return self._learner.league.materialize(historical[pick_idx])
 
     def get_match(self) -> tuple[ParamsContainer, bool]:
+        # Exploiter phase (docs/exploiter-phase-plan.md piece 2): matchmaking
+        # is pinned to a specific subset of the league instead of the whole
+        # thing, and the mirror coin toss below is skipped entirely — every
+        # game trains against the pinned target(s), never against self-play.
+        # Reuses the existing PFSP draw unmodified, just over a restricted
+        # candidate pool.
+        pin_opponent_steps = self._learner.config.pin_opponent_steps
+        if pin_opponent_steps:
+            opponent = self._pfsp_branch(allowed_steps=frozenset(pin_opponent_steps))
+            if opponent is not None:
+                return opponent, False
+            raise RuntimeError(
+                f"pin_opponent_steps={pin_opponent_steps} but none of those "
+                "step_counts are in the league — check FORK_FROM_CKPT forked "
+                "from a checkpoint that actually has these snapshots."
+            )
+
         coin_toss = np.random.random()
 
         # Make sure you can beat the League (PFSP)

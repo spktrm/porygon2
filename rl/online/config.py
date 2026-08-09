@@ -112,11 +112,86 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     league_cache_size: int = 16
     league_ucb_c: float = 1.0
 
+    # PSRO-style exploiter phase (docs/exploiter-phase-plan.md). Set only on
+    # a dedicated exploiter run — a process forked from a historical main
+    # checkpoint (FORK_FROM_CKPT env var) whose entire purpose is a bounded
+    # best-response search against a fixed subset of the league. When set,
+    # PlayerActor.get_match() skips the mirror coin toss and restricts the
+    # existing PFSP draw to exactly these step_counts (piece 2) — start a
+    # phase at k=1, widen the tuple later in the same phase once win-rate
+    # clears exploiter_promote_winrate, as a generalization check. None on
+    # every ordinary main run (the default): matchmaking is unrestricted.
+    pin_opponent_steps: tuple[int, ...] | None = None
+    # Promotion bar (piece 5): win-rate vs. EVERY opponent currently in
+    # pin_opponent_steps must clear this, not just the average — a
+    # strategy that crushes one pinned target and loses to another hasn't
+    # generalized. Matches the existing "dominant" league-addition bar
+    # (win-rate > 0.7) exactly — raised from an initial 0.55 (the plan
+    # doc's original placeholder, deliberately looser on the theory that a
+    # specialist beating a narrow target set didn't need "beats everything"
+    # stringency). 0.55 turned out to be a weak statistical bar at the
+    # exploiter_promote_min_games floor: standard error at n=20 games,
+    # p~0.5 is ~0.11, so 0.55 is under half a standard error above a coin
+    # flip — barely distinguishable from noise right at the reliability
+    # floor. 0.7 (~1.8 SE above a coin flip at n=20) is a real signal.
+    exploiter_promote_winrate: float = 0.7
+    # Same reliability floor as exploit_ctrl_min_games_per_opponent /
+    # bandit_min_games_per_opponent, applied here for the identical reason:
+    # a handful of lucky games isn't a real win-rate.
+    exploiter_promote_min_games: float = 20.0
+
     # Plasticity (shrink-and-perturb) params. Triggered when the main player
     # keeps failing to dominate its own league history: after
     # `plasticity_overdue_trigger` consecutive overdue-only league additions,
     # player params are interpolated toward a fresh init draw.
     plasticity_enabled: bool = True
+    # docs/exploiter-phase-plan.md piece 7: when the overdue-stagnation
+    # trigger fires, spend a bounded exploiter-phase budget first instead
+    # of auto-perturbing. Purely a suppression switch on its own — pairs
+    # with auto_exploiter_enabled below for full automation, or can be set
+    # alone for the manual v1 workflow (watch plasticity_consecutive_overdue,
+    # launch by hand via FORK_FROM_CKPT/EXPLOITER_RUN_ID, promote by hand via
+    # rl/online/promote_exploiter.py). Flip back to False once a manually-run
+    # episode concludes so a real stall still gets a perturbation.
+    plasticity_defer_to_exploiter: bool = False
+    # Full automation of the exploiter-phase lifecycle, all within one
+    # `python -m rl.online.main` invocation: main pauses itself (saving a
+    # checkpoint and raising a control-flow signal) the moment the overdue
+    # trigger fires; the orchestration loop in main.py forks an exploiter
+    # against increasingly-wide pinned opponent sets IN THE SAME PROCESS
+    # (strictly sequential — never two learners live at once, since this
+    # hardware can't run distributed/concurrent training anyway); each
+    # exploiter self-checks its own promotion bar and self-promotes or
+    # self-discards; main then resumes automatically. No manual
+    # promote_exploiter.py invocation and no separate launch commands needed
+    # once this is on. Implies plasticity_defer_to_exploiter — no need to
+    # also set both.
+    auto_exploiter_enabled: bool = True
+    # k values tried in sequence per stagnation episode. Each rung is an
+    # independent fresh fork from the SAME paused-main checkpoint (not a
+    # continuation of the previous rung's training) — width escalates only
+    # after a narrower attempt fails to clear the bar within its budget.
+    # Matches piece 2's k=1 (sharpest signal) / k=3-5 (generalization check)
+    # sizing, simplified for automation: the doc's "widen after success
+    # within the same phase" nuance is folded into "widen after failure,
+    # across independent attempts" here, for a much simpler state machine.
+    # main._pick_pin_opponent_steps fills each rung with the k opponents
+    # main is CURRENTLY WEAKEST against (by win-rate, reliability-gated),
+    # not the k most recent snapshots — recency was only ever a proxy for
+    # "resembles current main," and the league's own win/loss table says
+    # directly where the actual blind spot is.
+    auto_exploiter_ladder: tuple[int, ...] = (1, 3, 5)
+    # Frames (not steps — consistent with add_player_max_frames /
+    # plasticity_cooldown_frames) given to each ladder rung before it's
+    # declared failed and the next rung is tried. Sized the same as
+    # add_player_max_frames: roughly one main "overdue window" worth of
+    # dedicated search per attempt.
+    auto_exploiter_frame_budget: int = int(9e6)
+    # How often (learner steps) a running exploiter checks its own
+    # promotion bar. A fraction of save_interval_steps so a clear win
+    # doesn't sit undetected for long; the check itself is cheap (a
+    # handful of dict lookups over a tiny league).
+    auto_exploiter_check_interval: int = 5_000
     # Consecutive overdue-only adds before a perturbation. At 1 (the old
     # value) a single stalled add window (~6k steps of not dominating the
     # league) fired a 50% reset: the Aug 2026 run perturbed during a
