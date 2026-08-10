@@ -803,6 +803,22 @@ class Learner:
         self.player_state = player_state
         self.builder_state = builder_state
         self.config = config
+        # train_step's config is a STATIC jit arg (see the recompile/OOM
+        # history in the comment a few lines down) — every exploiter phase
+        # constructs a genuinely distinct config via .replace(pin_opponent_
+        # steps=..., auto_exploiter_enabled=True), which would otherwise
+        # trigger a fresh ~5GB-retaining recompile on EVERY exploiter
+        # attempt (the exact 1326 failure mode, reintroduced by varying a
+        # static arg across phases within one long-running orchestrated
+        # process). Neither field is read anywhere inside train_step or
+        # targets.py (verified) — passing a config with them pinned to a
+        # fixed canonical value keeps the jit cache key identical across
+        # every phase, main or exploiter alike, while self.config (used
+        # everywhere else: matchmaking, _check_auto_exploiter_transitions,
+        # controller construction) stays the real, unmodified one.
+        self._jit_config = config.replace(
+            pin_opponent_steps=None, auto_exploiter_enabled=False
+        )
         self.wandb_run = wandb_run
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
@@ -1362,7 +1378,7 @@ class Learner:
             self.player_state,
             self.builder_state,
             batch,
-            self.config,
+            self._jit_config,
             np.float32(self._current_lambda),
             np.float32(self._current_magnet_coef),
         )

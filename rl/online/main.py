@@ -681,6 +681,19 @@ def main(args: argparse.Namespace):
             )
             gc.collect()
 
+            if exploiter_outcome.kind == "interrupted":
+                # Ctrl-C during an exploiter attempt stops the WHOLE session
+                # immediately — it must never fall through to the generic
+                # "didn't clear the bar, try the next rung" branch below,
+                # which would silently launch another exploiter attempt
+                # instead of honouring the stop. Deliberately skip cleanup
+                # too, same as a genuine crash: an interrupted attempt's
+                # state may be worth inspecting.
+                logger.info(
+                    "Interrupted during exploiter attempt k=%d — stopping.", k
+                )
+                return
+
             # Disposable scratch either way: a promotion already copied
             # what matters into exploiters/promoted/, and a clean failure
             # has nothing worth keeping — the wandb run is the permanent
