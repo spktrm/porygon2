@@ -35,6 +35,7 @@ from rl.online.artifact import (
 )
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
+from rl.online.league import MAIN_KEY, League
 from rl.online.learner import (
     CAT_VF_SUPPORT,
     ExploiterBudgetExhausted,
@@ -42,7 +43,6 @@ from rl.online.learner import (
     ExploiterPromoted,
     Learner,
 )
-from rl.online.league import MAIN_KEY, League
 from rl.online.player_actor import PlayerActor
 
 logger = logging.getLogger(__name__)
@@ -510,12 +510,18 @@ def _run_one_phase(
             outcome = PhaseOutcome(kind="interrupted")
         except ExploiterPhaseRequested as e:
             logger.info("Main paused for an exploiter phase @ %s", e.checkpoint_path)
-            outcome = PhaseOutcome(kind="exploiter_requested", checkpoint_path=e.checkpoint_path)
+            outcome = PhaseOutcome(
+                kind="exploiter_requested", checkpoint_path=e.checkpoint_path
+            )
         except ExploiterPromoted as e:
             logger.info("Exploiter promoted -> %s", e.snapshot_dir)
-            outcome = PhaseOutcome(kind="promoted", promoted_snapshot_dir=e.snapshot_dir)
+            outcome = PhaseOutcome(
+                kind="promoted", promoted_snapshot_dir=e.snapshot_dir
+            )
         except ExploiterBudgetExhausted:
-            logger.info("Exploiter exhausted its budget without promoting — discarding.")
+            logger.info(
+                "Exploiter exhausted its budget without promoting — discarding."
+            )
             outcome = PhaseOutcome(kind="failed")
         finally:
             stop_signal[0] = True
@@ -636,7 +642,9 @@ def main(args: argparse.Namespace):
     )
     gc.collect()
 
-    while outcome.kind == "exploiter_requested" and learner_config.auto_exploiter_enabled:
+    while (
+        outcome.kind == "exploiter_requested" and learner_config.auto_exploiter_enabled
+    ):
         main_checkpoint = outcome.checkpoint_path
         promoted = False
 

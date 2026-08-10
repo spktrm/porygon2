@@ -232,7 +232,9 @@ def create_train_state(
     return player_train_state, builder_train_state
 
 
-def _ckpt_root(learner_config: Porygon2LearnerConfig, run_subdir: str | None = None) -> str:
+def _ckpt_root(
+    learner_config: Porygon2LearnerConfig, run_subdir: str | None = None
+) -> str:
     """Root directory for this process's own checkpoints.
 
     ``run_subdir`` namespaces an exploiter phase (docs/exploiter-phase-
@@ -259,7 +261,12 @@ def save_train_state(
     run_subdir: str | None = None,
 ):
     save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league, controller_bytes, run_subdir
+        learner_config,
+        player_state,
+        builder_state,
+        league,
+        controller_bytes,
+        run_subdir,
     )
     # Exploiter checkpoints never contest main's "latest" cloud artifact —
     # they're a specialist, deliberately-narrowed policy, not a candidate
@@ -268,7 +275,8 @@ def save_train_state(
     if (
         run_subdir is None
         and learner_config.log_artifacts_online
-        and player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
+        and player_state.step_count.item() % learner_config.cloud_save_interval_steps
+        == 0
     ):
         wandb_run.log_artifact(
             artifact_or_path=save_path,

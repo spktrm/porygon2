@@ -166,7 +166,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # promote_exploiter.py invocation and no separate launch commands needed
     # once this is on. Implies plasticity_defer_to_exploiter — no need to
     # also set both.
-    auto_exploiter_enabled: bool = True
+    auto_exploiter_enabled: bool = False
     # k values tried in sequence per stagnation episode. Each rung is an
     # independent fresh fork from the SAME paused-main checkpoint (not a
     # continuation of the previous rung's training) — width escalates only
@@ -308,8 +308,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Master switch for the adaptivity controller (the magnet KL coef
     # loop; name kept for checkpoint/config continuity).
     entropy_ctrl_enabled: bool = True
-    # Adaptivity controller (rl/online/controllers.py) is floor-only now.
-    # It used to also hold player_commit_cov's EMA at adapt_ctrl_
+    # Adaptivity controller (rl/online/controllers.py) is floor-plus-decay
+    # now. It used to also hold player_commit_cov's EMA at adapt_ctrl_
     # commit_target via a PI loop — removed after repeated bugs (an
     # unreachable target pinning pressure at the ceiling for ~50k steps
     # in 1338/1339, then a divide-by-near-zero once the target was
@@ -317,20 +317,32 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # exploit_ctrl scaled that same target). None of those bugs ever
     # touched the floors below, which is why they're what's left. See
     # AdaptivityController's class docstring for the full removal
-    # history. Pressure now only ever rises (bump() below, or a floor
-    # breach) — there is no automatic decay back toward baseline.
+    # history and for exactly why adapt_ctrl_decay_rate below can't
+    # reproduce any of those three bug patterns.
     adapt_ctrl_floor_gain: float = 2.0
     # Event bumps, added to log(coef) directly (0.7 ~ a 2x step,
-    # 1.4 ~ 4x) — the only source of a deliberate pressure increase now
-    # that the PI action is gone.
+    # 1.4 ~ 4x) — the only source of a deliberate pressure increase.
     adapt_ctrl_event_bump: float = 0.7
     adapt_ctrl_perturb_bump: float = 1.4
+    # Geometric per-step relaxation of the magnet-KL coefficient back
+    # toward baseline, skipped on any step with an active floor breach.
+    # Deliberately NOT sensor-driven (no commit_cov, no target, nothing
+    # for exploit_ctrl to scale) — see AdaptivityController's docstring
+    # for why that specifically is what makes this safe to add back.
+    # Default 0.0 (off): matches the post-removal "pressure only ever
+    # rises" behaviour exactly unless a run opts in. 3.47e-5 gives a
+    # ~20,000-step half-life (1 - 0.5**(1/20_000)) — slow enough not to
+    # undo real, still-needed pressure within a single overdue window
+    # (~35k steps), fast enough to actually relieve a stale, unrelieved
+    # stack of league-addition bumps over a run's lifetime instead of
+    # leaving it monotonically climbing toward entropy_ctrl_max_scale
+    # forever. Untested — no run has exercised this yet.
+    adapt_ctrl_decay_rate: float = 0.0
     # Hard floors — backstops, not the mechanism: the commitment
     # covariance is blind to actions the policy never takes, so a
     # modality going extinct (1330: switching to 0.002) must trip
-    # something the loop cannot miss. This is now the only way pressure
-    # rises besides bump() — there is no PI action left for a breach to
-    # override.
+    # something the loop cannot miss. Breaches always override decay in
+    # the same tick — a real, ongoing collapse risk always wins.
     entropy_ctrl_floor: float = 0.40
     # Hard floor for the MACRO MODALITY entropy axis, which sits
     # structurally lower than total action entropy. 1328 gained strength
@@ -340,12 +352,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # 0.08). The learner rescales this axis into action-entropy units.
     entropy_ctrl_modality_floor: float = 0.20
     # Range the controller may drive the magnet coef over, as multiples
-    # of the player_magnet_kl_coef baseline. Nothing currently pushes the
-    # coefficient below baseline (bump()/floor breaches only ever add) —
-    # min_scale is a defensive lower clamp, not an exercised anneal path,
-    # now that the PI action that used to decay pressure below baseline
-    # is gone. Kept well above zero regardless: c -> 0 against a fixed
-    # magnet loses the stable fixed point.
+    # of the player_magnet_kl_coef baseline. Kept well above zero
+    # regardless of how far decay can pull it down: c -> 0 against a
+    # fixed magnet loses the stable fixed point.
     entropy_ctrl_max_scale: float = 10.0
     entropy_ctrl_min_scale: float = 0.2
 

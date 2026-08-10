@@ -870,6 +870,7 @@ class Learner:
                 modality_floor=config.entropy_ctrl_modality_floor,
                 floor_gain=config.adapt_ctrl_floor_gain,
                 event_bump=config.adapt_ctrl_event_bump,
+                decay_rate=config.adapt_ctrl_decay_rate,
             )
 
         self.exploit_ctrl: ExploitabilityController | None = None
@@ -972,6 +973,19 @@ class Learner:
         # Last: the controllers and the plasticity controller must already
         # exist before their checkpointed state is applied.
         self.restore_controller_state(controller_bytes)
+
+        # An exploiter forks from main's checkpoint and restore_controller_
+        # state above just restored entropy_ctrl unconditionally from it —
+        # including whatever accumulated pressure reflects MAIN's own
+        # league-growth shock history, not this exploiter's. Reset it: the
+        # exploiter's whole task is concentrating 100% of training on
+        # committing to one specific counter to one specific opponent,
+        # which is exactly what elevated magnet-KL pressure fights
+        # hardest. The hard floors are untouched by this — a real
+        # collapse in the exploiter's own training still bumps pressure
+        # straight back up.
+        if self._is_exploiter and self.entropy_ctrl is not None:
+            self.entropy_ctrl.reset_to_baseline()
 
     def _make_plasticity_probe(self, network):
         """Builds the jitted plasticity probe: an encoder-only forward on
@@ -1479,9 +1493,7 @@ class Learner:
                 player_params=jax.device_get(self.player_state.params),
                 player_target_params=jax.device_get(self.player_state.target_params),
                 builder_params=jax.device_get(self.builder_state.params),
-                builder_target_params=jax.device_get(
-                    self.builder_state.target_params
-                ),
+                builder_target_params=jax.device_get(self.builder_state.target_params),
                 pin_opponent_steps=self.config.pin_opponent_steps,
                 player_frame_count=jax.device_get(self.player_state.frame_count).item(),
                 builder_frame_count=jax.device_get(
@@ -1492,7 +1504,10 @@ class Learner:
             raise ExploiterPromoted(snapshot_dir)
 
         frame_count = int(jax.device_get(self.player_state.frame_count))
-        if frame_count - self._exploiter_start_frame >= self.config.auto_exploiter_frame_budget:
+        if (
+            frame_count - self._exploiter_start_frame
+            >= self.config.auto_exploiter_frame_budget
+        ):
             raise ExploiterBudgetExhausted()
 
     def _measure_exploitability(self) -> float | None:

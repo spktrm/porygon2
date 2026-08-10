@@ -197,7 +197,8 @@ class LambdaGapController:
 
 
 class AdaptivityController:
-    """Hard-floor-only diversity guard for the magnet KL coefficient.
+    """Hard-floor diversity guard for the magnet KL coefficient, with an
+    optional slow, target-free decay back toward baseline.
 
     This used to also hold a covariance-driven PI action (hold
     player_commit_cov's EMA at a target, decay pressure below baseline
@@ -209,20 +210,26 @@ class AdaptivityController:
     (1341: ordinary sensor noise producing err ~ O(1e4), saturating the
     coefficient to a bound every tick), then a second bug in how
     exploit_ctrl scaled that same target. None of those bugs ever
-    touched the floors below — they're what's left, because they're the
-    actual safety mechanism (the removed PI action was explicitly
-    documented as backstopped BY these floors, not the other way
-    around) and a precondition for the exploiter-phase plan
-    (docs/exploiter-phase-plan.md) working at all: an exploiter with no
-    floor protection is just as likely to collapse to a degenerate
-    strategy as main is.
+    touched the floors — they're the actual safety mechanism (the
+    removed PI action was explicitly documented as backstopped BY these
+    floors, not the other way around) and a precondition for the
+    exploiter-phase plan (docs/exploiter-phase-plan.md) working at all:
+    an exploiter with no floor protection is just as likely to collapse
+    to a degenerate strategy as main is. The floors are untouched by
+    everything below.
 
-    Consequence of the removal: pressure only ever RISES now, via
-    bump() (a discrete shock: new league opponent, perturbation) or a
-    hard entropy-floor breach. There is no automatic decay back toward
-    baseline — that was the removed mechanism's job. If a future run
-    needs pressure relieved after a shock, that requires deliberately
-    reintroducing some form of decay, not just waiting.
+    ``decay_rate`` (default 0.0, i.e. off — matches the post-removal
+    behaviour exactly unless a run opts in) restores SOME ability to
+    relieve pressure after a shock, without resurrecting anything that
+    caused the three bugs above: it never reads player_commit_cov or any
+    other sensor, has no target to be unreachable or near-zero, and
+    exploit_ctrl has nothing here left to scale. It's just geometric
+    relaxation of the actuator toward its own baseline_log, one tick at a
+    time, skipped entirely on any tick with an active floor breach (a
+    real, ongoing collapse risk always wins over relaxation in the same
+    tick). Bounded by construction — each step only closes a fraction of
+    the remaining gap to baseline, so it can never overshoot past it,
+    unlike a PI action chasing a target it might not reach.
 
     Actuator is log(coef), clamped to [baseline*min_scale,
     baseline*max_scale] — clamping is anti-windup for bump()/floor
@@ -238,15 +245,18 @@ class AdaptivityController:
         modality_floor: float,
         floor_gain: float,
         event_bump: float,
+        decay_rate: float = 0.0,
     ):
         baseline_log = float(np.log(baseline_coef))
         log_min = baseline_log + float(np.log(min_scale))
         log_max = baseline_log + float(np.log(max_scale))
 
+        self.baseline_log = baseline_log
         self.action_floor = action_floor
         self.modality_floor = modality_floor
         self.floor_gain = floor_gain
         self.event_bump = event_bump
+        self.decay_rate = decay_rate
 
         self._pi = PILogController(baseline_log, log_min, log_max, kp=0.0, ki=0.0)
 
@@ -256,8 +266,27 @@ class AdaptivityController:
 
     def bump(self, scale: float | None = None) -> None:
         """Immediate pressure step for a known shock (perturbation, new
-        league opponent). Nothing decays this automatically anymore."""
+        league opponent). Decay (if enabled) is what relieves this over
+        time now — nothing decays it instantly."""
         self._pi.bump(self.event_bump if scale is None else scale)
+
+    def reset_to_baseline(self) -> None:
+        """Discards accumulated pressure entirely, back to baseline.
+
+        For forking an exploiter phase (docs/exploiter-phase-plan.md):
+        restore_controller_state restores entropy_ctrl unconditionally
+        from whatever checkpoint an exploiter forks from, so without this
+        it would inherit MAIN's accumulated, shock-history-specific
+        pressure. An exploiter concentrates 100% of its training on
+        committing to one specific counter to one specific opponent —
+        exactly what elevated magnet-KL pressure fights hardest — so
+        carrying over pressure that reflects main's OWN league-growth
+        history, not the exploiter's, would handicap the very mechanism
+        this phase exists to run. Does not touch the hard floors: a real
+        entropy collapse during the exploiter's own training still bumps
+        pressure back up immediately, same as always.
+        """
+        self._pi.set_log(self.baseline_log)
 
     def update(
         self,
@@ -272,6 +301,10 @@ class AdaptivityController:
 
         if breach > 0.0:
             self._pi.bump(self.floor_gain * breach)
+        elif self.decay_rate > 0.0:
+            self._pi.set_log(
+                self._pi.log + self.decay_rate * (self.baseline_log - self._pi.log)
+            )
 
         return self.logs(breach)
 
