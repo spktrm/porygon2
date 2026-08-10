@@ -166,7 +166,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # promote_exploiter.py invocation and no separate launch commands needed
     # once this is on. Implies plasticity_defer_to_exploiter — no need to
     # also set both.
-    auto_exploiter_enabled: bool = False
+    auto_exploiter_enabled: bool = True
     # k values tried in sequence per stagnation episode. Each rung is an
     # independent fresh fork from the SAME paused-main checkpoint (not a
     # continuation of the previous rung's training) — width escalates only
@@ -337,7 +337,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # stack of league-addition bumps over a run's lifetime instead of
     # leaving it monotonically climbing toward entropy_ctrl_max_scale
     # forever. Untested — no run has exercised this yet.
-    adapt_ctrl_decay_rate: float = 0.0
+    adapt_ctrl_decay_rate: float = 3.47e-5  # ~20,000-step half-life
     # Hard floors — backstops, not the mechanism: the commitment
     # covariance is blind to actions the policy never takes, so a
     # modality going extinct (1330: switching to 0.002) must trip
