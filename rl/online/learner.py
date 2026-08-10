@@ -17,6 +17,23 @@ from tqdm import tqdm
 
 import wandb
 from rl import checkpoint
+
+# Optional: renders the league win-rate heatmap (_get_league_winrate_heatmap).
+# Guarded rather than a hard top-level dependency — this codebase has already
+# hit real deployment-sync friction this session (files/config not landing on
+# the training box before a restart); crashing the ENTIRE training process
+# over a missing plotting library for a supplementary visualization would be
+# a disproportionate failure mode. Add matplotlib to requirements.txt and
+# `pip install` it on the training box to actually get the heatmap panel.
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")  # headless — no display server on a training box
+    import matplotlib.pyplot as plt
+
+    _MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    _MATPLOTLIB_AVAILABLE = False
 from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
 from rl.environment.interfaces import (
     Batch,
@@ -855,6 +872,23 @@ class Learner:
             if self._is_exploiter
             else None
         )
+        # The main checkpoint's step_count this exploiter forked from —
+        # recorded now (player_state.step_count reflects the fork point
+        # here, before any of this run's own training happens) since by
+        # the time a promotion might occur, self.player_state.step_count
+        # has moved on and no longer represents that fork point. Used to
+        # tag a promoted snapshot's PlayerRef.parent_step (league.py).
+        self._exploiter_fork_step = (
+            int(jax.device_get(player_state.step_count))
+            if self._is_exploiter
+            else None
+        )
+
+        if not _MATPLOTLIB_AVAILABLE:
+            logger.warning(
+                "matplotlib not installed — league_winrate_heatmap will not "
+                "be logged. `pip install matplotlib` to enable it."
+            )
 
         # Advantage-lambda and magnet-coef runtime scalars (traced into
         # train_step — never static config: each static value's recompile
@@ -1002,6 +1036,11 @@ class Learner:
         # straight back up.
         if self._is_exploiter and self.entropy_ctrl is not None:
             self.entropy_ctrl.reset_to_baseline()
+            # restore_controller_state above already set this from the
+            # restored (pre-reset) controller value — _update_hyper_
+            # controllers would correct it on the very next tick anyway,
+            # but there's no reason to leave even one step inconsistent.
+            self._current_magnet_coef = self.config.player_magnet_kl_coef
 
     def _make_plasticity_probe(self, network):
         """Builds the jitted plasticity probe: an encoder-only forward on
@@ -1207,7 +1246,7 @@ class Learner:
             # consumed here at all, only the two hard entropy backstops,
             # because a collapsed modality is invisible to the covariance
             # (which is how 1330 lost switching while looking healthy) —
-            # the same reason those floors were never optional.
+            # the same reason those floors were never optional FOR MAIN.
             action_ent = host_logs.get("player_action_normalized_entropy")
             modal_ent = host_logs.get("player_normalized_modality_entropy")
             host_logs.update(
@@ -1216,7 +1255,23 @@ class Learner:
                     None if modal_ent is None else float(modal_ent),
                 )
             )
-            self._current_magnet_coef = self.entropy_ctrl.value
+            # Still run + logged unconditionally above (adapt_ctrl_coef/
+            # adapt_ctrl_floor_breach stay informative for an exploiter
+            # too — e.g. showing whether a promoted counter's edge came
+            # from abandoning a modality), but NOT applied to the loss for
+            # exploiters: the floor's job is preventing degenerate
+            # collapse in MAIN's continuously-evolving lineage, a risk a
+            # bounded, disposable, one-shot exploiter search doesn't carry
+            # the same way. A frozen opponent that never switches is a
+            # legitimate, useful addition to main's league in its own
+            # right (main has to learn to beat it too) — the promotion
+            # bar, not this floor, is what actually gates whether an
+            # exploiter's counter is worth keeping.
+            self._current_magnet_coef = (
+                self.config.player_magnet_kl_coef
+                if self._is_exploiter
+                else self.entropy_ctrl.value
+            )
 
     def _update_replay_controller(self, host_logs: dict) -> None:
         """Velocity-form PI loop holding the replayed-batch actor KL at
@@ -1399,6 +1454,7 @@ class Learner:
 
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates())
+            logs.update(self._get_league_winrate_heatmap())
             logs.update(self.plasticity.logs())
             if self.exploit_ctrl is not None:
                 logs.update(self.exploit_ctrl.logs())
@@ -1516,6 +1572,7 @@ class Learner:
                     self.builder_state.frame_count
                 ).item(),
                 promoted_from=f"auto (EXPLOITER_RUN_ID={self._run_subdir})",
+                parent_step=self._exploiter_fork_step,
             )
             raise ExploiterPromoted(snapshot_dir)
 
@@ -1713,6 +1770,12 @@ class Learner:
                 target_params=jax.device_get(self.builder_state.target_params),
             ),
         )
+        # This is main's OWN routine league management when _is_exploiter
+        # is False. When True, it's an exploiter snapshotting itself
+        # mid-attempt into its own in-memory (forked, disposable) league —
+        # not a promotion; _cleanup_exploiter_run deletes this whole tree
+        # regardless of outcome. Tagged origin="exploiter" for
+        # consistency even though these never reach main's live league.
         self.league.add_player(
             PlayerRef(
                 step_count=step,
@@ -1723,6 +1786,8 @@ class Learner:
                 ).item(),
                 player_key="params",
                 builder_key="params",
+                origin="exploiter" if self._is_exploiter else "main",
+                parent_step=self._exploiter_fork_step if self._is_exploiter else None,
             )
         )
 
@@ -1743,9 +1808,27 @@ class Learner:
 
         return result
 
+    def _winrate_tracked_opponents(self) -> list[PlayerRef]:
+        """League members whose win-rate is actually live for this run.
+
+        For an exploiter, only the pinned opponents ever get new games
+        (get_match() restricts matchmaking to exactly them) — every OTHER
+        entry inherited from the forked-from checkpoint's league is just a
+        frozen number from the fork point that never updates for the rest
+        of this phase. Logging it anyway isn't wrong, just static/mildly
+        misleading noise (an unchanging line during the whole phase, when
+        in reality this run never even plays that opponent) — restrict to
+        what's actually being exercised.
+        """
+        others = [v for k, v in self.league.players.items() if k != MAIN_KEY]
+        if self._is_exploiter:
+            pinned = set(self.config.pin_opponent_steps)
+            others = [v for v in others if v.step_count in pinned]
+        return others
+
     def _get_league_winrates(self):
         current = self.league.get_main_player()
-        others = [v for k, v in self.league.players.items() if k != MAIN_KEY]
+        others = self._winrate_tracked_opponents()
 
         if not others:
             return {}
@@ -1755,3 +1838,54 @@ class Learner:
             f"league_main_v_{others[i].step_count}_winrate": wr
             for i, wr in enumerate(win_rates)
         }
+
+    def _get_league_winrate_heatmap(self):
+        """Full pairwise win-rate matrix — main plus every opponent this
+        run actually tracks (see _winrate_tracked_opponents) — logged as a
+        wandb Image alongside (not replacing) the per-opponent line-graph
+        metrics above. A league is fundamentally a matrix, not a set of
+        independent lines: win-rates exist between every pair, not just
+        main's own row, and a heatmap that gets re-logged every tick is
+        scrubbable via wandb's own step slider on the run page — an
+        evolving view over training, with zero custom panel configuration
+        needed. This is also where non-transitivity/cycles among
+        historical snapshots would actually be visible, which no single
+        "main vs X" line could ever show.
+        """
+        if not _MATPLOTLIB_AVAILABLE:
+            return {}
+
+        current = self.league.get_main_player()
+        others = self._winrate_tracked_opponents()
+        if not others:
+            return {}
+
+        all_players = [current] + others
+        labels = ["main"] + [str(p.step_count) for p in others]
+        matrix = np.asarray(self.league.get_winrate((all_players, all_players)))
+
+        # Floored, not just scaled by label count — a k=1 exploiter (main +
+        # one opponent) would otherwise get a ~3in-wide figure with a title
+        # far wider than the plot, reading as cramped/overflowing.
+        width = max(0.6 * len(labels) + 2, 5.0)
+        height = max(0.6 * len(labels) + 2, 4.5)
+        fig, ax = plt.subplots(figsize=(width, height))
+        im = ax.imshow(matrix, vmin=0.0, vmax=1.0, cmap="RdYlGn")
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticklabels(labels)
+        ax.set_xlabel("away")
+        ax.set_ylabel("home (row beats column)")
+        ax.set_title("League win-rate", fontsize=12)
+        for i in range(len(labels)):
+            for j in range(len(labels)):
+                ax.text(
+                    j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", fontsize=7
+                )
+        fig.colorbar(im, ax=ax, label="win rate")
+        fig.tight_layout()
+
+        image = wandb.Image(fig)
+        plt.close(fig)
+        return {"league_winrate_heatmap": image}

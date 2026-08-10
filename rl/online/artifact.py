@@ -608,6 +608,22 @@ def load_train_state(
 
 _EXPLOITER_SNAPSHOT_DIR_RE = re.compile(r"p_(\d+)$")
 
+# A promoted exploiter's directory name encodes ITS OWN step counter (a
+# fresh fork from main's pause point, then counting up independently) —
+# not a point on main's timeline. league.players is a plain dict[int,
+# PlayerRef] with no collision check in add_player, and main's own step
+# counter will eventually reach that same numeric value on its own
+# (nothing bounds it away from wherever an exploiter happened to promote),
+# silently overwriting the promoted entry — and corrupting the win/loss
+# stats keyed the same way — the moment main adds a snapshot at that step.
+# Offsetting well past num_steps (5,000,000 in this config, but read the
+# live value rather than hardcode it) guarantees the two numberings can
+# never collide, at the cost of the displayed step count in telemetry
+# (league_main_v_{step}_winrate) reading as this offset value rather than
+# the exploiter's true step — an acceptable, documented tradeoff for
+# correctness over readability.
+_PROMOTED_STEP_OFFSET = 100_000_000
+
 
 def merge_pending_exploiter_promotions(
     learner_config: Porygon2LearnerConfig, league: League
@@ -632,8 +648,9 @@ def merge_pending_exploiter_promotions(
         snapshot_dir = os.path.abspath(os.path.join(root, name))
         if not match or not os.path.isdir(snapshot_dir):
             continue
-        step = int(match.group(1))
-        if step in league.players:
+        exploiter_step = int(match.group(1))
+        key = _PROMOTED_STEP_OFFSET + exploiter_step
+        if key in league.players:
             continue
 
         meta_path = os.path.join(snapshot_dir, "meta.json")
@@ -649,18 +666,26 @@ def merge_pending_exploiter_promotions(
 
         league.add_player(
             PlayerRef(
-                step_count=step,
+                step_count=key,
                 snapshot_dir=snapshot_dir,
                 player_frame_count=int(meta["player_frame_count"]),
                 builder_frame_count=int(meta["builder_frame_count"]),
                 player_key="params",
                 builder_key="params",
+                origin="exploiter",
+                # .get(...), not [...]: promotions written before
+                # parent_step existed in meta.json still merge fine,
+                # just without ancestry (None matches PlayerRef's own
+                # default for pre-existing "main"-origin refs).
+                parent_step=meta.get("parent_step"),
             )
         )
         merged += 1
         logger.info(
-            "merged promoted exploiter snapshot %s (step %d) into the league",
+            "merged promoted exploiter snapshot %s (exploiter step %d, "
+            "league key %d) into the league",
             snapshot_dir,
-            step,
+            exploiter_step,
+            key,
         )
     return merged

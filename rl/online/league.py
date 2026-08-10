@@ -46,6 +46,23 @@ class PlayerRef(NamedTuple):
     builder_frame_count: int
     player_key: str = "params"
     builder_key: str = "params"
+    # Explicit provenance (docs/exploiter-phase-plan.md) — an AlphaStar-
+    # style ancestry tag, not inferred from step_count's numeric range.
+    # "main" for anything _add_player_to_league added in the ordinary
+    # course of main's training; "exploiter" for a promoted exploiter
+    # snapshot. Defaults make this safe to unpickle from checkpoints
+    # written before this field existed: NamedTuple reconstruction fills
+    # missing trailing fields from their defaults, and "main" is the
+    # semantically correct default for every pre-existing snapshot (the
+    # exploiter mechanism didn't exist when they were written).
+    origin: Literal["main", "exploiter"] = "main"
+    # For an exploiter-origin ref: the step_count of the main checkpoint
+    # it forked from (None for "main"-origin refs, and for older
+    # exploiter promotions written before this was tracked). One level
+    # today — exploiters can't recursively fork sub-exploiters — but a
+    # real field rather than an inferred one, so a deeper tree costs
+    # nothing structurally if that ever changes.
+    parent_step: int | None = None
 
 
 class League:

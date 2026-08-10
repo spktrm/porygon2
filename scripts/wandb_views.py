@@ -239,6 +239,12 @@ def rl_sections():
                     [],
                     regex="^league_main_v_.*_winrate$",
                 ),
+                wr.MediaBrowser(
+                    title="League win-rate heatmap (full pairwise matrix)",
+                    media_keys=["league_winrate_heatmap"],
+                    num_columns=1,
+                    gallery_axis="step",
+                ),
                 lp(
                     "Plasticity controller",
                     [
@@ -511,7 +517,12 @@ def save_view(entity, project, name, sections, update_url, settings=None, force_
     if force_x:
         for section in sections:
             for panel in section.panels:
-                panel.x = force_x
+                # Only LinePlot has an x field — MediaBrowser (and other
+                # non-line panel types) use gallery_axis/grid_x_axis/
+                # grid_y_axis instead, and pydantic's validate_assignment
+                # rejects setting an attribute the model doesn't declare.
+                if isinstance(panel, wr.LinePlot):
+                    panel.x = force_x
     if update_url:
         workspace = ws.Workspace.from_url(update_url)
         workspace.name = name

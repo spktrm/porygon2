@@ -192,6 +192,22 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # doesn't sit undetected for long; the check itself is cheap (a
     # handful of dict lookups over a tiny league).
     auto_exploiter_check_interval: int = 5_000
+    # Per-attempt probability of shrink-and-perturbing the forked params
+    # before training starts, instead of using the raw loaded checkpoint
+    # verbatim. Adapted from AlphaStar's LeagueExploiter.checkpoint(),
+    # which has a flat 25% chance of resetting to its original init rather
+    # than continuing from its current (already-trained) weights — kept
+    # here at the same 0.25. Addresses a real gap: without this, every
+    # ladder rung (k=1, k=3, k=5) and every retry across separate
+    # stagnation episodes always searches from the IDENTICAL starting
+    # point (same weights, same optimizer momentum), so repeated failures
+    # just repeat the same local search rather than genuinely
+    # diversifying it. Reuses shrink_and_perturb_player_state — the same
+    # mechanism plasticity resets already use — rather than a fresh
+    # random init: the shrink keeps the perturbed policy anchored to
+    # pre-perturbation behaviour via target_params/KL, exactly like a
+    # plasticity event, instead of discarding everything learned so far.
+    exploiter_hard_reset_prob: float = 0.25
     # Consecutive overdue-only adds before a perturbation. At 1 (the old
     # value) a single stalled add window (~6k steps of not dominating the
     # league) fired a 50% reset: the Aug 2026 run perturbed during a

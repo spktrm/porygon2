@@ -9,6 +9,7 @@ import gc
 import json
 import logging
 import os
+import random
 import shutil
 import threading
 import time
@@ -43,6 +44,7 @@ from rl.online.learner import (
     ExploiterPromoted,
     Learner,
 )
+from rl.online.plasticity import shrink_and_perturb_player_state
 from rl.online.player_actor import PlayerActor
 
 logger = logging.getLogger(__name__)
@@ -356,6 +358,29 @@ def _run_one_phase(
     if merged:
         logger.info("Merged %d promoted exploiter snapshot(s) into the league.", merged)
 
+    # AlphaStar-style search diversity (adapted from LeagueExploiter.
+    # checkpoint()'s 25% reset-to-original-init): without this, every
+    # ladder rung and every retry across stagnation episodes forks from
+    # the IDENTICAL point (same weights, same optimizer momentum) as
+    # main's pause checkpoint, so repeated failures just repeat the same
+    # local search rather than genuinely diversifying it. Only for
+    # exploiter phases — main itself is never perturbed this way outside
+    # its own plasticity mechanism.
+    is_exploiter_phase = learner_config.pin_opponent_steps is not None
+    if is_exploiter_phase and np.random.random() < learner_config.exploiter_hard_reset_prob:
+        logger.info(
+            "Exploiter hard-reset (p=%.2f): shrink-and-perturbing the "
+            "forked params before training instead of using the loaded "
+            "checkpoint verbatim.",
+            learner_config.exploiter_hard_reset_prob,
+        )
+        player_state = shrink_and_perturb_player_state(
+            player_state,
+            jax.random.PRNGKey(random.randint(0, 2**16 - 1)),
+            default_shrink=learner_config.plasticity_default_shrink,
+            module_shrink=learner_config.plasticity_module_shrink,
+        )
+
     player_state = jax.device_put(player_state)
     builder_state = jax.device_put(builder_state)
 
@@ -408,10 +433,20 @@ def _run_one_phase(
 
     outcome = PhaseOutcome(kind="exhausted")
 
+    # Win-rate vs. the scripted eval baselines plays no role in
+    # check_promotion_bar (only win-rate vs. the pinned opponents does) —
+    # it's pure diagnostic noise for an exploiter, unlike for main where
+    # it's a real strength signal. It isn't free either: eval_agent and
+    # learning_agent share one gpu_lock, so every eval-vs-baseline
+    # inference call directly contends with the exploiter's actual
+    # pinned-opponent games for the same GPU slot, slowing down the one
+    # thing that determines whether this phase succeeds within its frame
+    # budget. Skip spawning eval actors entirely for exploiter phases.
+    is_exploiter_phase = learner_config.pin_opponent_steps is not None
+    num_eval_baselines = 0 if is_exploiter_phase else len(learner_config.eval_baselines)
+
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(
-            learner_config.num_player_actors + 2 * len(learner_config.eval_baselines)
-        )
+        max_workers=(learner_config.num_player_actors + 2 * num_eval_baselines)
     ) as executor:
         if "randombattle" not in learner_config.smogon_format:
             logger.info(
@@ -455,39 +490,47 @@ def _run_one_phase(
                 )
             )
 
-        # Thread names carry the wandb series identity (run_eval_heuristic
-        # reads the current thread's name), including the baseline being
-        # played, so metric keys stay meaningful if the eval allocation
-        # changes.
-        logger.info(
-            f"Initializing {len(learner_config.eval_baselines)} evaluation actors "
-            f"(baseline indices: {learner_config.eval_baselines})..."
-        )
-        for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
-            baseline_name = EVAL_BASELINE_NAMES[baseline_index]
-            actor = PlayerActor(
-                agent=eval_agent,
-                # The username MUST start with "eval-heuristic" (the service
-                # routes such clients into games against a baseline bot by
-                # that prefix, service/src/server/utils.ts) and its ":<n>"
-                # suffix selects which baseline: the service parses the
-                # trailing number into an evalActionMapping index
-                # (service/src/server/runner.ts).
-                env=env_func(
-                    f"eval-heuristic-{baseline_name}-{eval_id}:{baseline_index:04d}"
-                ),
-                unroll_length=learner_config.unroll_length,
-                learner=learner,
-                rng_seed=len(actor_threads) + salt,
-                is_eval=True,
+        if is_exploiter_phase:
+            logger.info(
+                "Exploiter phase: skipping scripted-baseline eval actors "
+                "(not part of the promotion criterion, would only "
+                "contend with pinned-opponent games for the shared gpu_lock)."
             )
-            actor_threads.append(
-                threading.Thread(
-                    target=run_eval_heuristic,
-                    args=(actor, executor, stop_signal, wandb_run, learner_config),
-                    name=f"EvalActor-{baseline_name}-{eval_id}",
+        else:
+            # Thread names carry the wandb series identity (run_eval_heuristic
+            # reads the current thread's name), including the baseline being
+            # played, so metric keys stay meaningful if the eval allocation
+            # changes.
+            logger.info(
+                f"Initializing {len(learner_config.eval_baselines)} evaluation actors "
+                f"(baseline indices: {learner_config.eval_baselines})..."
+            )
+            for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
+                baseline_name = EVAL_BASELINE_NAMES[baseline_index]
+                actor = PlayerActor(
+                    agent=eval_agent,
+                    # The username MUST start with "eval-heuristic" (the
+                    # service routes such clients into games against a
+                    # baseline bot by that prefix,
+                    # service/src/server/utils.ts) and its ":<n>" suffix
+                    # selects which baseline: the service parses the
+                    # trailing number into an evalActionMapping index
+                    # (service/src/server/runner.ts).
+                    env=env_func(
+                        f"eval-heuristic-{baseline_name}-{eval_id}:{baseline_index:04d}"
+                    ),
+                    unroll_length=learner_config.unroll_length,
+                    learner=learner,
+                    rng_seed=len(actor_threads) + salt,
+                    is_eval=True,
                 )
-            )
+                actor_threads.append(
+                    threading.Thread(
+                        target=run_eval_heuristic,
+                        args=(actor, executor, stop_signal, wandb_run, learner_config),
+                        name=f"EvalActor-{baseline_name}-{eval_id}",
+                    )
+                )
 
         # Start the actors and learner.
         for t in actor_threads:
@@ -558,12 +601,24 @@ def _pick_pin_opponent_steps(
     log, was exactly this). Excluded snapshots are only used as a
     recency-ordered filler if there aren't enough reliably-measured hard
     opponents to reach k.
+
+    Diversity guard: among the hardest-first candidates, skips one that
+    shares a PlayerRef.parent_step with an opponent already picked — two
+    exploiter promotions forked from the identical main checkpoint are
+    the closest thing this data model can say "these are related," so
+    picking both spends a pinned slot on near-duplicate ancestry instead
+    of a genuinely different ancestor. This doesn't conjure more
+    candidates out of thin air — with a league too small to have real
+    choice (e.g. k=3 against a 3-member league), there's nothing to
+    diversify away from — but it makes the selection meaningfully better
+    once there's an actual pool to choose from, which grows every time an
+    exploiter gets promoted back into the league.
     """
     league_bytes = checkpoint.load_league_bytes(checkpoint_path)
     if league_bytes is None:
         return ()
     league = League.deserialize(league_bytes)
-    historical = [s for s in league.players if s != MAIN_KEY]
+    historical = [ref for step, ref in league.players.items() if step != MAIN_KEY]
     if not historical:
         return ()
 
@@ -572,20 +627,32 @@ def _pick_pin_opponent_steps(
             (step, MAIN_KEY), 0.0
         )
 
-    rateable = [s for s in historical if _games_vs_main(s) >= min_games]
+    rateable = [ref for ref in historical if _games_vs_main(ref.step_count) >= min_games]
     hardest_first = sorted(
-        rateable, key=lambda s: league._win_rate_by_steps(MAIN_KEY, s)
+        rateable, key=lambda ref: league._win_rate_by_steps(MAIN_KEY, ref.step_count)
     )
-    picked = hardest_first[:k]
+
+    picked: list[PlayerRef] = []
+    seen_parents: set[int] = set()
+    for ref in hardest_first:
+        if len(picked) >= k:
+            break
+        if ref.parent_step is not None and ref.parent_step in seen_parents:
+            continue
+        picked.append(ref)
+        if ref.parent_step is not None:
+            seen_parents.add(ref.parent_step)
 
     if len(picked) < k:
-        already_picked = set(picked)
+        already_picked_steps = {ref.step_count for ref in picked}
         fallback_by_recency = sorted(
-            (s for s in historical if s not in already_picked), reverse=True
+            (ref for ref in historical if ref.step_count not in already_picked_steps),
+            key=lambda ref: ref.step_count,
+            reverse=True,
         )
         picked += fallback_by_recency[: k - len(picked)]
 
-    return tuple(picked)
+    return tuple(ref.step_count for ref in picked)
 
 
 def _cleanup_exploiter_run(generation: int, run_id: str) -> None:

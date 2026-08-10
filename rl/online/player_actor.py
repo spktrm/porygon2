@@ -21,7 +21,7 @@ from rl.model.builder_model import get_packed_team_string
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
-from rl.online.league import MAIN_KEY, pfsp
+from rl.online.league import MAIN_KEY, PlayerRef, pfsp
 from rl.online.learner import Learner
 
 
@@ -191,6 +191,82 @@ class PlayerActor:
         # Selection above is metadata-only; load params for just the chosen ref.
         return self._learner.league.materialize(historical[pick_idx])
 
+    def _concerning_opponents(
+        self, candidates: list[PlayerRef]
+    ) -> tuple[list[PlayerRef], np.ndarray] | None:
+        """Among ``candidates``, which are reliable, real weak spots right
+        now — win-rate below exploit_ctrl_target with enough games to
+        trust the reading (exploit_ctrl_min_games_per_opponent). Returns
+        (players, win_rates) restricted to just those, or None if none
+        qualify."""
+        if not candidates:
+            return None
+        config = self._learner.config
+        league = self._learner.league
+        main_player = self.pull_main_player()
+        win_rates = np.atleast_1d(league.get_winrate((main_player, candidates)))
+        games = np.array(
+            [
+                league.games.get((MAIN_KEY, p.step_count), 0.0)
+                + league.games.get((p.step_count, MAIN_KEY), 0.0)
+                for p in candidates
+            ]
+        )
+        concerning = (games >= config.exploit_ctrl_min_games_per_opponent) & (
+            win_rates < config.exploit_ctrl_target
+        )
+        if not concerning.any():
+            return None
+        return (
+            [p for p, c in zip(candidates, concerning) if c],
+            win_rates[concerning],
+        )
+
+    def _verification_branch(self) -> ParamsContainer | None:
+        """Forces extra games against any historical opponent that's
+        currently a real, reliable weak spot — adapted from AlphaStar's
+        MainPlayer._verification_branch (the public league-management
+        pseudocode: github.com/chengyu2/learning_alpha_star/multiagent.py).
+
+        Checks exploiter-origin opponents FIRST, matching AlphaStar's own
+        scoping (their exploitation check is specifically restricted to
+        historical snapshots descended from a MainExploiter, not checked
+        against plain history uniformly) — a promoted exploiter represents
+        a deliberately found, proven weakness, worth monitoring more
+        sensitively than an opponent that's merely whatever main happened
+        to be when an overdue window expired. Falls back to checking ALL
+        historical opponents if no exploiter-origin one currently
+        qualifies, as a general safety net AlphaStar's version doesn't
+        need (it has a separate "forgetting" check — a monotonic-suffix
+        trick on win-rate history — for that; not ported here, see
+        _concerning_opponents' docstring... the threshold check above is
+        the direct substitute).
+
+        Deliberately reuses exploit_ctrl's own threshold/reliability bar
+        rather than inventing new config — this is the identical question
+        _measure_exploitability already asks, just acted on here via
+        matchmaking instead of only the loss controllers' caution scale.
+        """
+        league = self._learner.league
+        historical = [
+            player for player in league.players.values() if player.step_count != MAIN_KEY
+        ]
+        if not historical:
+            return None
+
+        exploiter_origin = [p for p in historical if p.origin == "exploiter"]
+        found = self._concerning_opponents(exploiter_origin) or self._concerning_opponents(
+            historical
+        )
+        if found is None:
+            return None
+        concerning_players, concerning_win_rates = found
+
+        pick_idx = np.random.choice(
+            len(concerning_players), p=pfsp(concerning_win_rates, weighting="squared")
+        )
+        return league.materialize(concerning_players[pick_idx])
+
     def get_match(self) -> tuple[ParamsContainer, bool]:
         # Exploiter phase (docs/exploiter-phase-plan.md piece 2): matchmaking
         # is pinned to a specific subset of the league instead of the whole
@@ -218,6 +294,16 @@ class PlayerActor:
         if coin_toss < 0.5:
             opponent = self._pfsp_branch()
             if opponent is not None:  # Found a historical opponent
+                return opponent, False
+        elif coin_toss < 0.65:
+            # AlphaStar-style verification slice (their split is 50% PFSP /
+            # 15% verification / 35% self-play — matched here): force
+            # attention on a real, reliable weak spot beyond what the
+            # broader PFSP draw above already biases toward. Falls through
+            # to mirror self-play, same as the PFSP branch above, if
+            # nothing currently qualifies as concerning.
+            opponent = self._verification_branch()
+            if opponent is not None:
                 return opponent, False
 
         return self.pull_main_player(), True
