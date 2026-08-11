@@ -63,16 +63,6 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
     )
 
 
-def write_manifest(save_path: str, learner_config, player_state) -> None:
-    manifest = dict(
-        step_count=int(np.asarray(player_state.step_count)),
-        frame_count=int(np.asarray(player_state.frame_count)),
-        **_model_capabilities(learner_config),
-    )
-    with open(os.path.join(save_path, MANIFEST_NAME), "w") as f:
-        json.dump(manifest, f, indent=2)
-
-
 def read_manifest(ckpt_path: str) -> dict | None:
     """The checkpoint's manifest, or None for pre-manifest checkpoints."""
     try:
@@ -317,7 +307,6 @@ def save_state(
     league: League,
     controller_bytes: bytes | None = None,
 ):
-    os.makedirs(save_path, exist_ok=True)
     player_components = dict(
         params=player_state.params,
         target_params=player_state.target_params,
@@ -338,15 +327,52 @@ def save_state(
             frame_count=builder_state.frame_count,
         ),
     )
-    checkpoint.save_train_state(
+    return write_checkpoint_components(
         save_path,
         learner_config,
         player_components,
         builder_components,
         league.serialize(),
         controller_bytes,
+        step_count=int(np.asarray(player_state.step_count)),
+        frame_count=int(np.asarray(player_state.frame_count)),
     )
-    write_manifest(save_path, learner_config, player_state)
+
+
+def write_checkpoint_components(
+    save_path: str,
+    learner_config: Porygon2LearnerConfig,
+    player_components: dict[str, Any],
+    builder_components: dict[str, Any],
+    league_bytes: bytes,
+    controller_bytes: bytes | None,
+    step_count: int,
+    frame_count: int,
+) -> str:
+    """The actual checkpoint disk I/O, given already-host-side components.
+
+    Split out of save_state so a background writer thread
+    (Learner._checkpoint_writer_worker) can do this work from a queued
+    payload without needing live TrainState/League objects — those aren't
+    safe to hand across threads once the training loop has moved on to
+    donating/mutating them for the next step.
+    """
+    os.makedirs(save_path, exist_ok=True)
+    checkpoint.save_train_state(
+        save_path,
+        learner_config,
+        player_components,
+        builder_components,
+        league_bytes,
+        controller_bytes,
+    )
+    manifest = dict(
+        step_count=step_count,
+        frame_count=frame_count,
+        **_model_capabilities(learner_config),
+    )
+    with open(os.path.join(save_path, MANIFEST_NAME), "w") as f:
+        json.dump(manifest, f, indent=2)
     return save_path
 
 

@@ -34,9 +34,10 @@ from rl.online.artifact import (
     load_train_state,
     merge_pending_exploiter_promotions,
 )
+from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
-from rl.online.league import MAIN_KEY, League
+from rl.online.league import MAIN_KEY, League, pfsp
 from rl.online.learner import (
     CAT_VF_SUPPORT,
     ExploiterBudgetExhausted,
@@ -253,6 +254,11 @@ class PhaseOutcome:
     ]
     checkpoint_path: str | None = None
     promoted_snapshot_dir: str | None = None
+    # Frames this specific phase trained, for the orchestration loop's
+    # running exploiter_frames_spent/total_frames_trained totals
+    # (config.exploiter_duty_cycle_fraction). 0 for a phase that crashed
+    # before completing any training.
+    frames_trained: int = 0
 
 
 def _run_one_phase(
@@ -263,6 +269,10 @@ def _run_one_phase(
     run_subdir: str | None,
     reset_plasticity_overdue: bool,
     wandb_group: str | None,
+    builder_replay: BuilderTrajectoryStore,
+    player_replay: PlayerTrajectoryStore,
+    exploiter_frames_spent: int,
+    total_frames_trained: int,
 ) -> PhaseOutcome:
     """Runs actors + the learner for one phase — main, or a single
     exploiter attempt — until config.num_steps, a crash, Ctrl-C, or an
@@ -280,6 +290,21 @@ def _run_one_phase(
     initial segment, every exploiter attempt, every subsequent main
     resume) together under wandb's Group view, so "the run" stays
     findable as a unit even though it's several run names underneath.
+
+    ``builder_replay``/``player_replay`` are owned by the caller and reused
+    across every phase in this process rather than allocated fresh here —
+    Learner.__init__ clears whichever is passed in before use. A fresh
+    store per phase left stale actor-thread writes able to leak trajectory
+    data from a just-ended phase's model into whatever ran next; see the
+    straggler check in this function's shutdown path, which is what makes
+    reusing (rather than reallocating) these safe to do.
+
+    ``exploiter_frames_spent``/``total_frames_trained`` are the running
+    totals as of the START of this phase (config.exploiter_duty_cycle_
+    fraction) — also owned by the caller, since a Learner doesn't survive
+    a phase transition and can't hold them itself. The returned
+    PhaseOutcome.frames_trained is this phase's own contribution, for the
+    caller to fold into those totals before the next call.
     """
     if debug:
         os.environ["WANDB_MODE"] = "disabled"
@@ -346,6 +371,10 @@ def _run_one_phase(
         fork_from_ckpt=fork_from_ckpt,
         run_subdir=run_subdir,
     )
+    # For PhaseOutcome.frames_trained (config.exploiter_duty_cycle_fraction)
+    # — captured here, before any hard-reset perturbation below, though
+    # that wouldn't change frame_count anyway (it only touches params).
+    phase_start_frame_count = int(jax.device_get(player_state.frame_count))
 
     # A promoted exploiter (rl/online/promote_exploiter.py, or the
     # in-process auto path in rl/online/learner.py) only reaches a live
@@ -367,7 +396,10 @@ def _run_one_phase(
     # exploiter phases — main itself is never perturbed this way outside
     # its own plasticity mechanism.
     is_exploiter_phase = learner_config.pin_opponent_steps is not None
-    if is_exploiter_phase and np.random.random() < learner_config.exploiter_hard_reset_prob:
+    if (
+        is_exploiter_phase
+        and np.random.random() < learner_config.exploiter_hard_reset_prob
+    ):
         logger.info(
             "Exploiter hard-reset (p=%.2f): shrink-and-perturbing the "
             "forked params before training instead of using the loaded "
@@ -421,6 +453,10 @@ def _run_one_phase(
         debug=debug,
         controller_bytes=controller_bytes,
         run_subdir=run_subdir,
+        builder_replay=builder_replay,
+        player_replay=player_replay,
+        exploiter_frames_spent_at_start=exploiter_frames_spent,
+        total_frames_trained_at_start=total_frames_trained,
     )
     if reset_plasticity_overdue:
         learner.plasticity.acknowledge_exploiter_episode()
@@ -570,6 +606,51 @@ def _run_one_phase(
             stop_signal[0] = True
             for t in actor_threads:
                 t.join(timeout=30)
+            stragglers = [t for t in actor_threads if t.is_alive()]
+            if stragglers:
+                # Transient slowness (a queued GPU op, a slow env reset)
+                # shouldn't be fatal on its own — give it one longer grace
+                # window before treating it as genuinely hung.
+                logger.warning(
+                    "%d actor thread(s) did not stop within 30s of "
+                    "stop_signal: %s — giving a 60s grace period before "
+                    "treating this as a hung shutdown.",
+                    len(stragglers),
+                    [t.name for t in stragglers],
+                )
+                for t in stragglers:
+                    t.join(timeout=60)
+                stragglers = [t for t in actor_threads if t.is_alive()]
+            if stragglers:
+                # A thread still alive here never honoured stop_signal — not
+                # transient slowness. Every actor thread holds a live
+                # reference to this phase's Learner (trajectory stores +
+                # device-resident player/builder state), so a thread that
+                # outlives this phase keeps all of it reachable regardless
+                # of gc.collect(): the next phase's Learner is constructed
+                # in the same process/GPU context (no subprocess boundary),
+                # so this is exactly how cross-phase RAM/VRAM usage creeps
+                # up across a long automated session and eventually causes
+                # a silent OOM death. Fail loudly here instead of silently
+                # starting the next phase on top of known-leaked state — an
+                # uncaught exception propagates past this call entirely,
+                # same as a genuine crash, leaving the checkpoint tree
+                # intact for inspection.
+                raise RuntimeError(
+                    f"{len(stragglers)} actor thread(s) never stopped after "
+                    f"stop_signal + 90s grace: {[t.name for t in stragglers]}. "
+                    "Refusing to proceed to the next phase with stale actors "
+                    "still holding this phase's buffers/device state alive."
+                )
+            try:
+                mem = jax.devices()[0].memory_stats()
+                logger.info(
+                    "Post-phase device memory: bytes_in_use=%s peak_bytes_in_use=%s",
+                    mem.get("bytes_in_use"),
+                    mem.get("peak_bytes_in_use"),
+                )
+            except Exception:
+                pass  # memory_stats() isn't available on every backend/version.
             try:
                 wandb_run.finish()
             except Exception:
@@ -577,42 +658,46 @@ def _run_one_phase(
                     "wandb_run.finish() failed during shutdown", exc_info=True
                 )
 
+    outcome.frames_trained = (
+        int(jax.device_get(learner.player_state.frame_count)) - phase_start_frame_count
+    )
     return outcome
 
 
 def _pick_pin_opponent_steps(
     checkpoint_path: str, k: int, min_games: float
 ) -> tuple[int, ...]:
-    """The k opponents main currently struggles with MOST, as of
-    checkpoint_path — ranked by the same win-rate table
-    Learner._measure_exploitability / _should_add_new_player already read,
-    not by recency. Recency was the doc's original proxy for "resembles
-    current main," but it's a weak one: a persistent shared blind spot can
-    survive across many "recent" snapshots, while the league's own
-    win/loss counts say directly which opponent is actually exposing it.
+    """k opponents for this exploiter phase, drawn via PFSP
+    (linear_capped weighting) over the same win-rate table
+    Learner._measure_exploitability / _should_add_new_player already read
+    — sampled, not deterministically ranked, so the same league doesn't
+    hand every ladder rung the identical hardest-first set. linear_capped
+    (min(0.5, 1 - win_rate)) still concentrates probability on opponents
+    main is currently losing to, capped so no single hardest opponent
+    dominates every draw.
 
     Snapshots with fewer than min_games effective games against main are
-    excluded from the ranking — the same reliability bar as
+    excluded from the draw — the same reliability bar as
     exploit_ctrl_min_games_per_opponent/bandit_min_games_per_opponent,
     applied here for the identical reason: a freshly-added or
     lightly-played snapshot reads near 0.5 by construction (main vs. a
     near-identical recent self), which looks exactly like a real hole
     otherwise (1338's exploit_ctrl false-positive, in the doc's session
     log, was exactly this). Excluded snapshots are only used as a
-    recency-ordered filler if there aren't enough reliably-measured hard
+    recency-ordered filler if there aren't enough reliably-measured
     opponents to reach k.
 
-    Diversity guard: among the hardest-first candidates, skips one that
-    shares a PlayerRef.parent_step with an opponent already picked — two
-    exploiter promotions forked from the identical main checkpoint are
-    the closest thing this data model can say "these are related," so
-    picking both spends a pinned slot on near-duplicate ancestry instead
-    of a genuinely different ancestor. This doesn't conjure more
-    candidates out of thin air — with a league too small to have real
-    choice (e.g. k=3 against a 3-member league), there's nothing to
-    diversify away from — but it makes the selection meaningfully better
-    once there's an actual pool to choose from, which grows every time an
-    exploiter gets promoted back into the league.
+    Diversity guard: sampling without replacement skips a draw that shares
+    a PlayerRef.parent_step with an opponent already picked — two exploiter
+    promotions forked from the identical main checkpoint are the closest
+    thing this data model can say "these are related," so picking both
+    spends a pinned slot on near-duplicate ancestry instead of a genuinely
+    different ancestor. This doesn't conjure more candidates out of thin
+    air — with a league too small to have real choice (e.g. k=3 against a
+    3-member league), there's nothing to diversify away from — but it
+    makes the draw meaningfully better once there's an actual pool to
+    choose from, which grows every time an exploiter gets promoted back
+    into the league.
     """
     league_bytes = checkpoint.load_league_bytes(checkpoint_path)
     if league_bytes is None:
@@ -627,16 +712,22 @@ def _pick_pin_opponent_steps(
             (step, MAIN_KEY), 0.0
         )
 
-    rateable = [ref for ref in historical if _games_vs_main(ref.step_count) >= min_games]
-    hardest_first = sorted(
-        rateable, key=lambda ref: league._win_rate_by_steps(MAIN_KEY, ref.step_count)
+    rateable = [
+        ref for ref in historical if _games_vs_main(ref.step_count) >= min_games
+    ]
+    win_rates = np.array(
+        [league._win_rate_by_steps(MAIN_KEY, ref.step_count) for ref in rateable]
     )
 
     picked: list[PlayerRef] = []
     seen_parents: set[int] = set()
-    for ref in hardest_first:
-        if len(picked) >= k:
-            break
+    candidates = list(rateable)
+    remaining_win_rates = win_rates
+    while candidates and len(picked) < k:
+        probs = pfsp(remaining_win_rates, weighting="linear_capped")
+        idx = np.random.choice(len(candidates), p=probs)
+        ref = candidates.pop(idx)
+        remaining_win_rates = np.delete(remaining_win_rates, idx)
         if ref.parent_step is not None and ref.parent_step in seen_parents:
             continue
         picked.append(ref)
@@ -682,6 +773,22 @@ def main(args: argparse.Namespace):
     learner_config = get_learner_config()
     debug = args.debug
 
+    # Constructed once for the life of this process and reused across
+    # every phase (main's segments, every exploiter attempt) instead of
+    # letting each phase's Learner allocate its own — see _run_one_phase's
+    # docstring and BuilderTrajectoryStore.clear for why a fresh-per-phase
+    # store was a leak vector. Learner.__init__ clears whichever is passed
+    # in before that phase's actors start writing to it.
+    builder_replay = BuilderTrajectoryStore(
+        max_size=learner_config.builder_replay_buffer_capacity,
+        max_reuses=learner_config.builder_replay_ratio,
+    )
+    player_replay = PlayerTrajectoryStore(
+        max_size=learner_config.player_replay_buffer_capacity,
+        max_reuses=learner_config.player_replay_ratio,
+        need_tracking=learner_config.smogon_format != "randombattle",
+    )
+
     # Only the very first phase in this process honours these — every
     # phase after that is an internal, deterministic transition (fork a
     # fresh exploiter, or resume main from the checkpoint it just paused
@@ -698,6 +805,15 @@ def main(args: argparse.Namespace):
     # findable as a unit despite being several run names underneath.
     wandb_group = f"session-{int(time.time())}"
 
+    # Budget-parity duty-cycle scheduling (config.exploiter_duty_cycle_
+    # fraction): running totals for the life of this process, threaded into
+    # each phase's Learner as its starting point and updated here after
+    # every phase returns. Resets to 0 on a process restart — not persisted
+    # across a full restart yet, same as every other per-process-only
+    # counter in this orchestration loop.
+    total_frames_trained = 0
+    exploiter_frames_spent = 0
+
     outcome = _run_one_phase(
         learner_config,
         debug,
@@ -706,7 +822,12 @@ def main(args: argparse.Namespace):
         run_subdir=initial_run_subdir,
         reset_plasticity_overdue=False,
         wandb_group=wandb_group,
+        builder_replay=builder_replay,
+        player_replay=player_replay,
+        exploiter_frames_spent=exploiter_frames_spent,
+        total_frames_trained=total_frames_trained,
     )
+    total_frames_trained += outcome.frames_trained
     gc.collect()
 
     while (
@@ -745,7 +866,13 @@ def main(args: argparse.Namespace):
                 run_subdir=run_id,
                 reset_plasticity_overdue=False,
                 wandb_group=wandb_group,
+                builder_replay=builder_replay,
+                player_replay=player_replay,
+                exploiter_frames_spent=exploiter_frames_spent,
+                total_frames_trained=total_frames_trained,
             )
+            total_frames_trained += exploiter_outcome.frames_trained
+            exploiter_frames_spent += exploiter_outcome.frames_trained
             gc.collect()
 
             if exploiter_outcome.kind == "interrupted":
@@ -756,9 +883,7 @@ def main(args: argparse.Namespace):
                 # instead of honouring the stop. Deliberately skip cleanup
                 # too, same as a genuine crash: an interrupted attempt's
                 # state may be worth inspecting.
-                logger.info(
-                    "Interrupted during exploiter attempt k=%d — stopping.", k
-                )
+                logger.info("Interrupted during exploiter attempt k=%d — stopping.", k)
                 return
 
             # Disposable scratch either way: a promotion already copied
@@ -794,7 +919,12 @@ def main(args: argparse.Namespace):
             run_subdir=None,
             reset_plasticity_overdue=True,
             wandb_group=wandb_group,
+            builder_replay=builder_replay,
+            player_replay=player_replay,
+            exploiter_frames_spent=exploiter_frames_spent,
+            total_frames_trained=total_frames_trained,
         )
+        total_frames_trained += outcome.frames_trained
         gc.collect()
 
     logger.info("Training run complete (%s).", outcome.kind)

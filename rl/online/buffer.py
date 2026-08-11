@@ -65,6 +65,34 @@ class BuilderTrajectoryStore:
             self._reuses >= self._max_reuses
         )
 
+    def set_max_reuses(self, max_reuses: int):
+        """Thread-safe update of the per-trajectory reuse cap. See
+        PlayerTrajectoryStore.set_max_reuses — mirrored here so a caller
+        reusing one persistent store across phases (main.py) can reapply
+        each phase's own config value without reaching into a private
+        attribute."""
+        with self._add_cv:
+            self._max_reuses = int(max_reuses)
+            self._add_cv.notify_all()
+            self._sample_cv.notify_all()
+
+    def clear(self):
+        """Resets the store to empty.
+
+        Used when reusing one persistent store across phase transitions
+        (main <-> exploiter) instead of letting each phase allocate its own
+        — a fresh-per-phase store meant an actor thread that outlived its
+        phase (see main.py's straggler check) could keep writing into a
+        store from a phase that had already "ended," silently leaking
+        trajectories from the wrong model into whatever ran next. Only
+        safe to call once every actor thread from the previous phase has
+        actually stopped.
+        """
+        with self._add_cv:
+            self._trajectories = {}
+            self._reuses = np.zeros(self._max_size, dtype=int)
+            self._valid = np.zeros(self._max_size, dtype=bool)
+
     def add_trajectory(
         self, trajectory: BuilderTransition, history: BuilderHistoryOutput
     ):
@@ -193,6 +221,19 @@ class PlayerTrajectoryStore:
             self._max_reuses = int(max_reuses)
             self._add_cv.notify_all()
             self._sample_cv.notify_all()
+
+    def clear(self):
+        """Resets the store to empty — see BuilderTrajectoryStore.clear for
+        why this exists (one persistent store reused across phase
+        transitions, rather than a fresh one per phase)."""
+        with self._add_cv:
+            self._trajectories = {}
+            self._reuses = np.zeros(self._max_size, dtype=int)
+            self._valid = np.zeros(self._max_size, dtype=bool)
+            self.total_adds = 0
+            self.total_samples = 0
+            if self.need_tracking:
+                self.reset_usage_counts()
 
     def reset_usage_counts(self):
         # Called from the learner thread; takes the store lock so it can't

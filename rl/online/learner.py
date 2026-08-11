@@ -47,8 +47,10 @@ from rl.model.utils import Params, ParamsContainer
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
+    _ckpt_root,
     save_train_state,
     save_train_state_locally,
+    write_checkpoint_components,
 )
 from rl.online.bandit import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -816,10 +818,25 @@ class Learner:
         debug: bool = False,
         controller_bytes: bytes | None = None,
         run_subdir: str | None = None,
+        builder_replay: BuilderTrajectoryStore | None = None,
+        player_replay: PlayerTrajectoryStore | None = None,
+        exploiter_frames_spent_at_start: int = 0,
+        total_frames_trained_at_start: int = 0,
     ):
         self.player_state = player_state
         self.builder_state = builder_state
         self.config = config
+        # Budget-parity duty-cycle scheduling (config.exploiter_duty_cycle_
+        # fraction): these totals are as of the START of this phase, owned
+        # and accumulated by main.py's orchestration loop across every
+        # phase in the process (this object doesn't survive a phase
+        # transition, so it can't hold the running total itself). This
+        # phase's own contribution is this phase's current frame_count
+        # minus _phase_start_frame_count, computed fresh each check in
+        # _check_auto_exploiter_transitions.
+        self._exploiter_frames_spent_at_start = exploiter_frames_spent_at_start
+        self._total_frames_trained_at_start = total_frames_trained_at_start
+        self._phase_start_frame_count = int(jax.device_get(player_state.frame_count))
         # train_step's config is a STATIC jit arg (see the recompile/OOM
         # history in the comment a few lines down) — every exploiter phase
         # constructs a genuinely distinct config via .replace(pin_opponent_
@@ -879,9 +896,7 @@ class Learner:
         # has moved on and no longer represents that fork point. Used to
         # tag a promoted snapshot's PlayerRef.parent_step (league.py).
         self._exploiter_fork_step = (
-            int(jax.device_get(player_state.step_count))
-            if self._is_exploiter
-            else None
+            int(jax.device_get(player_state.step_count)) if self._is_exploiter else None
         )
 
         if not _MATPLOTLIB_AVAILABLE:
@@ -942,17 +957,34 @@ class Learner:
         self._base_replay_kl_target = float(config.player_replay_kl_target)
 
         self.done = False
-        self.builder_replay = BuilderTrajectoryStore(
-            max_size=self.config.builder_replay_buffer_capacity,
-            max_reuses=self.config.builder_replay_ratio,
-        )
+        # A caller orchestrating multiple phases in one process (main.py's
+        # main <-> exploiter loop) passes one persistent store here and
+        # reuses it across every phase instead of letting each phase
+        # allocate its own — see BuilderTrajectoryStore.clear for why a
+        # fresh-per-phase store was a leak risk. Direct callers (tests,
+        # anything constructing a Learner standalone) get a fresh store as
+        # before by simply not passing one.
+        if builder_replay is not None:
+            builder_replay.clear()
+            builder_replay.set_max_reuses(self.config.builder_replay_ratio)
+            self.builder_replay = builder_replay
+        else:
+            self.builder_replay = BuilderTrajectoryStore(
+                max_size=self.config.builder_replay_buffer_capacity,
+                max_reuses=self.config.builder_replay_ratio,
+            )
 
         is_not_randoms = self.config.smogon_format != "randombattle"
-        self.player_replay = PlayerTrajectoryStore(
-            max_size=self.config.player_replay_buffer_capacity,
-            max_reuses=self.config.player_replay_ratio,
-            need_tracking=is_not_randoms,
-        )
+        if player_replay is not None:
+            player_replay.clear()
+            player_replay.set_max_reuses(self.config.player_replay_ratio)
+            self.player_replay = player_replay
+        else:
+            self.player_replay = PlayerTrajectoryStore(
+                max_size=self.config.player_replay_buffer_capacity,
+                max_reuses=self.config.player_replay_ratio,
+                need_tracking=is_not_randoms,
+            )
 
         # Plasticity probe: jitted encoder-only forward measuring trunk
         # representation health (dormant units, spectral rank) on the
@@ -1000,6 +1032,15 @@ class Learner:
         # Bounded so a stalled wandb client applies backpressure instead of
         # accumulating unbounded device references.
         self._log_q: queue.Queue[dict | None] = queue.Queue(maxsize=64)
+        # Checkpoint payloads are already host-side (device_get'd) and
+        # bytes-only (league/controller state pre-serialized) by the time
+        # they're queued — see _handle_periodic_tasks — so the writer
+        # thread never touches a live device buffer. Small bound: saves are
+        # infrequent (save_interval_steps) and each payload is the largest
+        # single thing this process holds in host RAM at once (full params
+        # + opt_state x2 networks); no reason to let more than a couple
+        # queue up if the writer ever falls behind.
+        self._ckpt_q: queue.Queue[dict | None] = queue.Queue(maxsize=2)
 
         # Progress Bars
         self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
@@ -1166,6 +1207,42 @@ class Learner:
             except Exception:
                 logger.exception("wandb logging failed")
 
+    def _checkpoint_writer_worker(self):
+        """Background thread: does the actual checkpoint disk I/O (and,
+        every cloud_save_interval_steps, the wandb artifact upload) so the
+        training loop never blocks on it. Payloads are already fully
+        host-side and pre-serialized by the time they're queued (see
+        _handle_periodic_tasks) — this thread never touches a live device
+        buffer or mutates self.league directly, only writes what it was
+        handed."""
+        while True:
+            payload = self._ckpt_q.get()
+            if payload is None:
+                break
+            try:
+                save_path = write_checkpoint_components(
+                    payload["save_path"],
+                    payload["learner_config"],
+                    payload["player_components"],
+                    payload["builder_components"],
+                    payload["league_bytes"],
+                    payload["controller_bytes"],
+                    step_count=payload["step_count"],
+                    frame_count=payload["frame_count"],
+                )
+                if payload["upload_to_cloud"]:
+                    self.wandb_run.log_artifact(
+                        artifact_or_path=save_path,
+                        name=f"latest-gen{payload['learner_config'].generation}",
+                        type="model",
+                    )
+            except Exception:
+                logger.exception(
+                    "Background checkpoint write failed @ step %s — the next "
+                    "periodic checkpoint will simply try again.",
+                    payload.get("step_count"),
+                )
+
     def controller_state_bytes(self) -> bytes:
         """Host-side training dynamics for the checkpoint: controllers and
         plasticity bookkeeping. Not parameters, but resuming without them
@@ -1330,6 +1407,10 @@ class Learner:
         transfer_thread.start()
         log_thread = threading.Thread(target=self._wandb_log_worker, daemon=True)
         log_thread.start()
+        ckpt_thread = threading.Thread(
+            target=self._checkpoint_writer_worker, daemon=True
+        )
+        ckpt_thread.start()
 
         # Host-side mirror of player_state.step_count: train_step increments
         # the device counter by exactly one per call, so tracking it here
@@ -1421,6 +1502,14 @@ class Learner:
             # worker is a daemon, so a wedged wandb client can't hang exit.
             self._log_q.put(None)
             log_thread.join(timeout=30)
+
+            # Same sentinel pattern for the checkpoint writer. Longer join
+            # timeout than the log worker's: a queued checkpoint write is
+            # full params + opt_state for both networks, the largest single
+            # I/O this process does, and worth waiting a real amount of
+            # time for rather than abandoning mid-write.
+            self._ckpt_q.put(None)
+            ckpt_thread.join(timeout=60)
             print("Training Finished.")
 
     def _train_step(self, batch: Batch) -> dict | None:
@@ -1484,14 +1573,63 @@ class Learner:
             self._update_main_player_in_league()
 
         if step % self.config.save_interval_steps == 0:
-            save_train_state(
-                self.wandb_run,
-                self.config,
-                jax.device_get(self.player_state),
-                jax.device_get(self.builder_state),
-                self.league,
-                self.controller_state_bytes(),
-                run_subdir=self._run_subdir,
+            # Everything host-side/fast happens here, synchronously: the
+            # device pulls (needed before the NEXT train_step potentially
+            # donates these same buffers) and the small in-memory
+            # serializations (league/controller state, no disk I/O). Only
+            # the actual disk write — the slow part — goes to the
+            # background writer, via a payload that's already fully
+            # host-side and immutable-enough to hand across threads
+            # (plain dicts/bytes/ints, never a live TrainState or the live
+            # League object itself).
+            host_player_state = jax.device_get(self.player_state)
+            host_builder_state = jax.device_get(self.builder_state)
+            player_components = dict(
+                params=host_player_state.params,
+                target_params=host_player_state.target_params,
+                opt_state=host_player_state.opt_state,
+                scalars=dict(
+                    step_count=host_player_state.step_count,
+                    frame_count=host_player_state.frame_count,
+                    ema_adv_mean=host_player_state.ema_adv_mean,
+                    ema_adv_std=host_player_state.ema_adv_std,
+                ),
+            )
+            builder_components = dict(
+                params=host_builder_state.params,
+                target_params=host_builder_state.target_params,
+                opt_state=host_builder_state.opt_state,
+                scalars=dict(
+                    step_count=host_builder_state.step_count,
+                    frame_count=host_builder_state.frame_count,
+                ),
+            )
+            save_path = os.path.abspath(
+                os.path.join(
+                    _ckpt_root(self.config, self._run_subdir),
+                    f"ckpt_{int(np.asarray(host_player_state.step_count)):08}",
+                )
+            )
+            # Exploiter checkpoints never contest main's "latest" cloud
+            # artifact — see save_train_state's identical condition, which
+            # this replaces for the periodic path.
+            upload_to_cloud = (
+                self._run_subdir is None
+                and self.config.log_artifacts_online
+                and step % self.config.cloud_save_interval_steps == 0
+            )
+            self._ckpt_q.put(
+                dict(
+                    save_path=save_path,
+                    learner_config=self.config,
+                    player_components=player_components,
+                    builder_components=builder_components,
+                    league_bytes=self.league.serialize(),
+                    controller_bytes=self.controller_state_bytes(),
+                    step_count=int(np.asarray(host_player_state.step_count)),
+                    frame_count=int(np.asarray(host_player_state.frame_count)),
+                    upload_to_cloud=upload_to_cloud,
+                )
             )
 
         if step % self.config.manage_league_interval == 0:
@@ -1527,12 +1665,26 @@ class Learner:
         since that has to happen between phases, not mid train_step.
         """
         if not self._is_exploiter:
-            # Main: pause and hand off the moment a stagnation episode is
-            # recommended, instead of letting shrink-and-perturb fire (the
-            # PlasticityController constructor already wired
-            # defer_to_exploiter=True for us whenever this flag is on, so
-            # should_perturb never fires while this path is live).
-            if self.plasticity.exploiter_phase_recommended:
+            # Main: pause and hand off whenever exploiter search is
+            # under-spent relative to its target duty-cycle fraction of
+            # total frames trained this process — not on a detected
+            # stagnation signal (plasticity.exploiter_phase_recommended is
+            # still computed/logged for visibility, just no longer
+            # consulted here; see config.exploiter_duty_cycle_fraction for
+            # why). Checked only every auto_exploiter_check_interval steps
+            # to avoid a device sync every single step — the ratio moves
+            # slowly, there's no need for per-step resolution.
+            if step % self.config.auto_exploiter_check_interval != 0:
+                return
+            frame_count = int(jax.device_get(self.player_state.frame_count))
+            frames_this_phase = frame_count - self._phase_start_frame_count
+            total_frames = self._total_frames_trained_at_start + frames_this_phase
+            duty_cycle_under_spent = (
+                total_frames > 0
+                and self._exploiter_frames_spent_at_start / total_frames
+                < self.config.exploiter_duty_cycle_fraction
+            )
+            if duty_cycle_under_spent:
                 save_path = save_train_state_locally(
                     self.config,
                     jax.device_get(self.player_state),
@@ -1581,6 +1733,30 @@ class Learner:
             frame_count - self._exploiter_start_frame
             >= self.config.auto_exploiter_frame_budget
         ):
+            # AlphaStar's checkpoint() publishes a Historical snapshot on
+            # EITHER outcome, success or timeout — even a failed attempt is
+            # a legitimate, permanent sparring partner for future PFSP
+            # matchmaking, not wasted exploration. Reuses
+            # write_promoted_snapshot's writer (same params-only layout,
+            # same merge path via merge_pending_exploiter_promotions) —
+            # this is NOT a promotion (still raises
+            # ExploiterBudgetExhausted below, so main.py's ladder-retry
+            # logic is unaffected), just an addition to the shared pool.
+            write_promoted_snapshot(
+                generation=self.config.generation,
+                step=int(jax.device_get(self.player_state.step_count)),
+                player_params=jax.device_get(self.player_state.params),
+                player_target_params=jax.device_get(self.player_state.target_params),
+                builder_params=jax.device_get(self.builder_state.params),
+                builder_target_params=jax.device_get(self.builder_state.target_params),
+                pin_opponent_steps=self.config.pin_opponent_steps,
+                player_frame_count=jax.device_get(self.player_state.frame_count).item(),
+                builder_frame_count=jax.device_get(
+                    self.builder_state.frame_count
+                ).item(),
+                promoted_from=f"auto-timeout (EXPLOITER_RUN_ID={self._run_subdir})",
+                parent_step=self._exploiter_fork_step,
+            )
             raise ExploiterBudgetExhausted()
 
     def _measure_exploitability(self) -> float | None:

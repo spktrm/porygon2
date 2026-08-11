@@ -249,15 +249,17 @@ class PlayerActor:
         """
         league = self._learner.league
         historical = [
-            player for player in league.players.values() if player.step_count != MAIN_KEY
+            player
+            for player in league.players.values()
+            if player.step_count != MAIN_KEY
         ]
         if not historical:
             return None
 
         exploiter_origin = [p for p in historical if p.origin == "exploiter"]
-        found = self._concerning_opponents(exploiter_origin) or self._concerning_opponents(
-            historical
-        )
+        found = self._concerning_opponents(
+            exploiter_origin
+        ) or self._concerning_opponents(historical)
         if found is None:
             return None
         concerning_players, concerning_win_rates = found

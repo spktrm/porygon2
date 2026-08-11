@@ -156,17 +156,43 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     plasticity_defer_to_exploiter: bool = False
     # Full automation of the exploiter-phase lifecycle, all within one
     # `python -m rl.online.main` invocation: main pauses itself (saving a
-    # checkpoint and raising a control-flow signal) the moment the overdue
-    # trigger fires; the orchestration loop in main.py forks an exploiter
-    # against increasingly-wide pinned opponent sets IN THE SAME PROCESS
-    # (strictly sequential — never two learners live at once, since this
-    # hardware can't run distributed/concurrent training anyway); each
-    # exploiter self-checks its own promotion bar and self-promotes or
-    # self-discards; main then resumes automatically. No manual
-    # promote_exploiter.py invocation and no separate launch commands needed
-    # once this is on. Implies plasticity_defer_to_exploiter — no need to
-    # also set both.
+    # checkpoint and raising a control-flow signal) the moment
+    # exploiter_duty_cycle_fraction is under-spent; the orchestration loop
+    # in main.py forks an exploiter against increasingly-wide pinned
+    # opponent sets IN THE SAME PROCESS (strictly sequential — never two
+    # learners live at once, since this hardware can't run distributed/
+    # concurrent training anyway); each exploiter self-checks its own
+    # promotion bar and self-promotes or self-discards; main then resumes
+    # automatically. No manual promote_exploiter.py invocation and no
+    # separate launch commands needed once this is on. Implies
+    # plasticity_defer_to_exploiter — no need to also set both.
     auto_exploiter_enabled: bool = True
+    # Target fraction of total frames trained (across every phase, main and
+    # exploiter alike, for the life of this process) to spend on exploiter
+    # search. AlphaStar's own League/Main Exploiters never gate on a
+    # detected signal at all — they're permanent population members,
+    # always running concurrently with Main Agents; the only scheduling
+    # logic in their pseudocode is a floor-and-ceiling on when an exploiter
+    # REFRESHES itself (MainExploiter.ready_to_checkpoint: min 2e9 steps
+    # dwell, then reset on success or 4e9-step timeout), not on whether a
+    # search is happening at all. This hardware can't run main and an
+    # exploiter concurrently, so "always running" translates to a fixed
+    # compute allocation instead of a fast trigger: main pauses itself
+    # whenever exploiter_frames_spent/total_frames_trained (tracked by
+    # main.py's orchestration loop, threaded into each phase's Learner)
+    # dips below this fraction. Self-correcting by construction — no drift
+    # compensation needed even though individual phases end at variable
+    # lengths (early promotion vs. full timeout). 0.10 sized against the
+    # ~200k-step target (see porygon2-1m-step-target): add_player_max_frames
+    # documents 9e6 frames as ~35k learner-step-equivalents, matching
+    # auto_exploiter_frame_budget below, so one full-timeout attempt costs
+    # roughly that — 10% of total frames is ~20k step-equivalents, a bit
+    # over half of one full-timeout attempt spread across the whole run.
+    # Replaces plasticity_overdue_trigger's role in gating this decision
+    # specifically; that field still exists for the shrink-and-perturb path
+    # (currently moot whenever auto_exploiter_enabled implies
+    # defer_to_exploiter, same as before).
+    exploiter_duty_cycle_fraction: float = 0.10
     # k values tried in sequence per stagnation episode. Each rung is an
     # independent fresh fork from the SAME paused-main checkpoint (not a
     # continuation of the previous rung's training) — width escalates only
@@ -175,11 +201,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # sizing, simplified for automation: the doc's "widen after success
     # within the same phase" nuance is folded into "widen after failure,
     # across independent attempts" here, for a much simpler state machine.
-    # main._pick_pin_opponent_steps fills each rung with the k opponents
-    # main is CURRENTLY WEAKEST against (by win-rate, reliability-gated),
-    # not the k most recent snapshots — recency was only ever a proxy for
-    # "resembles current main," and the league's own win/loss table says
-    # directly where the actual blind spot is.
+    # main._pick_pin_opponent_steps fills each rung by PFSP sampling
+    # (linear_capped weighting) over the reliability-gated win-rate table,
+    # not the k most recent snapshots and not a deterministic hardest-first
+    # ranking — recency was only ever a proxy for "resembles current
+    # main," and a fixed ranking handed every ladder rung the identical
+    # set; sampling still concentrates on opponents main is currently
+    # losing to (per the league's own win/loss table) while varying draw
+    # to draw.
     auto_exploiter_ladder: tuple[int, ...] = (1, 3, 5)
     # Frames (not steps — consistent with add_player_max_frames /
     # plasticity_cooldown_frames) given to each ladder rung before it's

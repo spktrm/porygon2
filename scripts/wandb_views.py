@@ -154,24 +154,26 @@ def rl_sections():
                     ["player_bootstrap_gap", "lambda_ctrl_gap_ema"],
                 ),
                 lp(
-                    # Adaptivity controller: magnet KL coef, its
-                    # commitment-covariance sensor, and whether an
-                    # entropy floor is currently overriding the loop.
+                    # Adaptivity controller: magnet KL coef and whether
+                    # an entropy floor is currently overriding it. Floor-
+                    # only since Aug 2026 — the commitment-covariance PI
+                    # action was removed (every bug traced back to it),
+                    # so there's no EMA of the sensor below to show here
+                    # anymore.
                     "Adaptivity controller (magnet coef)",
                     [
                         "adapt_ctrl_coef",
-                        "adapt_ctrl_commit_ema",
                         "adapt_ctrl_floor_breach",
                     ],
                     smooth=0,
                 ),
                 lp(
                     # Raw commitment sensor: corr(log pi(a), advantage),
-                    # bounded [-1, 1]. Falls on league additions and
-                    # perturbations — what makes the controller
-                    # event-responsive.
+                    # bounded [-1, 1]. Logged for visibility only — no
+                    # longer consumed by any controller (see the panel
+                    # above).
                     "Commitment correlation (sensor)",
-                    ["player_commit_cov", "adapt_ctrl_commit_ema"],
+                    ["player_commit_cov"],
                     range_y=(-1, 1),
                 ),
                 lp(
