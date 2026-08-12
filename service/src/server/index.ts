@@ -280,34 +280,41 @@ export class GameServer {
         let lastResetGameId: string | undefined;
 
         ws.on("message", async (clientRequestData: Buffer) => {
-            const clientRequest =
-                ClientRequest.deserializeBinary(clientRequestData);
-            const messageType = clientRequest.getMessageTypeCase();
+            try {
+                const clientRequest =
+                    ClientRequest.deserializeBinary(clientRequestData);
+                const messageType = clientRequest.getMessageTypeCase();
 
-            switch (messageType) {
-                case ClientRequest.MessageTypeCase.STEP: {
-                    const stepRequest = clientRequest.getStep();
-                    if (stepRequest !== undefined) {
-                        const workerResponse =
-                            await this.pool.step(stepRequest);
-                        ws.send(workerResponse.serializeBinary());
-                    } else {
-                        throw new Error("StepRequest not defined");
+                switch (messageType) {
+                    case ClientRequest.MessageTypeCase.STEP: {
+                        const stepRequest = clientRequest.getStep();
+                        if (stepRequest !== undefined) {
+                            const workerResponse =
+                                await this.pool.step(stepRequest);
+                            ws.send(workerResponse.serializeBinary());
+                        } else {
+                            throw new Error("StepRequest not defined");
+                        }
+                        break;
                     }
-                    break;
-                }
-                case ClientRequest.MessageTypeCase.RESET: {
-                    const resetRequest = clientRequest.getReset();
-                    if (resetRequest !== undefined) {
-                        lastResetGameId = resetRequest.getGameId();
-                        const workerResponse =
-                            await this.pool.reset(resetRequest);
-                        ws.send(workerResponse.serializeBinary());
-                    } else {
-                        throw new Error("StepRequest not defined");
+                    case ClientRequest.MessageTypeCase.RESET: {
+                        const resetRequest = clientRequest.getReset();
+                        if (resetRequest !== undefined) {
+                            lastResetGameId = resetRequest.getGameId();
+                            const workerResponse =
+                                await this.pool.reset(resetRequest);
+                            ws.send(workerResponse.serializeBinary());
+                        } else {
+                            throw new Error("StepRequest not defined");
+                        }
+                        break;
                     }
-                    break;
                 }
+            } catch (err) {
+                console.error(
+                    `Error handling message from ${userName}:`,
+                    err,
+                );
             }
         });
 

@@ -52,9 +52,15 @@ export class WorkerHandler {
 
         this.port.on(
             "message",
-            (data: Buffer | { type: string; gameId: string }) => {
-                if (Buffer.isBuffer(data)) {
-                    this.handleMessage(data);
+            (data: Buffer | Uint8Array | { type: string; gameId: string }) => {
+                // postMessage() transfers protobuf payloads as plain
+                // Uint8Array (serializeBinary()'s return type), NOT a Node
+                // Buffer — Buffer.isBuffer() is false for those, which
+                // silently dropped every reset/step request here (neither
+                // branch matched, no log, no error). Buffer is itself a
+                // Uint8Array subclass, so this covers both.
+                if (data instanceof Uint8Array) {
+                    this.handleMessage(Buffer.from(data));
                 } else if (data?.type === "evict_pending_game") {
                     // Fire-and-forget cleanup from index.ts's disconnect
                     // handler (WorkerPool.evictPendingGame). No-op if the
