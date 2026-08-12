@@ -31,6 +31,16 @@ def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndar
 
 
 MAIN_KEY = -1
+# AlphaStar-style population identities (docs/exploiter-phase-plan.md's
+# three-population redesign): MainExploiter and LeagueExploiter are live,
+# continuously-training populations too, not just frozen league members —
+# they need their own identity in the same payoff table MAIN_KEY already
+# uses, so win-rate signals between ANY pair of live/historical identities
+# (e.g. MainExploiter vs. live main) fall out of the existing machinery
+# below with zero new statistics code.
+MAIN_EXPLOITER_KEY = -2
+LEAGUE_EXPLOITER_KEY = -3
+LIVE_KEYS = (MAIN_KEY, MAIN_EXPLOITER_KEY, LEAGUE_EXPLOITER_KEY)
 
 
 class PlayerRef(NamedTuple):
@@ -48,14 +58,22 @@ class PlayerRef(NamedTuple):
     builder_key: str = "params"
     # Explicit provenance (docs/exploiter-phase-plan.md) — an AlphaStar-
     # style ancestry tag, not inferred from step_count's numeric range.
-    # "main" for anything _add_player_to_league added in the ordinary
-    # course of main's training; "exploiter" for a promoted exploiter
-    # snapshot. Defaults make this safe to unpickle from checkpoints
-    # written before this field existed: NamedTuple reconstruction fills
-    # missing trailing fields from their defaults, and "main" is the
-    # semantically correct default for every pre-existing snapshot (the
-    # exploiter mechanism didn't exist when they were written).
-    origin: Literal["main", "exploiter"] = "main"
+    # "main" for anything main's own population added in the ordinary
+    # course of training; "main_exploiter"/"league_exploiter" for a
+    # promoted snapshot from the corresponding exploiter population — split
+    # from the single former "exploiter" tag now that both are distinct,
+    # permanently-live populations (not one-shot forked phases) with
+    # different targeting rules (lineage-restricted vs. whole-history).
+    # Defaults make this safe to unpickle from checkpoints written before
+    # this field existed, and before the three-way split: NamedTuple
+    # reconstruction fills missing trailing fields from their defaults, and
+    # "main" is the semantically correct default for every pre-existing
+    # snapshot from before either exploiter mechanism existed. A ref
+    # pickled with the old two-value origin ("exploiter") is stale data
+    # from before this split; it is not silently reinterpreted as either
+    # new value — see rl/online/promote_exploiter.py for the one write
+    # path, which now always writes one of the three current values.
+    origin: Literal["main", "main_exploiter", "league_exploiter"] = "main"
     # For an exploiter-origin ref: the step_count of the main checkpoint
     # it forked from (None for "main"-origin refs, and for older
     # exploiter promotions written before this was tracked). One level
@@ -76,7 +94,14 @@ class League:
     the lowest ``(1 - main_winrate) + c * sqrt(ln N / (n + 1))``. Under-sampled
     or still-challenging opponents are kept hot.
 
-    The ``main`` player is the live learner and always stays in memory.
+    ``live`` holds every currently-training population (main always stays in
+    memory; main_exploiter/league_exploiter are present only once created —
+    see docs/exploiter-phase-plan.md's three-population redesign) keyed by
+    MAIN_KEY/MAIN_EXPLOITER_KEY/LEAGUE_EXPLOITER_KEY. One shared payoff table
+    below scores every live identity against every historical opponent AND
+    against each other (e.g. MainExploiter vs. live main) — this is what lets
+    MainExploiter's live-win-rate targeting signal fall out of the exact same
+    machinery league addition/eviction already uses, with no new code.
     """
 
     def __init__(
@@ -97,7 +122,13 @@ class League:
         self.ucb_c = ucb_c
         self.lock = threading.Lock()
 
-        self.main = main_player
+        # main_player kept as a constructor convenience (every existing
+        # caller already passes it this way) — seeds live[MAIN_KEY] only;
+        # main_exploiter/league_exploiter are added later via update_live
+        # once those populations are created.
+        self.live: dict[int, ParamsContainer] = {}
+        if main_player is not None:
+            self.live[MAIN_KEY] = main_player
         self.players: dict[int, PlayerRef] = {p.step_count: p for p in players}
         self.wins = collections.defaultdict(lambda: 0)
         self.draws = collections.defaultdict(lambda: 0)
@@ -186,15 +217,42 @@ class League:
             victim = min(self._cache.keys(), key=self._retention_score)
             del self._cache[victim]
 
+    def _evict_players_if_needed(self):
+        """Evict lowest-UCB players until the roster fits league_size.
+
+        Caller holds lock. Same retention score as the param cache (challenge
+        to main + UCB exploration bonus): drop the opponent main already
+        beats reliably and has sampled enough, keep challenging/under-sampled
+        ones. Must not call materialize() (re-acquires self.lock).
+
+        Scored against MAIN_KEY only, deliberately — main_exploiter/
+        league_exploiter's own pinned/lineage-restricted matchmaking already
+        keeps their targets naturally "hot" from constant play, so eviction
+        doesn't need to separately account for them."""
+        main = self.live.get(MAIN_KEY)
+        main_step = main.step_count if main is not None else MAIN_KEY
+        while len(self.players) > self.league_size:
+            candidates = [s for s in self.players if s != main_step]
+            if not candidates:
+                break
+            victim = min(candidates, key=self._retention_score)
+            del self.players[victim]
+            self._cache.pop(victim, None)
+            for stats in (self.wins, self.draws, self.losses, self.games):
+                for key in [k for k in stats if victim in k]:
+                    del stats[key]
+
     def _opponent_games(self, step: int) -> float:
-        if self.main is None:
+        main = self.live.get(MAIN_KEY)
+        if main is None:
             return 0.0
-        m = self.main.step_count
-        return self.games[m, step] + self.games[step, m]
+        m = main.step_count
+        return self.games.get((m, step), 0) + self.games.get((step, m), 0)
 
     def _retention_score(self, step: int) -> float:
         """Higher = keep hot. Challenge to main + UCB exploration bonus."""
-        main_step = self.main.step_count if self.main is not None else MAIN_KEY
+        main = self.live.get(MAIN_KEY)
+        main_step = main.step_count if main is not None else MAIN_KEY
         challenge = 1.0 - self._win_rate_by_steps(main_step, step)
         n = self._opponent_games(step)
         total = sum(self._opponent_games(s) for s in self._cache) or 1.0
@@ -233,8 +291,10 @@ class League:
         return self._win_rate_by_steps(sender.step_count, receiver.step_count)
 
     def _win_rate_by_steps(self, home: int, away: int) -> float:
-        numer = self.wins[home, away] + 0.5 * self.draws[home, away] + 0.5
-        denom = self.games[home, away] + 1
+        numer = (
+            self.wins.get((home, away), 0) + 0.5 * self.draws.get((home, away), 0) + 0.5
+        )
+        denom = self.games.get((home, away), 0) + 1
         return numer / denom
 
     # --- mutation ------------------------------------------------------------
@@ -242,10 +302,19 @@ class League:
     def add_player(self, ref: PlayerRef):
         with self.lock:
             self.players[ref.step_count] = ref
+            self._evict_players_if_needed()
+
+    def update_live(self, key: int, container: ParamsContainer):
+        """Sets/updates a live population's current params. key is one of
+        MAIN_KEY/MAIN_EXPLOITER_KEY/LEAGUE_EXPLOITER_KEY."""
+        with self.lock:
+            self.live[key] = container
 
     def update_main_player(self, main_player: ParamsContainer):
-        with self.lock:
-            self.main = main_player
+        """Thin MAIN_KEY-only alias — kept so every existing main-only
+        caller (artifact.py, learner.py, promote_exploiter.py) needs no
+        changes under the live-dict generalization."""
+        self.update_live(MAIN_KEY, main_player)
 
     def update_payoff(
         self, sender: ParamsContainer, receiver: ParamsContainer, payoff: float
@@ -254,10 +323,13 @@ class League:
             home = sender.step_count
             away = receiver.step_count
 
-            # Ignore updates for players that may have been removed
-            if home != MAIN_KEY and home not in self.players:
+            # Ignore updates for players that may have been removed — any
+            # live identity (main, main_exploiter, league_exploiter) is
+            # always a valid participant even though it's never in
+            # self.players (that dict is historical snapshots only).
+            if home not in LIVE_KEYS and home not in self.players:
                 return
-            if away != MAIN_KEY and away not in self.players:
+            if away not in LIVE_KEYS and away not in self.players:
                 return
 
             for stats in (self.games, self.wins, self.draws, self.losses):
@@ -277,11 +349,27 @@ class League:
                 self.losses[home, away] += 1
                 self.wins[away, home] += 1
 
-    def get_main_player(self) -> ParamsContainer:
+    def get_live(self, key: int) -> ParamsContainer:
+        """Returns the current params for a live population. key is one of
+        MAIN_KEY/MAIN_EXPLOITER_KEY/LEAGUE_EXPLOITER_KEY. Raises if that
+        population doesn't exist yet (main_exploiter/league_exploiter
+        before their creation trigger fires) — callers matchmaking for a
+        not-yet-created population is a bug, not a state to handle quietly."""
         with self.lock:
-            if self.main is None:
-                raise RuntimeError("Main player has not been set on the league.")
-            return self.main
+            container = self.live.get(key)
+            if container is None:
+                raise RuntimeError(
+                    f"Live population {key} has not been set on the league."
+                )
+            return container
+
+    def has_live(self, key: int) -> bool:
+        with self.lock:
+            return key in self.live
+
+    def get_main_player(self) -> ParamsContainer:
+        """Thin MAIN_KEY-only alias — see update_main_player."""
+        return self.get_live(MAIN_KEY)
 
 
 def main():

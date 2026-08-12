@@ -14,7 +14,6 @@ import functools
 import json
 import logging
 import os
-import re
 from collections.abc import Callable, Mapping
 from pprint import pprint
 from typing import Any, Literal
@@ -41,7 +40,7 @@ from rl.model.config import get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.league import MAIN_KEY, League, PlayerRef
+from rl.online.league import MAIN_KEY, League
 
 MANIFEST_NAME = "manifest.json"
 
@@ -222,22 +221,13 @@ def create_train_state(
     return player_train_state, builder_train_state
 
 
-def _ckpt_root(
-    learner_config: Porygon2LearnerConfig, run_subdir: str | None = None
-) -> str:
-    """Root directory for this process's own checkpoints.
-
-    ``run_subdir`` namespaces an exploiter phase (docs/exploiter-phase-
-    plan.md) under its own subtree, ``./ckpts/gen{N}/exploiters/{run_subdir}/``
-    — required, not cosmetic: an exploiter forks from a historical main
-    step and its own step_count then keeps counting up from that same
-    point while main is paused. Without a separate root, the exploiter's
-    ``ckpt_{step:08}`` and ``players/p_{step:08}`` directories would
-    eventually collide with — and silently overwrite — main's own, once
-    main resumes and its step_count catches back up past the fork point.
-    """
-    if run_subdir:
-        return f"./ckpts/gen{learner_config.generation}/exploiters/{run_subdir}/"
+def _ckpt_root(learner_config: Porygon2LearnerConfig) -> str:
+    """Root directory for this process's checkpoints. No more run_subdir
+    exploiter namespacing (docs/exploiter-phase-plan.md's 2026-08-12
+    three-population redesign): only "main" ever gets a full, resumable
+    checkpoint — see Learner._write_checkpoint's docstring for why an
+    exploiter population's in-progress state doesn't need one at all, so
+    there's no second checkpoint tree left to collide with main's."""
     return f"./ckpts/gen{learner_config.generation}/"
 
 
@@ -248,7 +238,6 @@ def save_train_state(
     builder_state: Porygon2BuilderTrainState,
     league: League,
     controller_bytes: bytes | None = None,
-    run_subdir: str | None = None,
 ):
     save_path = save_train_state_locally(
         learner_config,
@@ -256,15 +245,9 @@ def save_train_state(
         builder_state,
         league,
         controller_bytes,
-        run_subdir,
     )
-    # Exploiter checkpoints never contest main's "latest" cloud artifact —
-    # they're a specialist, deliberately-narrowed policy, not a candidate
-    # for "the next real main lineage" (docs/exploiter-phase-plan.md open
-    # question 3: keep exploiter runs visually/artifactually distinct).
     if (
-        run_subdir is None
-        and learner_config.log_artifacts_online
+        learner_config.log_artifacts_online
         and player_state.step_count.item() % learner_config.cloud_save_interval_steps
         == 0
     ):
@@ -281,11 +264,10 @@ def save_train_state_locally(
     builder_state: Porygon2BuilderTrainState,
     league: League,
     controller_bytes: bytes | None = None,
-    run_subdir: str | None = None,
 ):
     save_path = os.path.abspath(
         os.path.join(
-            _ckpt_root(learner_config, run_subdir),
+            _ckpt_root(learner_config),
             f"ckpt_{player_state.step_count:08}",
         )
     )
@@ -376,11 +358,9 @@ def write_checkpoint_components(
     return save_path
 
 
-def _get_checkpoint_path(
-    learner_config: Porygon2LearnerConfig, run_subdir: str | None = None
-) -> str | None:
+def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
     """Finds the most recent checkpoint folder under this process's root."""
-    save_path = _ckpt_root(learner_config, run_subdir)
+    save_path = _ckpt_root(learner_config)
     os.makedirs(save_path, exist_ok=True)
     return checkpoint.most_recent_ckpt_dir(save_path)
 
@@ -579,27 +559,18 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
-    fork_from_ckpt: str | None = None,
-    run_subdir: str | None = None,
 ) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
-
-    # 0. Exploiter-phase fork (docs/exploiter-phase-plan.md piece 1): an
-    # explicit, one-time source checkpoint, bypassing "most recent"
-    # entirely — this is what lets a launch fork from an arbitrary
-    # historical step instead of always resuming the latest. Deliberately
-    # ignores `mode`: seeding a fresh exploiter phase is always a full
-    # params+opt_state+league restore. Only pass this on the launch that
-    # actually creates the fork; a later resume of that same in-progress
-    # exploiter run should leave it unset so `run_subdir`'s own
-    # "most recent" search below picks up its OWN latest checkpoint
-    # instead of re-forking from the original point and losing whatever
-    # it learned since.
-    if fork_from_ckpt is not None:
-        return load_from_checkpoint(
-            fork_from_ckpt, learner_config, player_state, builder_state
-        )
-
-    latest_ckpt = _get_checkpoint_path(learner_config, run_subdir)
+    """Loads main's own state on a process (re)start. No more fork_from_ckpt/
+    run_subdir (docs/exploiter-phase-plan.md's 2026-08-12 three-population
+    redesign): exploiter populations are never loaded from a separate
+    checkpoint file at all — Learner._fork_population creates them
+    in-process by copying main's current live params, the instant this
+    process actually has a live main to fork from. Every promoted or
+    timed-out exploiter snapshot is already a normal, permanent
+    PlayerRef in the (persisted) League by the time this runs — there is
+    no separate "pending promotions" merge step anymore.
+    """
+    latest_ckpt = _get_checkpoint_path(learner_config)
 
     # 1. Force Scratch
     if mode == "scratch":
@@ -616,7 +587,7 @@ def load_train_state(
             "LOAD_STATE_MODE=%r but no checkpoint found under %s "
             "— starting from scratch.",
             mode,
-            _ckpt_root(learner_config, run_subdir),
+            _ckpt_root(learner_config),
         )
         return load_from_scratch(learner_config, player_state, builder_state)
 
@@ -630,88 +601,3 @@ def load_train_state(
     return load_from_checkpoint(
         latest_ckpt, learner_config, player_state, builder_state
     )
-
-
-_EXPLOITER_SNAPSHOT_DIR_RE = re.compile(r"p_(\d+)$")
-
-# A promoted exploiter's directory name encodes ITS OWN step counter (a
-# fresh fork from main's pause point, then counting up independently) —
-# not a point on main's timeline. league.players is a plain dict[int,
-# PlayerRef] with no collision check in add_player, and main's own step
-# counter will eventually reach that same numeric value on its own
-# (nothing bounds it away from wherever an exploiter happened to promote),
-# silently overwriting the promoted entry — and corrupting the win/loss
-# stats keyed the same way — the moment main adds a snapshot at that step.
-# Offsetting well past num_steps (5,000,000 in this config, but read the
-# live value rather than hardcode it) guarantees the two numberings can
-# never collide, at the cost of the displayed step count in telemetry
-# (league_main_v_{step}_winrate) reading as this offset value rather than
-# the exploiter's true step — an acceptable, documented tradeoff for
-# correctness over readability.
-_PROMOTED_STEP_OFFSET = 100_000_000
-
-
-def merge_pending_exploiter_promotions(
-    learner_config: Porygon2LearnerConfig, league: League
-) -> int:
-    """Merges any promoted exploiter snapshots into a freshly loaded league.
-
-    docs/exploiter-phase-plan.md piece 5: an exploiter phase runs as a
-    separate process, forked from — and independent of — main. The only
-    way a promoted exploiter reaches main's LIVE league is for main to
-    pick it up on its own next restart, from a well-known on-disk
-    location (``rl/online/promote_exploiter.py`` writes here after
-    re-verifying the promotion bar). Idempotent: already-merged step
-    counts are skipped, so calling this on every startup is safe.
-    """
-    root = f"./ckpts/gen{learner_config.generation}/exploiters/promoted/"
-    if not os.path.isdir(root):
-        return 0
-
-    merged = 0
-    for name in sorted(os.listdir(root)):
-        match = _EXPLOITER_SNAPSHOT_DIR_RE.match(name)
-        snapshot_dir = os.path.abspath(os.path.join(root, name))
-        if not match or not os.path.isdir(snapshot_dir):
-            continue
-        exploiter_step = int(match.group(1))
-        key = _PROMOTED_STEP_OFFSET + exploiter_step
-        if key in league.players:
-            continue
-
-        meta_path = os.path.join(snapshot_dir, "meta.json")
-        if not os.path.exists(meta_path):
-            logger.warning(
-                "skipping promoted exploiter snapshot %s: missing meta.json "
-                "(was this written by promote_exploiter.py?)",
-                snapshot_dir,
-            )
-            continue
-        with open(meta_path) as f:
-            meta = json.load(f)
-
-        league.add_player(
-            PlayerRef(
-                step_count=key,
-                snapshot_dir=snapshot_dir,
-                player_frame_count=int(meta["player_frame_count"]),
-                builder_frame_count=int(meta["builder_frame_count"]),
-                player_key="params",
-                builder_key="params",
-                origin="exploiter",
-                # .get(...), not [...]: promotions written before
-                # parent_step existed in meta.json still merge fine,
-                # just without ancestry (None matches PlayerRef's own
-                # default for pre-existing "main"-origin refs).
-                parent_step=meta.get("parent_step"),
-            )
-        )
-        merged += 1
-        logger.info(
-            "merged promoted exploiter snapshot %s (exploiter step %d, "
-            "league key %d) into the league",
-            snapshot_dir,
-            exploiter_step,
-            key,
-        )
-    return merged

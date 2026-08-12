@@ -145,9 +145,9 @@ class PlasticityController:
 
     def acknowledge_exploiter_episode(self):
         """Resets the overdue-stagnation clock after an automatic
-        exploiter-phase episode concludes (promoted, or the ladder in
-        auto_exploiter_ladder exhausted without a promotion). Without this,
-        main would immediately re-request another phase on its very next
+        exploiter-phase episode concludes (promoted, or the single attempt
+        failed to clear the promotion bar). Without this, main would
+        immediately re-request another phase on its very next
         league-management tick — nothing else about consecutive_overdue
         changes just because an episode happened. Deliberately
         unconditional, even on a failed episode: a fresh window before the

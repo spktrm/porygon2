@@ -50,9 +50,19 @@ export class WorkerHandler {
             throw new Error("Worker must be run as a worker thread");
         }
 
-        this.port.on("message", (data: Buffer) => {
-            this.handleMessage(data);
-        });
+        this.port.on(
+            "message",
+            (data: Buffer | { type: string; gameId: string }) => {
+                if (Buffer.isBuffer(data)) {
+                    this.handleMessage(data);
+                } else if (data?.type === "evict_pending_game") {
+                    // Fire-and-forget cleanup from index.ts's disconnect
+                    // handler (WorkerPool.evictPendingGame). No-op if the
+                    // entry was already consumed by a successful pairing.
+                    this.pendingGames.delete(data.gameId);
+                }
+            },
+        );
     }
 
     private getPlayerFromUsername(userName: string) {
@@ -105,6 +115,12 @@ export class WorkerHandler {
         const opponent = this.pendingGames.get(gameId);
 
         if (opponent !== undefined) {
+            // Remove the pairing immediately: any of the checks below can
+            // throw, and a throw here must not leave this gameId
+            // permanently stuck in pendingGames (it would never be reused,
+            // and the waiting opponent's promise would never resolve).
+            this.pendingGames.delete(gameId);
+
             if (opponent.playerDetails.userName === userName) {
                 throw new Error(
                     `User ${userName} attempted to match with themselves on gameId ${gameId}`,
@@ -137,16 +153,13 @@ export class WorkerHandler {
             this.playerMapping.set(opponent.playerDetails.userName, player1);
             this.playerMapping.set(userName, player2);
 
-            // 3. Remove the game from pending now that it has started
-            this.pendingGames.delete(gameId);
-
-            // 4. "Wake up" the waiting opponent
+            // 3. "Wake up" the waiting opponent
             opponent.resolve({
                 player: player1,
                 opponentDetails: details,
             });
 
-            // 5. Return the args for the *current* player
+            // 4. Return the args for the *current* player
             return Promise.resolve({
                 player: player2,
                 opponentDetails: opponent.playerDetails,

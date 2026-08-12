@@ -157,8 +157,23 @@ def load_full(ckpt_dir: str) -> dict[str, Any]:
             out[name] = _load(os.path.join(d, name))
         return out
 
+    try:
+        meta = _load(os.path.join(ckpt_dir, "meta"))
+    except Exception:
+        # meta["learner_config"] is provenance-only — no restore path
+        # actually reads it back (the live config always comes fresh from
+        # get_learner_config(), never from a checkpoint; verified no
+        # caller reads ckpt_data["meta"]). Unpickling it still runs
+        # eagerly here, though, so a config dataclass schema change since
+        # this checkpoint was written (a field renamed/removed — exactly
+        # what a redesign like the 2026-08-12 three-population one does)
+        # must not fail an otherwise-healthy resume of the actual training
+        # state. Same "never fatal for inessential state" posture as
+        # Learner.restore_controller_state.
+        meta = None
+
     return dict(
-        meta=_load(os.path.join(ckpt_dir, "meta")),
+        meta=meta,
         player_state=_read_dir("player"),
         builder_state=_read_dir("builder"),
         league=load_league_bytes(ckpt_dir),

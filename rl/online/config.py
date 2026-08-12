@@ -10,8 +10,19 @@ PolicyObjectiveT = Literal["spo", "ppo"]
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
-    num_player_actors: int = 12
-    num_builder_actors: int = 4
+    # Split main/exploiter (docs/exploiter-phase-plan.md's three-population
+    # redesign): actor pools for all live populations run continuously and
+    # concurrently now (never torn down between turns), all contending for
+    # the same gpu_lock as whichever population is on-turn to train — so
+    # exploiter pools are sized well below main's. Exploiters don't need
+    # mirror-self-play-scale throughput, only enough games to keep their
+    # narrow pinned-target win-rate estimates fresh. Both main_exploiter and
+    # league_exploiter use the same *_exploiter value; no evidence yet they
+    # need to differ.
+    num_player_actors_main: int = 12
+    num_player_actors_exploiter: int = 4
+    num_builder_actors_main: int = 4
+    num_builder_actors_exploiter: int = 2
     # One eval thread per entry; each plays the service baseline at that
     # index (service/src/server/eval.ts: 0=random, 1=default,
     # 2=simple_heuristic). The index travels explicitly in the env username
@@ -112,131 +123,142 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     league_cache_size: int = 16
     league_ucb_c: float = 1.0
 
-    # PSRO-style exploiter phase (docs/exploiter-phase-plan.md). Set only on
-    # a dedicated exploiter run — a process forked from a historical main
-    # checkpoint (FORK_FROM_CKPT env var) whose entire purpose is a bounded
-    # best-response search against a fixed subset of the league. When set,
-    # PlayerActor.get_match() skips the mirror coin toss and restricts the
-    # existing PFSP draw to exactly these step_counts (piece 2) — start a
-    # phase at k=1, widen the tuple later in the same phase once win-rate
-    # clears exploiter_promote_winrate, as a generalization check. None on
-    # every ordinary main run (the default): matchmaking is unrestricted.
-    pin_opponent_steps: tuple[int, ...] | None = None
-    # Promotion bar (piece 5): win-rate vs. EVERY opponent currently in
-    # pin_opponent_steps must clear this, not just the average — a
+    # Three-population league (docs/exploiter-phase-plan.md's 2026-08-12
+    # redesign, superseding the original single-forked-phase exploiter
+    # design): MainPlayer, MainExploiter, and LeagueExploiter are live,
+    # continuously-training populations sharing one process/GPU — never
+    # torn down/refounded, sequential turns via the duty-cycle fractions
+    # below. MainExploiter targets main's own lineage (and live main
+    # directly, once reliable — AlphaStar's actual rule); LeagueExploiter
+    # targets the whole historical population via linear_capped PFSP,
+    # unrestricted, same shape as the pre-redesign single exploiter role.
+    # False means only main exists, exactly as before this redesign.
+    auto_exploiter_enabled: bool = True
+
+    # Target share of total frames trained across the process's life;
+    # Learner._select_population picks whichever live population is
+    # furthest below its target share. Generalizes the old single
+    # exploiter_duty_cycle_fraction (binary main-vs-exploiter) to a 3-way
+    # split. Must sum to 1.0 — not enforced by a __post_init__ validator
+    # (no precedent for one on this frozen chex.dataclass, and no local
+    # environment to verify the interaction before shipping it) — check
+    # this invariant by hand when changing any of the three.
+    main_duty_cycle_fraction: float = 0.80
+    main_exploiter_duty_cycle_fraction: float = 0.10
+    league_exploiter_duty_cycle_fraction: float = 0.10
+
+    # Promotion bar, shared by both exploiter types: win-rate vs. EVERY
+    # opponent currently pinned must clear this, not just the average — a
     # strategy that crushes one pinned target and loses to another hasn't
     # generalized. Matches the existing "dominant" league-addition bar
-    # (win-rate > 0.7) exactly — raised from an initial 0.55 (the plan
-    # doc's original placeholder, deliberately looser on the theory that a
-    # specialist beating a narrow target set didn't need "beats everything"
-    # stringency). 0.55 turned out to be a weak statistical bar at the
-    # exploiter_promote_min_games floor: standard error at n=20 games,
-    # p~0.5 is ~0.11, so 0.55 is under half a standard error above a coin
-    # flip — barely distinguishable from noise right at the reliability
-    # floor. 0.7 (~1.8 SE above a coin flip at n=20) is a real signal.
+    # (win-rate > 0.7) exactly — raised from an initial 0.55 (deliberately
+    # looser on the theory that a specialist beating a narrow target set
+    # didn't need "beats everything" stringency). 0.55 turned out to be a
+    # weak statistical bar at the exploiter_promote_min_games floor:
+    # standard error at n=20 games, p~0.5 is ~0.11, so 0.55 is under half
+    # a standard error above a coin flip — barely distinguishable from
+    # noise right at the reliability floor. 0.7 (~1.8 SE above a coin flip
+    # at n=20) is a real signal.
     exploiter_promote_winrate: float = 0.7
     # Same reliability floor as exploit_ctrl_min_games_per_opponent /
     # bandit_min_games_per_opponent, applied here for the identical reason:
     # a handful of lucky games isn't a real win-rate.
     exploiter_promote_min_games: float = 20.0
+    # Minimum dwell before a population's promotion bar is even consulted.
+    # AlphaStar's MainExploiter.ready_to_checkpoint has an explicit
+    # minimum-dwell floor (min 2e9 steps) before either a promotion or a
+    # timeout can fire; the pre-redesign code had none at all (a promotion
+    # could fire on the very first check after creation). Shared by both
+    # exploiter types.
+    exploiter_min_dwell_frames: int = int(1e6)
 
-    # Plasticity (shrink-and-perturb) params. Triggered when the main player
-    # keeps failing to dominate its own league history: after
-    # `plasticity_overdue_trigger` consecutive overdue-only league additions,
-    # player params are interpolated toward a fresh init draw.
-    plasticity_enabled: bool = True
-    # docs/exploiter-phase-plan.md piece 7: when the overdue-stagnation
-    # trigger fires, spend a bounded exploiter-phase budget first instead
-    # of auto-perturbing. Purely a suppression switch on its own — pairs
-    # with auto_exploiter_enabled below for full automation, or can be set
-    # alone for the manual v1 workflow (watch plasticity_consecutive_overdue,
-    # launch by hand via FORK_FROM_CKPT/EXPLOITER_RUN_ID, promote by hand via
-    # rl/online/promote_exploiter.py). Flip back to False once a manually-run
-    # episode concludes so a real stall still gets a perturbation.
-    plasticity_defer_to_exploiter: bool = False
-    # Full automation of the exploiter-phase lifecycle, all within one
-    # `python -m rl.online.main` invocation: main pauses itself (saving a
-    # checkpoint and raising a control-flow signal) the moment
-    # exploiter_duty_cycle_fraction is under-spent; the orchestration loop
-    # in main.py forks an exploiter against increasingly-wide pinned
-    # opponent sets IN THE SAME PROCESS (strictly sequential — never two
-    # learners live at once, since this hardware can't run distributed/
-    # concurrent training anyway); each exploiter self-checks its own
-    # promotion bar and self-promotes or self-discards; main then resumes
-    # automatically. No manual promote_exploiter.py invocation and no
-    # separate launch commands needed once this is on. Implies
-    # plasticity_defer_to_exploiter — no need to also set both.
-    auto_exploiter_enabled: bool = True
-    # Target fraction of total frames trained (across every phase, main and
-    # exploiter alike, for the life of this process) to spend on exploiter
-    # search. AlphaStar's own League/Main Exploiters never gate on a
-    # detected signal at all — they're permanent population members,
-    # always running concurrently with Main Agents; the only scheduling
-    # logic in their pseudocode is a floor-and-ceiling on when an exploiter
-    # REFRESHES itself (MainExploiter.ready_to_checkpoint: min 2e9 steps
-    # dwell, then reset on success or 4e9-step timeout), not on whether a
-    # search is happening at all. This hardware can't run main and an
-    # exploiter concurrently, so "always running" translates to a fixed
-    # compute allocation instead of a fast trigger: main pauses itself
-    # whenever exploiter_frames_spent/total_frames_trained (tracked by
-    # main.py's orchestration loop, threaded into each phase's Learner)
-    # dips below this fraction. Self-correcting by construction — no drift
-    # compensation needed even though individual phases end at variable
-    # lengths (early promotion vs. full timeout). 0.10 sized against the
-    # ~200k-step target (see porygon2-1m-step-target): add_player_max_frames
-    # documents 9e6 frames as ~35k learner-step-equivalents, matching
-    # auto_exploiter_frame_budget below, so one full-timeout attempt costs
-    # roughly that — 10% of total frames is ~20k step-equivalents, a bit
-    # over half of one full-timeout attempt spread across the whole run.
-    # Replaces plasticity_overdue_trigger's role in gating this decision
-    # specifically; that field still exists for the shrink-and-perturb path
-    # (currently moot whenever auto_exploiter_enabled implies
-    # defer_to_exploiter, same as before).
-    exploiter_duty_cycle_fraction: float = 0.10
-    # k values tried in sequence per stagnation episode. Each rung is an
-    # independent fresh fork from the SAME paused-main checkpoint (not a
-    # continuation of the previous rung's training) — width escalates only
-    # after a narrower attempt fails to clear the bar within its budget.
-    # Matches piece 2's k=1 (sharpest signal) / k=3-5 (generalization check)
-    # sizing, simplified for automation: the doc's "widen after success
-    # within the same phase" nuance is folded into "widen after failure,
-    # across independent attempts" here, for a much simpler state machine.
-    # main._pick_pin_opponent_steps fills each rung by PFSP sampling
-    # (linear_capped weighting) over the reliability-gated win-rate table,
-    # not the k most recent snapshots and not a deterministic hardest-first
-    # ranking — recency was only ever a proxy for "resembles current
-    # main," and a fixed ranking handed every ladder rung the identical
-    # set; sampling still concentrates on opponents main is currently
-    # losing to (per the league's own win/loss table) while varying draw
-    # to draw.
-    auto_exploiter_ladder: tuple[int, ...] = (1, 3, 5)
-    # Frames (not steps — consistent with add_player_max_frames /
-    # plasticity_cooldown_frames) given to each ladder rung before it's
-    # declared failed and the next rung is tried. Sized the same as
-    # add_player_max_frames: roughly one main "overdue window" worth of
-    # dedicated search per attempt.
-    auto_exploiter_frame_budget: int = int(9e6)
+    # Per-population frame budget before a non-promoted attempt times out
+    # and resets (main_exploiter_reset_to_main / exploiter_hard_reset_prob
+    # below). Sized the same as add_player_max_frames: roughly one main
+    # "overdue window" worth of dedicated search.
+    main_exploiter_frame_budget: int = int(9e6)
+    league_exploiter_frame_budget: int = int(9e6)
+
+    # No pinned-opponent-set width knob: neither exploiter population pins
+    # to a fixed target set at all — AlphaStar's own exploiters PFSP-sample
+    # fresh from their candidate pool every single match (whole population
+    # for LeagueExploiter, origin=="main" lineage for MainExploiter's
+    # fallback branch below), never freezing a subset for the population's
+    # whole lifetime. A fixed k (the pre-redesign single-exploiter role's
+    # mechanism) would just be re-inventing that narrower, less faithful
+    # design under a new name — see rl/online/player_actor.py's
+    # get_match().
+
+    # MainExploiter's live-target branch (AlphaStar's actual MainExploiter
+    # rule, not a simplification of it): if main_exploiter's own win-rate
+    # against LIVE main exceeds this floor, play live main directly instead
+    # of falling back to the lineage-restricted historical draw above.
+    # Reliability-gated by main_exploiter_live_target_min_games — same
+    # pattern as exploit_ctrl_min_games_per_opponent/bandit_min_games_per_
+    # opponent: until enough games are recorded, the signal is
+    # untrustworthy, so the fallback (never the optimistic) branch is
+    # taken. main_exploiter's every game (either branch) records into
+    # League's shared payoff table, so this signal keeps updating with no
+    # new statistics code.
+    main_exploiter_live_target_winrate_floor: float = 0.1
+    main_exploiter_live_target_min_games: float = 20.0
+
     # How often (learner steps) a running exploiter checks its own
     # promotion bar. A fraction of save_interval_steps so a clear win
     # doesn't sit undetected for long; the check itself is cheap (a
     # handful of dict lookups over a tiny league).
     auto_exploiter_check_interval: int = 5_000
-    # Per-attempt probability of shrink-and-perturbing the forked params
-    # before training starts, instead of using the raw loaded checkpoint
-    # verbatim. Adapted from AlphaStar's LeagueExploiter.checkpoint(),
-    # which has a flat 25% chance of resetting to its original init rather
-    # than continuing from its current (already-trained) weights — kept
-    # here at the same 0.25. Addresses a real gap: without this, every
-    # ladder rung (k=1, k=3, k=5) and every retry across separate
-    # stagnation episodes always searches from the IDENTICAL starting
-    # point (same weights, same optimizer momentum), so repeated failures
-    # just repeat the same local search rather than genuinely
-    # diversifying it. Reuses shrink_and_perturb_player_state — the same
-    # mechanism plasticity resets already use — rather than a fresh
-    # random init: the shrink keeps the perturbed policy anchored to
-    # pre-perturbation behaviour via target_params/KL, exactly like a
-    # plasticity event, instead of discarding everything learned so far.
+
+    # On a terminal outcome (promoted or timed out): main_exploiter ALWAYS
+    # resets to a fresh fork of main's then-current live params — this is
+    # AlphaStar's actual rule for this role, not a tunable roll, hence a
+    # bool rather than a probability.
+    main_exploiter_reset_to_main: bool = True
+    # league_exploiter instead rolls this on a terminal outcome: per-attempt
+    # probability of shrink-and-perturbing toward random init instead of
+    # continuing to train its current (already-trained) weights un-reset.
+    # Adapted from AlphaStar's LeagueExploiter.checkpoint(), which has a
+    # flat 25% chance of resetting to its ORIGINAL init — this project
+    # deliberately reuses shrink_and_perturb_player_state (the same
+    # mechanism plasticity resets use) rather than a literal fresh random
+    # init: the shrink keeps the perturbed policy anchored to
+    # pre-perturbation behaviour via target_params/KL, instead of
+    # discarding everything learned so far the way a literal reinit of an
+    # already-trained network would.
     exploiter_hard_reset_prob: float = 0.25
+
+    # Plasticity (shrink-and-perturb) params. Triggered when the main player
+    # keeps failing to dominate its own league history: after
+    # `plasticity_overdue_trigger` consecutive overdue-only league additions,
+    # player params are interpolated toward a fresh init draw. Unrelated to
+    # the three-population redesign above: this is main's own weight
+    # perturbation mechanism, orthogonal to whether exploiter populations
+    # exist.
+    plasticity_enabled: bool = True
+    # Historically paired with the old phase-based exploiter mechanism
+    # (suppress main's own perturbation while a main-pausing exploiter
+    # phase ran); kept for the manual, non-automated workflow
+    # (rl/online/promote_exploiter.py) where that still applies. Under the
+    # three-population redesign, exploiter populations never pause main, so
+    # this has no effect when auto_exploiter_enabled is set.
+    plasticity_defer_to_exploiter: bool = False
+
+    # OOM guard (learner.py: Learner._check_oom_guard). A self-monitoring
+    # safety valve, not a leak fix — added after 1361 crashed, though that
+    # specific crash turned out to be an unrelated websocket failure to the
+    # game server, not RAM exhaustion. Checks available system RAM every
+    # oom_guard_check_interval steps; if it drops below
+    # oom_guard_min_available_fraction, saves a checkpoint and stops the
+    # whole process (main.py's orchestration loop treats this like a Ctrl-C
+    # interrupt) rather than letting the kernel's OOM killer SIGKILL this
+    # process at an arbitrary, possibly mid-write, moment. Deliberately
+    # does not try to continue in the same process after triggering —
+    # freeing Python objects doesn't guarantee the OS reclaims that memory,
+    # so only a fresh process actually gets back to a clean memory state.
+    oom_guard_enabled: bool = True
+    oom_guard_min_available_fraction: float = 0.10
+    oom_guard_check_interval: int = 1_000
+
     # Consecutive overdue-only adds before a perturbation. At 1 (the old
     # value) a single stalled add window (~6k steps of not dominating the
     # league) fired a 50% reset: the Aug 2026 run perturbed during a

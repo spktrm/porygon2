@@ -143,6 +143,24 @@ export class WorkerPool {
     shutdown(): void {
         for (const { worker } of this.workerInfos) worker.terminate();
     }
+
+    /** Fire-and-forget cleanup: tell the worker this session was last routed
+     * to drop any pendingGames entry for gameId. A no-op if that session was
+     * never routed, or if the entry was already consumed by a successful
+     * pairing — used from the connection's close/error handlers, where a
+     * disconnect while waiting for an opponent would otherwise leave the
+     * entry in worker.ts's pendingGames Map forever. */
+    evictPendingGame(userName: string, gameId: string): void {
+        const workerIndex = this.sessionToWorkerIndex.get(userName);
+        if (workerIndex === undefined) {
+            return;
+        }
+        const info = this.workerInfos[workerIndex];
+        if (info === undefined) {
+            return;
+        }
+        info.worker.postMessage({ type: "evict_pending_game", gameId });
+    }
 }
 
 export class GameServer {
@@ -195,6 +213,12 @@ export class GameServer {
 
     private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
         this.logger.info(`Username ${req.headers.username} connected`);
+        const userName = String(req.headers.username ?? "");
+        // Most recent gameId this connection asked to be matched on. Used to
+        // evict a stale pendingGames entry on disconnect — see
+        // WorkerPool.evictPendingGame. Harmless to re-send after a
+        // successful pairing (the entry is already gone by then).
+        let lastResetGameId: string | undefined;
 
         ws.on("message", async (clientRequestData: Buffer) => {
             const clientRequest =
@@ -216,6 +240,7 @@ export class GameServer {
                 case ClientRequest.MessageTypeCase.RESET: {
                     const resetRequest = clientRequest.getReset();
                     if (resetRequest !== undefined) {
+                        lastResetGameId = resetRequest.getGameId();
                         const workerResponse =
                             await this.pool.reset(resetRequest);
                         ws.send(workerResponse.serializeBinary());
@@ -229,10 +254,16 @@ export class GameServer {
 
         ws.on("error", (err) => {
             this.logger.error(err);
+            if (lastResetGameId) {
+                this.pool.evictPendingGame(userName, lastResetGameId);
+            }
         });
 
         ws.on("close", () => {
             this.logger.info(`Username ${req.headers.username} disconnected`);
+            if (lastResetGameId) {
+                this.pool.evictPendingGame(userName, lastResetGameId);
+            }
         });
     }
 

@@ -3,24 +3,18 @@ from dotenv import load_dotenv
 load_dotenv()
 import argparse
 import concurrent.futures
-import dataclasses
 import functools
-import gc
 import json
 import logging
 import os
-import random
-import shutil
 import threading
 import time
-from typing import Literal
 
 import jax
 import numpy as np
 import wandb.wandb_run
 
 import wandb
-from rl import checkpoint
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
@@ -29,23 +23,16 @@ from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent
-from rl.online.artifact import (
-    create_train_state,
-    load_train_state,
-    merge_pending_exploiter_promotions,
-)
-from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
+from rl.online.artifact import create_train_state, load_train_state
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
-from rl.online.league import MAIN_KEY, League, pfsp
 from rl.online.learner import (
     CAT_VF_SUPPORT,
-    ExploiterBudgetExhausted,
-    ExploiterPhaseRequested,
-    ExploiterPromoted,
+    POPULATION_NAMES,
     Learner,
+    OOMGuardTriggered,
+    PopulationName,
 )
-from rl.online.plasticity import shrink_and_perturb_player_state
 from rl.online.player_actor import PlayerActor
 
 logger = logging.getLogger(__name__)
@@ -67,13 +54,23 @@ def run_training_actor_pair(
 
     while not stop_signal[0]:
         try:
-            player_params = player.pull_main_player()
+            player_params = player.pull_own_player()
             opponent_params, is_trainable = player.get_match()
 
             player_ckpt = np.array(player_params.step_count).item()
             opponent_ckpt = np.array(opponent_params.step_count).item()
 
-            game_id = f"{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
+            # Population-prefixed: with all three populations' actors now
+            # running concurrently (docs/exploiter-phase-plan.md's
+            # three-population redesign), each independently step-counting
+            # from its own creation/reset point, two DIFFERENT populations
+            # can otherwise produce an identical game_id — impossible
+            # under the old design (only one population was ever live at
+            # once), now a real collision risk in the TS game server's
+            # pendingGames map (service/src/server/worker.ts).
+            game_id = (
+                f"{player.population}-{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
+            )
             for actor in (player, opponent):
                 actor.set_game_id(game_id)
 
@@ -103,11 +100,15 @@ def run_eval_heuristic(
     wandb_run: wandb.wandb_run.Run,
     learner_config: Porygon2LearnerConfig,
 ):
-    """Runs an actor to produce num_trajectories trajectories."""
+    """Runs an actor to produce num_trajectories trajectories. main only —
+    win-rate vs. the scripted baselines is a real strength signal for main,
+    pure diagnostic noise for an exploiter (docs/exploiter-phase-plan.md);
+    exploiter populations never get eval actors at all."""
     learner = actor._learner
+    main_pop = learner.populations["main"]
 
     with learner.gpu_lock:
-        step_count = np.array(learner.player_state.step_count).item()
+        step_count = np.array(main_pop.player_state.step_count).item()
 
     # Metric identity comes from the eval thread's name (set at spawn:
     # EvalActor-simpleheuristic-0, ...), not the env username, so renaming
@@ -126,7 +127,7 @@ def run_eval_heuristic(
     while not stop_signal[0]:
         try:
             with learner.gpu_lock:
-                new_step_count = np.array(learner.player_state.step_count).item()
+                new_step_count = np.array(main_pop.player_state.step_count).item()
             if new_step_count > step_count:
                 step_count = new_step_count
                 games += 1
@@ -144,16 +145,16 @@ def run_eval_heuristic(
                 if use_main:
                     prefix = "main"
                     with learner.gpu_lock:
-                        player_params = jax.device_get(learner.player_state.params)
-                        builder_params = jax.device_get(learner.builder_state.params)
+                        player_params = jax.device_get(main_pop.player_state.params)
+                        builder_params = jax.device_get(main_pop.builder_state.params)
                 else:
                     prefix = "ema"
                     with learner.gpu_lock:
                         player_params = jax.device_get(
-                            learner.player_state.target_params
+                            main_pop.player_state.target_params
                         )
                         builder_params = jax.device_get(
-                            learner.builder_state.target_params
+                            main_pop.builder_state.target_params
                         )
 
                 player = ParamsContainer(
@@ -215,7 +216,7 @@ def run_eval_heuristic(
 def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
     while not stop_signal[0]:
         try:
-            param_container = actor.pull_main_player()
+            param_container = actor.pull_own_player()
             new_key = actor.split_rng()
             actor.unroll(new_key, param_container.builder_params)
         except Exception as e:
@@ -223,104 +224,22 @@ def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
             raise e
 
 
-@dataclasses.dataclass
-class PhaseOutcome:
-    """What a single call to _run_one_phase ended with.
-
-    kind:
-        "exhausted"           — config.num_steps reached (essentially never
-                                 happens at num_steps=5,000,000; here for
-                                 completeness).
-        "exploiter_requested" — main paused itself for a PSRO exploiter
-                                 phase; checkpoint_path is a freshly written
-                                 full checkpoint to fork from.
-        "promoted"            — a running exploiter cleared the promotion
-                                 bar and wrote a promoted snapshot.
-        "failed"              — a running exploiter exhausted its frame
-                                 budget without clearing the bar; nothing
-                                 was written, its state is simply discarded.
-        "interrupted"         — Ctrl-C. Deliberately NOT re-raised past
-                                 this point: the orchestration loop below
-                                 only continues on "exploiter_requested", so
-                                 returning this (rather than letting
-                                 KeyboardInterrupt propagate all the way to
-                                 the top uncaught) is what stops the whole
-                                 loop cleanly instead of dumping a traceback
-                                 after a perfectly normal, intentional stop.
+def main(args: argparse.Namespace):
+    """Launches one persistent process holding three live, continuously-
+    training populations — MainPlayer, MainExploiter, LeagueExploiter
+    (docs/exploiter-phase-plan.md's 2026-08-12 three-population redesign,
+    superseding the old discrete-phases-in-one-process orchestration this
+    function used to run). Everything after initial setup is driven by a
+    single call to Learner.train(), which runs for the life of the
+    process; population creation/reset happens in-process (Learner._reset_
+    population), not via a fork-a-new-phase loop here.
     """
-
-    kind: Literal[
-        "exhausted", "exploiter_requested", "promoted", "failed", "interrupted"
-    ]
-    checkpoint_path: str | None = None
-    promoted_snapshot_dir: str | None = None
-    # Frames this specific phase trained, for the orchestration loop's
-    # running exploiter_frames_spent/total_frames_trained totals
-    # (config.exploiter_duty_cycle_fraction). 0 for a phase that crashed
-    # before completing any training.
-    frames_trained: int = 0
-
-
-def _run_one_phase(
-    learner_config: Porygon2LearnerConfig,
-    debug: bool,
-    mode: str,
-    fork_from_ckpt: str | None,
-    run_subdir: str | None,
-    reset_plasticity_overdue: bool,
-    wandb_group: str | None,
-    builder_replay: BuilderTrajectoryStore,
-    player_replay: PlayerTrajectoryStore,
-    exploiter_frames_spent: int,
-    total_frames_trained: int,
-) -> PhaseOutcome:
-    """Runs actors + the learner for one phase — main, or a single
-    exploiter attempt — until config.num_steps, a crash, Ctrl-C, or an
-    exploiter-phase transition. Exactly one phase is ever live at a time:
-    this hardware has one GPU and can't run distributed/concurrent
-    training, and the design (docs/exploiter-phase-plan.md) is strictly
-    sequential regardless — pause/fork/train/promote-or-discard/resume,
-    never two learners at once. main()'s orchestration loop calls this
-    repeatedly from the same process for that reason: no subprocess
-    spawning, no separate launch commands, one continuous GPU context.
-
-    Each call is its own wandb run (wandb.init() below) — a phase
-    transition always starts a fresh run, it doesn't rename the previous
-    one. wandb_group ties every phase of one orchestrated episode (main's
-    initial segment, every exploiter attempt, every subsequent main
-    resume) together under wandb's Group view, so "the run" stays
-    findable as a unit even though it's several run names underneath.
-
-    ``builder_replay``/``player_replay`` are owned by the caller and reused
-    across every phase in this process rather than allocated fresh here —
-    Learner.__init__ clears whichever is passed in before use. A fresh
-    store per phase left stale actor-thread writes able to leak trajectory
-    data from a just-ended phase's model into whatever ran next; see the
-    straggler check in this function's shutdown path, which is what makes
-    reusing (rather than reallocating) these safe to do.
-
-    ``exploiter_frames_spent``/``total_frames_trained`` are the running
-    totals as of the START of this phase (config.exploiter_duty_cycle_
-    fraction) — also owned by the caller, since a Learner doesn't survive
-    a phase transition and can't hold them itself. The returned
-    PhaseOutcome.frames_trained is this phase's own contribution, for the
-    caller to fold into those totals before the next call.
-    """
+    learner_config = get_learner_config()
+    debug = args.debug
     if debug:
         os.environ["WANDB_MODE"] = "disabled"
 
-    salt = time.time_ns()
-
     logger.info(f"Learner Config: {learner_config}")
-    if learner_config.pin_opponent_steps and not run_subdir:
-        raise ValueError(
-            "config.pin_opponent_steps is set (this is an exploiter-phase "
-            "run) but run_subdir is not — this would namespace this run's "
-            "checkpoints/snapshots into main's own checkpoint tree instead "
-            "of ckpts/gen{N}/exploiters/{run_subdir}/, eventually colliding "
-            "with main's ckpt_{step:08}/players/p_{step:08} directories at "
-            "the same step counts once main resumes."
-        )
 
     learner_player_model_config = get_player_model_config(
         learner_config.generation, train=True
@@ -339,9 +258,6 @@ def _run_one_phase(
     actor_player_network = get_player_model(actor_player_model_config)
     actor_builder_network = get_builder_model(actor_builder_model_config)
 
-    actor_threads: list[threading.Thread] = []
-    stop_signal = [False]
-
     player_state, builder_state = create_train_state(
         learner_player_network,
         learner_builder_network,
@@ -349,6 +265,11 @@ def _run_one_phase(
         learner_config,
     )
 
+    # Shared across all three populations — same architecture, so one
+    # Agent/gpu_lock serves everyone. Constructing a separate Agent per
+    # population would trigger redundant jax.jit traces of the identical
+    # apply_fn for no reason (rl/online/agent.py's Agent is already fully
+    # stateless w.r.t. "which model": params are a per-call argument).
     gpu_lock = threading.Lock()
     learning_agent = Agent(
         actor_player_network.apply,
@@ -362,184 +283,154 @@ def _run_one_phase(
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
-    logger.info("Loading train state...")
+
+    logger.info("Loading main's train state...")
+    mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
     player_state, builder_state, league, controller_bytes = load_train_state(
-        learner_config,
-        player_state,
-        builder_state,
-        mode=mode,
-        fork_from_ckpt=fork_from_ckpt,
-        run_subdir=run_subdir,
+        learner_config, player_state, builder_state, mode=mode
     )
-    # For PhaseOutcome.frames_trained (config.exploiter_duty_cycle_fraction)
-    # — captured here, before any hard-reset perturbation below, though
-    # that wouldn't change frame_count anyway (it only touches params).
-    phase_start_frame_count = int(jax.device_get(player_state.frame_count))
-
-    # A promoted exploiter (rl/online/promote_exploiter.py, or the
-    # in-process auto path in rl/online/learner.py) only reaches a live
-    # league here, at the start of a fresh phase — see
-    # docs/exploiter-phase-plan.md piece 5. Harmless to call for an
-    # exploiter phase too: already-merged step counts are skipped, and a
-    # freshly forked exploiter's league already carries whatever main had
-    # merged as of the fork point.
-    merged = merge_pending_exploiter_promotions(learner_config, league)
-    if merged:
-        logger.info("Merged %d promoted exploiter snapshot(s) into the league.", merged)
-
-    # AlphaStar-style search diversity (adapted from LeagueExploiter.
-    # checkpoint()'s 25% reset-to-original-init): without this, every
-    # ladder rung and every retry across stagnation episodes forks from
-    # the IDENTICAL point (same weights, same optimizer momentum) as
-    # main's pause checkpoint, so repeated failures just repeat the same
-    # local search rather than genuinely diversifying it. Only for
-    # exploiter phases — main itself is never perturbed this way outside
-    # its own plasticity mechanism.
-    is_exploiter_phase = learner_config.pin_opponent_steps is not None
-    if (
-        is_exploiter_phase
-        and np.random.random() < learner_config.exploiter_hard_reset_prob
-    ):
-        logger.info(
-            "Exploiter hard-reset (p=%.2f): shrink-and-perturbing the "
-            "forked params before training instead of using the loaded "
-            "checkpoint verbatim.",
-            learner_config.exploiter_hard_reset_prob,
-        )
-        player_state = shrink_and_perturb_player_state(
-            player_state,
-            jax.random.PRNGKey(random.randint(0, 2**16 - 1)),
-            default_shrink=learner_config.plasticity_default_shrink,
-            module_shrink=learner_config.plasticity_module_shrink,
-        )
-
     player_state = jax.device_put(player_state)
     builder_state = jax.device_put(builder_state)
 
-    logger.info("Initializing WandB...")
-    wandb_run = wandb.init(
-        project="pokemon-rl",
-        # Ties every phase of one orchestrated episode together in wandb's
-        # Group view — without this each phase transition (pause, fork,
-        # resume) would be an unrelated-looking run name with nothing
-        # connecting it to the episode it's actually part of.
-        group=wandb_group,
-        # Open question 3 in the exploiter-phase doc: keep exploiter runs
-        # visually distinguishable on the dashboard so they never get
-        # mistaken for "the next real main lineage".
-        tags=["exploiter"] if learner_config.pin_opponent_steps else None,
-        config={
-            "num_player_params": get_num_params(player_state.params),
-            "num_builder_params": get_num_params(builder_state.params),
-            "learner_config": learner_config,
-            "player_model_config": json.loads(
-                learner_player_model_config.to_json_best_effort()
-            ),
-            "builder_model_config": json.loads(
-                learner_builder_model_config.to_json_best_effort()
-            ),
-        },
-    )
-    logger.info(f"WandB serialized run: {wandb_run.name}")
+    # One wandb_group ties all three populations' runs together under
+    # wandb's Group view as one session — replaces the old meaning ("one
+    # episode's phases") with "one process's 3 populations", same
+    # underlying convention.
+    wandb_group = f"session-{int(time.time())}"
+    model_config_payload = {
+        "num_player_params": get_num_params(player_state.params),
+        "num_builder_params": get_num_params(builder_state.params),
+        "learner_config": learner_config,
+        "player_model_config": json.loads(
+            learner_player_model_config.to_json_best_effort()
+        ),
+        "builder_model_config": json.loads(
+            learner_builder_model_config.to_json_best_effort()
+        ),
+    }
 
-    learner = Learner(
-        player_state=player_state,
-        builder_state=builder_state,
-        config=learner_config,
-        league=league,
-        wandb_run=wandb_run,
-        gpu_lock=gpu_lock,
-        player_network=learner_player_network,
-        debug=debug,
-        controller_bytes=controller_bytes,
-        run_subdir=run_subdir,
-        builder_replay=builder_replay,
-        player_replay=player_replay,
-        exploiter_frames_spent_at_start=exploiter_frames_spent,
-        total_frames_trained_at_start=total_frames_trained,
-    )
-    if reset_plasticity_overdue:
-        learner.plasticity.acknowledge_exploiter_episode()
+    logger.info("Initializing WandB (3 persistent runs, one per population)...")
+    wandb_runs: dict[PopulationName, wandb.wandb_run.Run] = {}
+    for pop_name in POPULATION_NAMES:
+        wandb_runs[pop_name] = wandb.init(
+            project="pokemon-rl",
+            group=wandb_group,
+            job_type=pop_name,
+            name=f"{wandb_group}-{pop_name}",
+            # Keeps exploiter runs visually distinguishable on the
+            # dashboard so they never get mistaken for "the next real main
+            # lineage" (docs/exploiter-phase-plan.md open question 3).
+            tags=[pop_name] + (["exploiter"] if pop_name != "main" else []),
+            config=model_config_payload,
+            # Required for 3 genuinely-concurrent runs from one process.
+            # wandb.init()'s default reinit mode ("default" -> "return_
+            # previous" outside notebooks) means every call AFTER the
+            # first just hands back the already-active run instead of
+            # creating a new one — confirmed the hard way: without this,
+            # main_exploiter/league_exploiter silently received main's own
+            # Run object, so only one run ever showed up per session
+            # group. "create_new" makes each call independently create a
+            # real run; its only cost (not updating the wandb.run global /
+            # top-level wandb.log) is a non-issue here since every caller
+            # already logs through the specific Run object handed back
+            # (wandb_runs[...]/pop.wandb_run), never the bare wandb.log().
+            reinit="create_new",
+        )
+        logger.info(
+            "WandB serialized run (%s): %s", pop_name, wandb_runs[pop_name].name
+        )
 
     env_func = functools.partial(
         SinglePlayerSyncEnvironment,
         generation=learner_config.generation,
         smogon_format=learner_config.smogon_format,
     )
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=(
+            learner_config.num_player_actors_main
+            + 2 * learner_config.num_player_actors_exploiter
+            + 2 * len(learner_config.eval_baselines)
+        )
+    )
 
-    outcome = PhaseOutcome(kind="exhausted")
+    learner: Learner | None = None
 
-    # Win-rate vs. the scripted eval baselines plays no role in
-    # check_promotion_bar (only win-rate vs. the pinned opponents does) —
-    # it's pure diagnostic noise for an exploiter, unlike for main where
-    # it's a real strength signal. It isn't free either: eval_agent and
-    # learning_agent share one gpu_lock, so every eval-vs-baseline
-    # inference call directly contends with the exploiter's actual
-    # pinned-opponent games for the same GPU slot, slowing down the one
-    # thing that determines whether this phase succeeds within its frame
-    # budget. Skip spawning eval actors entirely for exploiter phases.
-    is_exploiter_phase = learner_config.pin_opponent_steps is not None
-    num_eval_baselines = 0 if is_exploiter_phase else len(learner_config.eval_baselines)
+    def spawn_actor_pool(population: PopulationName) -> None:
+        """Learner's spawn_actor_pool callback (learner.py can't import
+        PlayerActor/BuilderActor itself — both already import Learner,
+        so constructing them here in main.py and registering the threads
+        back onto the population avoids a circular import). Called
+        synchronously from Learner._reset_population the instant a
+        population's live params are set — for "main" this fires once
+        during initial setup below; for the two exploiter populations it
+        fires every creation AND every reset, since their actor pools
+        must be rebuilt against the freshly-forked params each time."""
+        is_exploiter = population != "main"
+        num_player_actors = (
+            learner_config.num_player_actors_exploiter
+            if is_exploiter
+            else learner_config.num_player_actors_main
+        )
+        num_builder_actors = (
+            learner_config.num_builder_actors_exploiter
+            if is_exploiter
+            else learner_config.num_builder_actors_main
+        )
+        stop_signal = learner.populations[population].stop_signal
+        salt = time.time_ns()
+        new_threads: list[threading.Thread] = []
 
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=(learner_config.num_player_actors + 2 * num_eval_baselines)
-    ) as executor:
         if "randombattle" not in learner_config.smogon_format:
             logger.info(
-                f"Initializing {learner_config.num_builder_actors} builder actors..."
+                "[%s] Initializing %d builder actors...", population, num_builder_actors
             )
-            for builder_id in range(learner_config.num_builder_actors):
+            for builder_id in range(num_builder_actors):
                 actor = BuilderActor(
                     agent=learning_agent,
                     learner=learner,
-                    rng_seed=len(actor_threads) + salt,
+                    rng_seed=len(new_threads) + salt,
+                    population=population,
                 )
-                args = (actor, stop_signal)
-                actor_threads.append(
+                new_threads.append(
                     threading.Thread(
                         target=run_builder_actor,
-                        args=args,
-                        name=f"BuilderActor-{builder_id}",
+                        args=(actor, stop_signal),
+                        name=f"BuilderActor-{population}-{builder_id}",
+                        daemon=True,
                     )
                 )
 
         logger.info(
-            f"Initializing {learner_config.num_player_actors} player actors (self-play)..."
+            "[%s] Initializing %d player actors (self-play)...",
+            population,
+            num_player_actors,
         )
-        for game_id in range(learner_config.num_player_actors // 2):
+        for game_id in range(num_player_actors // 2):
             actors = [
                 PlayerActor(
                     agent=learning_agent,
-                    env=env_func(f"train:p{player_id}g{game_id:02d}"),
+                    env=env_func(f"{population}:p{player_id}g{game_id:02d}"),
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
-                    rng_seed=len(actor_threads) + salt,
+                    rng_seed=len(new_threads) + salt,
+                    population=population,
                 )
                 for player_id in range(2)
             ]
-            args = (*actors, executor, stop_signal)
-            actor_threads.append(
+            new_threads.append(
                 threading.Thread(
                     target=run_training_actor_pair,
-                    args=args,
-                    name=f"Selfplay-{game_id}",
+                    args=(*actors, executor, stop_signal),
+                    name=f"Selfplay-{population}-{game_id}",
+                    daemon=True,
                 )
             )
 
-        if is_exploiter_phase:
+        if population == "main":
             logger.info(
-                "Exploiter phase: skipping scripted-baseline eval actors "
-                "(not part of the promotion criterion, would only "
-                "contend with pinned-opponent games for the shared gpu_lock)."
-            )
-        else:
-            # Thread names carry the wandb series identity (run_eval_heuristic
-            # reads the current thread's name), including the baseline being
-            # played, so metric keys stay meaningful if the eval allocation
-            # changes.
-            logger.info(
-                f"Initializing {len(learner_config.eval_baselines)} evaluation actors "
-                f"(baseline indices: {learner_config.eval_baselines})..."
+                "[main] Initializing %d evaluation actors (baseline indices: %s)...",
+                len(learner_config.eval_baselines),
+                learner_config.eval_baselines,
             )
             for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
                 baseline_name = EVAL_BASELINE_NAMES[baseline_index]
@@ -557,100 +448,63 @@ def _run_one_phase(
                     ),
                     unroll_length=learner_config.unroll_length,
                     learner=learner,
-                    rng_seed=len(actor_threads) + salt,
+                    rng_seed=len(new_threads) + salt,
                     is_eval=True,
+                    population="main",
                 )
-                actor_threads.append(
+                new_threads.append(
                     threading.Thread(
                         target=run_eval_heuristic,
-                        args=(actor, executor, stop_signal, wandb_run, learner_config),
+                        args=(
+                            actor,
+                            executor,
+                            stop_signal,
+                            wandb_runs["main"],
+                            learner_config,
+                        ),
                         name=f"EvalActor-{baseline_name}-{eval_id}",
+                        daemon=True,
                     )
                 )
 
-        # Start the actors and learner.
-        for t in actor_threads:
+        for t in new_threads:
             t.start()
+        learner.register_actor_threads(population, new_threads)
 
-        try:
-            learner.train()
-        except KeyboardInterrupt:
-            # Deliberately not re-raised: Learner.train() has already saved
-            # a checkpoint on its way out (its own KeyboardInterrupt
-            # handler) and this method's finally block below still joins
-            # every actor thread and finishes wandb cleanly either way.
-            # Returning "interrupted" is what actually stops the
-            # orchestration loop in main() (it only continues on
-            # "exploiter_requested") — re-raising here just sent a
-            # perfectly normal, intentional Ctrl-C stop past main()
-            # uncaught, printing a traceback that looks exactly like a
-            # crash for something that wasn't one.
-            logger.info("Keyboard interrupt received. Shutting down gracefully...")
-            outcome = PhaseOutcome(kind="interrupted")
-        except ExploiterPhaseRequested as e:
-            logger.info("Main paused for an exploiter phase @ %s", e.checkpoint_path)
-            outcome = PhaseOutcome(
-                kind="exploiter_requested", checkpoint_path=e.checkpoint_path
-            )
-        except ExploiterPromoted as e:
-            logger.info("Exploiter promoted -> %s", e.snapshot_dir)
-            outcome = PhaseOutcome(
-                kind="promoted", promoted_snapshot_dir=e.snapshot_dir
-            )
-        except ExploiterBudgetExhausted:
-            logger.info(
-                "Exploiter exhausted its budget without promoting — discarding."
-            )
-            outcome = PhaseOutcome(kind="failed")
-        finally:
-            stop_signal[0] = True
-            for t in actor_threads:
-                t.join(timeout=30)
-            stragglers = [t for t in actor_threads if t.is_alive()]
-            if stragglers:
-                # Transient slowness (a queued GPU op, a slow env reset)
-                # shouldn't be fatal on its own — give it one longer grace
-                # window before treating it as genuinely hung.
-                logger.warning(
-                    "%d actor thread(s) did not stop within 30s of "
-                    "stop_signal: %s — giving a 60s grace period before "
-                    "treating this as a hung shutdown.",
-                    len(stragglers),
-                    [t.name for t in stragglers],
-                )
-                for t in stragglers:
-                    t.join(timeout=60)
-                stragglers = [t for t in actor_threads if t.is_alive()]
-            if stragglers:
-                # A thread still alive here never honoured stop_signal — not
-                # transient slowness. Every actor thread holds a live
-                # reference to this phase's Learner (trajectory stores +
-                # device-resident player/builder state), so a thread that
-                # outlives this phase keeps all of it reachable regardless
-                # of gc.collect(): the next phase's Learner is constructed
-                # in the same process/GPU context (no subprocess boundary),
-                # so this is exactly how cross-phase RAM/VRAM usage creeps
-                # up across a long automated session and eventually causes
-                # a silent OOM death. Fail loudly here instead of silently
-                # starting the next phase on top of known-leaked state — an
-                # uncaught exception propagates past this call entirely,
-                # same as a genuine crash, leaving the checkpoint tree
-                # intact for inspection.
-                raise RuntimeError(
-                    f"{len(stragglers)} actor thread(s) never stopped after "
-                    f"stop_signal + 90s grace: {[t.name for t in stragglers]}. "
-                    "Refusing to proceed to the next phase with stale actors "
-                    "still holding this phase's buffers/device state alive."
-                )
-            try:
-                mem = jax.devices()[0].memory_stats()
-                logger.info(
-                    "Post-phase device memory: bytes_in_use=%s peak_bytes_in_use=%s",
-                    mem.get("bytes_in_use"),
-                    mem.get("peak_bytes_in_use"),
-                )
-            except Exception:
-                pass  # memory_stats() isn't available on every backend/version.
+    learner = Learner(
+        config=learner_config,
+        league=league,
+        player_state=player_state,
+        builder_state=builder_state,
+        main_wandb_run=wandb_runs["main"],
+        main_exploiter_wandb_run=wandb_runs["main_exploiter"],
+        league_exploiter_wandb_run=wandb_runs["league_exploiter"],
+        gpu_lock=gpu_lock,
+        player_network=learner_player_network,
+        debug=debug,
+        controller_bytes=controller_bytes,
+        spawn_actor_pool=spawn_actor_pool,
+    )
+    # main always exists from process start — its actor pool (and eval
+    # actors) spin up now. The two exploiter populations' pools spin up
+    # lazily, via the same spawn_actor_pool callback, the instant
+    # Learner._reset_population first creates them.
+    spawn_actor_pool("main")
+
+    try:
+        learner.train()
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received. Learner has saved main's checkpoint.")
+    except OOMGuardTriggered as e:
+        logger.warning(
+            "Stopped due to low available memory (checkpoint saved at %s). "
+            "Relaunch this process to resume — a fresh process is what "
+            "actually reclaims OS memory, so don't just retry in-place.",
+            e.checkpoint_path,
+        )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+        for wandb_run in wandb_runs.values():
             try:
                 wandb_run.finish()
             except Exception:
@@ -658,276 +512,7 @@ def _run_one_phase(
                     "wandb_run.finish() failed during shutdown", exc_info=True
                 )
 
-    outcome.frames_trained = (
-        int(jax.device_get(learner.player_state.frame_count)) - phase_start_frame_count
-    )
-    return outcome
-
-
-def _pick_pin_opponent_steps(
-    checkpoint_path: str, k: int, min_games: float
-) -> tuple[int, ...]:
-    """k opponents for this exploiter phase, drawn via PFSP
-    (linear_capped weighting) over the same win-rate table
-    Learner._measure_exploitability / _should_add_new_player already read
-    — sampled, not deterministically ranked, so the same league doesn't
-    hand every ladder rung the identical hardest-first set. linear_capped
-    (min(0.5, 1 - win_rate)) still concentrates probability on opponents
-    main is currently losing to, capped so no single hardest opponent
-    dominates every draw.
-
-    Snapshots with fewer than min_games effective games against main are
-    excluded from the draw — the same reliability bar as
-    exploit_ctrl_min_games_per_opponent/bandit_min_games_per_opponent,
-    applied here for the identical reason: a freshly-added or
-    lightly-played snapshot reads near 0.5 by construction (main vs. a
-    near-identical recent self), which looks exactly like a real hole
-    otherwise (1338's exploit_ctrl false-positive, in the doc's session
-    log, was exactly this). Excluded snapshots are only used as a
-    recency-ordered filler if there aren't enough reliably-measured
-    opponents to reach k.
-
-    Diversity guard: sampling without replacement skips a draw that shares
-    a PlayerRef.parent_step with an opponent already picked — two exploiter
-    promotions forked from the identical main checkpoint are the closest
-    thing this data model can say "these are related," so picking both
-    spends a pinned slot on near-duplicate ancestry instead of a genuinely
-    different ancestor. This doesn't conjure more candidates out of thin
-    air — with a league too small to have real choice (e.g. k=3 against a
-    3-member league), there's nothing to diversify away from — but it
-    makes the draw meaningfully better once there's an actual pool to
-    choose from, which grows every time an exploiter gets promoted back
-    into the league.
-    """
-    league_bytes = checkpoint.load_league_bytes(checkpoint_path)
-    if league_bytes is None:
-        return ()
-    league = League.deserialize(league_bytes)
-    historical = [ref for step, ref in league.players.items() if step != MAIN_KEY]
-    if not historical:
-        return ()
-
-    def _games_vs_main(step: int) -> float:
-        return league.games.get((MAIN_KEY, step), 0.0) + league.games.get(
-            (step, MAIN_KEY), 0.0
-        )
-
-    rateable = [
-        ref for ref in historical if _games_vs_main(ref.step_count) >= min_games
-    ]
-    win_rates = np.array(
-        [league._win_rate_by_steps(MAIN_KEY, ref.step_count) for ref in rateable]
-    )
-
-    picked: list[PlayerRef] = []
-    seen_parents: set[int] = set()
-    candidates = list(rateable)
-    remaining_win_rates = win_rates
-    while candidates and len(picked) < k:
-        probs = pfsp(remaining_win_rates, weighting="linear_capped")
-        idx = np.random.choice(len(candidates), p=probs)
-        ref = candidates.pop(idx)
-        remaining_win_rates = np.delete(remaining_win_rates, idx)
-        if ref.parent_step is not None and ref.parent_step in seen_parents:
-            continue
-        picked.append(ref)
-        if ref.parent_step is not None:
-            seen_parents.add(ref.parent_step)
-
-    if len(picked) < k:
-        already_picked_steps = {ref.step_count for ref in picked}
-        fallback_by_recency = sorted(
-            (ref for ref in historical if ref.step_count not in already_picked_steps),
-            key=lambda ref: ref.step_count,
-            reverse=True,
-        )
-        picked += fallback_by_recency[: k - len(picked)]
-
-    return tuple(ref.step_count for ref in picked)
-
-
-def _cleanup_exploiter_run(generation: int, run_id: str) -> None:
-    """Deletes an exploiter attempt's own working checkpoint tree once its
-    outcome is known and already acted on. Safe for both terminal
-    outcomes: a promotion already copied everything that matters into
-    exploiters/promoted/ (write_promoted_snapshot), and a clean
-    budget-exhausted failure leaves nothing worth keeping — this is
-    disposable search scratch in the fully-automated pipeline, not unique
-    work product (the wandb run for the attempt is the permanent record of
-    what happened). Only ever called after _run_one_phase returns a clean
-    PhaseOutcome — a genuine crash propagates past this call entirely, so
-    a real bug still has a checkpoint tree to inspect.
-    """
-    run_root = f"./ckpts/gen{generation}/exploiters/{run_id}"
-    shutil.rmtree(run_root, ignore_errors=True)
-    logger.info("Cleaned up discarded exploiter checkpoints at %s", run_root)
-
-
-def main(args: argparse.Namespace):
-    """Orchestrates one continuous session: main training, with automatic
-    PSRO exploiter phases (docs/exploiter-phase-plan.md) interleaved in the
-    SAME process when config.auto_exploiter_enabled is set. One command,
-    no manual promote_exploiter.py invocation, no separate launch per
-    phase — everything after the initial launch is driven by this loop.
-    """
-    learner_config = get_learner_config()
-    debug = args.debug
-
-    # Constructed once for the life of this process and reused across
-    # every phase (main's segments, every exploiter attempt) instead of
-    # letting each phase's Learner allocate its own — see _run_one_phase's
-    # docstring and BuilderTrajectoryStore.clear for why a fresh-per-phase
-    # store was a leak vector. Learner.__init__ clears whichever is passed
-    # in before that phase's actors start writing to it.
-    builder_replay = BuilderTrajectoryStore(
-        max_size=learner_config.builder_replay_buffer_capacity,
-        max_reuses=learner_config.builder_replay_ratio,
-    )
-    player_replay = PlayerTrajectoryStore(
-        max_size=learner_config.player_replay_buffer_capacity,
-        max_reuses=learner_config.player_replay_ratio,
-        need_tracking=learner_config.smogon_format != "randombattle",
-    )
-
-    # Only the very first phase in this process honours these — every
-    # phase after that is an internal, deterministic transition (fork a
-    # fresh exploiter, or resume main from the checkpoint it just paused
-    # at), never "start from scratch" or "merge params across an
-    # architecture change".
-    initial_mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
-    initial_fork_from_ckpt = os.environ.get("FORK_FROM_CKPT")
-    initial_run_subdir = os.environ.get("EXPLOITER_RUN_ID")
-
-    # One group per orchestration-loop invocation (i.e. per process launch,
-    # not per phase) — every phase this process runs, from main's initial
-    # segment through every exploiter attempt to every later main resume,
-    # shows up under this same group in wandb, so the whole episode stays
-    # findable as a unit despite being several run names underneath.
-    wandb_group = f"session-{int(time.time())}"
-
-    # Budget-parity duty-cycle scheduling (config.exploiter_duty_cycle_
-    # fraction): running totals for the life of this process, threaded into
-    # each phase's Learner as its starting point and updated here after
-    # every phase returns. Resets to 0 on a process restart — not persisted
-    # across a full restart yet, same as every other per-process-only
-    # counter in this orchestration loop.
-    total_frames_trained = 0
-    exploiter_frames_spent = 0
-
-    outcome = _run_one_phase(
-        learner_config,
-        debug,
-        mode=initial_mode,
-        fork_from_ckpt=initial_fork_from_ckpt,
-        run_subdir=initial_run_subdir,
-        reset_plasticity_overdue=False,
-        wandb_group=wandb_group,
-        builder_replay=builder_replay,
-        player_replay=player_replay,
-        exploiter_frames_spent=exploiter_frames_spent,
-        total_frames_trained=total_frames_trained,
-    )
-    total_frames_trained += outcome.frames_trained
-    gc.collect()
-
-    while (
-        outcome.kind == "exploiter_requested" and learner_config.auto_exploiter_enabled
-    ):
-        main_checkpoint = outcome.checkpoint_path
-        promoted = False
-
-        for k in learner_config.auto_exploiter_ladder:
-            pin_opponent_steps = _pick_pin_opponent_steps(
-                main_checkpoint, k, learner_config.exploit_ctrl_min_games_per_opponent
-            )
-            if not pin_opponent_steps:
-                logger.warning(
-                    "No historical league members yet to pin an exploiter "
-                    "against — skipping this stagnation episode entirely."
-                )
-                break
-
-            run_id = f"auto-{int(time.time())}-k{k}"
-            logger.info(
-                "Launching exploiter phase: k=%d pin=%s run_id=%s fork=%s",
-                k,
-                pin_opponent_steps,
-                run_id,
-                main_checkpoint,
-            )
-            exploiter_outcome = _run_one_phase(
-                learner_config.replace(
-                    pin_opponent_steps=pin_opponent_steps,
-                    auto_exploiter_enabled=True,
-                ),
-                debug,
-                mode="checkpoint",
-                fork_from_ckpt=main_checkpoint,
-                run_subdir=run_id,
-                reset_plasticity_overdue=False,
-                wandb_group=wandb_group,
-                builder_replay=builder_replay,
-                player_replay=player_replay,
-                exploiter_frames_spent=exploiter_frames_spent,
-                total_frames_trained=total_frames_trained,
-            )
-            total_frames_trained += exploiter_outcome.frames_trained
-            exploiter_frames_spent += exploiter_outcome.frames_trained
-            gc.collect()
-
-            if exploiter_outcome.kind == "interrupted":
-                # Ctrl-C during an exploiter attempt stops the WHOLE session
-                # immediately — it must never fall through to the generic
-                # "didn't clear the bar, try the next rung" branch below,
-                # which would silently launch another exploiter attempt
-                # instead of honouring the stop. Deliberately skip cleanup
-                # too, same as a genuine crash: an interrupted attempt's
-                # state may be worth inspecting.
-                logger.info("Interrupted during exploiter attempt k=%d — stopping.", k)
-                return
-
-            # Disposable scratch either way: a promotion already copied
-            # what matters into exploiters/promoted/, and a clean failure
-            # has nothing worth keeping — the wandb run is the permanent
-            # record. Only skipped on a genuine crash, which propagates
-            # past this call entirely rather than returning a PhaseOutcome.
-            if exploiter_outcome.kind in ("promoted", "failed"):
-                _cleanup_exploiter_run(learner_config.generation, run_id)
-
-            if exploiter_outcome.kind == "promoted":
-                promoted = True
-                break
-            logger.info(
-                "Exploiter attempt k=%d did not clear the promotion bar "
-                "within its budget — trying the next ladder rung.",
-                k,
-            )
-
-        if not promoted:
-            logger.info(
-                "Exhausted auto_exploiter_ladder=%s without a promotion "
-                "this episode. Resuming main unchanged.",
-                learner_config.auto_exploiter_ladder,
-            )
-
-        logger.info("Resuming main.")
-        outcome = _run_one_phase(
-            learner_config,
-            debug,
-            mode="checkpoint",
-            fork_from_ckpt=None,
-            run_subdir=None,
-            reset_plasticity_overdue=True,
-            wandb_group=wandb_group,
-            builder_replay=builder_replay,
-            player_replay=player_replay,
-            exploiter_frames_spent=exploiter_frames_spent,
-            total_frames_trained=total_frames_trained,
-        )
-        total_frames_trained += outcome.frames_trained
-        gc.collect()
-
-    logger.info("Training run complete (%s).", outcome.kind)
+    logger.info("Training run complete.")
 
 
 if __name__ == "__main__":
