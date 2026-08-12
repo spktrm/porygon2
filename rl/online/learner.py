@@ -43,7 +43,14 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
-from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
+from rl.environment.utils import (
+    _bucket_level,
+    _bucket_value,
+    _history_level,
+    _packed_history_level,
+    clip_history,
+    clip_packed_history,
+)
 from rl.model.heads import HeadParams, calculate_hierarchical_prior
 from rl.model.utils import Params, ParamsContainer
 from rl.online.artifact import (
@@ -800,8 +807,30 @@ def _stack_and_pad_batch(
         .item()
     )
 
-    num_valid = num_valid = geometric_bucket(
-        max_valid,
+    # One shared bucket level across player_transitions/history/packed_
+    # history instead of three independently-computed geometric_bucket()
+    # calls: all three lengths are different views of the same fact (how
+    # long this batch's games ran), so bucketing them independently lets
+    # XLA see the PRODUCT of each axis's distinct values as new shapes for
+    # _TRAIN_STEP_JIT, not just the sum — main's wider opponent/game-length
+    # diversity under the three-population redesign turned this from a
+    # latent inefficiency into frequent, ongoing recompilation (each
+    # permanently retained in JAX's compile cache) that both throttled
+    # main's step throughput and was a real contributor to the OOM-guard
+    # trip after ~1hr on 2026-08-12. Taking the max of each axis's own
+    # required level (rather than letting one field's level drive the
+    # others) means no field is ever truncated below what it individually
+    # needed — this only ever costs extra padding, never data loss.
+    level = max(
+        _bucket_level(max_valid, player_transition_min_length),
+        _history_level(stacked_trajectory.player_history, player_history_min_length),
+        _packed_history_level(
+            stacked_trajectory.player_packed_history, player_history_min_length
+        ),
+    )
+
+    num_valid = _bucket_value(
+        level,
         player_transition_min_length,
         stacked_trajectory.player_transitions.env_output.done.shape[0],
     )
@@ -815,9 +844,12 @@ def _stack_and_pad_batch(
         player_packed_history=clip_packed_history(
             stacked_trajectory.player_packed_history,
             min_length=player_history_min_length,
+            level=level,
         ),
         player_history=clip_history(
-            stacked_trajectory.player_history, min_length=player_history_min_length
+            stacked_trajectory.player_history,
+            min_length=player_history_min_length,
+            level=level,
         ),
         reuse_count=(
             ()
@@ -1140,10 +1172,12 @@ class Learner:
                 max_size=config.player_replay_buffer_capacity,
                 max_reuses=config.player_replay_ratio,
                 need_tracking=is_not_randoms,
+                name=name,
             ),
             builder_replay=BuilderTrajectoryStore(
                 max_size=config.builder_replay_buffer_capacity,
                 max_reuses=config.builder_replay_ratio,
+                name=name,
             ),
             plasticity=plasticity,
             player_state=player_state,
@@ -1199,14 +1233,25 @@ class Learner:
 
         zero_step = np.zeros_like(host_player.step_count)
         zero_frame = np.zeros_like(host_player.frame_count)
-        player_state = main.player_state.replace(
+        # .replace() must be called on the HOST copies (host_player/
+        # host_builder), not main.player_state/main.builder_state: any
+        # field not explicitly overridden below is inherited as-is from
+        # whatever .replace() is called on. Calling it on the live device
+        # objects silently aliased ema_adv_mean/ema_adv_std (and base
+        # TrainState.step) to main's own live, continuously-donated
+        # buffers instead of copying them — main's very next train step
+        # would donate (free) that shared buffer, and the forked
+        # population's own next train step would then try to donate that
+        # same already-freed buffer, raising XLA's "Donation requested
+        # for invalid buffer".
+        player_state = host_player.replace(
             params=player_params,
             target_params=player_target_params,
             opt_state=main.player_state.tx.init(player_params),
             step_count=zero_step,
             frame_count=zero_frame,
         )
-        builder_state = main.builder_state.replace(
+        builder_state = host_builder.replace(
             params=builder_params,
             target_params=builder_target_params,
             opt_state=main.builder_state.tx.init(builder_params),

@@ -218,10 +218,37 @@ def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
         try:
             param_container = actor.pull_own_player()
             new_key = actor.split_rng()
-            actor.unroll(new_key, param_container.builder_params)
+            # pull_own_player() returns host numpy (league.get_live() ->
+            # jax.device_get()'d params) — device_put it ONCE here, same as
+            # PlayerActor.unroll_and_push does for player_params. Without
+            # this, jax.jit implicitly re-transfers the same host array to
+            # device on every one of unroll()'s ~102 steps instead of once,
+            # across every concurrent builder actor thread, continuously
+            # for the process lifetime — a real memory/throughput cost.
+            builder_params = jax.device_put(param_container.builder_params)
+            actor.unroll(new_key, builder_params)
         except Exception as e:
             logger.error("Error running builder actor", exc_info=True)
             raise e
+
+
+def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
+    """Stop any run this project still shows as "running" from a previous
+    process. start.sh's `tmux kill-session` SIGKILLs the old python
+    process without giving wandb.finish() a chance to run, so those runs
+    otherwise sit "Running" in the dashboard until W&B's own heartbeat
+    timeout eventually flips them to Crashed. Called once, before this
+    process's own wandb.init() calls, so every "running" run found here is
+    necessarily stale. Assumes single-box, single-training-process usage
+    (docs/exploiter-phase-plan.md) — stopping every "running" run in the
+    project would be wrong if two training processes were ever live at
+    once."""
+    api = wandb.Api()
+    for run in api.runs(
+        f"{api.default_entity}/{project}", filters={"state": "running"}
+    ):
+        logger.info("Stopping stale wandb run %s (state=running)", run.name)
+        run.stop()
 
 
 def main(args: argparse.Namespace):
@@ -308,6 +335,8 @@ def main(args: argparse.Namespace):
             learner_builder_model_config.to_json_best_effort()
         ),
     }
+
+    _stop_stale_wandb_runs()
 
     logger.info("Initializing WandB (3 persistent runs, one per population)...")
     wandb_runs: dict[PopulationName, wandb.wandb_run.Run] = {}

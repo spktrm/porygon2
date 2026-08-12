@@ -74,36 +74,59 @@ def expand_dims(x, axis: int):
     return jax.tree.map(lambda i: np.expand_dims(i, axis=axis), x)
 
 
+def _bucket_level(length: int, lo: int) -> int:
+    """Number of lo-doublings needed to reach at least `length` (>= 0),
+    uncapped by any hi — see geometric_bucket. Exposed separately so
+    callers with multiple correlated length signals (e.g. _stack_and_pad_
+    batch's player_transitions/history/packed_history, which all describe
+    the same underlying game length) can take one shared max level instead
+    of each independently picking its own — see geometric_bucket's
+    docstring for why that matters."""
+    if length <= lo:
+        return 0
+    return math.ceil(math.log2(length / lo))
+
+
+def _bucket_value(level: int, lo: int, hi: int) -> int:
+    return min(hi, lo * 2**level)
+
+
 def geometric_bucket(length: int, lo: int, hi: int) -> int:
     """Rounds length up to the next lo * 2^k, capped at hi.
 
     Geometric buckets bound the number of distinct clipped shapes (and thus
-    JIT recompilations) to log2(hi / lo) + 1, at the cost of at most 2x
-    padding waste per sample.
+    JIT recompilations) to log2(hi / lo) + 1 for a SINGLE length signal —
+    if a jitted function's batch depends on multiple independently-bucketed
+    fields, the actual number of distinct shape combinations XLA sees is
+    the PRODUCT across fields, not the sum. When those fields are
+    correlated (e.g. all describing the same trajectory's game length),
+    prefer computing one shared level via _bucket_level per field, taking
+    their max, and applying it uniformly via _bucket_value — see
+    rl/online/learner.py's _stack_and_pad_batch.
     """
-    if length <= lo:
-        return lo
-    return min(hi, lo * 2 ** math.ceil(math.log2(length / lo)))
+    return _bucket_value(_bucket_level(length, lo), lo, hi)
 
 
-def clip_history(
-    history: PlayerHistoryOutput, min_length: int = 64
-) -> PlayerHistoryOutput:
+def _history_level(history: PlayerHistoryOutput, min_length: int) -> int:
     history_length = np.max(
         history.field[..., FieldFeature.FIELD_FEATURE__VALID].sum(0),
         axis=0,
     ).item()
+    return _bucket_level(history_length, min_length)
 
-    rounded_length = geometric_bucket(
-        history_length, min_length, history.field.shape[0]
-    )
 
+def clip_history(
+    history: PlayerHistoryOutput, min_length: int = 64, level: int | None = None
+) -> PlayerHistoryOutput:
+    if level is None:
+        level = _history_level(history, min_length)
+    rounded_length = _bucket_value(level, min_length, history.field.shape[0])
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
-def clip_packed_history(
-    packed_history: PlayerPackedHistoryOutput, min_length: int = 64
-) -> PlayerPackedHistoryOutput:
+def _packed_history_level(
+    packed_history: PlayerPackedHistoryOutput, min_length: int
+) -> int:
     history_length = np.max(
         (
             packed_history.revealed_cache[
@@ -113,11 +136,19 @@ def clip_packed_history(
         ).sum(0),
         axis=0,
     ).item()
+    return _bucket_level(history_length, min_length)
 
-    rounded_length = geometric_bucket(
-        history_length, min_length, packed_history.revealed_cache.shape[0]
+
+def clip_packed_history(
+    packed_history: PlayerPackedHistoryOutput,
+    min_length: int = 64,
+    level: int | None = None,
+) -> PlayerPackedHistoryOutput:
+    if level is None:
+        level = _packed_history_level(packed_history, min_length)
+    rounded_length = _bucket_value(
+        level, min_length, packed_history.revealed_cache.shape[0]
     )
-
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
 
 

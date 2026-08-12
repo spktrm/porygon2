@@ -7,6 +7,22 @@ ARGS=$(printf "%q " "$@")
 cd service
 cd ../
 
+# Ask any wandb runs from a previous "train" session to stop gracefully.
+# Run.stop() just sets a flag the OLD process's own heartbeat has to pick
+# up, so this only works while that process is still alive -- it MUST run
+# before the tmux kill-session below, or there's nothing left to see the
+# flag and the runs just sit "Running" until W&B's own timeout eventually
+# marks them Crashed instead of Killed.
+echo "Stopping stale wandb runs from any previous session..."
+env/bin/python -c "
+import wandb
+api = wandb.Api()
+for run in api.runs(f'{api.default_entity}/pokemon-rl', filters={'state': 'running'}):
+    print(f'  stopping {run.name}')
+    run.stop()
+" 2>/dev/null || true
+sleep 5
+
 # Start clean
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 

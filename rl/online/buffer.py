@@ -15,7 +15,7 @@ from rl.environment.protos.features_pb2 import PackedSetFeature
 class BuilderTrajectoryStore:
     """Stores builder trajectories for later use by the learner."""
 
-    def __init__(self, max_size: int = 1000, max_reuses: int = 5):
+    def __init__(self, max_size: int = 1000, max_reuses: int = 5, name: str = ""):
         self._trajectories: dict[
             int, tuple[BuilderTransition, BuilderHistoryOutput]
         ] = {}
@@ -34,7 +34,8 @@ class BuilderTrajectoryStore:
         self._add_cv = threading.Condition(lock)
         self._sample_cv = threading.Condition(lock)
 
-        self._progress = tqdm(desc="builder_producer", smoothing=0.1)
+        desc = f"builder_producer-{name}" if name else "builder_producer"
+        self._progress = tqdm(desc=desc, smoothing=0.1)
 
     @classmethod
     def from_trajectories(
@@ -151,6 +152,7 @@ class PlayerTrajectoryStore:
         max_size: int = 1000,
         max_reuses: int = 5,
         need_tracking: bool = False,
+        name: str = "",
     ):
         self._trajectories: dict[int, Trajectory] = {}
         self._reuses = np.zeros(max_size, dtype=int)
@@ -169,7 +171,8 @@ class PlayerTrajectoryStore:
         self.total_adds = 0
         self.total_samples = 0
 
-        self._progress = tqdm(desc="player_producer", smoothing=0.1)
+        desc = f"player_producer-{name}" if name else "player_producer"
+        self._progress = tqdm(desc=desc, smoothing=0.1)
 
         # Tracking
         self.need_tracking = need_tracking
