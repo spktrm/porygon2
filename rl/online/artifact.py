@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from collections.abc import Callable, Mapping
-from pprint import pprint
+from pprint import pformat
 from typing import Any, Literal
 
 import flax.linen as nn
@@ -26,6 +26,7 @@ import optax
 import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
+from tqdm import tqdm
 
 from rl import checkpoint
 from rl.config.common import AdamWConfig  # noqa: F401 (re-export convenience)
@@ -98,7 +99,7 @@ def check_manifest(ckpt_path: str, learner_config, strict: bool) -> None:
             f"architecture ({detail}); resume with load mode 'params' to "
             "merge, or start from scratch"
         )
-    print(f"manifest deltas vs current architecture ({detail}) — merging params")
+    tqdm.write(f"manifest deltas vs current architecture ({detail}) — merging params")
 
 
 class Porygon2PlayerTrainState(train_state.TrainState):
@@ -398,7 +399,7 @@ def load_from_scratch(
     """
     No-op on state; simply initializes a fresh league.
     """
-    print("Starting training from scratch.")
+    tqdm.write("Starting training from scratch.")
     league = _init_league(learner_config, player_state, builder_state)
     return player_state, builder_state, league, None
 
@@ -413,11 +414,11 @@ def load_from_checkpoint(
     Full restoration: loads params, opt_state, step counts, league, and the
     host-side controller/plasticity state.
     """
-    print(f"Loading checkpoint from {ckpt_path}")
+    tqdm.write(f"Loading checkpoint from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=True)
     ckpt_data = checkpoint.load_full(ckpt_path)
 
-    print("Checkpoint data:")
+    tqdm.write("Checkpoint data:")
     ckpt_player_state = ckpt_data["player_state"]
     ckpt_builder_state = ckpt_data["builder_state"]
     ckpt_league_bytes = ckpt_data["league"]
@@ -425,8 +426,8 @@ def load_from_checkpoint(
     builder_scalars = ckpt_builder_state["scalars"]
 
     # Debug prints (scalars only — heavy arrays excluded)
-    pprint(player_scalars)
-    pprint(builder_scalars)
+    tqdm.write(pformat(player_scalars))
+    tqdm.write(pformat(builder_scalars))
 
     # Restore League
     if ckpt_league_bytes is not None:
@@ -516,7 +517,7 @@ def load_from_params(
     the merged tree. Resets opt_state and counts (by keeping the input
     state's version of those) and starts a fresh league.
     """
-    print(f"Loading (merging) params only from {ckpt_path}")
+    tqdm.write(f"Loading (merging) params only from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=False)
     loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
     loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
@@ -529,9 +530,9 @@ def load_from_params(
     )
     for name, kept in (("player", player_kept_fresh), ("builder", builder_kept_fresh)):
         if kept:
-            print(f"{name}: {len(kept)} param subtrees kept fresh init:")
+            tqdm.write(f"{name}: {len(kept)} param subtrees kept fresh init:")
             for path in kept:
-                print(f"  {path}")
+                tqdm.write(f"  {path}")
 
     # target_params gets the same merged tree: leaving it at fresh init
     # would hand v-trace a garbage reference policy for ~1/ema_rate steps.

@@ -50,6 +50,7 @@ from rl.environment.utils import (
     _packed_history_level,
     clip_history,
     clip_packed_history,
+    next_tqdm_position,
 )
 from rl.model.heads import HeadParams, calculate_hierarchical_prior
 from rl.model.utils import Params, ParamsContainer
@@ -1198,8 +1199,12 @@ class Learner:
             ),
             base_lambda_gap_target=float(config.lambda_ctrl_gap_target),
             base_replay_kl_target=float(config.player_replay_kl_target),
-            consumer_progress=tqdm(desc=f"consumer-{name}", smoothing=0.1),
-            train_progress=tqdm(desc=f"batches-{name}", smoothing=0.1),
+            consumer_progress=tqdm(
+                desc=f"consumer-{name}", smoothing=0.1, position=next_tqdm_position()
+            ),
+            train_progress=tqdm(
+                desc=f"batches-{name}", smoothing=0.1, position=next_tqdm_position()
+            ),
             plasticity_probe_jit=self._plasticity_probe_jit,
         )
         pop.replay_kl_target = pop.base_replay_kl_target
@@ -1673,8 +1678,9 @@ class Learner:
                         continue
 
                 pop.host_step += 1
-                pop.frames_trained_total = int(
-                    jax.device_get(pop.player_state.frame_count)
+                pop.frames_trained_total = (
+                    int(jax.device_get(pop.player_state.frame_count))
+                    - pop.created_at_frame
                 )
                 if (
                     pop.plasticity_probe_jit is not None
@@ -1716,7 +1722,7 @@ class Learner:
             self.done = True
             for pop in self.populations.values():
                 self._stop_population_workers(pop)
-            print("Training Finished.")
+            tqdm.write("Training Finished.")
 
     def register_actor_threads(
         self, population: PopulationName, threads: list[threading.Thread]
@@ -1970,7 +1976,7 @@ class Learner:
         this routine stagnation-driven one."""
         reason = self._should_add_new_player(pop)
         if reason is not None:
-            print(f"Adding new player to league @ {step} ({reason})")
+            tqdm.write(f"Adding new player to league @ {step} ({reason})")
             self._add_player_to_league(pop, step, origin="main")
             pop.player_replay.reset_usage_counts()
             pop.plasticity.on_player_added(reason)
@@ -2193,7 +2199,7 @@ class Learner:
             self._add_player_to_league(pop, step, origin="main")
             latest = self.league.get_latest_player()
 
-        print(
+        tqdm.write(
             f"Applying shrink-and-perturb plasticity update @ {step} "
             f"(recovery ref: player {latest.step_count})"
         )

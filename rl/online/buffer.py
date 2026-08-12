@@ -10,6 +10,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
+from rl.environment.utils import next_tqdm_position
 
 
 class BuilderTrajectoryStore:
@@ -35,7 +36,7 @@ class BuilderTrajectoryStore:
         self._sample_cv = threading.Condition(lock)
 
         desc = f"builder_producer-{name}" if name else "builder_producer"
-        self._progress = tqdm(desc=desc, smoothing=0.1)
+        self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
     @classmethod
     def from_trajectories(
@@ -172,7 +173,7 @@ class PlayerTrajectoryStore:
         self.total_samples = 0
 
         desc = f"player_producer-{name}" if name else "player_producer"
-        self._progress = tqdm(desc=desc, smoothing=0.1)
+        self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
         # Tracking
         self.need_tracking = need_tracking

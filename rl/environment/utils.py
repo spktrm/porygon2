@@ -1,6 +1,21 @@
+import itertools
 import math
 from collections.abc import Sequence
 from typing import TypeVar
+
+_tqdm_position_counter = itertools.count()
+
+
+def next_tqdm_position() -> int:
+    """Assigns each tqdm progress bar a unique, stable terminal row (via
+    tqdm's position= kwarg / ANSI cursor movement) instead of letting
+    concurrent bars fight over "the current line" with bare \\r redraws —
+    with up to 4 bars per population (player_producer/builder_producer/
+    consumer/batches) across 3 concurrently-training populations, that
+    fight is what corrupted terminal output into garbled interleaved
+    text. Call once per tqdm() construction, at bar-creation time."""
+    return next(_tqdm_position_counter)
+
 
 import jax
 import jax.numpy as jnp

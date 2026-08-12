@@ -13,6 +13,7 @@ import time
 import jax
 import numpy as np
 import wandb.wandb_run
+from tqdm import tqdm
 
 import wandb
 from rl.environment.env import SinglePlayerSyncEnvironment
@@ -36,6 +37,23 @@ from rl.online.learner import (
 from rl.online.player_actor import PlayerActor
 
 logger = logging.getLogger(__name__)
+
+
+class TqdmLoggingHandler(logging.Handler):
+    """Routes log records through tqdm.write() instead of a raw stream
+    write. tqdm.write() clears whatever progress bars are currently
+    rendered, prints the line cleanly above them, then redraws the bars —
+    the default StreamHandler writes straight to stderr with no knowledge
+    of tqdm's cursor position, which is what corrupted terminal output
+    into garbled interleaved text once multiple bars were running
+    concurrently (one per population per producer/consumer/batches)."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            tqdm.write(self.format(record))
+        except Exception:
+            self.handleError(record)
+
 
 # Wandb metric-key names for the service's evalActionMapping indices
 # (service/src/server/eval.ts).
@@ -243,12 +261,33 @@ def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
     (docs/exploiter-phase-plan.md) — stopping every "running" run in the
     project would be wrong if two training processes were ever live at
     once."""
-    api = wandb.Api()
-    for run in api.runs(
-        f"{api.default_entity}/{project}", filters={"state": "running"}
-    ):
-        logger.info("Stopping stale wandb run %s (state=running)", run.name)
-        run.stop()
+    try:
+        api = wandb.Api()
+        runs = list(
+            api.runs(f"{api.default_entity}/{project}", filters={"state": "running"})
+        )
+    except Exception:
+        logger.warning(
+            "Could not query wandb for stale runs — skipping.", exc_info=True
+        )
+        return
+    for run in runs:
+        try:
+            logger.info("Stopping stale wandb run %s (state=running)", run.name)
+            run.stop()
+        except Exception:
+            # Best-effort only — e.g. wandb.Api().Run.stop() doesn't exist
+            # before some SDK version (AttributeError on 0.27.2, present by
+            # 0.28.1). A stale run this misses just falls back to the
+            # pre-existing behavior: sitting "Running" until W&B's own
+            # heartbeat timeout marks it Crashed. Never worth blocking this
+            # process's own startup over.
+            logger.warning(
+                "Failed to stop stale wandb run %s — leaving it for W&B's "
+                "own timeout to resolve.",
+                run.name,
+                exc_info=True,
+            )
 
 
 def main(args: argparse.Namespace):
@@ -549,6 +588,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[TqdmLoggingHandler()],
     )
     parser = argparse.ArgumentParser(description="Run the RL learner.")
     parser.add_argument(

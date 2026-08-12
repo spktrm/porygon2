@@ -18,9 +18,16 @@ env/bin/python -c "
 import wandb
 api = wandb.Api()
 for run in api.runs(f'{api.default_entity}/pokemon-rl', filters={'state': 'running'}):
-    print(f'  stopping {run.name}')
-    run.stop()
-" 2>/dev/null || true
+    try:
+        print(f'  stopping {run.name}')
+        run.stop()
+    except Exception as e:
+        # Best-effort: e.g. Run.stop() doesn't exist before some SDK
+        # version (AttributeError on 0.27.2, present by 0.28.1). Never
+        # worth blocking the restart over — falls back to W&B's own
+        # heartbeat timeout marking it Crashed instead of Killed.
+        print(f'  could not stop {run.name}: {e}')
+" 2>&1 || echo "  (skipping wandb cleanup — could not reach the API, e.g. network issue)"
 sleep 5
 
 # Start clean
