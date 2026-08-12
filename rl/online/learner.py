@@ -1917,11 +1917,18 @@ class Learner:
                 frame_count=host_builder_state.frame_count,
             ),
         )
+        # No pop.name component: every call site (OOM-guard, periodic save,
+        # KeyboardInterrupt) only ever passes pop=main, and load_train_state
+        # (artifact.py's _ckpt_root/_get_checkpoint_path/load_from_checkpoint)
+        # expects the checkpoint directly under ckpt_{step:08}/ with no
+        # population subdirectory — see _ckpt_root's docstring. Nesting it
+        # under pop.name here (always "main" in practice) silently produced
+        # a checkpoint the loader could never find, surfacing as
+        # FileNotFoundError on the next resume.
         save_path = os.path.abspath(
             os.path.join(
                 f"./ckpts/gen{self.config.generation}",
                 f"ckpt_{int(np.asarray(host_player_state.step_count)):08}",
-                pop.name,
             )
         )
         upload_to_cloud = (
