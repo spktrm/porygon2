@@ -54,8 +54,57 @@ export class WorkerPool {
         }
     }
 
+    /** Deterministic worker assignment for a training pairing: both sides
+     * of a game (player and opponent) compute and send the IDENTICAL
+     * gameId string before either issues its reset() — see
+     * rl/online/main.py's run_training_actor_pair and
+     * rl/environment/env.py's SinglePlayerSyncEnvironment.reset(), which
+     * puts it on the ResetRequest itself, not just a connection-time
+     * header. Hashing that shared string always lands both sides on the
+     * SAME worker, regardless of arrival order.
+     *
+     * Replaces the previous stateful round-robin (`rr += 0.5`, "every 2
+     * consecutive reset() calls share a worker"): that invariant only
+     * holds if resets arrive in strict, globally-serialized pairs, which
+     * concurrent self-play threads never guarantee — each pair's two
+     * reset() calls are dispatched via a shared thread pool with no
+     * ordering relative to OTHER pairs' calls, so with more than one pair
+     * (or more than one worker) in flight, an interleaved arrival could
+     * route a player and its own opponent to DIFFERENT workers.
+     * pendingGames (worker.ts) is a per-worker map, so two sides of one
+     * game on different workers would each wait forever for a match that
+     * can never arrive on either — a silent, un-erroring hang identical
+     * in shape to a genuine deadlock. This was latent even before the
+     * three-population redesign (docs/exploiter-phase-plan.md) — it just
+     * needed enough concurrent pairs (or workers) actually in flight to
+     * surface, which multiple simultaneously-live populations makes far
+     * more likely than the one-population-at-a-time design ever hit. */
+    private hashGameId(gameId: string): number {
+        // FNV-1a — cheap, well-distributed, no external dependency.
+        let hash = 2166136261;
+        for (let i = 0; i < gameId.length; i++) {
+            hash ^= gameId.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return Math.abs(hash) % this.workerInfos.length;
+    }
+
+    private trainingWorkerForGameId(
+        sessionId: string,
+        gameId: string,
+    ): WorkerInfo {
+        const workerIndex = this.hashGameId(gameId);
+        const workerInfo = this.workerInfos[workerIndex];
+        this.sessionToWorkerIndex.set(sessionId, workerIndex);
+        return workerInfo;
+    }
+
     private nextTrainingWorker(sessionId: string): WorkerInfo {
-        // Increment by 0.5 so as to allocate groups of 2 players to a worker
+        // Fallback only — used when a training reset somehow has no
+        // gameId (shouldn't happen; env.py always sets one before
+        // calling reset()). Kept as the old round-robin rather than
+        // always routing to worker 0, so a missing gameId degrades to
+        // "no pairing guarantee" instead of "guaranteed wrong worker."
         const workerIndex = Math.floor(this.rr);
         const workerInfo = this.workerInfos[workerIndex];
         this.sessionToWorkerIndex.set(sessionId, workerIndex);
@@ -64,6 +113,11 @@ export class WorkerPool {
     }
 
     private nextEvalWorker(sessionId: string): WorkerInfo {
+        // Eval games never pair with another live actor (worker.ts's
+        // resetPlayerFromEvalUserName creates the battle immediately
+        // against a scripted baseline), so plain round-robin load
+        // distribution is fine here — no shared-gameId invariant to
+        // preserve.
         const workerIndex = Math.floor(this.er);
         const workerInfo = this.workerInfos[workerIndex];
         this.sessionToWorkerIndex.set(sessionId, workerIndex);
@@ -120,12 +174,18 @@ export class WorkerPool {
         return await this.send(info, workerRequest);
     }
 
-    nextWorker(userName: string): WorkerInfo {
+    nextWorker(userName: string, gameId?: string): WorkerInfo {
         if (isEvalUser(userName)) {
             return this.nextEvalWorker(userName);
-        } else {
-            return this.nextTrainingWorker(userName);
         }
+        // Deterministic gameId-hash routing whenever a gameId is present
+        // (the normal case — see trainingWorkerForGameId's docstring for
+        // why this replaces the old round-robin). Falls back to the
+        // round-robin only if gameId is missing/empty.
+        if (gameId) {
+            return this.trainingWorkerForGameId(userName, gameId);
+        }
+        return this.nextTrainingWorker(userName);
     }
 
     async reset(resetRequest: ResetRequest): Promise<WorkerResponse> {
@@ -133,7 +193,7 @@ export class WorkerPool {
         if (!userName) {
             throw new Error("Username must be provided in reset request");
         }
-        const info = this.nextWorker(userName);
+        const info = this.nextWorker(userName, resetRequest.getGameId());
         const workerRequest = new WorkerRequest();
         workerRequest.setResetRequest(resetRequest);
         return await this.send(info, workerRequest);
@@ -191,10 +251,9 @@ export class GameServer {
         this.logger = pino({ level: loggingLevel });
         this.wss = new WebSocketServer({ port });
         this.actionCount = 0;
-        this.pool = new WorkerPool(
-            this.logger,
-            Math.min(maxWorkers ?? 1, availableParallelism()),
-        );
+        const safeCpuFrac = 0.8;
+        const safeCpuAmount = Math.min(safeCpuFrac * availableParallelism());
+        this.pool = new WorkerPool(this.logger, maxWorkers ?? safeCpuAmount);
 
         this.wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) =>
             this.handleConnection(ws, req),
@@ -288,7 +347,7 @@ export class GameServer {
 // Initialize the server
 new GameServer(8080, {
     maxGamesPerWorker: 50,
-    // maxWorkers: 16,
+    maxWorkers: 12,
     loggingLevel: "info", // Set to 'debug' for more verbose logging
     logThroughput: false,
     throughputIntervalMs: 1000,
