@@ -5,7 +5,6 @@ import pickle
 import queue
 import random
 import threading
-import traceback
 from _thread import LockType
 from contextlib import nullcontext
 from typing import Callable, Literal
@@ -50,6 +49,7 @@ from rl.environment.utils import (
     _packed_history_level,
     clip_history,
     clip_packed_history,
+    close_tqdm_bar,
     next_tqdm_position,
 )
 from rl.model.heads import HeadParams, calculate_hierarchical_prior
@@ -1007,6 +1007,18 @@ class PopulationState:
     # last reset — what Learner._select_population's duty-cycle share is
     # computed from.
     frames_trained_total: int = 0
+    # frames_trained_total snapshot taken the last time the scheduler's
+    # ready-set changed — _select_population measures duty-cycle shares
+    # from this anchor (the current scheduling epoch), not from process
+    # start; see its docstring for why.
+    sched_anchor_frames: int = 0
+    # frame_count at this population's last terminal outcome that did NOT
+    # rebuild it (league_exploiter's continue/perturb fates in
+    # _apply_terminal_outcome) — the dwell and frame-budget checks in
+    # _check_exploiter_transitions measure from here, so a continued
+    # attempt gets a full fresh window instead of instantly re-tripping
+    # the timeout on its inherited counter.
+    budget_anchor_frames: int = 0
     consumer_progress: object = None
     train_progress: object = None
     plasticity_probe_jit: object = None
@@ -1096,6 +1108,9 @@ class Learner:
             wandb_run = self._pending_wandb_runs[name]
             wandb_run.log({"population_created": 0})
 
+        # Which populations were schedulable last time _select_population
+        # looked — a change starts a new scheduling epoch (see there).
+        self._sched_ready_names: frozenset = frozenset()
         self.done = False
 
     # --- population construction / lifecycle --------------------------------
@@ -1623,10 +1638,22 @@ class Learner:
     def _select_population(self) -> PopulationState | None:
         """Proportional-fairness pick: among populations that exist AND
         have a replay buffer past its min-fill fraction, pick whichever is
-        furthest below its target duty-cycle share of total frames trained
-        this process. Generalizes the old binary exploiter_duty_cycle_
-        fraction check to three targets with no extra bookkeeping beyond
-        each population's own frames_trained_total."""
+        furthest below its target duty-cycle share of frames trained in
+        the current scheduling EPOCH — the window since the ready-set last
+        changed — not since process start. Measured from process start, a
+        freshly created/reset exploiter starts at share 0 of a total that
+        includes everything main trained before it existed, so it would
+        win every tick until it had accumulated ~17% of the entire
+        process's frames: a GPU-monopolizing, main-starving burst that
+        grows with process age and can exceed the exploiter's whole frame
+        budget (the starvation fingerprint in session 1786537634's
+        predecessor). Re-anchoring every ready population at each
+        ready-set change makes the configured ratio hold locally, from
+        the moment the set changes onward. Targets are normalized over
+        the ready set so the realized ratio between the populations that
+        DO exist matches the configured fractions exactly (unnormalized,
+        main:exploiter converges to 0.85:0.15 while the third population
+        is absent, not the configured 8:1)."""
         ready = [
             pop
             for pop in self.populations.values()
@@ -1637,13 +1664,45 @@ class Learner:
         ]
         if not ready:
             return None
-        total = sum(p.frames_trained_total for p in ready) or 1
+
+        ready_names = frozenset(pop.name for pop in ready)
+        if ready_names != self._sched_ready_names:
+            self._sched_ready_names = ready_names
+            for pop in ready:
+                pop.sched_anchor_frames = pop.frames_trained_total
+
+        epoch_frames = {
+            pop.name: pop.frames_trained_total - pop.sched_anchor_frames
+            for pop in ready
+        }
+        total = sum(epoch_frames.values()) or 1
+        target_sum = sum(
+            getattr(self.config, _DUTY_CYCLE_FIELD[pop.name]) for pop in ready
+        )
 
         def deficit(pop: PopulationState) -> float:
             target = getattr(self.config, _DUTY_CYCLE_FIELD[pop.name])
-            return target - pop.frames_trained_total / total
+            return target / target_sum - epoch_frames[pop.name] / total
 
-        return max(ready, key=deficit)
+        # Only populations with a batch already sitting in their device_q
+        # are pickable THIS tick. The deficit winner used to be chosen over
+        # the whole ready set and train() then blocked on ITS queue — so a
+        # behind-target exploiter whose 4 actors hadn't finished producing
+        # yet head-of-line-blocked the GPU while main's full queue sat
+        # unread (up to the exploiter's whole ~4s batch production time,
+        # most of the gap between main's solo step rate and the combined
+        # rate in session 1786537634). Deficits/epochs still track the full
+        # ready set, so a data-starved population keeps accumulating claim
+        # and wins the first tick its batch lands — the realized split
+        # converges to min(target, actor production capacity), which is the
+        # correct duty cycle for a producer-bound population. The .empty()
+        # peek is race-free for our purposes: this (the train loop) is the
+        # sole consumer of every device_q, so an observed non-empty queue
+        # can't be emptied by anyone else before train() collects it.
+        pickable = [pop for pop in ready if not pop.device_q.empty()]
+        if not pickable:
+            return None
+        return max(pickable, key=deficit)
 
     def train(self):
         """Unified training loop across every live population — no more
@@ -1665,12 +1724,19 @@ class Learner:
                 pop = self._select_population()
                 if pop is None:
                     # Nothing has a warm-enough replay buffer yet (e.g. at
-                    # process start, before main's own buffer fills) —
-                    # brief wait rather than a busy spin.
+                    # process start, before main's own buffer fills), or
+                    # every ready population's device_q is momentarily
+                    # empty — brief wait rather than a busy spin.
                     threading.Event().wait(timeout=0.1)
                     continue
 
-                batch = pop.device_q.get()
+                try:
+                    # Never blocks: _select_population only returns a
+                    # population it observed a batch for, and this thread
+                    # is the sole consumer of every device_q.
+                    batch = pop.device_q.get_nowait()
+                except queue.Empty:
+                    continue
                 with self.gpu_lock:
                     batch = jax.device_put(batch)
                     logs = self._train_step(pop, batch)
@@ -1714,10 +1780,15 @@ class Learner:
                         pop.name,
                     )
             raise
-        except Exception as e:
-            logger.error(f"Learner training crashed: {e}")
-            traceback.print_exc()
-            raise e
+        except Exception:
+            # logger.exception, NOT traceback.print_exc(): the logging
+            # handler routes through tqdm.write(), so the traceback prints
+            # cleanly above the progress bars — print_exc() wrote raw to
+            # stderr and got shredded line-by-line into the concurrent bar
+            # redraws (session 1786537634's OOM traceback was near-
+            # unreadable in the captured console for exactly this reason).
+            logger.exception("Learner training crashed")
+            raise
         finally:
             self.done = True
             for pop in self.populations.values():
@@ -1814,6 +1885,21 @@ class Learner:
                 "Refusing to proceed with this population's state still "
                 "reachable from a live thread."
             )
+
+        # Return this population's 4 progress-bar rows to the shared pool
+        # (close_tqdm_bar) so the replacement fork reuses the same rows —
+        # without this, every exploiter reset leaked 4 dead rows and
+        # pushed all live bars one screen-row further down, unboundedly,
+        # for the life of the process. Closing is safe against any update
+        # racing in from a straggler: tqdm's close() flips .disable, which
+        # every update() checks first.
+        for bar in (
+            pop.consumer_progress,
+            pop.train_progress,
+            pop.player_replay._progress,
+            pop.builder_replay._progress,
+        ):
+            close_tqdm_bar(bar)
 
     def _train_step(self, pop: PopulationState, batch: Batch) -> dict | None:
         """Runs the JAX update for pop via the shared compiled train_step,
@@ -2003,7 +2089,11 @@ class Learner:
                 continue
 
             frame_count = int(jax.device_get(pop.player_state.frame_count))
-            if frame_count < self.config.exploiter_min_dwell_frames:
+            # Both windows measure from the last non-rebuilding terminal
+            # outcome (0 for a fresh fork), not from fork — a continued
+            # league_exploiter would otherwise time out again instantly.
+            frames_this_attempt = frame_count - pop.budget_anchor_frames
+            if frames_this_attempt < self.config.exploiter_min_dwell_frames:
                 continue
 
             failure = _check_promotion_bar(
@@ -2018,7 +2108,7 @@ class Learner:
                 self.config.exploiter_promote_min_games,
             )
             frame_budget = getattr(self.config, _FRAME_BUDGET_FIELD[name])
-            timed_out = frame_count >= frame_budget
+            timed_out = frames_this_attempt >= frame_budget
 
             if failure is None:
                 self._add_player_to_league(pop, pop.host_step, origin=name)
@@ -2028,7 +2118,7 @@ class Learner:
                     pop.host_step,
                     pop.fork_step,
                 )
-                self._reset_population(name, reason="promoted")
+                self._apply_terminal_outcome(pop, name, frame_count, "promoted")
             elif timed_out:
                 # AlphaStar's checkpoint() publishes a Historical snapshot
                 # on EITHER outcome — even a non-promoted attempt is a
@@ -2037,12 +2127,76 @@ class Learner:
                 self._add_player_to_league(pop, pop.host_step, origin=name)
                 logger.info(
                     "Population %s timed out without promotion @ own-step "
-                    "%d (%s) — added as historical, resetting.",
+                    "%d (%s) — added as historical.",
                     name,
                     pop.host_step,
                     failure,
                 )
-                self._reset_population(name, reason="timeout")
+                self._apply_terminal_outcome(pop, name, frame_count, "timeout")
+
+    def _apply_terminal_outcome(
+        self,
+        pop: PopulationState,
+        name: PopulationName,
+        frame_count: int,
+        reason: str,
+    ) -> None:
+        """Decides an exploiter population's fate AFTER its snapshot was
+        published on a terminal outcome — wires config.main_exploiter_
+        reset_to_main and config.exploiter_hard_reset_prob, which
+        documented exactly this policy but were never read (both
+        populations unconditionally re-forked from main).
+
+        main_exploiter: fresh fork of live main — AlphaStar's fixed rule
+        for the role (reset_to_main=False degrades to the continue path).
+
+        league_exploiter, following AlphaStar's LeagueExploiter.
+        checkpoint() (25%: reset to original init / otherwise: keep
+        training): rolls exploiter_hard_reset_prob for a shrink-and-
+        perturb toward a fresh init draw — this codebase's stand-in for
+        "original init", since no supervised params exist — and otherwise
+        continues training its current weights un-reset. The continue
+        path is the one that matters strategically: with every reset
+        target being a fork of main, a league exploiter that survives
+        checkpoints is the league's only source of opponents that keep
+        drifting off main's own policy manifold.
+
+        Both non-rebuilding fates re-anchor budget_anchor_frames so the
+        next attempt gets a full dwell/timeout window."""
+        if name == "main_exploiter" and self.config.main_exploiter_reset_to_main:
+            self._reset_population(name, reason=reason)
+            return
+
+        if name == "league_exploiter" and (
+            random.random() < self.config.exploiter_hard_reset_prob
+        ):
+            rng = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
+            pop.player_state = shrink_and_perturb_player_state(
+                pop.player_state,
+                rng,
+                default_shrink=self.config.plasticity_default_shrink,
+                module_shrink=self.config.plasticity_module_shrink,
+            )
+            # Actors pull params via the league's live entry — push the
+            # perturbed weights now rather than waiting for the next
+            # periodic update_live.
+            self.league.update_live(pop.live_key, self._create_params_container(pop))
+            pop.budget_anchor_frames = frame_count
+            pop.wandb_run.log({"population_perturbed": 1}, commit=False)
+            logger.info(
+                "Population %s (%s): hard reset rolled (p=%.2f) — "
+                "shrink-and-perturbed toward fresh init.",
+                name,
+                reason,
+                self.config.exploiter_hard_reset_prob,
+            )
+            return
+
+        pop.budget_anchor_frames = frame_count
+        pop.wandb_run.log({"population_continued": 1}, commit=False)
+        logger.info(
+            "Population %s (%s): continues training un-reset.", name, reason
+        )
 
     @staticmethod
     def _available_memory_fraction() -> float | None:

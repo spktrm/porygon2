@@ -7,6 +7,7 @@ import functools
 import json
 import logging
 import os
+import sys
 import threading
 import time
 
@@ -53,7 +54,6 @@ class TqdmLoggingHandler(logging.Handler):
             tqdm.write(self.format(record))
         except Exception:
             self.handleError(record)
-
 
 # Wandb metric-key names for the service's evalActionMapping indices
 # (service/src/server/eval.ts).
@@ -267,9 +267,7 @@ def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
             api.runs(f"{api.default_entity}/{project}", filters={"state": "running"})
         )
     except Exception:
-        logger.warning(
-            "Could not query wandb for stale runs — skipping.", exc_info=True
-        )
+        logger.warning("Could not query wandb for stale runs — skipping.", exc_info=True)
         return
     for run in runs:
         try:
@@ -559,6 +557,7 @@ def main(args: argparse.Namespace):
     # Learner._reset_population first creates them.
     spawn_actor_pool("main")
 
+    crashed = False
     try:
         learner.train()
     except KeyboardInterrupt:
@@ -570,16 +569,26 @@ def main(args: argparse.Namespace):
             "actually reclaims OS memory, so don't just retry in-place.",
             e.checkpoint_path,
         )
+    except Exception:
+        # Learner.train() already logged the full traceback; this handler
+        # exists so the finish() below can mark the wandb runs FAILED.
+        # Letting the exception fly past an unconditional finish() left
+        # session 1786537634's OOM crash showing as three cleanly-
+        # "finished" runs, which sent the postmortem down the wrong path.
+        crashed = True
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
         for wandb_run in wandb_runs.values():
             try:
-                wandb_run.finish()
+                wandb_run.finish(exit_code=1 if crashed else 0)
             except Exception:
                 logger.warning(
                     "wandb_run.finish() failed during shutdown", exc_info=True
                 )
 
+    if crashed:
+        logger.error("Training run crashed — see traceback above.")
+        sys.exit(1)
     logger.info("Training run complete.")
 
 

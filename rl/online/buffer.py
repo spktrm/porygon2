@@ -112,7 +112,7 @@ class BuilderTrajectoryStore:
         else:
             available_indices = np.where(self._reuses >= self._max_reuses)[0]
             if len(available_indices) == 0:
-                print(
+                tqdm.write(
                     "Trajectory store is full and no trajectories are available for replacement."
                 )
                 return
@@ -296,7 +296,7 @@ class PlayerTrajectoryStore:
         else:
             available_indices = np.where(self._reuses >= self._max_reuses)[0]
             if len(available_indices) == 0:
-                print(
+                tqdm.write(
                     "Trajectory store is full and no trajectories are available for replacement."
                 )
                 return

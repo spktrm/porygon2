@@ -1,9 +1,12 @@
-import itertools
+import heapq
 import math
+import threading
 from collections.abc import Sequence
 from typing import TypeVar
 
-_tqdm_position_counter = itertools.count()
+_tqdm_position_lock = threading.Lock()
+_tqdm_free_positions: list[int] = []
+_tqdm_positions_issued = 0
 
 
 def next_tqdm_position() -> int:
@@ -13,9 +16,34 @@ def next_tqdm_position() -> int:
     with up to 4 bars per population (player_producer/builder_producer/
     consumer/batches) across 3 concurrently-training populations, that
     fight is what corrupted terminal output into garbled interleaved
-    text. Call once per tqdm() construction, at bar-creation time."""
-    return next(_tqdm_position_counter)
+    text. Call once per tqdm() construction, at bar-creation time, and
+    pair with close_tqdm_bar() at teardown: exploiter populations are
+    reset repeatedly, and without recycling rows each reset would place
+    its 4 new bars one screen-row lower, leaving the dead rows above
+    permanently occupied for the life of the process."""
+    global _tqdm_positions_issued
+    with _tqdm_position_lock:
+        if _tqdm_free_positions:
+            return heapq.heappop(_tqdm_free_positions)
+        position = _tqdm_positions_issued
+        _tqdm_positions_issued += 1
+        return position
 
+
+def close_tqdm_bar(bar) -> None:
+    """Closes a bar created with position=next_tqdm_position() and returns
+    its terminal row to the pool for the next bar. tqdm stores an
+    explicitly-passed position negated in .pos (its marker for "fixed
+    position"), so abs() recovers what next_tqdm_position() issued.
+    Safe to call more than once: close() sets .disable, which gates the
+    release here so the same row can't be pushed to the free pool twice
+    (a double release would hand one terminal row to two live bars)."""
+    if bar.disable:
+        return
+    position = abs(bar.pos)
+    bar.close()
+    with _tqdm_position_lock:
+        heapq.heappush(_tqdm_free_positions, position)
 
 import jax
 import jax.numpy as jnp
