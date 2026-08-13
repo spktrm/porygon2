@@ -1,5 +1,6 @@
 import threading
 
+import jax
 import numpy as np
 from tqdm import tqdm
 
@@ -56,6 +57,17 @@ class BuilderTrajectoryStore:
         if limit is None:
             limit = self._max_size
         return len(self._trajectories) >= limit
+
+    def nbytes(self) -> int:
+        """Total host bytes of stored trajectory arrays — RAM diagnostics
+        (Learner._log_memory_diagnostics)."""
+        with self._sample_cv:
+            return sum(
+                leaf.nbytes
+                for item in self._trajectories.values()
+                for leaf in jax.tree.leaves(item)
+                if hasattr(leaf, "nbytes")
+            )
 
     def ready_to_sample(self) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
@@ -189,6 +201,17 @@ class PlayerTrajectoryStore:
         if limit is None:
             limit = self._max_size
         return len(self._trajectories) >= limit
+
+    def nbytes(self) -> int:
+        """Total host bytes of stored trajectory arrays — RAM diagnostics
+        (Learner._log_memory_diagnostics)."""
+        with self._sample_cv:
+            return sum(
+                leaf.nbytes
+                for item in self._trajectories.values()
+                for leaf in jax.tree.leaves(item)
+                if hasattr(leaf, "nbytes")
+            )
 
     def is_min_fill_fraction_reached(self, fraction: float = 0.5) -> bool:
         """Returns True if the store is at least ``fraction`` full.

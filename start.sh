@@ -50,6 +50,16 @@ tmux send-keys  -t "$SESSION":service.0 "npm run start" C-m
 tmux split-window -h -t "$SESSION":service.0
 tmux select-pane -t "$SESSION":service.1 -T "rl"
 tmux send-keys  -t "$SESSION":service.1 "source env/bin/activate" C-m
+# .env is the single definition point for ALL env vars (see .env.example
+# for the documented set; .env itself is gitignored, per-box). It's
+# sourced into the pane shell BEFORE python starts because main.py's own
+# load_dotenv() runs inside the already-started interpreter — fine for
+# variables python code reads later (LOAD_STATE_MODE, WANDB_*, XLA
+# flags), but silently useless for anything the C runtime consumes at
+# process startup (MALLOC_ARENA_MAX, PYTHONMALLOC, LD_*). Sourcing here
+# covers both classes from one file. Single-quoted so expansion happens
+# in the pane shell.
+tmux send-keys  -t "$SESSION":service.1 'set -a; [ -f .env ] && source .env || echo "WARNING: no .env found — see .env.example (MALLOC_ARENA_MAX etc. unset)"; set +a' C-m
 # Inject the captured arguments at the end of the python command
 tmux send-keys  -t "$SESSION":service.1 "python -m rl.online.main $ARGS" C-m
 

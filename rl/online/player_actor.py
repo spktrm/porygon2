@@ -23,6 +23,7 @@ from rl.model.builder_model import get_packed_team_string
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
+from rl.online.inference import InferenceServer
 from rl.online.league import (
     LEAGUE_EXPLOITER_KEY,
     LIVE_KEYS,
@@ -41,6 +42,16 @@ _LIVE_KEY_BY_POPULATION: dict[Population, int] = {
 }
 
 
+class ActorStopped(Exception):
+    """Raised inside an unroll when its population began shutting down —
+    unwinds the actor thread out of a blocking wait it would otherwise
+    never leave (e.g. the builder-replay sample wait, where no data is
+    coming once that population's producers have stopped). Handled as a
+    clean loop exit by main.py's actor runners, never as an error —
+    without it, Ctrl-C left actor threads stuck in these waits, tripping
+    the shutdown straggler check."""
+
+
 class PlayerActor:
     """Manages the state of a single agent/environment interaction loop."""
 
@@ -53,12 +64,20 @@ class PlayerActor:
         rng_seed: int = 42,
         is_eval: bool = False,
         population: Population = "main",
+        inference_client: InferenceServer | None = None,
     ):
         self._agent = agent
         self._env = env
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
+        # When set, per-step inference goes through the shared batched
+        # InferenceServer (rl/online/inference.py) instead of this actor's
+        # own batch-1 Agent.step_player dispatch. Training actors get one;
+        # eval actors deliberately don't (different sampling temperature
+        # via eval_agent's HeadParams, and 3 low-volume threads aren't
+        # worth a second server).
+        self._inference_client = inference_client
         # Eval actors must never contribute to training data, nor consume the
         # builder replay buffer's reuse budget. This flag gates both.
         self._is_eval = is_eval
@@ -90,8 +109,14 @@ class PlayerActor:
             tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )
 
-    def unroll(self, rng_key: jax.Array, player_params: Params) -> Trajectory:
-        """Run unroll_length agent/environment steps, returning the trajectory."""
+    def unroll(
+        self, rng_key: jax.Array, player_params: Params | ParamsContainer
+    ) -> Trajectory:
+        """Run unroll_length agent/environment steps, returning the trajectory.
+
+        player_params is device-resident Params on the direct-Agent path,
+        or the host ParamsContainer when routing through the batched
+        InferenceServer (which owns device transfer) — see unroll_and_push."""
 
         player_subkeys = split_rng(rng_key, self._unroll_length)
         player_traj = []
@@ -100,10 +125,24 @@ class PlayerActor:
         builder_trajectory = ()
         builder_history = ()
         if self._learner.config.smogon_format != "randombattle":
-            builder_replay = self._learner.populations[self.population].builder_replay
+            pop = self._learner.populations[self.population]
+            builder_replay = pop.builder_replay
             sample_cond = builder_replay._sample_cv
             with sample_cond:
-                sample_cond.wait_for(builder_replay.ready_to_sample)
+                # done-aware, like builder_actor.py's add-side wait and
+                # Learner.enqueue_traj already are: once this population is
+                # shutting down no builder trajectory is ever coming, so a
+                # bare ready_to_sample predicate blocked this thread forever
+                # (_stop_population_workers notifies this CV precisely so
+                # waiters re-check and see done).
+                sample_cond.wait_for(
+                    lambda: pop.done or builder_replay.ready_to_sample()
+                )
+                if pop.done:
+                    raise ActorStopped(
+                        f"population {self.population} stopped during "
+                        "builder-replay sample wait"
+                    )
                 # Eval samples teams read-only: it doesn't increment reuse
                 # counts, so it can't evict builder trajectories that training
                 # would otherwise consume.
@@ -132,11 +171,20 @@ class PlayerActor:
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
-            player_agent_output = self._agent.step_player(
-                player_subkeys[player_step_index],
-                player_params,
-                player_actor_input_clipped,
-            )
+            if self._inference_client is not None:
+                # player_params is the host ParamsContainer on this path
+                # (see unroll_and_push) — the server owns device transfer.
+                player_agent_output = self._inference_client.step_player(
+                    player_subkeys[player_step_index],
+                    player_params,
+                    player_actor_input_clipped,
+                )
+            else:
+                player_agent_output = self._agent.step_player(
+                    player_subkeys[player_step_index],
+                    player_params,
+                    player_actor_input_clipped,
+                )
             player_transition = PlayerTransition(
                 env_output=player_actor_input_clipped.env,
                 agent_output=player_agent_output,
@@ -183,7 +231,14 @@ class PlayerActor:
 
     def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
-        player_params = jax.device_put(params_container.player_params)
+        if self._inference_client is not None:
+            # The server owns device transfer behind a versioned cache, so
+            # every actor playing the same params version shares ONE device
+            # copy — the per-actor device_put below made 12 separate copies
+            # of the identical live params, one per actor per game.
+            player_params = params_container
+        else:
+            player_params = jax.device_put(params_container.player_params)
         subkey = self.split_rng()
 
         act_out = self.unroll(rng_key=subkey, player_params=player_params)

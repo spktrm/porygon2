@@ -1792,7 +1792,11 @@ class Learner:
         finally:
             self.done = True
             for pop in self.populations.values():
-                self._stop_population_workers(pop)
+                # strict=False: process is exiting — a straggler here is
+                # tolerable (daemon threads die with the process), and
+                # raising would mask the real outcome, turning e.g. a
+                # clean Ctrl-C into a crash. Resets keep strict=True.
+                self._stop_population_workers(pop, strict=False)
             tqdm.write("Training Finished.")
 
     def register_actor_threads(
@@ -1831,7 +1835,9 @@ class Learner:
         ckpt_thread.start()
         pop.worker_threads.extend([transfer_thread, log_thread, ckpt_thread])
 
-    def _stop_population_workers(self, pop: PopulationState) -> None:
+    def _stop_population_workers(
+        self, pop: PopulationState, strict: bool = True
+    ) -> None:
         pop.done = True
         pop.stop_signal[0] = True
         try:
@@ -1879,11 +1885,29 @@ class Learner:
                 t.join(timeout=30)
             stragglers = [t for t in stragglers if t.is_alive()]
         if stragglers:
-            raise RuntimeError(
-                f"{len(stragglers)} worker thread(s) for population "
-                f"{pop.name} never stopped: {[t.name for t in stragglers]}. "
-                "Refusing to proceed with this population's state still "
-                "reachable from a live thread."
+            if strict:
+                raise RuntimeError(
+                    f"{len(stragglers)} worker thread(s) for population "
+                    f"{pop.name} never stopped: {[t.name for t in stragglers]}. "
+                    "Refusing to proceed with this population's state still "
+                    "reachable from a live thread."
+                )
+            # strict=False is the whole-PROCESS shutdown path (train()'s
+            # finally, incl. Ctrl-C): the straggler raise exists to stop a
+            # population RESET from rebuilding on top of state a leaked
+            # thread still holds (the 2026-08-11 RAM/VRAM leak) — at
+            # process exit there is no next phase to protect, every
+            # thread is a daemon that dies with the process, and raising
+            # here would convert a clean Ctrl-C into a "crashed" outcome
+            # (an actor blocked on the game-server websocket mid-game is
+            # normal at this point, not a leak).
+            logger.warning(
+                "%d thread(s) for population %s still alive at process "
+                "shutdown: %s — proceeding; they are daemons and exit "
+                "with the process.",
+                len(stragglers),
+                pop.name,
+                [t.name for t in stragglers],
             )
 
         # Return this population's 4 progress-bar rows to the shared pool
@@ -1900,6 +1924,64 @@ class Learner:
             pop.builder_replay._progress,
         ):
             close_tqdm_bar(bar)
+
+    # Known python-thread name prefixes, for the census below — anything
+    # unrecognized lands in "other".
+    _THREAD_NAME_BUCKETS = (
+        "Selfplay-",
+        "BuilderActor-",
+        "EvalActor-",
+        "transfer-",
+        "log-",
+        "ckpt-",
+        "inference-server",
+        "ThreadPoolExecutor",
+    )
+
+    def _log_memory_diagnostics(self, logs: dict) -> None:
+        """Process-wide RAM attribution, riding main's periodic wandb logs
+        every memory_diag_interval steps (main-only, same convention as
+        _check_oom_guard: process-wide facts don't need three copies).
+
+        Motivated by session 1786537634: RSS climbed 5.9GB -> 17GB while
+        the OS thread count grew 478 -> 775 with no obvious owner, and
+        none of it was attributable from wandb alone. The bounded-by-
+        design consumers (replay buffers, league opponent cache) get
+        exact byte counts here; the thread census separates python
+        threads (named, bucketed below) from native ones — if
+        diag_os_threads far exceeds diag_py_threads, the growth lives in
+        native pools (XLA/CUDA/websocket internals), not python code."""
+        try:
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        logs["diag_rss_mb"] = int(line.split()[1]) / 1024.0
+                    elif line.startswith("Threads:"):
+                        logs["diag_os_threads"] = int(line.split()[1])
+        except Exception:
+            pass  # non-Linux — skip, same posture as _available_memory_fraction
+
+        py_threads = threading.enumerate()
+        logs["diag_py_threads"] = len(py_threads)
+        buckets = dict.fromkeys(self._THREAD_NAME_BUCKETS, 0)
+        buckets["other"] = 0
+        for t in py_threads:
+            for prefix in self._THREAD_NAME_BUCKETS:
+                if t.name.startswith(prefix):
+                    buckets[prefix] += 1
+                    break
+            else:
+                buckets["other"] += 1
+        for prefix, count in buckets.items():
+            key = prefix.rstrip("-").lower().replace("-", "_")
+            logs[f"diag_py_threads_{key}"] = count
+
+        for name, pop in self.populations.items():
+            logs[f"diag_player_replay_mb_{name}"] = pop.player_replay.nbytes() / 2**20
+            logs[f"diag_builder_replay_mb_{name}"] = pop.builder_replay.nbytes() / 2**20
+        entries, cache_bytes = self.league.cache_stats()
+        logs["diag_league_cache_entries"] = entries
+        logs["diag_league_cache_mb"] = cache_bytes / 2**20
 
     def _train_step(self, pop: PopulationState, batch: Batch) -> dict | None:
         """Runs the JAX update for pop via the shared compiled train_step,
@@ -1940,6 +2022,13 @@ class Learner:
                     self.config.bandit_min_rated_opponents,
                 )
             )
+
+        if (
+            pop.name == "main"
+            and self.config.memory_diag_interval > 0
+            and step % self.config.memory_diag_interval == 0
+        ):
+            self._log_memory_diagnostics(logs)
 
         pop.log_q.put(logs)
 
@@ -2194,9 +2283,7 @@ class Learner:
 
         pop.budget_anchor_frames = frame_count
         pop.wandb_run.log({"population_continued": 1}, commit=False)
-        logger.info(
-            "Population %s (%s): continues training un-reset.", name, reason
-        )
+        logger.info("Population %s (%s): continues training un-reset.", name, reason)
 
     @staticmethod
     def _available_memory_fraction() -> float | None:

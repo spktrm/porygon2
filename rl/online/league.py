@@ -182,6 +182,28 @@ class League:
 
     # --- lazy materialisation + UCB-managed cache ---------------------------
 
+    def cache_stats(self) -> tuple[int, int]:
+        """(entries, total host bytes) of the materialized-opponent cache —
+        RAM diagnostics (Learner._log_memory_diagnostics). At ~112MB per
+        full player+builder container, a full 16-slot cache is one of the
+        largest single host-RAM consumers in the process."""
+
+        def tree_nbytes(tree) -> int:
+            if hasattr(tree, "nbytes"):
+                return tree.nbytes
+            if isinstance(tree, collections.abc.Mapping):
+                return sum(tree_nbytes(v) for v in tree.values())
+            if isinstance(tree, (list, tuple)):
+                return sum(tree_nbytes(v) for v in tree)
+            return 0
+
+        with self.lock:
+            containers = list(self._cache.values())
+        total = sum(
+            tree_nbytes((c.player_params, c.builder_params)) for c in containers
+        )
+        return len(containers), total
+
     def materialize(self, ref: PlayerRef) -> ParamsContainer:
         """Return a ParamsContainer for ``ref``, loading from disk on a miss."""
         with self.lock:

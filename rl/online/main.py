@@ -7,6 +7,7 @@ import functools
 import json
 import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -28,6 +29,7 @@ from rl.online.agent import Agent
 from rl.online.artifact import create_train_state, load_train_state
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
+from rl.online.inference import InferenceServer
 from rl.online.learner import (
     CAT_VF_SUPPORT,
     POPULATION_NAMES,
@@ -35,7 +37,7 @@ from rl.online.learner import (
     OOMGuardTriggered,
     PopulationName,
 )
-from rl.online.player_actor import PlayerActor
+from rl.online.player_actor import ActorStopped, PlayerActor
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,7 @@ class TqdmLoggingHandler(logging.Handler):
             tqdm.write(self.format(record))
         except Exception:
             self.handleError(record)
+
 
 # Wandb metric-key names for the service's evalActionMapping indices
 # (service/src/server/eval.ts).
@@ -106,6 +109,11 @@ def run_training_actor_pair(
                 player.update_player_league_stats(
                     player_params, opponent_params, trajectory
                 )
+        except ActorStopped:
+            # Clean shutdown unwind (Ctrl-C / population reset) — the
+            # population stopped while this actor was blocked inside an
+            # unroll. Not an error; just stop producing.
+            break
         except Exception as e:
             logger.error(f"Error in {worker_id}: {e}", exc_info=True)
             raise e
@@ -223,6 +231,8 @@ def run_eval_heuristic(
                     )
                 wandb_run.log(logs)
 
+        except ActorStopped:
+            break
         except Exception:
             logger.error("Error running eval heuristic", exc_info=True)
             # Dont let bad evaluation crash the whole training loop
@@ -267,7 +277,9 @@ def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
             api.runs(f"{api.default_entity}/{project}", filters={"state": "running"})
         )
     except Exception:
-        logger.warning("Could not query wandb for stale runs — skipping.", exc_info=True)
+        logger.warning(
+            "Could not query wandb for stale runs — skipping.", exc_info=True
+        )
         return
     for run in runs:
         try:
@@ -347,6 +359,23 @@ def main(args: argparse.Namespace):
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
+
+    # One batched-inference server for ALL training PlayerActors across
+    # the three populations (rl/online/inference.py). Same apply_fn and
+    # default HeadParams as learning_agent — eval actors stay on
+    # eval_agent's direct path (different sampling temperature, and 3
+    # low-volume threads don't warrant a second server). Builder actors
+    # also stay direct: builder inference is one team-build per game vs.
+    # ~35 player steps, negligible traffic.
+    inference_server = None
+    if learner_config.inference_server_enabled:
+        inference_server = InferenceServer(
+            actor_player_network.apply,
+            gpu_lock=gpu_lock,
+            max_batch=learner_config.inference_max_batch,
+            params_cache_size=learner_config.inference_params_cache_size,
+        )
+        inference_server.start()
 
     logger.info("Loading main's train state...")
     mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
@@ -480,6 +509,7 @@ def main(args: argparse.Namespace):
                     learner=learner,
                     rng_seed=len(new_threads) + salt,
                     population=population,
+                    inference_client=inference_server,
                 )
                 for player_id in range(2)
             ]
@@ -577,6 +607,17 @@ def main(args: argparse.Namespace):
         # "finished" runs, which sent the postmortem down the wrong path.
         crashed = True
     finally:
+        # From here the process is exiting as fast as it safely can — a
+        # second Ctrl-C would abort this cleanup midway, skipping the
+        # remaining wandb finishes and leaving those runs "Running" until
+        # W&B's heartbeat timeout flips them to Crashed. Ignore further
+        # SIGINT (main thread only, which is where this finally runs).
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        logger.info(
+            "Shutting down: finishing %d wandb runs (further Ctrl-C is "
+            "ignored — this takes a few seconds)...",
+            len(wandb_runs),
+        )
         executor.shutdown(wait=False, cancel_futures=True)
         for wandb_run in wandb_runs.values():
             try:

@@ -135,9 +135,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # False means only main exists, exactly as before this redesign.
     auto_exploiter_enabled: bool = True
 
-    # Target share of total frames trained across the process's life;
-    # Learner._select_population picks whichever live population is
-    # furthest below its target share. Generalizes the old single
+    # Target share of frames trained; Learner._select_population picks
+    # whichever live population is furthest below its target share of the
+    # current scheduling epoch (the window since the ready-set last
+    # changed — see its docstring), with targets normalized over the
+    # populations that currently exist. Generalizes the old single
     # exploiter_duty_cycle_fraction (binary main-vs-exploiter) to a 3-way
     # split. Must sum to 1.0 — not enforced by a __post_init__ validator
     # (no precedent for one on this frozen chex.dataclass, and no local
@@ -146,6 +148,24 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     main_duty_cycle_fraction: float = 0.80
     main_exploiter_duty_cycle_fraction: float = 0.10
     league_exploiter_duty_cycle_fraction: float = 0.10
+
+    # Centralized batched actor inference (rl/online/inference.py): all
+    # training PlayerActors submit per-step forwards to one server thread
+    # that runs a single vmapped apply over whatever is queued — zero-wait
+    # adaptive batching (no min-batch, no max-wait timer; see the module
+    # docstring for why those knobs are deliberately absent). False
+    # restores the per-actor batch-1 Agent.step_player path exactly.
+    inference_server_enabled: bool = True
+    # Compile-shape/latency cap on one batched forward. Padded to powers
+    # of two, so traced batch sizes are log2(cap)+1 distinct values.
+    inference_max_batch: int = 16
+    # Device-resident params LRU in the server, keyed by params version.
+    # Sizing note: entries are actor-model-params-sized, but this REPLACES
+    # the old per-actor copies (every actor device_put its own copy of its
+    # current params per game — up to ~2x num actors live at once), so 16
+    # shared entries is a strict VRAM improvement, covering 3 live
+    # populations + concurrent historical opponents.
+    inference_params_cache_size: int = 16
 
     # Promotion bar, shared by both exploiter types: win-rate vs. EVERY
     # opponent currently pinned must clear this, not just the average — a
@@ -242,6 +262,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # three-population redesign, exploiter populations never pause main, so
     # this has no effect when auto_exploiter_enabled is set.
     plasticity_defer_to_exploiter: bool = False
+
+    # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
+    # through main's periodic wandb logs: process RSS + OS-vs-python thread
+    # census + exact replay-buffer/league-cache byte counts. Added after
+    # session 1786537634's RSS climbed 5.9->17GB (threads 478->775) with
+    # no way to attribute it from wandb alone. 0 disables. Cost per tick
+    # is one /proc read + a walk over stored trajectories' array headers —
+    # negligible at this interval.
+    memory_diag_interval: int = 5_000
 
     # OOM guard (learner.py: Learner._check_oom_guard). A self-monitoring
     # safety valve, not a leak fix — added after 1361 crashed, though that
@@ -388,9 +417,18 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # reproduce any of those three bug patterns.
     adapt_ctrl_floor_gain: float = 2.0
     # Event bumps, added to log(coef) directly (0.7 ~ a 2x step,
-    # 1.4 ~ 4x) — the only source of a deliberate pressure increase.
-    adapt_ctrl_event_bump: float = 0.7
-    adapt_ctrl_perturb_bump: float = 1.4
+    # 1.4 ~ 4x). Zeroed 2026-08-13 — fixed-baseline regime: session
+    # 1786537634 showed main carrying ~6x baseline magnet pressure with
+    # ZERO floor breaches the whole run (pure stacked league-addition/
+    # perturbation bumps, decaying on a ~20k-step half-life), holding the
+    # policy near the prior and blocking it from sharpening. League
+    # additions are routine, not collapse events — the floors below are
+    # the collapse detector, and they escalate on their own via
+    # floor_gain when actually breached. With both bumps at 0 the coef
+    # sits EXACTLY at player_magnet_kl_coef except during a real breach,
+    # and decay returns it to baseline afterward.
+    adapt_ctrl_event_bump: float = 0.0
+    adapt_ctrl_perturb_bump: float = 0.0
     # Geometric per-step relaxation of the magnet-KL coefficient back
     # toward baseline, skipped on any step with an active floor breach.
     # Deliberately NOT sensor-driven (no commit_cov, no target, nothing
