@@ -653,9 +653,25 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.sendFinalState();
     }
 
+    // The omniscient stream of this player's battle, attached by
+    // createBattle — lets destroy() end the underlying BattleStream so
+    // the sim Battle (whose `log`/`inputLog`/Pokemon graph dwarfs the
+    // client-side views) is freed too. Without this, an early-finished
+    // game's BattleStream never sees an `end` and retains the full sim
+    // Battle for as long as either player object is reachable.
+    omniscientStream: ObjectReadWriteStream<string> | undefined;
+
     destroy() {
         this.privateBattle.destroy();
         this.publicBattle.destroy();
+        // Idempotent (BattleStream._writeEnd checks atEOF) and safe to
+        // call from either side: on a normally-ended battle it's a no-op,
+        // on an early-finished one it triggers battle.destroy().
+        try {
+            void this.omniscientStream?.writeEnd();
+        } catch {
+            // Stream already destroyed — nothing left to free.
+        }
     }
 }
 
@@ -731,6 +747,8 @@ export function createBattle(
 
     const p1 = new TrainablePlayerAI(p1spec.name, streams.p1, {}, debug);
     const p2 = new TrainablePlayerAI(p2spec.name, streams.p2, {}, debug);
+    p1.omniscientStream = streams.omniscient;
+    p2.omniscientStream = streams.omniscient;
 
     p1.start();
     p2.start();

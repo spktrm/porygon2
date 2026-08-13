@@ -354,7 +354,13 @@ export class GameServer {
 // Initialize the server
 new GameServer(8080, {
     maxGamesPerWorker: 50,
-    maxWorkers: 12,
+    // Each worker is a full V8 isolate with its own dex/sim data
+    // (~150MB baseline before any battles). Under the learner's
+    // block-sequential actor gating at most ONE population's pool plays
+    // at a time (~6 self-play games + 3 eval), and a worker steps many
+    // concurrent battles fine — sim stepping is far cheaper than the
+    // python side's inference. 6 halves the idle baseline vs the old 12.
+    maxWorkers: 6,
     loggingLevel: "info", // Set to 'debug' for more verbose logging
     logThroughput: false,
     throughputIntervalMs: 1000,

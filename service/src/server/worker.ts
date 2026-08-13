@@ -275,6 +275,21 @@ export class WorkerHandler {
         workerResponse.setEnvironmentResponse(environmentResponse);
 
         this.sendMessage(taskId, workerResponse);
+
+        // Eager cleanup: this was the game's final state, so nothing will
+        // ever be requested from this player again — the python actor's
+        // next contact is a reset, and gameId-hash routing (index.ts)
+        // usually lands that reset on a DIFFERENT worker, so the old
+        // "destroy on next reset of the same username" path here left one
+        // finished battle (two client Battles + the full sim Battle via
+        // the stream refs) retained per username per worker indefinitely.
+        // destroy() also ends the BattleStream, which is what actually
+        // frees the sim Battle on the early-finish path (no `end` line
+        // ever arrives there).
+        if (player.done) {
+            player.destroy();
+            this.playerMapping.delete(userName);
+        }
     }
 
     private resetPlayerFromUserName(
