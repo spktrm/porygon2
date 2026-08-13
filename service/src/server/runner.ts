@@ -653,25 +653,24 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.sendFinalState();
     }
 
-    // The omniscient stream of this player's battle, attached by
-    // createBattle — lets destroy() end the underlying BattleStream so
-    // the sim Battle (whose `log`/`inputLog`/Pokemon graph dwarfs the
-    // client-side views) is freed too. Without this, an early-finished
-    // game's BattleStream never sees an `end` and retains the full sim
-    // Battle for as long as either player object is reachable.
-    omniscientStream: ObjectReadWriteStream<string> | undefined;
+    // One-shot battle-stream teardown shared by BOTH players of a game,
+    // attached by createBattle — lets destroy() end the underlying
+    // BattleStream so the sim Battle (whose `log`/`inputLog`/Pokemon
+    // graph dwarfs the client-side views) is freed too. Without this, an
+    // early-finished game's BattleStream never sees an `end` and retains
+    // the full sim Battle for as long as either player object is
+    // reachable. MUST be once-only and swallow async errors:
+    // BattleStream._writeEnd unconditionally re-runs battle.destroy(),
+    // which throws on a second call (already-nulled internals), and
+    // writeEnd() is async so a plain try/catch around it catches
+    // nothing — the rejection killed workers as an unhandled 'error'
+    // (see the 2026-08-13 service crash).
+    endBattleStream: (() => void) | undefined;
 
     destroy() {
         this.privateBattle.destroy();
         this.publicBattle.destroy();
-        // Idempotent (BattleStream._writeEnd checks atEOF) and safe to
-        // call from either side: on a normally-ended battle it's a no-op,
-        // on an early-finished one it triggers battle.destroy().
-        try {
-            void this.omniscientStream?.writeEnd();
-        } catch {
-            // Stream already destroyed — nothing left to free.
-        }
+        this.endBattleStream?.();
     }
 }
 
@@ -747,8 +746,19 @@ export function createBattle(
 
     const p1 = new TrainablePlayerAI(p1spec.name, streams.p1, {}, debug);
     const p2 = new TrainablePlayerAI(p2spec.name, streams.p2, {}, debug);
-    p1.omniscientStream = streams.omniscient;
-    p2.omniscientStream = streams.omniscient;
+    // Shared once-guard: whichever player's cleanup runs first ends the
+    // stream (freeing the sim Battle); the second call is a no-op. The
+    // .catch swallows the async double-destroy TypeError class — by this
+    // point the battle is torn down either way, so there is nothing
+    // actionable in the rejection.
+    let battleStreamEnded = false;
+    const endBattleStream = () => {
+        if (battleStreamEnded) return;
+        battleStreamEnded = true;
+        streams.omniscient.writeEnd().catch(() => {});
+    };
+    p1.endBattleStream = endBattleStream;
+    p2.endBattleStream = endBattleStream;
 
     p1.start();
     p2.start();
