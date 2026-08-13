@@ -13,26 +13,32 @@ learner.py builds on ``PILogController`` the same way but keeps its own
 windowed-mean sensor, since averaging the actor-KL over a fixed window
 rather than decaying it is a deliberate, different smoothing choice.
 
-Timescale separation across the loops: replay controller (fast,
-actor-KL -> reuse cap), lambda controller (slow, calibration gap ->
-advantage lambda), plasticity (episodic; pushes lambda to its ceiling
-during recovery), exploitability controller (slowest — league win-rate
--> a shared caution scale applied to the lambda and replay controllers'
-targets, not a runtime scalar of its own).
+Timescale separation across the surviving loops: replay controller
+(fast, actor-KL -> reuse cap; lives in learner.py), plasticity
+(episodic), exploitability controller (slowest — league win-rate -> a
+caution scale applied to the replay controller's target, not a runtime
+scalar of its own).
 
-There is deliberately no controller on the magnet KL coefficient
-anymore. The AdaptivityController (commitment-covariance PI, later
-floor-only escalation on entropy-floor breaches) was removed entirely
-2026-08-13: across several runs its effect proved hard to tune and
-predict — the PI action caused three separate bugs (unreachable target
-pinning pressure at the ceiling in 1338/1339, divide-by-near-zero in
-1341, an exploit_ctrl target-scaling bug), and the stacked event bumps
-held main at ~6x baseline pressure for a whole run (session 1786537634)
-with zero floor breaches. The coefficient is now exactly
-config.player_magnet_kl_coef, always. The entropy signals it watched
-are still logged from train_step for the dashboard; nothing acts on
-them — modality collapse (the 1330 failure mode) is watched, not
-auto-corrected.
+Two controllers were deliberately removed, for the same reason — their
+effects proved hard to tune and predict:
+
+- AdaptivityController (magnet KL coef; removed 2026-08-13): the
+  commitment-covariance PI caused three separate bugs (unreachable
+  target pinning pressure at the ceiling in 1338/1339,
+  divide-by-near-zero in 1341, an exploit_ctrl target-scaling bug), and
+  its stacked event bumps held main at ~6x baseline pressure for a whole
+  run (session 1786537634) with zero floor breaches. The coefficient is
+  now exactly config.player_magnet_kl_coef, always. Its entropy sensors
+  are still logged; modality collapse (the 1330 failure mode) is
+  watched, not auto-corrected.
+- LambdaGapController (advantage lambda; removed 2026-08-14): replaced
+  by AlphaStar's actual recipe — fixed TD(lambda=0.8) value targets,
+  unparameterised v-trace policy advantages, and a UPGO term whose
+  per-step outcome-conditional cut supplies locally what the
+  controller's single global lambda approximated (see targets.py). Its
+  one genuinely-useful behaviour, forcing pure Monte Carlo while a
+  freshly-perturbed critic is untrustworthy, survives as "upgo_coef=0
+  during plasticity recovery" in Learner._train_step.
 """
 
 import numpy as np
@@ -108,110 +114,16 @@ class EmaSensor:
         self.ticks = 0
 
 
-class LambdaGapController:
-    """Adapts the ADVANTAGE lambda by holding the critic's measured
-    bootstrap bias at a target.
-
-    Sensor: player_bootstrap_gap — the per-batch mean |main head value −
-    lambda=1.0 Monte Carlo anchor value|. Gap under target means the
-    critic is trustworthy, so lambda drifts down and the actor harvests
-    variance reduction; gap over target means bootstrap bias is leaking
-    into the policy gradient, so lambda backs off toward outcomes.
-
-    Works in log(1 - lambda) (horizon space): a step is a multiplicative
-    change to the bootstrap horizon, so moves are equally sized at 0.99
-    and 0.6.
-
-    Plasticity coupling: while the plasticity controller is in recovery
-    the perturbed critic cannot be trusted, so lambda is driven to its
-    ceiling and the PI state is reset; annealing restarts from the top
-    as the critic re-fits — the transient reversion the 1328 postmortem
-    showed a schedule cannot provide.
-
-    Known blind spot: the gap reads zero where a shared-trunk error
-    fools both readouts, so lambda_min is a hard floor, not a tunable
-    convenience.
-    """
-
-    def __init__(
-        self,
-        initial_lambda: float,
-        gap_target: float,
-        kp: float,
-        ki: float,
-        interval: int,
-        lambda_min: float,
-        lambda_max: float,
-        sensor_ema: float,
-    ):
-        self.gap_target = gap_target
-        log_h_min = float(np.log(1.0 - lambda_max + 1e-6))
-        log_h_max = float(np.log(1.0 - lambda_min))
-        initial_log_h = float(np.log(1.0 - initial_lambda + 1e-6))
-
-        self._pi = PILogController(initial_log_h, log_h_min, log_h_max, kp, ki)
-        self._sensor = EmaSensor(sensor_ema, interval)
-
-    @property
-    def value(self) -> float:
-        return float(1.0 - np.exp(self._pi.log))
-
-    def update(self, gap: float | None, recovering: bool) -> dict[str, float]:
-        if recovering:
-            self._pi.set_log(self._pi.log_min)
-            self._pi.prev_err = 0.0
-            self._sensor.reset()
-            return self.logs()
-
-        self._sensor.observe(gap)
-        if self._sensor.ready():
-            self._sensor.consume()
-            # err > 0: gap under target -> grow the horizon (lambda down).
-            err = (self.gap_target - self._sensor.ema) / self.gap_target
-            self._pi.step(err)
-        return self.logs()
-
-    def logs(self) -> dict[str, float]:
-        out = {"lambda_ctrl_lambda": self.value}
-        if self._sensor.ema is not None:
-            out["lambda_ctrl_gap_ema"] = float(self._sensor.ema)
-        return out
-
-    def state_dict(self) -> dict:
-        return dict(
-            log_h=self._pi.log,
-            gap_ema=self._sensor.ema,
-            prev_err=self._pi.prev_err,
-            ticks=self._sensor.ticks,
-        )
-
-    def load_state_dict(self, state: dict) -> None:
-        # Tolerant by key: a checkpoint written by an older controller
-        # revision must never be able to fail a resume — the state is an
-        # optimisation (skip the re-anneal), not a correctness input.
-        # Re-clip too: the band moves when lambda_ctrl_min/max change,
-        # and a restored actuator outside it would be stuck until the
-        # integral walked it back.
-        if "log_h" in state:
-            self._pi.set_log(state["log_h"])
-        self._sensor.ema = state.get("gap_ema")
-        self._pi.prev_err = float(state.get("prev_err", 0.0))
-        self._sensor.ticks = int(state.get("ticks", 0))
-
-
 class ExploitabilityController:
-    """Adapts a shared CAUTION SCALE by holding league exploitability —
-    1 minus main's win-rate against its worst historical snapshot — at a
-    target, then applies that scale to the lambda and replay
-    controllers' targets (lambda_ctrl_gap_target, the replay KL target)
-    rather than driving a runtime scalar of its own. Callers own
-    applying the scale — see learner._apply_exploit_scale — since the
-    sign of the adjustment differs per target (shrink some, grow others)
-    depending on which direction means "more cautious" for that
-    controller. Used to also scale the adaptivity controller's commit
-    target, but that controller no longer exists at all (removed
-    2026-08-13 — see the module docstring), so this touches exactly two
-    targets.
+    """Adapts a CAUTION SCALE by holding league exploitability — 1 minus
+    main's win-rate against its worst historical snapshot — at a target,
+    then applies that scale to the replay controller's KL target rather
+    than driving a runtime scalar of its own (learner._apply_exploit_
+    scale). Used to also scale the adaptivity and lambda controllers'
+    targets, but both were removed (2026-08-13/-14 — see the module
+    docstring), leaving the replay KL target as the one remaining
+    target: exploitability rising shrinks it, cutting replay reuse and
+    keeping training closer to fresh data.
 
     Sign convention is flipped relative to the other controllers: the
     actuator (log(scale)) rises when the sensor is ABOVE target (more

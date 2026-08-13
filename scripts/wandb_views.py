@@ -133,17 +133,25 @@ def rl_sections():
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
                 ),
                 lp(
-                    # Advantage-lambda: the gap controller's continuous
-                    # output. Control signal — not smoothed.
-                    "Advantage lambda (gap controller)",
-                    ["lambda_ctrl_lambda"],
-                    smooth=0,
+                    # Critic calibration: |main head - MC anchor| value
+                    # gap. Diagnostic only since the lambda controller's
+                    # removal (2026-08-14) — a large/growing gap means
+                    # bootstrap bias is leaking into targets.
+                    "Bootstrap gap (critic calibration)",
+                    ["player_bootstrap_gap"],
                 ),
                 lp(
-                    # Lambda controller sensor: bootstrap bias = |main
-                    # head - MC anchor| value gap, raw and EMA.
-                    "Bootstrap gap (lambda ctrl sensor)",
-                    ["player_bootstrap_gap", "lambda_ctrl_gap_ema"],
+                    # UPGO (AlphaStar-style second PG term): cut_frac is
+                    # the fraction of steps whose return truncated to the
+                    # bootstrap — ~0 at cold start (pessimistic critic =
+                    # pure MC), rising as the critic calibrates. Loss is
+                    # zeroed during plasticity recovery.
+                    "UPGO (cut fraction & loss)",
+                    [
+                        "player_upgo_cut_frac",
+                        "player_loss_upgo",
+                        "player_upgo_adv_std",
+                    ],
                 ),
                 lp(
                     # Slow BT-fit auditors, never controlled on (hundreds
@@ -245,6 +253,7 @@ def rl_sections():
                     "Loss components",
                     [
                         "player_loss_pg",
+                        "player_loss_upgo",
                         "player_loss_kl",
                         "player_loss_magnet_kl",
                         "player_loss_v_win",

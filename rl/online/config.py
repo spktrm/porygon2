@@ -376,37 +376,39 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_adv_std_floor: float = 0.05
     builder_ema_update_rate: float = 1e-3
 
-    # Advantage estimation params
+    # Advantage estimation params — AlphaStar's v-trace + UPGO recipe
+    # (2026-08-14, replacing the LambdaGapController; see targets.py):
+    # the value head trains on TD(lambda)-style v-trace targets at
+    # player_lambda, the policy gradient takes v-trace advantages with NO
+    # lambda of its own (AlphaStar's vtrace_advantages is
+    # unparameterised — clipped IS weights only, i.e. lambda=1), and a
+    # separate UPGO term (below) carries the per-step outcome-conditional
+    # credit the old runtime-tuned advantage lambda was trying to
+    # approximate globally.
     player_gamma: float = 1.0
     player_alpha: float = 1.0
-    # Value-target (td) lambda — pinned; the critic's objective and the
-    # MC-anchor calibration signal never drift.
-    player_lambda: float = 0.99
-    # Advantage (gae) lambda — the actor's bias/variance knob; the
-    # lambda controller (rl/online/controllers.py) drives it at runtime
-    # when enabled, this is the starting/static value otherwise.
-    player_adv_lambda: float = 0.99
+    # Value-target lambda. AlphaStar's own choice: TD(lambda=0.8), a
+    # short (~5-step) bootstrap horizon — they could afford heavy
+    # bootstrapping because supervised init gave them a sane critic from
+    # step one. This project starts from scratch AND the 1328 five-arm
+    # sweep pointed the same direction (monotone lower-lambda-better,
+    # confounded but directional), so 0.8 is adopted as-is. The aux
+    # spectrum's lambda=1.0 MC-anchor row (player_aux_lambdas) keeps the
+    # bootstrap-bias readout (player_bootstrap_gap) alive regardless.
+    player_lambda: float = 0.8
 
-    # Lambda PI controller: holds the measured bootstrap bias
-    # (player_bootstrap_gap: main head vs lambda=1.0 MC-anchor value gap)
-    # at lambda_ctrl_gap_target by adjusting the advantage lambda in
-    # log(1-lambda) space. Gap under target -> lambda anneals down;
-    # over -> backs off toward outcomes. During plasticity recovery
-    # lambda is forced to lambda_ctrl_max (bootstrap untrustworthy) and
-    # re-anneals afterwards. gap_target is on the +-1 value scale —
-    # calibrate from the first run's player_bootstrap_gap telemetry.
-    lambda_ctrl_enabled: bool = True
-    lambda_ctrl_gap_target: float = 0.05
-    # Gains sized from the 1329 trace: a sustained full-scale error moves
-    # log(1-lambda) ~0.05/tick -> the 0.99 -> 0.95 traverse (~+2.0 in
-    # log space) takes ~30-40k steps. The original ki=0.01 needed
-    # 100-200k — most of a run spent mid-anneal.
-    lambda_ctrl_kp: float = 0.2
-    lambda_ctrl_ki: float = 0.05
-    lambda_ctrl_interval: int = 500
-    lambda_ctrl_min: float = 0.5
-    lambda_ctrl_max: float = 1.0
-    lambda_ctrl_sensor_ema: float = 0.01
+    # UPGO (AlphaStar rl.py upgo_returns): policy-gradient-only return
+    # that follows the actual trajectory while the continuation performs
+    # at least as well as the critic expected (lambda_t = 1 where
+    # Q_hat >= V, else cut to the critic's value) — full Monte Carlo
+    # credit along successful lines, truncation at the first
+    # worse-than-expected step. Coefficient mirrors AlphaStar's equal
+    # weighting of the v-trace and UPGO PG terms. Passed to train_step
+    # as a RUNTIME scalar, zeroed while plasticity recovery is active
+    # (an optimistically-wrong post-perturbation critic would cut in the
+    # wrong places — the same regime the old lambda controller handled
+    # by forcing lambda to its ceiling).
+    player_upgo_coef: float = 1.0
 
     # No adaptivity/entropy controller fields anymore: the magnet KL
     # coefficient is exactly player_magnet_kl_coef, always. The
@@ -429,10 +431,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # rating exists and rating_logs reports bandit_rating_valid=0.
     # These fields used to also configure LambdaBandit, a discounted-UCB
     # bandit that retuned the advantage lambda from this same rating —
-    # retired in favour of the lambda gap-controller and the
-    # exploitability controller (both react every manage_league_interval
-    # call; the rating itself needs hundreds of games per point, so it
-    # stays an auditor, never a control signal — see bandit.py).
+    # retired in favour of the lambda gap-controller (itself since
+    # removed, 2026-08-14, for UPGO + fixed player_lambda) and the
+    # exploitability controller (the rating itself needs hundreds of
+    # games per point, so it stays an auditor, never a control signal —
+    # see bandit.py).
     bandit_window_steps: int = 20_000
     bandit_min_games_per_opponent: float = 20.0
     bandit_min_rated_opponents: int = 2

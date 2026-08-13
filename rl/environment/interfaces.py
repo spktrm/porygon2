@@ -182,6 +182,10 @@ class BuilderTransition:
 class PlayerTargets:
     win_returns: ArrayLike = ()
     advantages: ArrayLike = ()
+    # AlphaStar-style UPGO advantages (targets.py upgo_returns) — a
+    # second, policy-gradient-only advantage channel; never touches the
+    # value loss.
+    upgo_advantages: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()
 

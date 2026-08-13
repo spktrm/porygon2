@@ -64,7 +64,6 @@ from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.controllers import (
     ExploitabilityController,
-    LambdaGapController,
     PILogController,
 )
 from rl.online.league import (
@@ -167,15 +166,17 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
-    adv_lambda: jax.Array | None = None,
+    upgo_coef: jax.Array | None = None,
     magnet_coef: jax.Array | None = None,
 ):
     """Train for a single step.
 
-    ``adv_lambda`` and ``magnet_coef`` are RUNTIME scalars (traced, not
-    static) driven by the lambda/entropy controllers — runtime values
-    never recompile; see compute_player_targets for the OOM history
-    behind this rule.
+    ``upgo_coef`` and ``magnet_coef`` are RUNTIME scalars (traced, not
+    static — runtime values never recompile; static-config scalars
+    retained ~5GB of executables per distinct value and OOM-killed run
+    1326). upgo_coef is config.player_upgo_coef, zeroed by the caller
+    during plasticity recovery (a freshly-perturbed critic cuts UPGO
+    returns in the wrong places).
     """
 
     player_transitions = batch.player_transitions
@@ -223,7 +224,6 @@ def train_step(
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
         config=config,
-        adv_lambda=adv_lambda,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
@@ -278,11 +278,20 @@ def train_step(
         # value-estimation noise into the actor precisely when the real
         # signal is weakest. Below the floor, normalisation stops
         # rescaling and the gradient is allowed to get small.
+        adv_std_divisor = jnp.maximum(
+            player_state.ema_adv_std, config.player_adv_std_floor
+        )
         player_advantages = (
             player_targets.advantages - player_state.ema_adv_mean
-        ) / jnp.maximum(player_state.ema_adv_std, config.player_adv_std_floor)
+        ) / adv_std_divisor
+        # UPGO shares the std divisor (both channels live on the same +-1
+        # value scale) but is NOT mean-recentered: its positive skew —
+        # extra credit along better-than-expected lines — is the
+        # mechanism, not a normalisation artefact to remove.
+        player_upgo_advantages = player_targets.upgo_advantages / adv_std_divisor
     else:
         player_advantages = player_targets.advantages
+        player_upgo_advantages = player_targets.upgo_advantages
 
     # Magnet policy for the KL regularizer: the hierarchical prior — uniform
     # over valid modalities, uniform within each modality — which is the init
@@ -323,6 +332,17 @@ def train_step(
         loss_pg = policy_gradient_loss(
             policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
             advantages=player_advantages,
+            valid=policy_mask,
+            threshold=config.player_ppo_clip_threshold,
+            objective=config.player_policy_objective,
+        )
+        # UPGO PG term (AlphaStar: v-trace loss + UPGO loss, summed) —
+        # same surrogate/clipping, the outcome-conditional advantage
+        # channel. upgo_coef is the runtime scalar (0 during plasticity
+        # recovery).
+        loss_upgo = policy_gradient_loss(
+            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
+            advantages=player_upgo_advantages,
             valid=policy_mask,
             threshold=config.player_ppo_clip_threshold,
             objective=config.player_policy_objective,
@@ -441,6 +461,8 @@ def train_step(
 
         loss = (
             config.player_policy_loss_coef * loss_pg
+            + (config.player_upgo_coef if upgo_coef is None else upgo_coef)
+            * loss_upgo
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
@@ -451,6 +473,7 @@ def train_step(
         return loss, dict(
             # Loss values
             player_loss_pg=loss_pg,
+            player_loss_upgo=loss_upgo,
             player_loss_v_win=loss_v_win,
             player_loss_v_aux=loss_v_aux,
             player_loss_kl=loss_actor_backward_kl,
@@ -950,7 +973,6 @@ class PopulationState:
     plasticity: PlasticityController
     player_state: Porygon2PlayerTrainState | None = None
     builder_state: Porygon2BuilderTrainState | None = None
-    lambda_ctrl: LambdaGapController | None = None
     exploit_ctrl: ExploitabilityController | None = None
     created_at_frame: int | None = None
     # For an exploiter population: the main step_count it was forked from
@@ -972,7 +994,6 @@ class PopulationState:
     actor_threads: list = dataclasses.field(default_factory=list)
     stop_signal: list = dataclasses.field(default_factory=lambda: [False])
     done: bool = False
-    current_lambda: float = 0.99
     # Block-sequential actor gating (Learner._set_active): set = this
     # population's actor threads may play games; cleared = they idle
     # between games (threading.Event wait, threads stay alive — no
@@ -981,7 +1002,6 @@ class PopulationState:
     run_gate: "threading.Event" = None
     replay_pi: PILogController | None = None
     replay_kl_target: float = 0.045
-    base_lambda_gap_target: float = 0.05
     base_replay_kl_target: float = 0.045
     replay_ctrl_kl_sum: float = 0.0
     replay_ctrl_kl_count: int = 0
@@ -1132,18 +1152,6 @@ class Learner:
                 config.plasticity_defer_to_exploiter or config.auto_exploiter_enabled
             ),
         )
-        lambda_ctrl = None
-        if config.lambda_ctrl_enabled:
-            lambda_ctrl = LambdaGapController(
-                initial_lambda=config.player_adv_lambda,
-                gap_target=config.lambda_ctrl_gap_target,
-                kp=config.lambda_ctrl_kp,
-                ki=config.lambda_ctrl_ki,
-                interval=config.lambda_ctrl_interval,
-                lambda_min=config.lambda_ctrl_min,
-                lambda_max=config.lambda_ctrl_max,
-                sensor_ema=config.lambda_ctrl_sensor_ema,
-            )
         exploit_ctrl = None
         if config.exploit_ctrl_enabled:
             exploit_ctrl = ExploitabilityController(
@@ -1175,11 +1183,9 @@ class Learner:
             plasticity=plasticity,
             player_state=player_state,
             builder_state=builder_state,
-            lambda_ctrl=lambda_ctrl,
             exploit_ctrl=exploit_ctrl,
             created_at_frame=int(jax.device_get(player_state.frame_count)),
             fork_step=fork_step,
-            current_lambda=float(config.player_adv_lambda),
             replay_pi=PILogController(
                 initial_log=float(np.log(config.player_replay_ratio)),
                 log_min=float(np.log(config.player_replay_ratio_min)),
@@ -1187,7 +1193,6 @@ class Learner:
                 kp=config.player_replay_ctrl_kp,
                 ki=config.player_replay_ctrl_ki,
             ),
-            base_lambda_gap_target=float(config.lambda_ctrl_gap_target),
             base_replay_kl_target=float(config.player_replay_kl_target),
             consumer_progress=tqdm(
                 desc=f"consumer-{name}", smoothing=0.1, position=next_tqdm_position()
@@ -1439,7 +1444,6 @@ class Learner:
             try:
                 host_logs = jax.device_get(logs)
                 self._update_replay_controller(pop, host_logs)
-                self._update_hyper_controllers(pop, host_logs)
                 pop.wandb_run.log(host_logs)
             except Exception:
                 logger.exception("wandb logging failed for population %s", pop.name)
@@ -1490,8 +1494,6 @@ class Learner:
         silently resets an in-flight plasticity recovery and re-anneals
         lambda from scratch."""
         state = {"plasticity": pop.plasticity.state_dict()}
-        if pop.lambda_ctrl is not None:
-            state["lambda_ctrl"] = pop.lambda_ctrl.state_dict()
         if pop.exploit_ctrl is not None:
             state["exploit_ctrl"] = pop.exploit_ctrl.state_dict()
         return pickle.dumps(state)
@@ -1531,35 +1533,20 @@ class Learner:
                 )
 
         _restore("plasticity", pop.plasticity.load_state_dict)
-        if pop.lambda_ctrl is not None:
-            _restore("lambda_ctrl", pop.lambda_ctrl.load_state_dict)
-            pop.current_lambda = pop.lambda_ctrl.value
-        # A checkpoint written before the AdaptivityController's removal
-        # (2026-08-13) carries an "entropy_ctrl" section — simply never
-        # read, same as any other missing/extra section here.
+        # Checkpoints written before the AdaptivityController's removal
+        # (2026-08-13) / LambdaGapController's removal (2026-08-14) carry
+        # "entropy_ctrl" / "lambda_ctrl" sections — simply never read,
+        # same as any other missing/extra section here.
         if pop.exploit_ctrl is not None:
             _restore("exploit_ctrl", pop.exploit_ctrl.load_state_dict)
             self._apply_exploit_scale(pop)
 
-    def _update_hyper_controllers(self, pop: PopulationState, host_logs: dict) -> None:
-        """Lambda controller. Runs on the log worker like the replay
-        controller — the sensor is a host-side per-step log, and the
-        actuator is a plain float the train thread reads on its next step
-        (GIL-atomic swap). The magnet KL coefficient is a fixed config
-        scalar now (player_magnet_kl_coef) — the AdaptivityController
-        that used to drive it was removed 2026-08-13; the raw entropy
-        logs it watched (player_action_normalized_entropy,
-        player_normalized_modality_entropy) are still logged from
-        train_step, they just drive nothing."""
-        if pop.lambda_ctrl is not None:
-            gap = host_logs.get("player_bootstrap_gap")
-            host_logs.update(
-                pop.lambda_ctrl.update(
-                    None if gap is None else float(gap),
-                    recovering=pop.plasticity.recovering,
-                )
-            )
-            pop.current_lambda = pop.lambda_ctrl.value
+    # No _update_hyper_controllers anymore: the magnet KL coef became a
+    # fixed config scalar when the AdaptivityController was removed
+    # (2026-08-13), and the advantage lambda went with the
+    # LambdaGapController (2026-08-14) — UPGO's per-step cut plus the
+    # fixed player_lambda replaced it (see targets.py). The replay
+    # reuse-cap controller below is the one remaining per-log-tick loop.
 
     def _update_replay_controller(self, pop: PopulationState, host_logs: dict) -> None:
         """Velocity-form PI loop holding the replayed-batch actor KL at
@@ -1935,12 +1922,17 @@ class Learner:
         """Runs the JAX update for pop via the shared compiled train_step,
         rebinding the result onto pop (not self — every population takes
         turns through the same compiled closure)."""
+        # upgo_coef zeroed during plasticity recovery: a freshly-perturbed
+        # critic cuts UPGO returns in the wrong places (the same regime
+        # the removed lambda controller handled by forcing lambda to its
+        # ceiling). Runtime scalar — flipping it never recompiles.
+        upgo_coef = 0.0 if pop.plasticity.recovering else self.config.player_upgo_coef
         pop.player_state, pop.builder_state, logs = self._train_step_jit(
             pop.player_state,
             pop.builder_state,
             batch,
             self._jit_config,
-            np.float32(pop.current_lambda),
+            np.float32(upgo_coef),
             np.float32(self.config.player_magnet_kl_coef),
         )
         return logs
@@ -2373,15 +2365,14 @@ class Learner:
         self._apply_exploit_scale(pop)
 
     def _apply_exploit_scale(self, pop: PopulationState) -> None:
-        """Scales pop's own lambda/replay controllers' TARGETS (not their
-        actuators) by pop's own exploitability controller's caution
-        scale."""
+        """Scales pop's own replay controller's TARGET (not its actuator)
+        by pop's own exploitability controller's caution scale. Used to
+        also scale the lambda controller's gap target, but that
+        controller was removed 2026-08-14 (UPGO + fixed player_lambda
+        replaced it), so the replay KL target is the one target left."""
         if pop.exploit_ctrl is None:
             return
-        scale = pop.exploit_ctrl.value
-        if pop.lambda_ctrl is not None:
-            pop.lambda_ctrl.gap_target = pop.base_lambda_gap_target / scale
-        pop.replay_kl_target = pop.base_replay_kl_target / scale
+        pop.replay_kl_target = pop.base_replay_kl_target / pop.exploit_ctrl.value
 
     def _should_add_new_player(self, pop: PopulationState) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.

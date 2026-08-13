@@ -36,14 +36,59 @@ def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax
     return errors
 
 
+def upgo_returns(
+    v_scalar: jax.Array,
+    r_scalar: jax.Array,
+    discount: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """AlphaStar's UPGO return (rl.py upgo_returns): follow the actual
+    trajectory's return while the continuation performed at least as well
+    as the critic expected, cut to the critic's value at the first
+    worse-than-expected step:
+
+        G_t = r_t + gamma_t * (G_{t+1} if Q_hat_{t+1} >= V_{t+1}
+                               else V_{t+1})
+        Q_hat_t = r_t + gamma_t * V_{t+1}
+
+    Equivalent to a per-step lambda in {0, 1} chosen by the sign of the
+    one-step lookahead — the outcome-conditional, asymmetric version of
+    what a single global advantage lambda approximates uniformly.
+    Returns (G, cut_mask) where cut_mask marks steps whose continuation
+    was truncated to the bootstrap (diagnostic: player_upgo_cut_frac).
+    """
+    v_next = jnp.concatenate([v_scalar[1:], v_scalar[-1:]], axis=0)
+    q_hat = r_scalar + discount * v_next
+    # follow[t]: at state t+1 the taken action's lookahead beat the
+    # critic, so G_t may keep following the tail beyond t+1. The final
+    # step has no tail — its continuation is the bootstrap either way.
+    follow = jnp.concatenate(
+        [(q_hat[1:] >= v_scalar[1:]), jnp.zeros_like(q_hat[-1:], dtype=jnp.bool_)],
+        axis=0,
+    )
+
+    def _body(g_next, xs):
+        r, disc, v_nxt, follow_t = xs
+        g = r + disc * jnp.where(follow_t, g_next, v_nxt)
+        return g, g
+
+    _, g = jax.lax.scan(
+        _body,
+        v_scalar[-1],
+        (r_scalar, discount, v_next, follow),
+        reverse=True,
+    )
+    return g, ~follow
+
+
 def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
     isr: jax.Array,
     config: Porygon2LearnerConfig,
-    adv_lambda: jax.Array | float | None = None,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
-    """Computes v-trace returns and advantages on the win/loss channel.
+    """Computes v-trace returns/advantages and UPGO advantages on the
+    win/loss channel — AlphaStar's actor recipe (2026-08-14, replacing
+    the split td/gae lambda + LambdaGapController design).
 
     PBRS/potential shaping retired (Aug 2026): the shaped-advantage era's
     channel machinery lived here; the win channel is now the sole reward.
@@ -56,14 +101,12 @@ def compute_player_targets(
     under replay reuse because the fast target tracks the learner within ~1k
     steps.
 
-    Split lambdas (Ataraxos-style td/gae): value targets always use
-    config.player_lambda, so the critic's objective — and the MC-anchor
-    calibration signal built on it — never drifts. ``adv_lambda`` (a
-    RUNTIME scalar; traced, not static — lambda-as-static-config
-    recompiled per value and each recompile retained ~5GB host RAM,
-    killing run 1326) controls ONLY the advantage path, so the lambda
-    controller tunes the actor's bias/variance trade without touching
-    what the value heads learn.
+    Lambda placement follows AlphaStar exactly: config.player_lambda
+    (0.8, their TD(lambda) value) shapes only the VALUE targets; the
+    v-trace policy advantages carry no lambda of their own (clipped IS
+    weights only — their vtrace_advantages is unparameterised); UPGO
+    supplies the per-step, outcome-conditional credit the old
+    runtime-tuned advantage lambda approximated with one global value.
     """
     cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
 
@@ -91,19 +134,11 @@ def compute_player_targets(
     errors = vtrace(td_errors, discount_t, c_t * td_lambda)
     targets_tm1 = (errors + v_tm1) * mask_expanded
 
-    gae_lambda = jnp.asarray(
-        config.player_adv_lambda if adv_lambda is None else adv_lambda,
-        dtype=isr.dtype,
-    )
-    adv_errors = vtrace(td_errors, discount_t, c_t * gae_lambda)
+    # Policy advantages: unparameterised v-trace (lambda=1) — q_estimate
+    # bootstraps from the next step's v-trace target, per IMPALA.
+    adv_errors = vtrace(td_errors, discount_t, c_t)
     adv_targets = (adv_errors + v_tm1) * mask_expanded
-    q_bootstrap = jnp.concatenate(
-        [
-            gae_lambda * adv_targets[1:] + (1 - gae_lambda) * v_tm1[1:],
-            v_t[-1:],
-        ],
-        axis=0,
-    )
+    q_bootstrap = jnp.concatenate([adv_targets[1:], v_t[-1:]], axis=0)
     q_estimate = r_t + discount_t * q_bootstrap
 
     pg_advantages = rho_t * (q_estimate - v_tm1)
@@ -112,6 +147,15 @@ def compute_player_targets(
     win_returns = targets_tm1
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
+
+    # UPGO runs in scalar value space (the categorical machinery above
+    # exists for the CE value loss; the cut decision is a scalar
+    # comparison). Same clipped rho as the v-trace PG term.
+    discount_scalar = jnp.squeeze(discount_t, axis=-1)
+    v_scalar = (v_tm1 @ cat_vf_support) * jnp.squeeze(mask_expanded, axis=-1)
+    r_scalar = r_t @ cat_vf_support
+    upgo_g, upgo_cut = upgo_returns(v_scalar, r_scalar, discount_scalar)
+    upgo_advantages = jnp.squeeze(rho_t, axis=-1) * (upgo_g - v_scalar)
 
     t_length, batch_size, *_ = batch.player_transitions.env_output.action_mask.shape
     num_actions = batch.player_transitions.env_output.action_mask.reshape(
@@ -135,12 +179,19 @@ def compute_player_targets(
         "player_isr_ess": isr_mean * isr_mean / (isr_sq_mean + 1e-8),
         "player_rho_clip_frac": (isr > 1.0).mean(where=policy_mask),
         "player_win_adv_std": win_advantages.std(where=policy_mask),
+        # Fraction of steps whose UPGO return truncated to the bootstrap
+        # (continuation underperformed the critic). ~0 = pure Monte
+        # Carlo (cold critic, or everything going better than expected);
+        # high = heavy truncation. The one dial UPGO has.
+        "player_upgo_cut_frac": upgo_cut.mean(where=policy_mask),
+        "player_upgo_adv_std": upgo_advantages.std(where=policy_mask),
     }
 
     return (
         PlayerTargets(
             win_returns=win_returns,
             advantages=win_advantages,
+            upgo_advantages=upgo_advantages,
             policy_mask=policy_mask,
             value_mask=value_mask,
         ),
@@ -164,10 +215,10 @@ def compute_aux_value_targets(
     spectrum varies the bias/variance of the TARGET instead: lambda=1 is
     the Monte Carlo anchor (its gap to the main lambda=0.99 head is a
     direct bootstrap-bias readout), low lambda leans on the critic. The
-    spectrum is deliberately independent of the advantage lambda, which
-    the lambda controller varies at runtime — aux target semantics must
-    not drift with the live value. Targets only — the aux heads never
-    produce advantages; the policy reads the main head exclusively.
+    spectrum is deliberately independent of the value-target lambda
+    (config.player_lambda) — aux target semantics stay fixed if that is
+    ever retuned. Targets only — the aux heads never produce advantages;
+    the policy reads the main head exclusively.
 
     aux_value_log_probs: (T, B, K, n_bins) from the fast EMA target.
     Returns (T, B, K, n_bins) distribution targets.
