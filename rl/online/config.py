@@ -507,17 +507,20 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # anchor, low lambda leans on the critic. A gamma spectrum would
     # degenerate here (terminal-only reward: gamma^45 kills the signal).
     # Spectrum chosen ~geometric in effective horizon 1/(1-lambda):
-    # 2, 5, 10, 20, inf turns against a ~45-turn mean game (the 20->inf
-    # gap is covered by the main head's lambda=0.99 ~ 100). lambda=0.2
-    # (horizon 1.25) was dropped 2026-08-14: with terminal-only reward
-    # its target is nearly pure next-step self-distillation of the
-    # shared critic, and run 1786583261-main showed its R2 series
-    # correlating 0.984 with lambda=0.5's over 223k steps — a redundant
-    # head, not a distinct horizon. Fixed, independent of the advantage
-    # lambda, which the lambda controller (or a bandit, historically)
-    # varies at runtime. Length must match the model config's
+    # 2, 10, 20, inf turns against a ~45-turn mean game, bracketing the
+    # main head's own lambda=0.8 ~ 5-turn horizon. Two rows dropped as
+    # redundant-with-another-head, same logic both times:
+    # - lambda=0.2 (2026-08-14): near-pure next-step self-distillation
+    #   with terminal-only reward; its R2 series correlated 0.984 with
+    #   lambda=0.5's over 223k steps (run 1786583261-main).
+    # - lambda=0.8 (2026-08-14, after player_lambda moved 0.99->0.8):
+    #   the main head's target became exactly lambda=0.8 v-trace at the
+    #   same gamma — a copy, not a horizon.
+    # The lambda=1.0 row is the MC anchor player_bootstrap_gap reads —
+    # the safety instrument for the bootstrap-heavy lambda=0.8 value
+    # target — and must stay. Length must match the model config's
     # aux_v_head.num_heads.
-    player_aux_lambdas: tuple = (0.5, 0.8, 0.9, 0.95, 1.0)
+    player_aux_lambdas: tuple = (0.5, 0.9, 0.95, 1.0)
     player_aux_value_coef: float = 0.5
 
     ## Builder
