@@ -97,6 +97,7 @@ _TARGET_STATIC_SLOTS = np.setdiff1d(
     np.concatenate([_MOVE_SLOTS, _SWITCH_SLOTS]),
 )
 
+
 def _lifted_entity_vmap(method):
     """Lifted (flax.linen) replacement for the previous plain
     `jax.vmap(self._embed_*)` call-site pattern: `nn.vmap` maps the data

@@ -458,8 +458,7 @@ def train_step(
 
         loss = (
             config.player_policy_loss_coef * loss_pg
-            + (config.player_upgo_coef if upgo_coef is None else upgo_coef)
-            * loss_upgo
+            + (config.player_upgo_coef if upgo_coef is None else upgo_coef) * loss_upgo
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
@@ -1747,7 +1746,9 @@ class Learner:
         ckpt_thread.start()
         pop.worker_threads.extend([transfer_thread, log_thread, ckpt_thread])
 
-    def _stop_population_workers(self, pop: PopulationState, strict: bool = True) -> None:
+    def _stop_population_workers(
+        self, pop: PopulationState, strict: bool = True
+    ) -> None:
         pop.done = True
         pop.stop_signal[0] = True
         # Wake actors idling at the block gate so they observe stop_signal
@@ -1891,9 +1892,7 @@ class Learner:
 
         for name, pop in self.populations.items():
             logs[f"diag_player_replay_mb_{name}"] = pop.player_replay.nbytes() / 2**20
-            logs[f"diag_builder_replay_mb_{name}"] = (
-                pop.builder_replay.nbytes() / 2**20
-            )
+            logs[f"diag_builder_replay_mb_{name}"] = pop.builder_replay.nbytes() / 2**20
         entries, cache_bytes = self.league.cache_stats()
         logs["diag_league_cache_entries"] = entries
         logs["diag_league_cache_mb"] = cache_bytes / 2**20
@@ -2251,9 +2250,7 @@ class Learner:
 
         pop.budget_anchor_frames = frame_count
         pop.wandb_run.log({"population_continued": 1}, commit=False)
-        logger.info(
-            "Population %s (%s): continues training un-reset.", name, reason
-        )
+        logger.info("Population %s (%s): continues training un-reset.", name, reason)
 
     @staticmethod
     def _available_memory_fraction() -> float | None:

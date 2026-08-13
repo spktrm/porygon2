@@ -57,6 +57,7 @@ class TqdmLoggingHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
+
 # Wandb metric-key names for the service's evalActionMapping indices
 # (service/src/server/eval.ts).
 EVAL_BASELINE_NAMES = {0: "random", 1: "default", 2: "simpleheuristic"}
@@ -293,7 +294,9 @@ def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
             api.runs(f"{api.default_entity}/{project}", filters={"state": "running"})
         )
     except Exception:
-        logger.warning("Could not query wandb for stale runs — skipping.", exc_info=True)
+        logger.warning(
+            "Could not query wandb for stale runs — skipping.", exc_info=True
+        )
         return
     for run in runs:
         try:
