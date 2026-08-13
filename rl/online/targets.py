@@ -55,7 +55,16 @@ def upgo_returns(
     what a single global advantage lambda approximates uniformly.
     Returns (G, cut_mask) where cut_mask marks steps whose continuation
     was truncated to the bootstrap (diagnostic: player_upgo_cut_frac).
+
+    Computed in f32 regardless of input dtype (bf16 under the training
+    policy): the recursion is a precision-critical readout, and mixed
+    bf16/f32 inputs otherwise produce a scan carry whose input/output
+    dtypes disagree (the 2026-08-13 session-1786597636 crash — discount
+    arrives f32 via python-scalar promotion while values are bf16).
     """
+    v_scalar = v_scalar.astype(jnp.float32)
+    r_scalar = r_scalar.astype(jnp.float32)
+    discount = discount.astype(jnp.float32)
     v_next = jnp.concatenate([v_scalar[1:], v_scalar[-1:]], axis=0)
     q_hat = r_scalar + discount * v_next
     # follow[t]: at state t+1 the taken action's lookahead beat the
