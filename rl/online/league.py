@@ -283,11 +283,24 @@ class League:
 
     # --- selection (metadata only) ------------------------------------------
 
-    def get_latest_player(self) -> PlayerRef | None:
+    def get_latest_player(self, origin: str | None = None) -> PlayerRef | None:
+        """Newest historical snapshot, optionally restricted to one origin.
+
+        The origin filter exists because exploiter-origin refs carry the
+        +100M/+200M _STEP_OFFSET key ranges: an unfiltered max() pins to
+        an exploiter snapshot forever once one exists, which is wrong for
+        any caller asking "when did *main* last checkpoint?" (AlphaStar's
+        ready_to_checkpoint paces against the player's own last
+        checkpoint, never the league's newest entry)."""
         with self.lock:
-            if not self.players:
+            keys = [
+                k
+                for k, ref in self.players.items()
+                if origin is None or ref.origin == origin
+            ]
+            if not keys:
                 return None
-            return self.players[max(self.players.keys())]
+            return self.players[max(keys)]
 
     def get_winrate(
         self,

@@ -2319,7 +2319,13 @@ class Learner:
     def _should_add_new_player(self, pop: PopulationState) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.
         main only."""
-        latest = self.league.get_latest_player()
+        # Pacing is measured against main's OWN last checkpoint (AlphaStar
+        # MainPlayer.ready_to_checkpoint: steps since self._checkpoint_step),
+        # not the league's newest entry — an exploiter timeout-publication
+        # would otherwise become "latest" permanently (its offset key wins
+        # max()) with a frame count that never advances, firing an overdue
+        # add on every league-management tick.
+        latest = self.league.get_latest_player(origin="main")
         current = self.league.get_live(pop.live_key)
 
         latest_frames = latest.player_frame_count if latest is not None else 0
@@ -2369,10 +2375,10 @@ class Learner:
         self, pop: PopulationState, step: int, frame_count: int
     ):
         """Shrink-and-perturb the player params to restore plasticity."""
-        latest = self.league.get_latest_player()
+        latest = self.league.get_latest_player(origin="main")
         if latest is None or latest.step_count != step + _STEP_OFFSET[pop.name]:
             self._add_player_to_league(pop, step, origin="main")
-            latest = self.league.get_latest_player()
+            latest = self.league.get_latest_player(origin="main")
 
         tqdm.write(
             f"Applying shrink-and-perturb plasticity update @ {step} "
