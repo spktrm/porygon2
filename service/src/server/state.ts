@@ -712,16 +712,25 @@ function getNullPokemon() {
 
 const nullPokemon = getNullPokemon();
 
+// Warn once per distinct unmapped key per worker: cosmetic-forme
+// fallbacks (e.g. Vivillon patterns) are expected and harmless, but the
+// per-occurrence line printed thousands of times per session and buried
+// real errors in the pane (the 2026-08-13 worker crash was nearly
+// scrolled out by it). A NEW name appearing here still logs — that's
+// the signal worth keeping, in case a non-cosmetic species ever starts
+// falling back.
+const warnedEnumFallbacks = new Set<string>();
+
 function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
     for (const key of keys) {
         try {
             return IndexValueFromEnum(enumDatum, key);
         } catch (err) {
-            // Expected for unmapped cosmetic formes (e.g. Vivillon
-            // patterns) — the next key in the chain is the base species.
-            // One quiet line, not a stack trace: this is a fallback, not
-            // a failure.
-            console.warn(`enum fallback: ${(err as Error).message}`);
+            const message = (err as Error).message;
+            if (!warnedEnumFallbacks.has(message)) {
+                warnedEnumFallbacks.add(message);
+                console.warn(`enum fallback (first occurrence): ${message}`);
+            }
             continue;
         }
     }
