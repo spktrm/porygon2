@@ -206,39 +206,59 @@ class InferenceServer:
                 except queue.Empty:
                     break
 
-            # One forward per params version, in arrival order (dict
-            # preserves first-appearance order) so no version's requests
-            # can be starved by a chattier one.
-            groups: "dict[tuple[int, int], list[_InferenceRequest]]" = {}
+            # One forward per (params version, history bucket level), in
+            # arrival order (dict preserves first-appearance order) so no
+            # group's requests can be starved by a chattier one. The
+            # bucket level is part of the key deliberately: vmap forces
+            # one padded history length on the whole batch, so batching a
+            # turn-3 game (level-64 history) with a turn-90 one (level
+            # 256) made the short game's forward pay the long game's
+            # attention FLOPs — with ~12 actors at random game stages,
+            # most batches contained one long game, so nearly EVERY step
+            # ran at worst-case history length and the batching win
+            # leaked away as padding compute. Splitting by level trades a
+            # little batch size for every slice running at its own true
+            # cost; the traced-shape budget is unchanged (batch buckets x
+            # history buckets, same product as before — grouping only
+            # changes which combinations actually occur).
+            groups: "dict[tuple[int, int, int], list[_InferenceRequest]]" = {}
             for request in requests:
-                groups.setdefault(self._version_key(request.container), []).append(
-                    request
-                )
+                groups.setdefault(
+                    self._version_key(request.container)
+                    + (self._history_level(request),),
+                    [],
+                ).append(request)
             for key, group in groups.items():
                 try:
-                    self._run_group(key, group)
+                    self._run_group(group)
                 except BaseException as e:  # noqa: BLE001 — must reach requesters
                     for request in group:
                         request.error = e
                         request.done.set()
 
-    def _run_group(
-        self, key: tuple[int, int], group: "list[_InferenceRequest]"
-    ) -> None:
-        params = self._get_device_params(key, group[0].container)
-
-        # One shared bucket level across history + packed_history for the
-        # whole batch (see _stack_axis0_to's docstring), each capped at
-        # its own natural maximum exactly like the learner's version —
-        # capping only ever pads less, never truncates data.
-        field_len = max(r.actor_input.history.field.shape[0] for r in group)
-        packed_len = max(
-            r.actor_input.packed_history.revealed_cache.shape[0] for r in group
-        )
-        level = max(
+    @staticmethod
+    def _history_level(request: _InferenceRequest) -> int:
+        """One shared bucket level across a request's history AND
+        packed_history (see _stack_axis0_to's docstring) — also the
+        grouping key that keeps different-length games out of the same
+        vmap batch (see _run)."""
+        field_len = request.actor_input.history.field.shape[0]
+        packed_len = request.actor_input.packed_history.revealed_cache.shape[0]
+        return max(
             _bucket_level(field_len, _HISTORY_MIN_LENGTH),
             _bucket_level(packed_len, _HISTORY_MIN_LENGTH),
         )
+
+    def _run_group(self, group: "list[_InferenceRequest]") -> None:
+        params = self._get_device_params(
+            self._version_key(group[0].container), group[0].container
+        )
+
+        # All requests in a group share one bucket level by construction
+        # (it's part of the grouping key); each target is capped at its
+        # own natural maximum exactly like the learner's version —
+        # capping only ever pads less, never truncates data.
+        level = self._history_level(group[0])
         history_target = _bucket_value(level, _HISTORY_MIN_LENGTH, NUM_HISTORY)
         packed_target = _bucket_value(level, _HISTORY_MIN_LENGTH, 2 * NUM_HISTORY)
 
