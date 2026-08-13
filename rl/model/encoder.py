@@ -97,6 +97,29 @@ _TARGET_STATIC_SLOTS = np.setdiff1d(
     np.concatenate([_MOVE_SLOTS, _SWITCH_SLOTS]),
 )
 
+def _lifted_entity_vmap(method):
+    """Lifted (flax.linen) replacement for the previous plain
+    `jax.vmap(self._embed_*)` call-site pattern: `nn.vmap` maps the data
+    axis while broadcasting params (`variable_axes={"params": None}` —
+    the embedders only APPLY setup-defined submodules, never create
+    variables), and the surrounding lifted `nn.jit` makes each embedder
+    its own XLA subcomputation instead of being inlined wholesale into
+    the caller's graph — smaller HLO and cheaper compiles (the retained-
+    executable RAM lesson from run 1326), plus trace reuse whenever two
+    call sites agree on shapes. Composing lifted transforms (rather than
+    plain jax ones) is what keeps this legal to nest under flax's other
+    lifted transforms (nn.scan/nn.checkpoint) elsewhere in the model."""
+    return nn.jit(
+        nn.vmap(
+            method,
+            in_axes=0,
+            out_axes=0,
+            variable_axes={"params": None},
+            split_rngs={"params": False},
+        )
+    )
+
+
 # (name, static slot indices) per decoder, used to gather/scatter action embeddings.
 ACTION_DECODER_SLOT_GROUPS = (
     ("move", _MOVE_SLOTS),
@@ -1064,15 +1087,15 @@ class Encoder(nn.Module):
     def _embed_public_entities(
         self, env_step: PlayerEnvOutput
     ) -> tuple[jax.Array, jax.Array]:
-        revealed_entity_embedding, mask = jax.vmap(self._embed_public_entity)(
-            env_step.public_team, env_step.revealed_team
-        )
+        revealed_entity_embedding, mask = _lifted_entity_vmap(
+            Encoder._embed_public_entity
+        )(self, env_step.public_team, env_step.revealed_team)
         field_embeddings, *_ = self._embed_field(env_step.field)
 
         return (revealed_entity_embedding, field_embeddings, mask)
 
     def _embed_private_entities(self, private_team: jax.Array):
-        return jax.vmap(self._embed_private_entity)(private_team)
+        return _lifted_entity_vmap(Encoder._embed_private_entity)(self, private_team)
 
     def _embed_action(self, action: jax.Array) -> jax.Array:
         """
@@ -1110,7 +1133,7 @@ class Encoder(nn.Module):
         return embedding, mask
 
     def _embed_moves(self, moveset: jax.Array) -> jax.Array:
-        return jax.vmap(self._embed_action)(moveset)
+        return _lifted_entity_vmap(Encoder._embed_action)(self, moveset)
 
     def _batched_forward(
         self,
@@ -1317,11 +1340,11 @@ class Encoder(nn.Module):
         (scan output, edge_slot_ids, node_sides, per-step field vectors)."""
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
-        node_embedding_cache, _ = jax.vmap(self._embed_public_entity)(
-            packed_history_step.public_cache, packed_history_step.revealed_cache
+        node_embedding_cache, _ = _lifted_entity_vmap(Encoder._embed_public_entity)(
+            self, packed_history_step.public_cache, packed_history_step.revealed_cache
         )
-        edge_embedding_cache, _ = jax.vmap(self._embed_edge)(
-            packed_history_step.edge_cache
+        edge_embedding_cache, _ = _lifted_entity_vmap(Encoder._embed_edge)(
+            self, packed_history_step.edge_cache
         )
         edge_slot_ids = packed_history_step.edge_cache[
             :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
@@ -1336,9 +1359,7 @@ class Encoder(nn.Module):
             step_valid,
             step_request_count,
             _,
-        ) = jax.vmap(
-            self._embed_field
-        )(history_step.field)
+        ) = _lifted_entity_vmap(Encoder._embed_field)(self, history_step.field)
         step_field_vec = self.history_field_step_linear(
             step_field_embeddings.reshape(step_field_embeddings.shape[0], -1)
         )
