@@ -43,8 +43,6 @@ def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
 
 
 SH = "EvalActor-simpleheuristic"
-# Pre-eval-rework runs: eval actor id 2 played the simple heuristic.
-LEGACY = "EvalActor-full-2"
 
 
 def rl_sections():
@@ -71,12 +69,6 @@ def rl_sections():
                     # NaN. Smoothed payoff reads as 2*winrate - 1.
                     "Raw payoff per actor (UI-smoothed)",
                     [f"ema-payoff-{SH}-{i}" for i in range(3)],
-                    x="training_step",
-                    smooth=0.95,
-                ),
-                lp(
-                    "Legacy runs (pre-rework) payoff",
-                    [f"ema-payoff-{LEGACY}", f"main-payoff-{LEGACY}"],
                     x="training_step",
                     smooth=0.95,
                 ),
@@ -154,29 +146,6 @@ def rl_sections():
                     ["player_bootstrap_gap", "lambda_ctrl_gap_ema"],
                 ),
                 lp(
-                    # Adaptivity controller: magnet KL coef and whether
-                    # an entropy floor is currently overriding it. Floor-
-                    # only since Aug 2026 — the commitment-covariance PI
-                    # action was removed (every bug traced back to it),
-                    # so there's no EMA of the sensor below to show here
-                    # anymore.
-                    "Adaptivity controller (magnet coef)",
-                    [
-                        "adapt_ctrl_coef",
-                        "adapt_ctrl_floor_breach",
-                    ],
-                    smooth=0,
-                ),
-                lp(
-                    # Raw commitment sensor: corr(log pi(a), advantage),
-                    # bounded [-1, 1]. Logged for visibility only — no
-                    # longer consumed by any controller (see the panel
-                    # above).
-                    "Commitment correlation (sensor)",
-                    ["player_commit_cov"],
-                    range_y=(-1, 1),
-                ),
-                lp(
                     # Slow BT-fit auditors, never controlled on (hundreds
                     # of games per point): worst-matchup drift and BT
                     # non-transitivity are the exploitability signature
@@ -200,10 +169,11 @@ def rl_sections():
                     smooth=0,
                 ),
                 lp(
-                    # Collapse guards: the controller's combined sensor
-                    # (min of action entropy and floor-rescaled modality
-                    # entropy) against the raw axes and the switch rate
-                    # the modality axis governs.
+                    # THE collapse watch panel — with the adaptivity
+                    # controller removed (2026-08-13) modality collapse
+                    # has no automated backstop, only these eyes-on axes
+                    # (1330 died at modality entropy 0.08; 1328 gained
+                    # strength at 0.18-0.26).
                     "Entropy axes & switch rate",
                     [
                         "player_action_normalized_entropy",
@@ -221,15 +191,6 @@ def rl_sections():
                     "Gradient / param norm",
                     ["player_gradient_norm", "player_param_norm"],
                 ),
-                lp(
-                    "Entropy",
-                    [
-                        "player_action_entropy",
-                        "player_action_normalized_entropy",
-                        "player_normalized_modality_entropy",
-                    ],
-                ),
-                lp("Value head R²", ["player_value_head_r2"], range_y=(-1, 1)),
             ],
         ),
         ws.Section(
@@ -264,18 +225,6 @@ def rl_sections():
                         "plasticity_value_emb_dormant_frac",
                         "plasticity_action_emb_srank_frac",
                         "plasticity_value_emb_srank_frac",
-                    ],
-                ),
-                lp(
-                    # Divergence between these (init 1.0) is the readout of
-                    # the per-modality logit-scale-separation hypothesis.
-                    "Per-modality micro-logit scales",
-                    [
-                        "pi_head_modality_scale_move",
-                        "pi_head_modality_scale_switch",
-                        "pi_head_modality_scale_wildcard",
-                        "pi_head_modality_scale_other",
-                        "pi_head_modality_scale_unspecified",
                     ],
                 ),
                 lp(
@@ -338,11 +287,11 @@ def rl_sections():
                 ),
                 lp(
                     "State advantage",
-                    ["player_state_adv_mean", "player_state_adv_std"],
-                ),
-                lp(
-                    "Channel stds",
-                    ["player_win_adv_std", "player_potential_adv_std"],
+                    [
+                        "player_state_adv_mean",
+                        "player_state_adv_std",
+                        "player_win_adv_std",
+                    ],
                 ),
             ],
         ),
@@ -375,6 +324,9 @@ def rl_sections():
             name="Gradient norms by module",
             panels=[
                 lp(
+                    # Keys are f"player_{module}_gradient_norm" over the
+                    # param tree's top level (+ encoder submodules matching
+                    # *encoder/*decoder) — see learner.py's training_logs.
                     "Module grad norms",
                     [
                         "player_encoder_gradient_norm",
@@ -382,6 +334,7 @@ def rl_sections():
                         "player_macro_head_gradient_norm",
                         "player_pi_head_gradient_norm",
                         "player_v_head_gradient_norm",
+                        "player_aux_v_head_gradient_norm",
                     ],
                     log_y=True,
                 ),

@@ -45,7 +45,6 @@ def close_tqdm_bar(bar) -> None:
     with _tqdm_position_lock:
         heapq.heappush(_tqdm_free_positions, position)
 
-
 import jax
 import jax.numpy as jnp
 import numpy as np

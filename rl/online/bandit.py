@@ -119,9 +119,8 @@ def rating_logs(
 def _rating_exploitability_logs(
     ratings: dict[int, float], wins: dict, draws: dict, games: dict
 ) -> dict[str, float]:
-    """Auditor metrics for the adaptivity controller — logged, never
-    controlled on (they need hundreds of games per point, far slower than
-    the covariance loop).
+    """Auditor metrics — logged, never controlled on (they need hundreds
+    of games per point, far too slow to drive anything).
 
     An under-regularised policy is EXPLOITABLE, which shows up two ways
     in the payoff table: main's worst matchup drifts toward (or below)

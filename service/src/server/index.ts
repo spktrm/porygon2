@@ -311,7 +311,10 @@ export class GameServer {
                     }
                 }
             } catch (err) {
-                console.error(`Error handling message from ${userName}:`, err);
+                console.error(
+                    `Error handling message from ${userName}:`,
+                    err,
+                );
             }
         });
 

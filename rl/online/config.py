@@ -10,19 +10,15 @@ PolicyObjectiveT = Literal["spo", "ppo"]
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
-    # Split main/exploiter (docs/exploiter-phase-plan.md's three-population
-    # redesign): actor pools for all live populations run continuously and
-    # concurrently now (never torn down between turns), all contending for
-    # the same gpu_lock as whichever population is on-turn to train — so
-    # exploiter pools are sized well below main's. Exploiters don't need
-    # mirror-self-play-scale throughput, only enough games to keep their
-    # narrow pinned-target win-rate estimates fresh. Both main_exploiter and
-    # league_exploiter use the same *_exploiter value; no evidence yet they
-    # need to differ.
-    num_player_actors_main: int = 12
-    num_player_actors_exploiter: int = 4
-    num_builder_actors_main: int = 4
-    num_builder_actors_exploiter: int = 2
+    # One pool size for every population (docs/three-population-league.md,
+    # block-sequential scheduling): all three populations spawn pools of
+    # this size, but the per-population run_gate (Learner._set_active)
+    # means only the block owner's actors actually play — so this is
+    # simply "the machine's actor budget", handed whole to whoever is
+    # training. Idle pools' threads stay alive but wait at the gate
+    # between games (no create/destroy churn, no inference contention).
+    num_player_actors: int = 12
+    num_builder_actors: int = 4
     # One eval thread per entry; each plays the service baseline at that
     # index (service/src/server/eval.ts: 0=random, 1=default,
     # 2=simple_heuristic). The index travels explicitly in the env username
@@ -99,7 +95,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     save_interval_steps: int = 20_000
     cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
-    main_player_update_steps: int = 10
+    # How often (own steps) each population publishes fresh live params for
+    # its actors (update_live). Every interval mints a NEW params version,
+    # and versions stay referenced until their in-flight games end, so this
+    # directly sets the inference server's params-cache working set: at 10
+    # (~6s of main training), main alone kept 5-10 versions live at once;
+    # 50 (~30s) collapses that to ~2, letting inference_params_cache_size
+    # =12 cover the whole working set without LRU thrash. Staleness cost:
+    # actors act on params up to ~30s old — measured actor-KL is 0.005-
+    # 0.006 vs the 0.045 replay target, ~5x headroom, and the replay-KL
+    # controller cuts reuse if that ever stops being true.
+    main_player_update_steps: int = 50
     add_player_min_frames: int = int(2e5)
     # Backstop ("overdue") add interval, ~35k learner steps at the current
     # batch shape. The healthy path — "dominant" adds when main beats every
@@ -123,31 +129,26 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     league_cache_size: int = 16
     league_ucb_c: float = 1.0
 
-    # Three-population league (docs/exploiter-phase-plan.md's 2026-08-12
-    # redesign, superseding the original single-forked-phase exploiter
-    # design): MainPlayer, MainExploiter, and LeagueExploiter are live,
-    # continuously-training populations sharing one process/GPU — never
-    # torn down/refounded, sequential turns via the duty-cycle fractions
-    # below. MainExploiter targets main's own lineage (and live main
-    # directly, once reliable — AlphaStar's actual rule); LeagueExploiter
-    # targets the whole historical population via linear_capped PFSP,
-    # unrestricted, same shape as the pre-redesign single exploiter role.
-    # False means only main exists, exactly as before this redesign.
+    # Three-population league (docs/three-population-league.md, updated
+    # 2026-08-13 to block-sequential scheduling): MainPlayer,
+    # MainExploiter, and LeagueExploiter are live populations sharing one
+    # process/GPU — never torn down/refounded. Scheduling is
+    # block-sequential, not fraction-interleaved: main trains until a
+    # routine league addition closes its window, then ONE exploiter
+    # population (alternating MainExploiter/LeagueExploiter) owns the GPU
+    # for a full attempt — to its own promotion or frame-budget timeout,
+    # AlphaStar's ready_to_checkpoint shape — before main's next window.
+    # There are deliberately no frame-split fractions: each population
+    # trains to its own terminal condition against a (mostly) frozen
+    # target, sequentialising AlphaStar's concurrent league on one GPU
+    # rather than simulating concurrency by interleaving (main does still
+    # train as filler on ticks where the active exploiter's smaller actor
+    # pool has no batch ready — see Learner._select_population).
+    # MainExploiter targets main's own lineage (and live main directly,
+    # once reliable — AlphaStar's actual rule); LeagueExploiter targets
+    # the whole historical population via linear_capped PFSP,
+    # unrestricted. False means only main exists, exactly as before.
     auto_exploiter_enabled: bool = True
-
-    # Target share of frames trained; Learner._select_population picks
-    # whichever live population is furthest below its target share of the
-    # current scheduling epoch (the window since the ready-set last
-    # changed — see its docstring), with targets normalized over the
-    # populations that currently exist. Generalizes the old single
-    # exploiter_duty_cycle_fraction (binary main-vs-exploiter) to a 3-way
-    # split. Must sum to 1.0 — not enforced by a __post_init__ validator
-    # (no precedent for one on this frozen chex.dataclass, and no local
-    # environment to verify the interaction before shipping it) — check
-    # this invariant by hand when changing any of the three.
-    main_duty_cycle_fraction: float = 0.80
-    main_exploiter_duty_cycle_fraction: float = 0.10
-    league_exploiter_duty_cycle_fraction: float = 0.10
 
     # Centralized batched actor inference (rl/online/inference.py): all
     # training PlayerActors submit per-step forwards to one server thread
@@ -159,13 +160,19 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Compile-shape/latency cap on one batched forward. Padded to powers
     # of two, so traced batch sizes are log2(cap)+1 distinct values.
     inference_max_batch: int = 16
-    # Device-resident params LRU in the server, keyed by params version.
-    # Sizing note: entries are actor-model-params-sized, but this REPLACES
-    # the old per-actor copies (every actor device_put its own copy of its
-    # current params per game — up to ~2x num actors live at once), so 16
-    # shared entries is a strict VRAM improvement, covering 3 live
-    # populations + concurrent historical opponents.
-    inference_params_cache_size: int = 16
+    # Device-resident params LRU in the server, keyed by params version —
+    # each entry is one device copy of the actor player params (~81MB at
+    # 20.3M f32), so this is a VRAM knob. It REPLACES the old per-actor
+    # copies (every actor device_put its own copy per game — up to ~2x num
+    # actors live at once), and it must cover the WORKING SET of versions
+    # simultaneously referenced by in-flight games: ~2 per live population
+    # (paced by main_player_update_steps above) + ~5-7 concurrent
+    # historical PFSP opponents. 12 covers that with a slot or two spare;
+    # sizing BELOW the working set causes LRU thrash — a serial ~81MB
+    # host->device transfer per miss in the server thread, plus alloc/free
+    # churn in XLA's pool (fragmentation, the OOM class that killed
+    # session 1786537634).
+    inference_params_cache_size: int = 12
 
     # Promotion bar, shared by both exploiter types: win-rate vs. EVERY
     # opponent currently pinned must clear this, not just the average — a
@@ -401,67 +408,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     lambda_ctrl_max: float = 1.0
     lambda_ctrl_sensor_ema: float = 0.01
 
-    # Master switch for the adaptivity controller (the magnet KL coef
-    # loop; name kept for checkpoint/config continuity).
-    entropy_ctrl_enabled: bool = True
-    # Adaptivity controller (rl/online/controllers.py) is floor-plus-decay
-    # now. It used to also hold player_commit_cov's EMA at adapt_ctrl_
-    # commit_target via a PI loop — removed after repeated bugs (an
-    # unreachable target pinning pressure at the ceiling for ~50k steps
-    # in 1338/1339, then a divide-by-near-zero once the target was
-    # recalibrated toward 0.0 in 1341, then a second bug in how
-    # exploit_ctrl scaled that same target). None of those bugs ever
-    # touched the floors below, which is why they're what's left. See
-    # AdaptivityController's class docstring for the full removal
-    # history and for exactly why adapt_ctrl_decay_rate below can't
-    # reproduce any of those three bug patterns.
-    adapt_ctrl_floor_gain: float = 2.0
-    # Event bumps, added to log(coef) directly (0.7 ~ a 2x step,
-    # 1.4 ~ 4x). Zeroed 2026-08-13 — fixed-baseline regime: session
-    # 1786537634 showed main carrying ~6x baseline magnet pressure with
-    # ZERO floor breaches the whole run (pure stacked league-addition/
-    # perturbation bumps, decaying on a ~20k-step half-life), holding the
-    # policy near the prior and blocking it from sharpening. League
-    # additions are routine, not collapse events — the floors below are
-    # the collapse detector, and they escalate on their own via
-    # floor_gain when actually breached. With both bumps at 0 the coef
-    # sits EXACTLY at player_magnet_kl_coef except during a real breach,
-    # and decay returns it to baseline afterward.
-    adapt_ctrl_event_bump: float = 0.0
-    adapt_ctrl_perturb_bump: float = 0.0
-    # Geometric per-step relaxation of the magnet-KL coefficient back
-    # toward baseline, skipped on any step with an active floor breach.
-    # Deliberately NOT sensor-driven (no commit_cov, no target, nothing
-    # for exploit_ctrl to scale) — see AdaptivityController's docstring
-    # for why that specifically is what makes this safe to add back.
-    # Default 0.0 (off): matches the post-removal "pressure only ever
-    # rises" behaviour exactly unless a run opts in. 3.47e-5 gives a
-    # ~20,000-step half-life (1 - 0.5**(1/20_000)) — slow enough not to
-    # undo real, still-needed pressure within a single overdue window
-    # (~35k steps), fast enough to actually relieve a stale, unrelieved
-    # stack of league-addition bumps over a run's lifetime instead of
-    # leaving it monotonically climbing toward entropy_ctrl_max_scale
-    # forever. Untested — no run has exercised this yet.
-    adapt_ctrl_decay_rate: float = 3.47e-5  # ~20,000-step half-life
-    # Hard floors — backstops, not the mechanism: the commitment
-    # covariance is blind to actions the policy never takes, so a
-    # modality going extinct (1330: switching to 0.002) must trip
-    # something the loop cannot miss. Breaches always override decay in
-    # the same tick — a real, ongoing collapse risk always wins.
-    entropy_ctrl_floor: float = 0.40
-    # Hard floor for the MACRO MODALITY entropy axis, which sits
-    # structurally lower than total action entropy. 1328 gained strength
-    # through a stretch at 0.18-0.26, so holding 0.40 there (as the
-    # shared floor did in 1331) mandates more switching than the game
-    # rewards; 0.20 still trips hard on a real collapse (1330 died at
-    # 0.08). The learner rescales this axis into action-entropy units.
-    entropy_ctrl_modality_floor: float = 0.20
-    # Range the controller may drive the magnet coef over, as multiples
-    # of the player_magnet_kl_coef baseline. Kept well above zero
-    # regardless of how far decay can pull it down: c -> 0 against a
-    # fixed magnet loses the stable fixed point.
-    entropy_ctrl_max_scale: float = 10.0
-    entropy_ctrl_min_scale: float = 0.2
+    # No adaptivity/entropy controller fields anymore: the magnet KL
+    # coefficient is exactly player_magnet_kl_coef, always. The
+    # AdaptivityController was removed entirely 2026-08-13 (hard to tune,
+    # harder to predict — see rl/online/controllers.py's module docstring
+    # for the bug history). Its entropy sensors are still logged from
+    # train_step (player_action_normalized_entropy,
+    # player_normalized_modality_entropy); modality collapse (1330 died
+    # at 0.08 on that axis) is now watched on the dashboard, not
+    # auto-corrected.
 
     # BT-rating telemetry (rl/online/bandit.py): every bandit_window_steps
     # the learner fits a Bradley-Terry rating for main against the frozen
@@ -493,9 +448,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # KL target both shrink as exploitability rises, pushing toward more
     # caution; it does not drive a runtime scalar of its own. Used to
     # also grow the adaptivity controller's commit_target, but that
-    # target no longer exists (AdaptivityController is floor-only now —
-    # see its class docstring). exploit_ctrl_target=0.3 mirrors the
-    # existing "dominant" league-addition threshold (win-rate > 0.7).
+    # controller was removed entirely 2026-08-13 (see rl/online/
+    # controllers.py's module docstring). exploit_ctrl_target=0.3 mirrors
+    # the existing "dominant" league-addition threshold (win-rate > 0.7).
     exploit_ctrl_enabled: bool = True
     exploit_ctrl_target: float = 0.3
     exploit_ctrl_kp: float = 0.2

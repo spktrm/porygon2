@@ -57,7 +57,6 @@ class TqdmLoggingHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
-
 # Wandb metric-key names for the service's evalActionMapping indices
 # (service/src/server/eval.ts).
 EVAL_BASELINE_NAMES = {0: "random", 1: "default", 2: "simpleheuristic"}
@@ -74,6 +73,14 @@ def run_training_actor_pair(
     worker_id = threading.current_thread().name
 
     while not stop_signal[0]:
+        # Block-sequential actor gating (Learner._set_active): only the
+        # active population's actors play, so the whole actor budget
+        # serves whoever's block it is. Timeout keeps the stop_signal
+        # check live while gated; the fresh dict lookup survives a
+        # population reset replacing the PopulationState object.
+        pop = player._learner.populations[player.population]
+        if not pop.run_gate.wait(timeout=1.0):
+            continue
         try:
             player_params = player.pull_own_player()
             opponent_params, is_trainable = player.get_match()
@@ -151,6 +158,11 @@ def run_eval_heuristic(
     smooth_weight = 0.0
 
     while not stop_signal[0]:
+        # Eval measures main; during another population's block main is
+        # (mostly) frozen, so idle at main's own block gate rather than
+        # burning shared inference on a frozen policy.
+        if not main_pop.run_gate.wait(timeout=1.0):
+            continue
         try:
             with learner.gpu_lock:
                 new_step_count = np.array(main_pop.player_state.step_count).item()
@@ -243,6 +255,10 @@ def run_eval_heuristic(
 
 def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
     while not stop_signal[0]:
+        # Same block gating as run_training_actor_pair.
+        pop = actor._learner.populations[actor.population]
+        if not pop.run_gate.wait(timeout=1.0):
+            continue
         try:
             param_container = actor.pull_own_player()
             new_key = actor.split_rng()
@@ -277,9 +293,7 @@ def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
             api.runs(f"{api.default_entity}/{project}", filters={"state": "running"})
         )
     except Exception:
-        logger.warning(
-            "Could not query wandb for stale runs — skipping.", exc_info=True
-        )
+        logger.warning("Could not query wandb for stale runs — skipping.", exc_info=True)
         return
     for run in runs:
         try:
@@ -440,10 +454,13 @@ def main(args: argparse.Namespace):
         generation=learner_config.generation,
         smogon_format=learner_config.smogon_format,
     )
+    # Every population's pool is main-sized now, but the run_gate means at
+    # most one pool plays at a time (plus a brief overlap while a
+    # just-gated-off pool finishes its in-flight games at a block switch,
+    # plus the eval actors) — hence 2x one pool, not 3x.
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=(
-            learner_config.num_player_actors_main
-            + 2 * learner_config.num_player_actors_exploiter
+            2 * learner_config.num_player_actors
             + 2 * len(learner_config.eval_baselines)
         )
     )
@@ -459,18 +476,16 @@ def main(args: argparse.Namespace):
         population's live params are set — for "main" this fires once
         during initial setup below; for the two exploiter populations it
         fires every creation AND every reset, since their actor pools
-        must be rebuilt against the freshly-forked params each time."""
-        is_exploiter = population != "main"
-        num_player_actors = (
-            learner_config.num_player_actors_exploiter
-            if is_exploiter
-            else learner_config.num_player_actors_main
-        )
-        num_builder_actors = (
-            learner_config.num_builder_actors_exploiter
-            if is_exploiter
-            else learner_config.num_builder_actors_main
-        )
+        must be rebuilt against the freshly-forked params each time.
+
+        Every population gets the SAME full-size pool: the per-population
+        run_gate (Learner._set_active) means only the block owner's pool
+        actually plays, so uniform sizing is what gives whoever is
+        training the full actor budget — the old smaller exploiter pools
+        were sized for all pools running concurrently, which gating made
+        obsolete."""
+        num_player_actors = learner_config.num_player_actors
+        num_builder_actors = learner_config.num_builder_actors
         stop_signal = learner.populations[population].stop_signal
         salt = time.time_ns()
         new_threads: list[threading.Thread] = []

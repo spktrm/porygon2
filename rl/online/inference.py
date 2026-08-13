@@ -272,7 +272,8 @@ class InferenceServer:
                 stacked,
             )
         rng_keys = jnp.stack(
-            [r.rng_key for r in group] + [group[0].rng_key] * (padded_batch - batch)
+            [r.rng_key for r in group]
+            + [group[0].rng_key] * (padded_batch - batch)
         )
 
         with self._gpu_lock:

@@ -2,7 +2,7 @@
 
 All of them follow the replay-ratio controller's design language
 (velocity-form PI on a log-scale actuator, EMA-smoothed sensors,
-anti-windup via clamping the actuator itself) and the three that drive
+anti-windup via clamping the actuator itself) and those that drive
 train_step actuate RUNTIME scalars — never static config, which
 recompiles (and whose retained executables OOM-killed run 1326). That
 shared shape lives in ``PILogController`` (the actuator: step, bump,
@@ -16,20 +16,23 @@ rather than decaying it is a deliberate, different smoothing choice.
 Timescale separation across the loops: replay controller (fast,
 actor-KL -> reuse cap), lambda controller (slow, calibration gap ->
 advantage lambda), plasticity (episodic; pushes lambda to its ceiling
-during recovery and bumps the magnet coef), exploitability controller
-(slowest — league win-rate -> a shared caution scale applied to the
-lambda and replay controllers' targets, not a runtime scalar of its
-own).
+during recovery), exploitability controller (slowest — league win-rate
+-> a shared caution scale applied to the lambda and replay controllers'
+targets, not a runtime scalar of its own).
 
-The adaptivity controller is the odd one out, deliberately: it used to
-be a per-batch PI loop symmetric with the lambda controller (commitment
-covariance -> how much to let the policy commit), but every bug found in
-it traced back to that PI action specifically, never to its hard entropy
-floors — see the class docstring for the removal history. It is now
-floor-only: pressure only ever rises (bump() on a known shock, or a hard
-entropy-floor breach), never decays on its own. `exploit_ctrl` no longer
-scales anything on this controller as a result — there is no target
-left to scale.
+There is deliberately no controller on the magnet KL coefficient
+anymore. The AdaptivityController (commitment-covariance PI, later
+floor-only escalation on entropy-floor breaches) was removed entirely
+2026-08-13: across several runs its effect proved hard to tune and
+predict — the PI action caused three separate bugs (unreachable target
+pinning pressure at the ceiling in 1338/1339, divide-by-near-zero in
+1341, an exploit_ctrl target-scaling bug), and the stacked event bumps
+held main at ~6x baseline pressure for a whole run (session 1786537634)
+with zero floor breaches. The coefficient is now exactly
+config.player_magnet_kl_coef, always. The entropy signals it watched
+are still logged from train_step for the dashboard; nothing acts on
+them — modality collapse (the 1330 failure mode) is watched, not
+auto-corrected.
 """
 
 import numpy as np
@@ -196,137 +199,6 @@ class LambdaGapController:
         self._sensor.ticks = int(state.get("ticks", 0))
 
 
-class AdaptivityController:
-    """Hard-floor diversity guard for the magnet KL coefficient, with an
-    optional slow, target-free decay back toward baseline.
-
-    This used to also hold a covariance-driven PI action (hold
-    player_commit_cov's EMA at a target, decay pressure below baseline
-    once validated — the entropy counterpart of the lambda controller).
-    Removed: every bug found in this controller, across several runs,
-    traced back to that mechanism specifically — an unreachable target
-    pinning pressure at the ceiling for ~50k steps (1338/1339), then a
-    divide-by-near-zero once the target was recalibrated toward 0.0
-    (1341: ordinary sensor noise producing err ~ O(1e4), saturating the
-    coefficient to a bound every tick), then a second bug in how
-    exploit_ctrl scaled that same target. None of those bugs ever
-    touched the floors — they're the actual safety mechanism (the
-    removed PI action was explicitly documented as backstopped BY these
-    floors, not the other way around) and a precondition for the
-    exploiter-phase plan (docs/exploiter-phase-plan.md) working at all:
-    an exploiter with no floor protection is just as likely to collapse
-    to a degenerate strategy as main is. The floors are untouched by
-    everything below.
-
-    ``decay_rate`` (default 0.0, i.e. off — matches the post-removal
-    behaviour exactly unless a run opts in) restores SOME ability to
-    relieve pressure after a shock, without resurrecting anything that
-    caused the three bugs above: it never reads player_commit_cov or any
-    other sensor, has no target to be unreachable or near-zero, and
-    exploit_ctrl has nothing here left to scale. It's just geometric
-    relaxation of the actuator toward its own baseline_log, one tick at a
-    time, skipped entirely on any tick with an active floor breach (a
-    real, ongoing collapse risk always wins over relaxation in the same
-    tick). Bounded by construction — each step only closes a fraction of
-    the remaining gap to baseline, so it can never overshoot past it,
-    unlike a PI action chasing a target it might not reach.
-
-    Actuator is log(coef), clamped to [baseline*min_scale,
-    baseline*max_scale] — clamping is anti-windup for bump()/floor
-    breaches, same as always.
-    """
-
-    def __init__(
-        self,
-        baseline_coef: float,
-        max_scale: float,
-        min_scale: float,
-        action_floor: float,
-        modality_floor: float,
-        floor_gain: float,
-        event_bump: float,
-        decay_rate: float = 0.0,
-    ):
-        baseline_log = float(np.log(baseline_coef))
-        log_min = baseline_log + float(np.log(min_scale))
-        log_max = baseline_log + float(np.log(max_scale))
-
-        self.baseline_log = baseline_log
-        self.action_floor = action_floor
-        self.modality_floor = modality_floor
-        self.floor_gain = floor_gain
-        self.event_bump = event_bump
-        self.decay_rate = decay_rate
-
-        self._pi = PILogController(baseline_log, log_min, log_max, kp=0.0, ki=0.0)
-
-    @property
-    def value(self) -> float:
-        return float(np.exp(self._pi.log))
-
-    def bump(self, scale: float | None = None) -> None:
-        """Immediate pressure step for a known shock (perturbation, new
-        league opponent). Decay (if enabled) is what relieves this over
-        time now — nothing decays it instantly."""
-        self._pi.bump(self.event_bump if scale is None else scale)
-
-    def reset_to_baseline(self) -> None:
-        """Discards accumulated pressure entirely, back to baseline.
-
-        For forking an exploiter phase (docs/exploiter-phase-plan.md):
-        restore_controller_state restores entropy_ctrl unconditionally
-        from whatever checkpoint an exploiter forks from, so without this
-        it would inherit MAIN's accumulated, shock-history-specific
-        pressure. An exploiter concentrates 100% of its training on
-        committing to one specific counter to one specific opponent —
-        exactly what elevated magnet-KL pressure fights hardest — so
-        carrying over pressure that reflects main's OWN league-growth
-        history, not the exploiter's, would handicap the very mechanism
-        this phase exists to run. Does not touch the hard floors: a real
-        entropy collapse during the exploiter's own training still bumps
-        pressure back up immediately, same as always.
-        """
-        self._pi.set_log(self.baseline_log)
-
-    def update(
-        self,
-        action_entropy: float | None,
-        modality_entropy: float | None,
-    ) -> dict[str, float]:
-        breach = 0.0
-        if action_entropy is not None and np.isfinite(action_entropy):
-            breach = max(breach, self.action_floor - action_entropy)
-        if modality_entropy is not None and np.isfinite(modality_entropy):
-            breach = max(breach, self.modality_floor - modality_entropy)
-
-        if breach > 0.0:
-            self._pi.bump(self.floor_gain * breach)
-        elif self.decay_rate > 0.0:
-            self._pi.set_log(
-                self._pi.log + self.decay_rate * (self.baseline_log - self._pi.log)
-            )
-
-        return self.logs(breach)
-
-    def logs(self, breach: float = 0.0) -> dict[str, float]:
-        return {
-            "adapt_ctrl_coef": self.value,
-            "adapt_ctrl_floor_breach": float(breach),
-        }
-
-    def state_dict(self) -> dict:
-        return dict(log_coef=self._pi.log)
-
-    def load_state_dict(self, state: dict) -> None:
-        # Tolerant by key: checkpoints from before this simplification
-        # carry extra keys (cov_ema, prev_err, ticks, ticks_elapsed,
-        # kp/ki-derived state) with no counterpart now — ignored, not an
-        # error. Re-clip because min_scale/max_scale move when config
-        # changes.
-        if "log_coef" in state:
-            self._pi.set_log(state["log_coef"])
-
-
 class ExploitabilityController:
     """Adapts a shared CAUTION SCALE by holding league exploitability —
     1 minus main's win-rate against its worst historical snapshot — at a
@@ -336,10 +208,10 @@ class ExploitabilityController:
     applying the scale — see learner._apply_exploit_scale — since the
     sign of the adjustment differs per target (shrink some, grow others)
     depending on which direction means "more cautious" for that
-    controller. Used to also scale adapt_ctrl_commit_target, but that
-    target no longer exists — the adaptivity controller's PI action was
-    removed (see its class docstring), so this only touches two targets
-    now, not three.
+    controller. Used to also scale the adaptivity controller's commit
+    target, but that controller no longer exists at all (removed
+    2026-08-13 — see the module docstring), so this touches exactly two
+    targets.
 
     Sign convention is flipped relative to the other controllers: the
     actuator (log(scale)) rises when the sensor is ABOVE target (more
