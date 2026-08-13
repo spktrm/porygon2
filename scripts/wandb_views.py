@@ -166,17 +166,6 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Exploit controller: PI on the raw win-rate table
-                    # (not the BT-fit auditors above), reacting every
-                    # manage_league_interval call. Scale is applied to
-                    # the OTHER controllers' targets — see
-                    # learner._apply_exploit_scale — not a runtime
-                    # scalar of its own.
-                    "Exploitability controller (caution scale)",
-                    ["exploit_ctrl_scale", "exploit_ctrl_exploitability_ema"],
-                    smooth=0,
-                ),
-                lp(
                     # THE collapse watch panel — with the adaptivity
                     # controller removed (2026-08-13) modality collapse
                     # has no automated backstop, only these eyes-on axes

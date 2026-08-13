@@ -62,10 +62,7 @@ from rl.online.artifact import (
 from rl.online.bandit import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.controllers import (
-    ExploitabilityController,
-    PILogController,
-)
+from rl.online.controllers import PILogController
 from rl.online.league import (
     LEAGUE_EXPLOITER_KEY,
     LIVE_KEYS,
@@ -973,7 +970,6 @@ class PopulationState:
     plasticity: PlasticityController
     player_state: Porygon2PlayerTrainState | None = None
     builder_state: Porygon2BuilderTrainState | None = None
-    exploit_ctrl: ExploitabilityController | None = None
     created_at_frame: int | None = None
     # For an exploiter population: the main step_count it was forked from
     # (recorded at creation/reset time — see Learner._fork_population).
@@ -1001,8 +997,10 @@ class PopulationState:
     # its gate set, so the full actor budget serves whoever is training.
     run_gate: "threading.Event" = None
     replay_pi: PILogController | None = None
+    # Fixed at config.player_replay_kl_target — the ExploitabilityController
+    # that used to scale it was removed 2026-08-14 (last of the adaptive
+    # hyperparameter loops; see rl/online/controllers.py's module docstring).
     replay_kl_target: float = 0.045
-    base_replay_kl_target: float = 0.045
     replay_ctrl_kl_sum: float = 0.0
     replay_ctrl_kl_count: int = 0
     replay_ctrl_prev_adds: int = 0
@@ -1152,18 +1150,6 @@ class Learner:
                 config.plasticity_defer_to_exploiter or config.auto_exploiter_enabled
             ),
         )
-        exploit_ctrl = None
-        if config.exploit_ctrl_enabled:
-            exploit_ctrl = ExploitabilityController(
-                target=config.exploit_ctrl_target,
-                kp=config.exploit_ctrl_kp,
-                ki=config.exploit_ctrl_ki,
-                interval=config.exploit_ctrl_interval,
-                min_scale=config.exploit_ctrl_min_scale,
-                max_scale=config.exploit_ctrl_max_scale,
-                sensor_ema=config.exploit_ctrl_sensor_ema,
-            )
-
         is_not_randoms = config.smogon_format != "randombattle"
         pop = PopulationState(
             name=name,
@@ -1183,7 +1169,6 @@ class Learner:
             plasticity=plasticity,
             player_state=player_state,
             builder_state=builder_state,
-            exploit_ctrl=exploit_ctrl,
             created_at_frame=int(jax.device_get(player_state.frame_count)),
             fork_step=fork_step,
             replay_pi=PILogController(
@@ -1193,7 +1178,7 @@ class Learner:
                 kp=config.player_replay_ctrl_kp,
                 ki=config.player_replay_ctrl_ki,
             ),
-            base_replay_kl_target=float(config.player_replay_kl_target),
+            replay_kl_target=float(config.player_replay_kl_target),
             consumer_progress=tqdm(
                 desc=f"consumer-{name}", smoothing=0.1, position=next_tqdm_position()
             ),
@@ -1202,7 +1187,6 @@ class Learner:
             ),
             plasticity_probe_jit=self._plasticity_probe_jit,
         )
-        pop.replay_kl_target = pop.base_replay_kl_target
         # Actor gate starts open only for the population whose block it
         # currently is (main at cold start; the just-activated exploiter
         # when _reset_population runs mid-block-transition) — everyone
@@ -1489,13 +1473,13 @@ class Learner:
     # --- controller state (main only ever restores from a real checkpoint) --
 
     def controller_state_bytes(self, pop: PopulationState) -> bytes:
-        """Host-side training dynamics for the checkpoint: controllers and
-        plasticity bookkeeping. Not parameters, but resuming without them
-        silently resets an in-flight plasticity recovery and re-anneals
-        lambda from scratch."""
+        """Host-side training dynamics for the checkpoint — just the
+        plasticity bookkeeping now (the adaptive hyperparameter
+        controllers were all removed 2026-08-13/-14). Not parameters, but
+        resuming without it silently forgets an in-flight plasticity
+        recovery, clearing the cooldown that stops a second
+        shrink-and-perturb from hitting a convalescing net."""
         state = {"plasticity": pop.plasticity.state_dict()}
-        if pop.exploit_ctrl is not None:
-            state["exploit_ctrl"] = pop.exploit_ctrl.state_dict()
         return pickle.dumps(state)
 
     def _restore_controller_state(
@@ -1533,13 +1517,9 @@ class Learner:
                 )
 
         _restore("plasticity", pop.plasticity.load_state_dict)
-        # Checkpoints written before the AdaptivityController's removal
-        # (2026-08-13) / LambdaGapController's removal (2026-08-14) carry
-        # "entropy_ctrl" / "lambda_ctrl" sections — simply never read,
-        # same as any other missing/extra section here.
-        if pop.exploit_ctrl is not None:
-            _restore("exploit_ctrl", pop.exploit_ctrl.load_state_dict)
-            self._apply_exploit_scale(pop)
+        # Checkpoints written before the controller removals (entropy_ctrl
+        # 2026-08-13; lambda_ctrl/exploit_ctrl 2026-08-14) carry those
+        # sections — simply never read, same as any other extra section.
 
     # No _update_hyper_controllers anymore: the magnet KL coef became a
     # fixed config scalar when the AdaptivityController was removed
@@ -1958,8 +1938,6 @@ class Learner:
                 logs.update(self._get_league_winrates(pop))
                 logs.update(self._get_league_winrate_heatmap(pop))
             logs.update(pop.plasticity.logs())
-            if pop.exploit_ctrl is not None:
-                logs.update(pop.exploit_ctrl.logs())
 
         if pop.name == "main" and step % self.config.bandit_window_steps == 0:
             logs.update(
@@ -2107,7 +2085,6 @@ class Learner:
             self._begin_exploiter_block()
 
         self._update_plasticity(pop, step)
-        self._update_exploit_controller(pop)
 
     def _set_active(self, name: PopulationName) -> None:
         """Makes `name` the block owner: scheduler preference
@@ -2333,46 +2310,11 @@ class Learner:
             )
             raise OOMGuardTriggered(save_path)
 
-    def _measure_exploitability(self, pop: PopulationState) -> float | None:
-        """1 - main's win-rate against its worst historical league
-        snapshot — the same win_rates.min() _should_add_new_player already
-        computes for the "dominant" gate, reused here as a control sensor
-        rather than a one-shot threshold. main only (exploit_ctrl is only
-        ever constructed meaningfully relevant for main's own caution
-        scaling)."""
-        current = self.league.get_live(pop.live_key)
-        min_games = self.config.exploit_ctrl_min_games_per_opponent
-        rateable = [
-            v
-            for k, v in self.league.players.items()
-            if k not in LIVE_KEYS
-            and self.league.games.get((pop.live_key, k), 0.0)
-            + self.league.games.get((k, pop.live_key), 0.0)
-            >= min_games
-        ]
-        if len(rateable) < self.config.exploit_ctrl_min_historical:
-            return None
-        win_rates = self.league.get_winrate((current, rateable))
-        return float(1.0 - np.min(win_rates))
-
-    def _update_exploit_controller(self, pop: PopulationState) -> None:
-        """Ticks the exploitability controller and reapplies its scale.
-        Separated from _apply_exploit_scale so a checkpoint restore can
-        reapply a just-loaded scale without re-stepping the PI loop."""
-        if pop.exploit_ctrl is None:
-            return
-        pop.exploit_ctrl.update(self._measure_exploitability(pop))
-        self._apply_exploit_scale(pop)
-
-    def _apply_exploit_scale(self, pop: PopulationState) -> None:
-        """Scales pop's own replay controller's TARGET (not its actuator)
-        by pop's own exploitability controller's caution scale. Used to
-        also scale the lambda controller's gap target, but that
-        controller was removed 2026-08-14 (UPGO + fixed player_lambda
-        replaced it), so the replay KL target is the one target left."""
-        if pop.exploit_ctrl is None:
-            return
-        pop.replay_kl_target = pop.base_replay_kl_target / pop.exploit_ctrl.value
+    # (_measure_exploitability/_update_exploit_controller/_apply_exploit_
+    # scale removed 2026-08-14 with the ExploitabilityController — the
+    # worst-matchup win-rate signal still exists in _should_add_new_player's
+    # "dominant" gate and the league_main_winrate_min auditor; it just
+    # doesn't actuate anything anymore.)
 
     def _should_add_new_player(self, pop: PopulationState) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.

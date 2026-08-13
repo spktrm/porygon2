@@ -333,10 +333,11 @@ class PlayerActor:
         _concerning_opponents' docstring... the threshold check above is
         the direct substitute).
 
-        Deliberately reuses exploit_ctrl's own threshold/reliability bar
-        rather than inventing new config — this is the identical question
-        _measure_exploitability already asks, just acted on here via
-        matchmaking instead of only the loss controllers' caution scale.
+        Uses exploit_ctrl_target/exploit_ctrl_min_games_per_opponent —
+        since the ExploitabilityController's removal (2026-08-14) this
+        branch is those fields' sole consumer: the weak-spot question is
+        now acted on purely through matchmaking, never through a loss
+        caution scale.
         """
         league = self._learner.league
         historical = [

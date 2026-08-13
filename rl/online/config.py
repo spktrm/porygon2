@@ -440,40 +440,27 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     bandit_min_games_per_opponent: float = 20.0
     bandit_min_rated_opponents: int = 2
 
-    # Exploitability controller (rl/online/controllers.py): PI on
-    # 1 - (main's win-rate vs its worst historical league snapshot),
-    # measured every manage_league_interval call from the same win-rate
-    # table _should_add_new_player already reads (not the slower
-    # BT-rating auditors above) — no bandit-style exploration tax, so it
-    # reacts as fast as the underlying win-rate signal allows. Output is
-    # a caution-scale multiplier (baseline 1.0) applied to the lambda and
-    # replay controllers' targets — lambda_ctrl_gap_target and the replay
-    # KL target both shrink as exploitability rises, pushing toward more
-    # caution; it does not drive a runtime scalar of its own. Used to
-    # also grow the adaptivity controller's commit_target, but that
-    # controller was removed entirely 2026-08-13 (see rl/online/
-    # controllers.py's module docstring). exploit_ctrl_target=0.3 mirrors
-    # the existing "dominant" league-addition threshold (win-rate > 0.7).
-    exploit_ctrl_enabled: bool = True
+    # No ExploitabilityController anymore (removed 2026-08-14, the last
+    # adaptive hyperparameter loop — see rl/online/controllers.py's
+    # module docstring). The replay KL target is fixed at
+    # player_replay_kl_target; the worst-matchup win-rate it sensed still
+    # exists as _should_add_new_player's "dominant" gate and the
+    # league_main_winrate_min auditor, it just doesn't actuate anything.
+    #
+    # Both fields below now serve main's VERIFICATION branch
+    # (player_actor._concerning_opponents) exclusively; names kept from
+    # the removed controller, which shared them.
+    #
+    # A historical opponent counts as a real, current weak spot when
+    # main's win-rate against it is below this. 0.3 mirrors the
+    # "dominant" league-addition threshold (win-rate > 0.7).
     exploit_ctrl_target: float = 0.3
-    exploit_ctrl_kp: float = 0.2
-    exploit_ctrl_ki: float = 0.05
-    exploit_ctrl_interval: int = 1
-    exploit_ctrl_sensor_ema: float = 0.3
-    exploit_ctrl_min_scale: float = 0.5
-    exploit_ctrl_max_scale: float = 2.0
-    # Historical snapshots required before trusting the win-rate-min
-    # reading — a lone freshly-added snapshot's win-rate is still
-    # Bayesian-prior-dominated (League._win_rate_by_steps).
-    exploit_ctrl_min_historical: int = 2
-    # A snapshot must ALSO have this many effective games against main
-    # before counting toward win_rates.min() — same reliability bar as
-    # bandit_min_games_per_opponent, applied here for a different reason:
-    # a freshly-added (or lightly-played) snapshot reads near 0.5 by
-    # construction (main vs. a near-identical recent self), which looks
-    # exactly like a real exploitability hole to this controller (1338:
-    # two snapshots 5.5k/26.9k steps old, win-rate never left 0.48-0.54,
-    # pinned the caution scale at its ceiling from a false positive).
+    # ...AND it has this many effective games against main, so the
+    # reading is trustworthy — a freshly-added (or lightly-played)
+    # snapshot reads near 0.5 by construction (main vs. a near-identical
+    # recent self), which looks exactly like a real hole (1338: two
+    # snapshots 5.5k/26.9k steps old, win-rate never left 0.48-0.54 — a
+    # false positive from exactly this).
     exploit_ctrl_min_games_per_opponent: float = 20.0
 
     builder_gamma: float = 1.0
