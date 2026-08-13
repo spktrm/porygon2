@@ -504,12 +504,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # anchor, low lambda leans on the critic. A gamma spectrum would
     # degenerate here (terminal-only reward: gamma^45 kills the signal).
     # Spectrum chosen ~geometric in effective horizon 1/(1-lambda):
-    # 1.25, 2, 5, 10, 20, inf turns against a ~45-turn mean game (the
-    # 20->inf gap is covered by the main head's lambda=0.99 ~ 100).
-    # Fixed, independent of the advantage lambda, which the lambda
-    # controller (or a bandit, historically) varies at runtime. Length
-    # must match the model config's aux_v_head.num_heads.
-    player_aux_lambdas: tuple = (0.2, 0.5, 0.8, 0.9, 0.95, 1.0)
+    # 2, 5, 10, 20, inf turns against a ~45-turn mean game (the 20->inf
+    # gap is covered by the main head's lambda=0.99 ~ 100). lambda=0.2
+    # (horizon 1.25) was dropped 2026-08-14: with terminal-only reward
+    # its target is nearly pure next-step self-distillation of the
+    # shared critic, and run 1786583261-main showed its R2 series
+    # correlating 0.984 with lambda=0.5's over 223k steps — a redundant
+    # head, not a distinct horizon. Fixed, independent of the advantage
+    # lambda, which the lambda controller (or a bandit, historically)
+    # varies at runtime. Length must match the model config's
+    # aux_v_head.num_heads.
+    player_aux_lambdas: tuple = (0.5, 0.8, 0.9, 0.95, 1.0)
     player_aux_value_coef: float = 0.5
 
     ## Builder

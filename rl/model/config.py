@@ -183,7 +183,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # auxiliary lambda. num_heads must match the learner config's
     # player_aux_lambdas length (shape mismatch fails loudly otherwise).
     cfg.aux_v_head = ConfigDict()
-    cfg.aux_v_head.num_heads = 6
+    cfg.aux_v_head.num_heads = 5
     cfg.aux_v_head.mlp = ConfigDict()
     # Same depth as v_head (see comment there); final width = one
     # categorical row per aux lambda.
