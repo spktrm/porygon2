@@ -720,11 +720,24 @@ const nullPokemon = getNullPokemon();
 // the signal worth keeping, in case a non-cosmetic species ever starts
 // falling back.
 const warnedEnumFallbacks = new Set<string>();
+// Memoised resolution per (enum, key-chain): the throwing path inside
+// IndexValueFromEnum captures a stack trace per Error, and unmapped
+// cosmetic formes hit it on EVERY encode — pure allocation churn in the
+// hot path. Bounded: key chains are drawn from the finite
+// species/moves/... vocabularies.
+const resolvedFallbackCache = new Map<string, number>();
 
 function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
+    const cacheKey = `${getPrefix(enumDatum)}|${keys.join("|")}`;
+    const cached = resolvedFallbackCache.get(cacheKey);
+    if (cached !== undefined) {
+        return cached;
+    }
     for (const key of keys) {
         try {
-            return IndexValueFromEnum(enumDatum, key);
+            const value = IndexValueFromEnum(enumDatum, key) as number;
+            resolvedFallbackCache.set(cacheKey, value);
+            return value;
         } catch (err) {
             const message = (err as Error).message;
             if (!warnedEnumFallbacks.has(message)) {
