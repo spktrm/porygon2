@@ -44,4 +44,4 @@ viz/*.json
 attn_weights/
 viz/
 
-**/.DS_Store
+**/.DS_Storedocs/
