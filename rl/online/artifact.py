@@ -366,6 +366,50 @@ def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
     return checkpoint.most_recent_ckpt_dir(save_path)
 
 
+WANDB_RUNS_NAME = "wandb_runs.json"
+
+
+def _wandb_run_info_path(learner_config: Porygon2LearnerConfig) -> str:
+    return os.path.join(_ckpt_root(learner_config), WANDB_RUNS_NAME)
+
+
+def save_wandb_run_info(
+    learner_config: Porygon2LearnerConfig,
+    group: str,
+    run_ids: dict[str, str],
+) -> None:
+    """Persists this session's wandb identity (group + per-population run
+    ids) next to the checkpoints, so a checkpoint-mode restart resumes the
+    same wandb runs instead of opening a fresh session trio."""
+    path = _wandb_run_info_path(learner_config)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(dict(group=group, runs=run_ids), f, indent=2)
+
+
+def load_wandb_run_info(learner_config: Porygon2LearnerConfig) -> dict | None:
+    """The saved wandb session ({"group": ..., "runs": {pop: id}}), or None.
+
+    Only meaningful alongside a resumable checkpoint: if the checkpoint
+    tree is gone (archived, fresh start) the training lineage is gone too,
+    and resuming the old wandb runs would append an unrelated lineage's
+    metrics onto them — so a missing checkpoint invalidates the file.
+    """
+    if _get_checkpoint_path(learner_config) is None:
+        return None
+    try:
+        with open(_wandb_run_info_path(learner_config)) as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(info, dict) or not isinstance(info.get("group"), str):
+        return None
+    runs = info.get("runs")
+    if not isinstance(runs, dict):
+        return None
+    return info
+
+
 def _init_league(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,

@@ -26,7 +26,12 @@ from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent
-from rl.online.artifact import create_train_state, load_train_state
+from rl.online.artifact import (
+    create_train_state,
+    load_train_state,
+    load_wandb_run_info,
+    save_wandb_run_info,
+)
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.inference import InferenceServer
@@ -277,7 +282,9 @@ def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
             raise e
 
 
-def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
+def _stop_stale_wandb_runs(
+    project: str = "pokemon-rl", skip_ids: set[str] | None = None
+):
     """Stop any run this project still shows as "running" from a previous
     process. start.sh's `tmux kill-session` SIGKILLs the old python
     process without giving wandb.finish() a chance to run, so those runs
@@ -299,6 +306,12 @@ def _stop_stale_wandb_runs(project: str = "pokemon-rl"):
         )
         return
     for run in runs:
+        if skip_ids and run.id in skip_ids:
+            # This process is about to wandb.init(id=..., resume=...) this
+            # exact run — resuming flips it back to running by itself, and
+            # racing a server-side stop against that handoff buys nothing.
+            logger.info("Leaving stale wandb run %s — resuming it below.", run.name)
+            continue
         try:
             logger.info("Stopping stale wandb run %s (state=running)", run.name)
             run.stop()
@@ -406,7 +419,21 @@ def main(args: argparse.Namespace):
     # wandb's Group view as one session — replaces the old meaning ("one
     # episode's phases") with "one process's 3 populations", same
     # underlying convention.
-    wandb_group = f"session-{int(time.time())}"
+    #
+    # A checkpoint-mode restart reuses the previous session's group and
+    # per-population run ids (persisted next to the checkpoints), so each
+    # population keeps one continuous wandb run across restarts instead of
+    # a new trio per process. load_wandb_run_info returns None whenever the
+    # resume didn't actually happen (params/scratch mode, or checkpoint
+    # mode falling back to scratch because no checkpoint exists) — those
+    # are new lineages and get a fresh session.
+    wandb_resume = load_wandb_run_info(learner_config) if mode == "checkpoint" else None
+    if wandb_resume is not None:
+        wandb_group = wandb_resume["group"]
+        logger.info("Resuming previous wandb session %s", wandb_group)
+    else:
+        wandb_group = f"session-{int(time.time())}"
+    resume_run_ids: dict[str, str] = (wandb_resume or {}).get("runs", {})
     model_config_payload = {
         "num_player_params": get_num_params(player_state.params),
         "num_builder_params": get_num_params(builder_state.params),
@@ -419,16 +446,22 @@ def main(args: argparse.Namespace):
         ),
     }
 
-    _stop_stale_wandb_runs()
+    _stop_stale_wandb_runs(skip_ids=set(resume_run_ids.values()))
 
     logger.info("Initializing WandB (3 persistent runs, one per population)...")
     wandb_runs: dict[PopulationName, wandb.wandb_run.Run] = {}
     for pop_name in POPULATION_NAMES:
+        run_id = resume_run_ids.get(pop_name)
         wandb_runs[pop_name] = wandb.init(
             project="pokemon-rl",
             group=wandb_group,
             job_type=pop_name,
             name=f"{wandb_group}-{pop_name}",
+            id=run_id,
+            # "allow", not "must": resume the run when it still exists
+            # server-side, otherwise recreate it under the same id — a
+            # wandb-side deletion should never block a training restart.
+            resume="allow" if run_id else None,
             # Keeps exploiter runs visually distinguishable on the
             # dashboard so they never get mistaken for "the next real main
             # lineage" (docs/exploiter-phase-plan.md open question 3).
@@ -449,8 +482,20 @@ def main(args: argparse.Namespace):
             reinit="create_new",
         )
         logger.info(
-            "WandB serialized run (%s): %s", pop_name, wandb_runs[pop_name].name
+            "WandB serialized run (%s): %s (id=%s, resumed=%s)",
+            pop_name,
+            wandb_runs[pop_name].name,
+            wandb_runs[pop_name].id,
+            wandb_runs[pop_name].resumed,
         )
+
+    # Written every session (fresh or resumed): the next checkpoint-mode
+    # restart reads this to resume these exact runs.
+    save_wandb_run_info(
+        learner_config,
+        wandb_group,
+        {pop_name: run.id for pop_name, run in wandb_runs.items()},
+    )
 
     env_func = functools.partial(
         SinglePlayerSyncEnvironment,
