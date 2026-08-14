@@ -519,7 +519,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # q_head params to the tree, so a strict checkpoint-mode resume across
     # the flip fails — resume with LOAD_STATE_MODE=params (merge) or start
     # fresh. Singles only (asserted in get_player_model_config).
-    player_q_enabled: bool = False
+    player_q_enabled: bool = True
     # CE weight — same modest scale as the aux value spectrum, and for the
     # same reason (heavy aux gradient globally clips everything).
     player_q_coef: float = 0.5
