@@ -9,6 +9,8 @@ import pytest
 from rl.online.targets import (
     compute_aux_value_targets,
     compute_player_targets,
+    compute_q_targets,
+    two_hot,
     upgo_returns,
     vtrace,
 )
@@ -94,6 +96,147 @@ def test_upgo_batched_shapes():
     assert np.isfinite(np.asarray(g)).all()
 
 
+class TestTwoHot:
+    def test_bin_centres_are_one_hot(self):
+        support = jnp.array([-1.0, 0.0, 1.0])
+        got = two_hot(jnp.array([-1.0, 0.0, 1.0]), support)
+        np.testing.assert_allclose(
+            np.asarray(got), np.eye(3, dtype=np.float32), atol=1e-6
+        )
+
+    def test_interpolates_and_clips(self):
+        support = jnp.array([-1.0, 0.0, 1.0])
+        got = np.asarray(two_hot(jnp.array([0.8, -0.25, 2.0, -3.0]), support))
+        np.testing.assert_allclose(got[0], [0.0, 0.2, 0.8], atol=1e-6)
+        np.testing.assert_allclose(got[1], [0.25, 0.75, 0.0], atol=1e-6)
+        np.testing.assert_allclose(got[2], [0.0, 0.0, 1.0], atol=1e-6)  # clip hi
+        np.testing.assert_allclose(got[3], [1.0, 0.0, 0.0], atol=1e-6)  # clip lo
+        np.testing.assert_allclose(got.sum(-1), 1.0, atol=1e-6)
+
+
+def _q_batch(done, win_reward, action_mask, action_index):
+    """Minimal Batch for compute_q_targets: env rows plus the taken-action
+    index (the only agent_output field the Retrace path reads)."""
+    from rl.environment.interfaces import (
+        Batch,
+        PlayerActorOutput,
+        PlayerAgentOutput,
+        PlayerEnvOutput,
+        PlayerPolicyHeadOutput,
+        PlayerTransition,
+    )
+
+    return Batch(
+        player_transitions=PlayerTransition(
+            env_output=PlayerEnvOutput(
+                done=done, win_reward=win_reward, action_mask=action_mask
+            ),
+            agent_output=PlayerAgentOutput(
+                actor_output=PlayerActorOutput(
+                    action_head=PlayerPolicyHeadOutput(action_index=action_index)
+                )
+            ),
+        )
+    )
+
+
+class TestQTargetsHandExample:
+    """T=3, B=1, 2x2 grid (A=4), terminal win on the last (done) row,
+    uniform Q logits (E[Q] = 0 everywhere) and uniform target policy.
+
+    delta = [0 + 1*v_exp(s1) - 0, 0 + 1*r - 0, 0 (done row zeroed)]
+          = [0, 1, 0]
+    E     = [lam * 1, 1, 0]   (c_{t+1} trace, on-policy isr)
+    G     = q_taken + E = [lam, 1, .]
+    """
+
+    def _inputs(self):
+        from rl.online.config import Porygon2LearnerConfig
+
+        T, B, N = 3, 1, 2
+        done = jnp.array([[False], [False], [True]])
+        win_reward = jnp.zeros((T, B, 3), dtype=jnp.float32)
+        win_reward = win_reward.at[:, :, 1].set(1.0)  # scalar 0 rows
+        win_reward = win_reward.at[2, :, :].set(jnp.array([0.0, 0.0, 1.0]))  # win
+        action_mask = jnp.ones((T, B, N, N), dtype=bool)
+        action_index = jnp.zeros((T, B), dtype=jnp.int32)
+        batch = _q_batch(done, win_reward, action_mask, action_index)
+        q_logits = jnp.zeros((T, B, N * N, 3), dtype=jnp.float32)
+        log_policy = jnp.full((T, B, N * N), -np.log(N * N), dtype=jnp.float32)
+        isr = jnp.ones((T, B), dtype=jnp.float32)
+        return batch, q_logits, log_policy, isr, Porygon2LearnerConfig
+
+    def test_retrace_matches_hand_computation(self):
+        batch, q_logits, log_policy, isr, config_cls = self._inputs()
+        lam = 0.8
+        config = config_cls(player_q_lambda=lam)
+        probs, g, q_all, v_exp = compute_q_targets(
+            batch, q_logits, log_policy, isr, config
+        )
+        np.testing.assert_allclose(np.asarray(q_all), 0.0, atol=1e-6)
+        np.testing.assert_allclose(np.asarray(v_exp), 0.0, atol=1e-6)
+        np.testing.assert_allclose(np.asarray(g[0, 0]), lam, atol=1e-6)
+        np.testing.assert_allclose(np.asarray(g[1, 0]), 1.0, atol=1e-6)
+        # Two-hot of lam over [-1, 0, 1]: (0, 1-lam, lam).
+        np.testing.assert_allclose(
+            np.asarray(probs[0, 0]), [0.0, 1.0 - lam, lam], atol=1e-6
+        )
+        np.testing.assert_allclose(np.asarray(probs[1, 0]), [0.0, 0.0, 1.0], atol=1e-6)
+
+    def test_lambda_one_is_monte_carlo(self):
+        # lam=1, on-policy: every acted step's target is the final outcome.
+        batch, q_logits, log_policy, isr, config_cls = self._inputs()
+        config = config_cls(player_q_lambda=1.0)
+        _, g, _, _ = compute_q_targets(batch, q_logits, log_policy, isr, config)
+        np.testing.assert_allclose(np.asarray(g[:2, 0]), [1.0, 1.0], atol=1e-6)
+
+    def test_off_policy_ratio_truncates(self):
+        # isr >> 1 truncates to 1 (same as lam=1 on-policy); isr = 0 kills
+        # the correction, leaving the pure one-step bootstrap.
+        batch, q_logits, log_policy, _, config_cls = self._inputs()
+        config = config_cls(player_q_lambda=1.0)
+        big = jnp.full((3, 1), 10.0, dtype=jnp.float32)
+        _, g_big, _, _ = compute_q_targets(batch, q_logits, log_policy, big, config)
+        np.testing.assert_allclose(np.asarray(g_big[0, 0]), 1.0, atol=1e-6)
+        zero = jnp.zeros((3, 1), dtype=jnp.float32)
+        _, g_zero, _, _ = compute_q_targets(batch, q_logits, log_policy, zero, config)
+        # Bootstrap on v_exp(s1) = 0, no correction from the outcome.
+        np.testing.assert_allclose(np.asarray(g_zero[0, 0]), 0.0, atol=1e-6)
+        # The last acted step's outcome enters through the terminal-anchor
+        # bootstrap, not the trace, so it survives isr = 0.
+        np.testing.assert_allclose(np.asarray(g_zero[1, 0]), 1.0, atol=1e-6)
+
+
+class TestQTargetsOnExTrajectory:
+    def test_shapes_and_ranges(self, ex_target_inputs):
+        batch, _, isr, config = ex_target_inputs
+        env = batch.player_transitions.env_output
+        T, B = env.done.shape
+        flat_mask = np.asarray(env.action_mask).reshape(T, B, -1)
+        A = flat_mask.shape[-1]
+        full = _q_batch(
+            env.done,
+            env.win_reward,
+            env.action_mask,
+            jnp.argmax(jnp.asarray(flat_mask), axis=-1),
+        )
+        q_logits = jnp.zeros((T, B, A, 3), dtype=jnp.float32)
+        log_policy = jnp.full((T, B, A), -np.log(A), dtype=jnp.float32)
+        probs, g, q_all, v_exp = compute_q_targets(
+            full, q_logits, log_policy, isr, config
+        )
+        assert probs.shape == (T, B, 3)
+        assert g.shape == (T, B)
+        assert q_all.shape == (T, B, A)
+        assert v_exp.shape == (T, B)
+        for leaf in (probs, g, q_all, v_exp):
+            assert np.isfinite(np.asarray(leaf)).all()
+        # Retrace returns live on the reward support, and the CE labels
+        # are distributions everywhere.
+        assert (np.abs(np.asarray(g)) <= 1.0 + 1e-6).all()
+        np.testing.assert_allclose(np.asarray(probs).sum(-1), 1.0, atol=1e-5)
+
+
 @pytest.fixture(scope="module")
 def ex_target_inputs():
     """Real env outputs from ex.bin (T, B=1), an on-policy isr, and a
@@ -133,7 +276,9 @@ class TestPlayerTargetsOnExTrajectory:
 
         # value_mask covers everything up to and including the first done.
         expected = 1 - (np.cumsum(done, axis=0) - done)
-        np.testing.assert_array_equal(np.asarray(targets.value_mask), expected.astype(bool))
+        np.testing.assert_array_equal(
+            np.asarray(targets.value_mask), expected.astype(bool)
+        )
         # policy_mask is a strict subset: no terminal steps, no forced moves.
         policy_mask = np.asarray(targets.policy_mask)
         assert not (policy_mask & ~np.asarray(targets.value_mask)).any()

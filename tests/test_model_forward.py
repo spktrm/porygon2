@@ -2,22 +2,22 @@
 
 Marked gpu: runs wherever JAX puts it (the training box GPU, with
 preallocation disabled by conftest so it coexists with a live learner).
-Deselect with `-m "not gpu"` for a fast CPU-only run.
+Marked slow (~1 min): deselect with `-m "not slow"` for the quick suite.
 """
 
 import jax
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.gpu
+pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
 @pytest.fixture(scope="module")
 def model_and_inputs():
     from rl.environment.utils import get_ex_player_step
     from rl.model.config import get_player_model_config
-    from rl.model.player_model import get_player_model
     from rl.model.heads import HeadParams
+    from rl.model.player_model import get_player_model
 
     network = get_player_model(get_player_model_config(generation=9, train=True))
     actor_input, actor_output = jax.device_put(
@@ -50,6 +50,39 @@ def test_forward_outputs_finite_and_shaped(model_and_inputs):
 
     pi_lp = np.asarray(out.action_head.log_prob, dtype=np.float32)
     assert np.isfinite(pi_lp).all()
+
+
+def test_q_head_forward_shapes_and_gating(model_and_inputs):
+    """q_head_enabled adds a (T, A, n_bins) observer Q readout (stage 1,
+    docs/q-critic-plan.md) — and adds params, so the default config must
+    keep producing q-free trees (checkpoint compatibility)."""
+
+    from rl.environment.utils import get_ex_player_step
+    from rl.model.config import get_player_model_config
+    from rl.model.heads import HeadParams
+    from rl.model.player_model import get_player_model
+
+    _, params_off, _, _ = model_and_inputs
+    assert "q_head" not in params_off["params"]
+
+    network = get_player_model(
+        get_player_model_config(generation=9, train=True, q_head_enabled=True)
+    )
+    actor_input, actor_output = jax.device_put(
+        jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+    )
+    params = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
+    assert "q_head" in params["params"]
+
+    out = network.apply(params, actor_input, actor_output, HeadParams())
+    T = actor_input.env.done.shape[0]
+    A = int(np.prod(actor_input.env.action_mask.shape[-2:]))
+    q_logits = np.asarray(out.q_logits, dtype=np.float32)
+    assert q_logits.shape == (T, A, 3)
+    assert np.isfinite(q_logits).all()
+    # Full-support log_policy is present in train mode — the Retrace
+    # target's expectation bootstrap depends on it.
+    assert np.asarray(out.action_head.log_policy).shape[-1] == A
 
 
 def test_forward_is_deterministic(model_and_inputs):

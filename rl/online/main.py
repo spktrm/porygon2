@@ -348,7 +348,9 @@ def main(args: argparse.Namespace):
     logger.info(f"Learner Config: {learner_config}")
 
     learner_player_model_config = get_player_model_config(
-        learner_config.generation, train=True
+        learner_config.generation,
+        train=True,
+        q_head_enabled=learner_config.player_q_enabled,
     )
     learner_builder_model_config = get_builder_model_config(
         learner_config.generation, train=True

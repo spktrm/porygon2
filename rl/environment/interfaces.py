@@ -90,6 +90,11 @@ class PlayerActorOutput:
     # K auxiliary discounts (multi-gamma value aux). Actors leave this
     # empty so replay transitions stay small.
     aux_value_logits: ArrayLike = ()
+    # Learner-only (cfg.train and q_head.enabled): (T, A, n_bins)
+    # categorical logits of the observer all-action Q critic over the flat
+    # src x tgt action grid (stage 1, docs/q-critic-plan.md). Actors leave
+    # this empty for the same replay-size reason as aux_value_logits.
+    q_logits: ArrayLike = ()
 
 
 @dataclass

@@ -22,7 +22,9 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
+def get_player_model_config(
+    generation: int = 3, train: bool = False, q_head_enabled: bool = False
+) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 64
@@ -192,6 +194,30 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         entity_size,
         cfg.aux_v_head.num_heads * len(CAT_VF_SUPPORT),
     )
+
+    # Observer all-action Q head (learner-only; stage 1 of
+    # docs/q-critic-plan.md): categorical logits over CAT_VF_SUPPORT per
+    # src x tgt cell, read off the same action embeddings as pi_head. One
+    # residual block per role — the readout leans on the trunk/decoder
+    # depth that already exists rather than duplicating pi_head's
+    # per-modality stacks. Params exist in the tree only when enabled
+    # (module never called otherwise), so flipping this on is an
+    # architecture change for checkpoint purposes.
+    cfg.q_head = ConfigDict()
+    cfg.q_head.enabled = q_head_enabled
+    cfg.q_head.num_blocks = 1
+    cfg.q_head.src_mlp = ConfigDict()
+    cfg.q_head.tgt_mlp = ConfigDict()
+    cfg.q_head.qk_logits = ConfigDict()
+    cfg.q_head.qk_logits.num_heads = len(CAT_VF_SUPPORT)
+    cfg.q_head.qk_logits.use_bias = True
+    cfg.q_head.qk_logits.qk_layer_norm = True
+
+    if q_head_enabled and cfg.num_decision_slots != 1:
+        # Stage 1 is singles-only: the doubles path stacks per-stage
+        # log_policy/action_index, which the Retrace target code does not
+        # yet consume. Fail loudly rather than train a silently-wrong Q.
+        raise ValueError("q_head requires num_decision_slots == 1 (singles)")
 
     for head in [cfg.pi_head]:
         head.train = train

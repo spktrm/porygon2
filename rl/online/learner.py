@@ -35,13 +35,19 @@ try:
     _MATPLOTLIB_AVAILABLE = True
 except ImportError:
     _MATPLOTLIB_AVAILABLE = False
-from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
+from rl.environment.data import (
+    CAT_VF_SUPPORT,
+    FLAT_MODALITY_MASK,
+    STOI,
+    PackedSetFeature,
+)
 from rl.environment.interfaces import (
     Batch,
     BuilderActorInput,
     PlayerActorInput,
     Trajectory,
 )
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import (
     _bucket_level,
     _bucket_value,
@@ -86,6 +92,7 @@ from rl.online.targets import (
     compute_aux_value_targets,
     compute_builder_targets,
     compute_player_targets,
+    compute_q_targets,
 )
 from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
 from rl.utils import average
@@ -305,6 +312,47 @@ def train_step(
         flat_action_mask, jnp.log(jnp.maximum(magnet_prior, 1e-9)), 0.0
     )
 
+    # Observer Q critic (stage 1, docs/q-critic-plan.md): Retrace targets
+    # from the fast EMA target's all-action Q readout and reference
+    # policy. Zero policy influence — the head trains, the diagnostics
+    # log, nothing reaches the actor loss.
+    if config.player_q_enabled:
+        q_target_probs, q_retrace_g, q_all_target, q_v_exp = compute_q_targets(
+            batch,
+            q_logits=player_target_pred.q_logits,
+            target_log_policy=player_target_pred.action_head.log_policy,
+            isr=target_actor_ratio,
+            config=config,
+        )
+        # Q(s, a) exists wherever an action was actually taken — including
+        # forced single-option steps (policy_mask excludes those; the Q
+        # regression must not) — but not on terminal rows.
+        q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
+
+        # Both readouts estimate the same state value from the same target
+        # params: their absolute gap is the Q head's calibration debt to
+        # the V head (q-critic-plan.md stage-1 acceptance metric).
+        training_logs["player_q_ev_gap"] = average(
+            jnp.abs(
+                q_v_exp - player_target_pred.value_head.expectation.astype(jnp.float32)
+            ),
+            q_mask,
+        )
+        # The direct "what does the critic think switching is worth"
+        # readout: best legal switch's E[Q] minus best legal move's, over
+        # states offering both. The number the switch-collapse
+        # investigation (Aug 2026) had no way to measure.
+        switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+        move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
+        valid_switch = flat_action_mask & switch_cells
+        valid_move = flat_action_mask & move_cells
+        best_switch = jnp.max(jnp.where(valid_switch, q_all_target, -jnp.inf), axis=-1)
+        best_move = jnp.max(jnp.where(valid_move, q_all_target, -jnp.inf), axis=-1)
+        has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
+        training_logs["player_q_switch_move_gap"] = average(
+            jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
+        )
+
     def player_loss_fn(params: Params):
 
         learner_player_pred = player_state.apply_fn(
@@ -456,6 +504,36 @@ def train_step(
             for k, lam in enumerate(config.player_aux_lambdas)
         }
 
+        # Observer Q CE (stage 1, docs/q-critic-plan.md): the taken
+        # action's categorical Q logits against the two-hot Retrace
+        # target. Config-static branch — the jit variant without the head
+        # never traces this.
+        q_logs = {}
+        loss_q = 0.0
+        if config.player_q_enabled:
+            learner_q_logits_taken = jnp.take_along_axis(
+                learner_player_pred.q_logits.astype(jnp.float32),
+                player_actor_action_head.action_index[..., None, None],
+                axis=-2,
+            ).squeeze(-2)
+            loss_q = average(
+                optax.softmax_cross_entropy(
+                    logits=learner_q_logits_taken, labels=q_target_probs
+                ),
+                q_mask,
+            )
+            q_taken_pred = jax.nn.softmax(
+                learner_q_logits_taken, axis=-1
+            ) @ cat_vf_support.astype(jnp.float32)
+            q_logs = dict(
+                player_loss_q=loss_q,
+                player_q_r2=calculate_r2(
+                    value_prediction=q_taken_pred,
+                    value_target=q_retrace_g,
+                    mask=q_mask,
+                ),
+            )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
             + (config.player_upgo_coef if upgo_coef is None else upgo_coef) * loss_upgo
@@ -464,9 +542,11 @@ def train_step(
             + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
             * loss_magnet_kl
             + config.player_aux_value_coef * loss_v_aux
+            + config.player_q_coef * loss_q
         )
 
         return loss, dict(
+            **q_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_upgo=loss_upgo,

@@ -1,0 +1,106 @@
+"""Eager (unjitted) train_step smoke with the observer Q head enabled —
+the stage-1 wiring test for docs/q-critic-plan.md: model Q readout ->
+Retrace targets -> CE loss -> gradients, end to end on the bundled
+ex.bin trajectory. CPU-pinned so it can run next to a live learner
+(randombattle config, so the builder branch self-skips).
+
+Marked slow (~3 min eager): deselect with `-m "not slow"` for the quick
+suite."""
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+pytestmark = [pytest.mark.gpu, pytest.mark.slow]
+
+
+def test_train_step_player_q_smoke():
+    from rl.environment.interfaces import (
+        Batch,
+        CategoricalValueHeadOutput,
+        PlayerActorOutput,
+        PlayerAgentOutput,
+        PlayerPolicyHeadOutput,
+        PlayerTransition,
+    )
+    from rl.environment.utils import get_ex_player_step
+    from rl.model.builder_model import get_builder_model
+    from rl.model.config import get_builder_model_config, get_player_model_config
+    from rl.model.player_model import get_player_model
+    from rl.online.artifact import create_train_state
+    from rl.online.config import Porygon2LearnerConfig
+    from rl.online.learner import train_step
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        config = Porygon2LearnerConfig(player_q_enabled=True)
+        player_net = get_player_model(
+            get_player_model_config(config.generation, train=True, q_head_enabled=True)
+        )
+        builder_net = get_builder_model(
+            get_builder_model_config(config.generation, train=True)
+        )
+        player_state, builder_state = create_train_state(
+            player_net, builder_net, jax.random.key(0), config
+        )
+
+        actor_input, actor_output = get_ex_player_step()
+        env = actor_input.env  # (T, B=1, ...)
+        T, B = env.done.shape
+        mask_width = env.action_mask.shape[-1]
+        action_index = jnp.asarray(actor_output.action_head.action_index)
+
+        batch = Batch(
+            player_transitions=PlayerTransition(
+                env_output=env,
+                agent_output=PlayerAgentOutput(
+                    actor_output=PlayerActorOutput(
+                        action_head=PlayerPolicyHeadOutput(
+                            action_index=action_index,
+                            log_prob=jnp.full((T, B), -1.0, dtype=jnp.float32),
+                            src_index=action_index // mask_width,
+                            tgt_index=action_index % mask_width,
+                        ),
+                        value_head=CategoricalValueHeadOutput(
+                            expectation=jnp.zeros((T, B), dtype=jnp.float32)
+                        ),
+                    )
+                ),
+            ),
+            player_history=actor_input.history,
+            player_packed_history=actor_input.packed_history,
+        )
+
+        new_player_state, _, logs = train_step(
+            player_state, builder_state, batch, config
+        )
+
+    assert int(new_player_state.step_count) == 1
+    for key in (
+        "player_loss_q",
+        "player_q_r2",
+        "player_q_ev_gap",
+        "player_q_switch_move_gap",
+        # The per-module grad-norm loop picks the new head up by itself;
+        # nonzero norm proves the CE loss actually reaches q_head params.
+        "player_q_head_gradient_norm",
+    ):
+        assert key in logs, key
+        assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
+    assert float(logs["player_q_head_gradient_norm"]) > 0.0
+
+    # Observer contract: with player_q_enabled=False nothing q-flavoured
+    # may appear (and the loss must not reference undefined q terms).
+    config_off = Porygon2LearnerConfig()
+    player_net_off = get_player_model(
+        get_player_model_config(config_off.generation, train=True)
+    )
+    with jax.default_device(jax.devices("cpu")[0]):
+        player_state_off, builder_state_off = create_train_state(
+            player_net_off, builder_net, jax.random.key(0), config_off
+        )
+        _, _, logs_off = train_step(
+            player_state_off, builder_state_off, batch, config_off
+        )
+    assert "player_loss_q" not in logs_off
+    assert "player_q_switch_move_gap" not in logs_off

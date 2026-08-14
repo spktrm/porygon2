@@ -304,6 +304,35 @@ class PolicyQKHead(nn.Module):
         )
 
 
+class QValueHead(nn.Module):
+    """All-action categorical Q readout (observer critic — stage 1 of
+    docs/q-critic-plan.md).
+
+    Reads the SAME action-slot embeddings the policy heads read and scores
+    every src x tgt grid cell with one logit per CAT_VF_SUPPORT bin:
+    per-role residual blocks (the head-local depth convention of
+    PairPolicyHead) into a PointerLogits whose num_heads is the bin count,
+    so the bilinear form produces a categorical value distribution per
+    cell. Learner-only — gated in Porygon2PlayerModel.__call__; never
+    sampled from, so it has no interaction with acting or replay. Handles
+    arbitrary leading batch dims (PointerLogits/MLP are einsum-based).
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, action_embeddings: jax.Array) -> jax.Array:
+        src = action_embeddings
+        tgt = action_embeddings
+        for block in range(self.cfg.num_blocks):
+            src = src + MLP(**self.cfg.src_mlp.to_dict(), name=f"src_mlp_b{block}")(src)
+            tgt = tgt + MLP(**self.cfg.tgt_mlp.to_dict(), name=f"tgt_mlp_b{block}")(tgt)
+        # (..., N, N, n_bins) -> (..., N * N, n_bins): flat cell order
+        # matches the policy head's flat action indexing.
+        logits = PointerLogits(**self.cfg.qk_logits.to_dict())(src, tgt)
+        return logits.reshape(*logits.shape[:-3], -1, logits.shape[-1])
+
+
 # Alive-mon differential support: margins -6..+6, matching the offline
 # critic's 13-bin distributional target.
 NUM_MARGIN_BINS = 13

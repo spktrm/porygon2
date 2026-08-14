@@ -27,6 +27,7 @@ from rl.model.heads import (
     MacroHead,
     MultiLambdaValueLogitHead,
     PerModalityPolicyHead,
+    QValueHead,
     SlotConditioning,
     calculate_hierarchical_prior,
     compute_policy_metrics,
@@ -49,6 +50,12 @@ class Porygon2PlayerModel(nn.Module):
             # is called, so singles checkpoints are unaffected; a future
             # doubles resume via load-mode "params" fresh-inits this.
             self.slot_conditioning = SlotConditioning()
+        if self.cfg.get("q_head") is not None and self.cfg.q_head.enabled:
+            # Observer Q critic (stage 1, docs/q-critic-plan.md). Same
+            # params-only-when-called convention as slot_conditioning:
+            # checkpoints from q-disabled configs are unaffected, and a
+            # resume across the flip goes through load-mode "params".
+            self.q_head = QValueHead(self.cfg.q_head)
 
     def _forward_pi_head(self, action_embeddings: jax.Array):
         """Per-modality src x tgt pointer logits.
@@ -403,6 +410,12 @@ class Porygon2PlayerModel(nn.Module):
             outputs = outputs.replace(
                 aux_value_logits=self.aux_v_head(value_embeddings)
             )
+            if self.cfg.get("q_head") is not None and self.cfg.q_head.enabled:
+                # Observer all-action Q readout over the flat action grid
+                # — (T, N*N, n_bins) categorical logits. Retrace targets
+                # and diagnostics live learner-side; nothing here feeds
+                # the policy (stage 1, docs/q-critic-plan.md).
+                outputs = outputs.replace(q_logits=self.q_head(action_embeddings))
         return outputs
 
 

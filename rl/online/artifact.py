@@ -60,6 +60,10 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         num_decision_slots=int(model_cfg.num_decision_slots),
         pi_head="per_modality",
         pi_head_num_blocks=int(model_cfg.pi_head.num_blocks),
+        # Observer Q head (docs/q-critic-plan.md): enabling adds params to
+        # the tree, so checkpoint-mode resumes across the flip must fail
+        # with a sentence. Absent from pre-q manifests -> skipped there.
+        q_head=bool(learner_config.player_q_enabled),
     )
 
 

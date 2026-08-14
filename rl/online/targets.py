@@ -208,6 +208,106 @@ def compute_player_targets(
     )
 
 
+def two_hot(scalar: jax.Array, support: jax.Array) -> jax.Array:
+    """Project scalars onto a categorical support as the standard two-hot
+    distribution: all mass on the two bins bracketing the value, split by
+    linear interpolation. Values are clipped to the support's range."""
+    scalar = jnp.clip(scalar, support[0], support[-1])
+    upper_idx = jnp.clip(
+        jnp.searchsorted(support, scalar, side="left"), 1, support.shape[0] - 1
+    )
+    lower = support[upper_idx - 1]
+    upper = support[upper_idx]
+    w_upper = (scalar - lower) / jnp.maximum(upper - lower, 1e-8)
+    n_bins = support.shape[0]
+    return jax.nn.one_hot(upper_idx - 1, n_bins) * (1.0 - w_upper[..., None]) + (
+        jax.nn.one_hot(upper_idx, n_bins) * w_upper[..., None]
+    )
+
+
+def compute_q_targets(
+    batch: Batch,
+    q_logits: jax.Array,
+    target_log_policy: jax.Array,
+    isr: jax.Array,
+    config: Porygon2LearnerConfig,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Retrace(lambda) targets for the observer Q head (stage 1,
+    docs/q-critic-plan.md).
+
+    Scalar-space recursion (like upgo_returns) with a two-hot projection
+    back onto CAT_VF_SUPPORT for the CE loss. Expectation bootstrap —
+    delta_t uses V(s_{t+1}) = sum_a pi(a|s_{t+1}) E[Q(s_{t+1}, a)], never
+    a max — so the target stays sound against a mixed-strategy opponent
+    and free of argmax overestimation. The correction product starts at
+    t+1 (Retrace, vs v-trace's t): a_t is given, only the continuation is
+    off-policy — so delta_t itself carries no rho factor, and the
+    recursion is E_t = delta_t + gamma_t * c_{t+1} * E_{t+1} with
+    c = player_q_lambda * min(1, pi_target/mu). min(1, .) tolerates
+    arbitrary behaviour policies: replay reuse today, other populations'
+    trajectories at stage 4.
+
+    q_logits / target_log_policy come from the fast EMA target network —
+    the same IMPACT reasoning as the v-trace reference policy. Everything
+    runs in f32: value readouts are precision-critical under the bf16
+    training policy (see upgo_returns).
+
+    Returns (q_target_probs, retrace_g, q_all, v_exp):
+      q_target_probs (T, B, n_bins) — CE labels for the taken action;
+      retrace_g      (T, B)         — the scalar Retrace returns (R2 diag);
+      q_all          (T, B, A)      — target net per-action E[Q], and
+      v_exp          (T, B)         — its policy expectation; the last two
+    are diagnostics only (player_q_switch_move_gap / player_q_ev_gap).
+    """
+    support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
+
+    dones = batch.player_transitions.env_output.done  # (T, B)
+    mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
+    discount_t = (1 - dones) * config.player_gamma * mask
+    discount_t = discount_t.astype(jnp.float32)
+
+    q_probs = jax.nn.softmax(q_logits.astype(jnp.float32), axis=-1)
+    q_all = q_probs @ support  # (T, B, A)
+
+    action_mask = batch.player_transitions.env_output.action_mask
+    flat_action_mask = action_mask.reshape(*q_all.shape)
+    # Renormalised over legal cells: the policy head already zeroes
+    # illegal mass, this just guards E[Q] against numerical dust there.
+    pi = jnp.exp(target_log_policy.astype(jnp.float32)) * flat_action_mask
+    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
+    v_exp = (pi * q_all).sum(axis=-1)  # (T, B)
+
+    action_index = (
+        batch.player_transitions.agent_output.actor_output.action_head.action_index
+    )
+    q_taken = jnp.take_along_axis(q_all, action_index[..., None], axis=-1).squeeze(-1)
+
+    r_t = (batch.player_transitions.env_output.win_reward @ support).astype(jnp.float32)
+
+    # Terminal anchor: rewards land on the terminal OBSERVATION row (the
+    # done step, where no action is taken and the Q head never trains), so
+    # that row's state value is exactly its stored reward. Bootstrap the
+    # last acted step on r rather than on the Q readout's uncalibrated
+    # terminal estimate, and zero the terminal row's own delta — the
+    # outcome enters the recursion through the bootstrap, exactly once,
+    # with no reference to the terminal row's meaningless action_index.
+    v_boot = jnp.where(dones.astype(bool), r_t, v_exp)
+    v_next = jnp.concatenate([v_boot[1:], v_boot[-1:]], axis=0)
+    td_errors = (
+        jnp.where(dones.astype(bool), 0.0, r_t + discount_t * v_next - q_taken) * mask
+    )
+
+    c_t = config.player_q_lambda * jnp.minimum(1.0, isr.astype(jnp.float32))
+    # Shift left: the recursion's trace factor is c_{t+1} (Retrace), and
+    # the final step has no continuation to correct.
+    c_next = jnp.concatenate([c_t[1:], jnp.zeros_like(c_t[-1:])], axis=0)
+    errors = vtrace(td_errors, discount_t, c_next)
+
+    retrace_g = jnp.clip(q_taken + errors, support[0], support[-1]) * mask
+    q_target_probs = two_hot(retrace_g, support)
+    return q_target_probs, retrace_g, q_all, v_exp
+
+
 def compute_aux_value_targets(
     batch: Batch,
     aux_value_log_probs: jax.Array,
