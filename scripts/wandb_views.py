@@ -153,6 +153,45 @@ def rl_sections():
                     ["player_q_ev_gap"],
                 ),
                 lp(
+                    # Gap discriminator 1/3 — calibration by context.
+                    # Forced switches (post-faint) stay data-rich through
+                    # a switch collapse; voluntary ones starve. Forced
+                    # calibrated + voluntary degraded = starvation
+                    # artefact (don't trust the gap); all three tracking
+                    # together = the critic means it.
+                    "Q calibration by context (R2)",
+                    [
+                        "player_q_r2_move",
+                        "player_q_r2_switch_forced",
+                        "player_q_r2_switch_voluntary",
+                    ],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    # Gap discriminator 2/3 — how much CE gradient switch
+                    # cells actually receive (the CE trains only the
+                    # taken action's cell). Voluntary frac -> 0 is the
+                    # starvation mechanism in the flesh.
+                    "Q training coverage by modality",
+                    [
+                        "player_q_switch_target_frac",
+                        "player_q_voluntary_switch_target_frac",
+                    ],
+                ),
+                lp(
+                    # Gap discriminator 3/3 — head-independent: mean
+                    # Retrace return after a voluntary switch vs after a
+                    # move, both over states offering both modalities. If
+                    # the data itself says switches lose, the negative
+                    # gap is honest and the fix is opponent pressure
+                    # (stage 4), not the improvement term.
+                    "Empirical returns: voluntary switch vs move",
+                    [
+                        "player_q_target_voluntary_switch",
+                        "player_q_target_move",
+                    ],
+                ),
+                lp(
                     "Q loss & head gradient",
                     ["player_loss_q", "player_q_head_gradient_norm"],
                 ),

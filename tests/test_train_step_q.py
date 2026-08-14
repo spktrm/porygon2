@@ -81,6 +81,15 @@ def test_train_step_player_q_smoke():
         "player_q_r2",
         "player_q_ev_gap",
         "player_q_switch_move_gap",
+        # Gap discriminators: per-context calibration + data coverage +
+        # head-independent conditional Retrace means.
+        "player_q_r2_move",
+        "player_q_r2_switch_forced",
+        "player_q_r2_switch_voluntary",
+        "player_q_switch_target_frac",
+        "player_q_voluntary_switch_target_frac",
+        "player_q_target_voluntary_switch",
+        "player_q_target_move",
         # The per-module grad-norm loop picks the new head up by itself;
         # nonzero norm proves the CE loss actually reaches q_head params.
         "player_q_head_gradient_norm",
@@ -91,7 +100,8 @@ def test_train_step_player_q_smoke():
 
     # Observer contract: with player_q_enabled=False nothing q-flavoured
     # may appear (and the loss must not reference undefined q terms).
-    config_off = Porygon2LearnerConfig()
+    # Explicit False — the default flipped to enabled in 817132a.
+    config_off = Porygon2LearnerConfig(player_q_enabled=False)
     player_net_off = get_player_model(
         get_player_model_config(config_off.generation, train=True)
     )

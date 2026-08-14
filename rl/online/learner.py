@@ -353,6 +353,32 @@ def train_step(
             jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
         )
 
+        # Discriminators for a negative gap: starved switch cells vs a
+        # genuine judgement. The CE only trains the taken action's cell,
+        # so a collapsing switch_ratio starves voluntary-switch cells of
+        # gradient while forced replacements (post-faint, no legal move)
+        # keep flowing regardless of policy. Coverage says how bad the
+        # starvation is; the conditional Retrace means are the
+        # head-independent answer to "do voluntary switches actually lead
+        # to worse outcomes than moves from the same kind of state?".
+        taken_switch = jnp.take(switch_cells, player_actor_action_head.action_index)
+        has_move = valid_move.any(axis=-1)
+        q_voluntary_switch_mask = q_mask & taken_switch & has_move
+        q_forced_switch_mask = q_mask & taken_switch & jnp.logical_not(has_move)
+        q_move_mask = q_mask & jnp.logical_not(taken_switch)
+        training_logs["player_q_switch_target_frac"] = average(
+            taken_switch.astype(jnp.float32), q_mask
+        )
+        training_logs["player_q_voluntary_switch_target_frac"] = average(
+            (taken_switch & has_move).astype(jnp.float32), q_mask
+        )
+        training_logs["player_q_target_voluntary_switch"] = average(
+            q_retrace_g, q_voluntary_switch_mask
+        )
+        training_logs["player_q_target_move"] = average(
+            q_retrace_g, q_move_mask & has_both
+        )
+
     def player_loss_fn(params: Params):
 
         learner_player_pred = player_state.apply_fn(
@@ -525,6 +551,23 @@ def train_step(
             q_taken_pred = jax.nn.softmax(
                 learner_q_logits_taken, axis=-1
             ) @ cat_vf_support.astype(jnp.float32)
+
+            # Calibration by context. Forced switches stay data-rich
+            # through a switch collapse; voluntary ones starve. Calibrated
+            # forced + degraded voluntary = starvation artefact; both
+            # calibrated with the gap still negative = the critic means it
+            # (0.0 sentinel when a batch has no steps in a context).
+            def q_context_r2(context_mask):
+                return jnp.where(
+                    context_mask.any(),
+                    calculate_r2(
+                        value_prediction=q_taken_pred,
+                        value_target=q_retrace_g,
+                        mask=context_mask,
+                    ),
+                    0.0,
+                )
+
             q_logs = dict(
                 player_loss_q=loss_q,
                 player_q_r2=calculate_r2(
@@ -532,6 +575,9 @@ def train_step(
                     value_target=q_retrace_g,
                     mask=q_mask,
                 ),
+                player_q_r2_move=q_context_r2(q_move_mask),
+                player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
+                player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
             )
 
         loss = (
