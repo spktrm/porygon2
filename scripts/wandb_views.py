@@ -118,6 +118,47 @@ def rl_sections():
             ],
         ),
         ws.Section(
+            # Stage-1 acceptance dashboard (docs/q-critic-plan.md): the
+            # observer Q trains but never touches the policy, so these
+            # panels are pure measurement until stage 2 flips on.
+            name="1.5 · Observer Q critic",
+            is_open=True,
+            panels=[
+                lp(
+                    # Acceptance: q_r2 climbing into the V head's band.
+                    # Lagging early is expected (one action's target per
+                    # state vs every state for V); plateauing far below
+                    # means per-action values aren't extractable from the
+                    # action embeddings.
+                    "Q calibration vs V head (R2)",
+                    ["player_q_r2", "player_value_head_r2"],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    # THE switching readout: best legal switch E[Q] minus
+                    # best legal move E[Q], joint-read with switch_ratio.
+                    # Gap positive while switch_ratio collapses = ratchet
+                    # (stage 2's mandate); gap negative = the critic
+                    # agrees with not switching on the visited data (fix
+                    # is opponents/data, not the policy update).
+                    "Switch-vs-move value gap & switch rate",
+                    ["player_q_switch_move_gap", "switch_ratio"],
+                ),
+                lp(
+                    # |sum(pi*E[Q]) - V|: the two heads' state-value
+                    # disagreement. Should shrink to a small stable
+                    # residual; growing while both R2s look fine points
+                    # at target construction, not capacity.
+                    "Q-V state-value agreement",
+                    ["player_q_ev_gap"],
+                ),
+                lp(
+                    "Q loss & head gradient",
+                    ["player_loss_q", "player_q_head_gradient_norm"],
+                ),
+            ],
+        ),
+        ws.Section(
             name="2 · Optimiser guardrails",
             is_open=True,
             panels=[
@@ -246,6 +287,7 @@ def rl_sections():
                         "player_loss_kl",
                         "player_loss_magnet_kl",
                         "player_loss_v_win",
+                        "player_loss_q",
                     ],
                 ),
                 lp("NLL sum", ["player_nll_sum"]),
@@ -333,6 +375,7 @@ def rl_sections():
                         "player_pi_head_gradient_norm",
                         "player_v_head_gradient_norm",
                         "player_aux_v_head_gradient_norm",
+                        "player_q_head_gradient_norm",
                     ],
                     log_y=True,
                 ),
@@ -341,7 +384,11 @@ def rl_sections():
         ws.Section(
             name="Throughput",
             panels=[
-                lp("Frame counts", ["player_frame_count", "builder_frame_count"], smooth=0),
+                lp(
+                    "Frame counts",
+                    ["player_frame_count", "builder_frame_count"],
+                    smooth=0,
+                ),
                 lp("Training step", ["training_step"], smooth=0),
             ],
         ),
