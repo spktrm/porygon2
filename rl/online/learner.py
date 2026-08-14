@@ -1249,6 +1249,18 @@ class Learner:
             player_state=player_state,
             builder_state=builder_state,
             created_at_frame=int(jax.device_get(player_state.frame_count)),
+            # Seeded from the state's own (restored) step_count, NOT 0: the
+            # league keys main's snapshots by host_step + _STEP_OFFSET, and
+            # League.get_latest_player picks "newest" as max(key) — a
+            # session-local counter restarting at 0 made every post-restart
+            # add key smaller than the restored league's, so the stale
+            # pre-restart ref stayed "latest" forever, frames_passed never
+            # reset, and "overdue" fired on every league-management tick
+            # (the 2026-08-14 10:15 add storm; also the p_{step:08}
+            # snapshot-dir overwrite hazard once the counter caught up).
+            # Exploiter forks are unaffected: their states are zeroed at
+            # fork, so their host_step still starts at 0.
+            host_step=int(jax.device_get(player_state.step_count)),
             fork_step=fork_step,
             replay_pi=PILogController(
                 initial_log=float(np.log(config.player_replay_ratio)),

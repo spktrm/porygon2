@@ -8,12 +8,10 @@ League underneath.
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 
 from rl.model.utils import ParamsContainer
-from rl.online.learner import _STEP_OFFSET, Learner
 from rl.online.league import MAIN_KEY, League, PlayerRef
-
+from rl.online.learner import _STEP_OFFSET, Learner
 
 MIN_FRAMES = 200_000
 MAX_FRAMES = 9_000_000
@@ -99,7 +97,9 @@ def test_dominant_before_max_frames():
 
 def test_not_dominant_at_prior_win_rate():
     # Prior is 0.5 with no games recorded: min win rate 0.5 < 0.7.
-    stub, pop = make_learner(main_frames=MIN_FRAMES + 1, players=[make_ref(100, frames=0)])
+    stub, pop = make_learner(
+        main_frames=MIN_FRAMES + 1, players=[make_ref(100, frames=0)]
+    )
     assert gate(stub, pop) is None
 
 
@@ -146,3 +146,49 @@ def test_dominance_is_judged_against_all_historicals():
         stub.league.update_payoff(main, main_ref, payoff=1.0)
         stub.league.update_payoff(main, exp_ref, payoff=-1.0)
     assert gate(stub, pop) is None
+
+
+def test_build_population_seeds_host_step_from_restored_state():
+    """Regression (2026-08-14 overdue add storm): league keys are
+    host_step + _STEP_OFFSET and League.get_latest_player picks newest as
+    max(key), so a session-local host_step restarting at 0 left the
+    pre-restart snapshot "latest" forever (frames_passed never reset ->
+    "overdue" every management tick, plus a p_{step:08} overwrite hazard).
+    _build_population must seed host_step from the state's own restored
+    step_count — and a freshly forked exploiter (step_count 0) must still
+    start at 0."""
+    from rl.online.config import Porygon2LearnerConfig
+
+    league = League(
+        main_player=ParamsContainer(
+            step_count=MAIN_KEY,
+            player_frame_count=0,
+            builder_frame_count=0,
+            player_params={},
+            builder_params={},
+        ),
+        players=[],
+    )
+    stub = SimpleNamespace(
+        config=Porygon2LearnerConfig(),
+        league=league,
+        _active="main",
+        _plasticity_probe_jit=None,
+        _restore_controller_state=lambda pop, blob: None,
+        _create_params_container=lambda pop: None,
+    )
+    stub.league.update_live = lambda key, container: None
+
+    def build(name, steps):
+        return Learner._build_population(
+            stub,
+            name,
+            player_state=SimpleNamespace(
+                step_count=np.array(steps), frame_count=np.array(0)
+            ),
+            builder_state=SimpleNamespace(frame_count=np.array(0)),
+            wandb_run=None,
+        )
+
+    assert build("main", 71_139).host_step == 71_139
+    assert build("main_exploiter", 0).host_step == 0
