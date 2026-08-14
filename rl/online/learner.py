@@ -233,6 +233,21 @@ def train_step(
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
 
+    # Stage-4 cross-population intake (docs/q-critic-plan.md): rows drawn
+    # from another population's buffer may train ONLY the observer Q
+    # critic. This is the single choke point — own-masking policy/value
+    # masks here removes foreign rows from every PG/value/KL/aux/entropy
+    # term and both advantage-EMA updates downstream; the Q block builds
+    # its own mask from the pre-masked q_row_mask so it alone consumes the
+    # foreign data (with target_actor_ratio already being exactly the
+    # main-pi-over-foreign-behaviour ISR Retrace truncates on).
+    q_row_mask = value_mask
+    own_rows = None
+    if not isinstance(batch.foreign, tuple):
+        own_rows = jnp.logical_not(batch.foreign[0].astype(bool))  # (B,)
+        policy_mask = policy_mask & own_rows[None, :]
+        value_mask = value_mask & own_rows[None, :]
+
     # Per-lambda v-trace distribution targets for the multi-lambda aux
     # value heads, bootstrapped from each lambda's OWN fast-target readout
     # so every row's target is self-consistent.
@@ -265,8 +280,14 @@ def train_step(
         vm = value_mask.astype(value_sq_err.dtype)
         per_traj_err = (value_sq_err * vm).sum(axis=0) / (vm.sum(axis=0) + 1e-8)
         fresh = batch.reuse_count[0] == 0
+        replayed = ~fresh
+        if own_rows is not None:
+            # Foreign rows carry reuse_count 0 but a zeroed value_mask —
+            # counting them as "fresh" would drag fresh_err toward 0.
+            fresh = fresh & own_rows
+            replayed = replayed & own_rows
         fresh_err = per_traj_err.mean(where=fresh)
-        replay_err = per_traj_err.mean(where=~fresh)
+        replay_err = per_traj_err.mean(where=replayed)
         training_logs.update(
             {
                 "plasticity_fresh_value_err": fresh_err,
@@ -326,8 +347,15 @@ def train_step(
         )
         # Q(s, a) exists wherever an action was actually taken — including
         # forced single-option steps (policy_mask excludes those; the Q
-        # regression must not) — but not on terminal rows.
-        q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
+        # regression must not) — but not on terminal rows. Built from the
+        # PRE-own-masked row mask: foreign intake rows train the Q critic.
+        q_mask = q_row_mask & jnp.logical_not(player_transitions.env_output.done)
+        if own_rows is not None:
+            training_logs["player_q_foreign_frac"] = average(
+                jnp.logical_not(own_rows)[None, :].astype(jnp.float32)
+                * jnp.ones_like(q_mask, dtype=jnp.float32),
+                q_mask,
+            )
 
         # Both readouts estimate the same state value from the same target
         # params: their absolute gap is the Q head's calibration debt to
@@ -579,6 +607,14 @@ def train_step(
                 player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
                 player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
             )
+            if own_rows is not None:
+                # Does main's Q actually fit the exploiter-generated
+                # returns it is digesting? Persistent gap vs player_q_r2
+                # = the intake is too off-policy to learn from (Retrace
+                # cutting every trace) rather than free counterfactuals.
+                q_logs["player_q_r2_foreign"] = q_context_r2(
+                    q_mask & jnp.logical_not(own_rows)[None, :]
+                )
 
         loss = (
             config.player_policy_loss_coef * loss_pg
@@ -635,7 +671,14 @@ def train_step(
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
-        frame_count=player_state.frame_count + player_valid.sum(),
+        # Own frames only: foreign intake rows must not advance the league
+        # add cadence (add_player_min_frames counts main's own play).
+        frame_count=player_state.frame_count
+        + (
+            player_valid.sum()
+            if own_rows is None
+            else (player_valid & own_rows[None, :]).sum()
+        ),
         target_params=optax.incremental_update(
             player_state.params,
             player_state.target_params,
@@ -726,6 +769,10 @@ def train_step(
         )
 
         builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
+        if own_rows is not None:
+            # Foreign rows carry the FOREIGN population's team-building
+            # episode — main's builder must not imitate exploiter teams.
+            builder_valid = builder_valid & own_rows[None, :]
 
         # Compute builder targets inside train_step (JAX/JIT compatible).
         builder_targets = compute_builder_targets(
@@ -982,6 +1029,11 @@ def _stack_and_pad_batch(
             ()
             if isinstance(stacked_trajectory.reuse_count, tuple)
             else stacked_trajectory.reuse_count
+        ),
+        foreign=(
+            ()
+            if isinstance(stacked_trajectory.foreign, tuple)
+            else stacked_trajectory.foreign
         ),
         rng_key=rng_key,
     )
@@ -1501,6 +1553,26 @@ class Learner:
 
     # --- per-population background workers -----------------------------------
 
+    def _sample_foreign(self, n: int) -> list:
+        """Stage-4 intake draw: up to n trajectories split evenly across
+        whichever exploiter populations exist and hold data, read without
+        touching their reuse/eviction accounting. Returns fewer (possibly
+        none — early process life, or exploiters not yet created) and the
+        caller tops the minibatch back up from main's own store."""
+        sources = [
+            p.player_replay
+            for name, p in self.populations.items()
+            if name != "main" and p.player_state is not None and len(p.player_replay)
+        ]
+        if n <= 0 or not sources:
+            return []
+        random.shuffle(sources)
+        out = []
+        for i, store in enumerate(sources):
+            want = -(-(n - len(out)) // (len(sources) - i))  # ceil of even split
+            out.extend(store.sample_readonly(want))
+        return out[:n]
+
     def host_to_device_worker(self, pop: PopulationState):
         """Background thread to batch data and push to this population's
         own GPU queue."""
@@ -1523,6 +1595,23 @@ class Learner:
                 if pop.done:
                     break
 
+                # Stage-4 cross-population intake: main replaces a fraction
+                # of its minibatch with read-only draws from the exploiter
+                # buffers (Q-critic-only rows — see the foreign own-masking
+                # in train_step). Drawn BEFORE taking main's own store lock
+                # (different stores' locks, never nested), and own_n shrinks
+                # to match so batch shape stays constant for the jit.
+                foreign_rows = []
+                if (
+                    pop.name == "main"
+                    and self.config.player_q_enabled
+                    and self.config.player_q_foreign_fraction > 0
+                ):
+                    foreign_rows = self._sample_foreign(
+                        int(round(minibatch_size * self.config.player_q_foreign_fraction))
+                    )
+                own_n = minibatch_size - len(foreign_rows)
+
                 sample_cond = pop.player_replay._sample_cv
                 with sample_cond:
                     sample_cond.wait_for(
@@ -1531,7 +1620,22 @@ class Learner:
                     )
                     if pop.done:
                         break
-                    batch = pop.player_replay.sample(minibatch_size)
+                    batch = pop.player_replay.sample(own_n)
+
+                # Tag EVERY trajectory (all-False for non-main populations
+                # too) so the shared train_step jit sees one pytree
+                # structure; foreign rows also need a reuse_count array for
+                # uniform stacking (excluded from the plasticity fresh/
+                # replay split by the same own-masking).
+                batch = [
+                    t.replace(foreign=np.array([False])) for t in batch
+                ] + [
+                    t.replace(
+                        foreign=np.array([True]),
+                        reuse_count=np.array([0], dtype=np.int32),
+                    )
+                    for t in foreign_rows
+                ]
 
                 add_cond = pop.player_replay._add_cv
                 with add_cond:

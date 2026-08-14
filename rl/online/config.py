@@ -525,6 +525,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_q_coef: float = 0.5
     # Retrace trace parameter; matches player_lambda's 0.8 default.
     player_q_lambda: float = 0.8
+    # Stage 4 (docs/q-critic-plan.md) — cross-population Retrace intake:
+    # this fraction of each MAIN minibatch is drawn read-only from the
+    # exploiter populations' replay buffers and trains ONLY the observer Q
+    # critic (foreign rows are own-masked out of every actor/value/builder
+    # loss in train_step; Retrace's ISR truncation vs the stored exploiter
+    # behaviour policy handles the off-policyness). The exploiters are the
+    # ones generating switching evidence — this is the channel by which
+    # main's critic digests it. 0 disables. No parameter change either
+    # way, so the flip is checkpoint-safe. Requires player_q_enabled.
+    player_q_foreign_fraction: float = 0.25
 
     ## Builder
     builder_value_loss_coef: float = 0.5

@@ -353,5 +353,24 @@ class PlayerTrajectoryStore:
 
         return sampled
 
+    def sample_readonly(self, n: int) -> list[Trajectory]:
+        """Uniform sample of up to n stored trajectories WITHOUT touching
+        reuse counts or the add/sample accounting — the stage-4
+        cross-population intake path (main's Q-loss reading an exploiter's
+        buffer). Reads must be invisible to the owning population's
+        replay-ratio controller and eviction machinery, or main's
+        consumption would burn through the exploiter's own training data.
+        Ignores the max_reuses eligibility filter for the same reason:
+        staleness for the reader is Retrace's problem, not this store's.
+        Returns fewer than n (possibly none) when the store is small;
+        never blocks."""
+        with self._sample_cv:
+            available = np.where(self._valid)[0]
+            if len(available) == 0 or n <= 0:
+                return []
+            k = min(n, len(available))
+            indices = np.random.choice(available, size=k, replace=False)
+            return [self._trajectories[i] for i in indices]
+
     def __len__(self):
         return len(self._trajectories)

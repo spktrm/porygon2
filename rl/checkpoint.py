@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from typing import Any
 
 import cloudpickle as pickle
@@ -42,7 +43,13 @@ def _dump(path: str, obj: Any) -> None:
     # Pull arrays back to host so checkpoints don't pin device memory and stay
     # portable across device topologies.
     obj = jax.device_get(obj)
-    tmp_path = f"{path}.tmp"
+    # Writer-unique tmp name: the periodic checkpoint worker and the OOM
+    # guard's emergency save can race on the SAME step directory (observed
+    # 2026-08-14 at ckpt_00020000) — with a shared "<path>.tmp" the loser's
+    # os.replace finds its tmp already consumed and crashes the save it was
+    # supposed to guarantee. Both writers dump identical state for that
+    # step, so last-rename-wins per component is fully consistent.
+    tmp_path = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
     with open(tmp_path, "wb") as f:
         pickle.dump(obj, f)
     # Atomic rename so a reader never observes a half-written component.

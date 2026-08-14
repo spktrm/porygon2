@@ -192,6 +192,17 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # Stage 4 — cross-population intake. foreign_frac is
+                    # the realised share of Q training data drawn from
+                    # exploiter buffers (0 until the exploiters exist);
+                    # r2_foreign persistently below player_q_r2 means the
+                    # intake is too off-policy to learn from (Retrace
+                    # cutting every trace) rather than free switching
+                    # counterfactuals.
+                    "Cross-population Q intake",
+                    ["player_q_foreign_frac", "player_q_r2_foreign"],
+                ),
+                lp(
                     "Q loss & head gradient",
                     ["player_loss_q", "player_q_head_gradient_norm"],
                 ),
