@@ -1,8 +1,11 @@
 #!/bin/bash
 SESSION=train
 
-# Safely capture all script arguments, preserving spaces and quotes
-ARGS=$(printf "%q " "$@")
+# Safely capture all script arguments, preserving spaces and quotes.
+# Guard the no-arg case: printf %q with an empty arg list still runs the
+# format once and emits a literal '' that main.py rejects.
+ARGS=""
+[ $# -gt 0 ] && ARGS=$(printf "%q " "$@")
 
 cd service
 cd ../
