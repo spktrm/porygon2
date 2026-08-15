@@ -529,28 +529,38 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # cross-population intake, removed 2026-08-15: it conflated another
     # agent's policy evidence with main's own action values, and its
     # frozen-between-blocks stock went stale — foreign-row Q R² 0.27 vs
-    # 0.84 own). The LAST num_explore_actors player-actor slots of every
-    # population's pool sample each GAME at a fresh temperature drawn
-    # log-uniform from explore_temp_range (the continuous analogue of
-    # R2D2's geometrically-spaced per-actor epsilon ladder; base actors
-    # sample at 1.0). Because the temp is applied to the logits BEFORE
-    # the policy metrics are computed, the recorded behaviour policy IS
-    # the tempered distribution, so v-trace/Retrace ISRs are
-    # automatically correct. Their trajectories are tagged explore=True
-    # at the actor: own-masked out of every PG/value/builder loss at the
-    # existing choke points, consumed ONLY by the observer Q critic —
-    # grounded counterfactual coverage (switches included) from main's
-    # OWN policy family, no cross-agent mixing. 0 disables. No parameter
-    # change, so the flip is checkpoint-safe.
-    # Log-symmetric around 1 (median temp = 1.0): the >1 side generates
-    # the counterfactual coverage, the <1 side makes the explore pair's
-    # opponent sharper than the base policy so those counterfactuals get
-    # graded against strong play rather than explorer-vs-explorer noise
-    # (R2D2's ladder spans near-greedy to wild for the same reason). Not
-    # wider: 0.5 already matches eval's sharpened temp, and both ends
-    # stay within 2x of the base policy so Retrace's ISR truncation
-    # keeps most of every trace.
-    num_explore_actors: int = 2
+    # 0.84 own). Every player actor independently makes each game it
+    # plays with its own live params an explore game with this
+    # probability, drawing a fresh temperature log-uniform from
+    # explore_temp_range (the continuous analogue of R2D2's
+    # geometrically-spaced epsilon ladder, assigned per game like
+    # Agent57's per-episode picks rather than per dedicated actor slot;
+    # base games sample at 1.0). Per-game draws make the explore share
+    # of trajectories equal this probability BY CONSTRUCTION — the prior
+    # dedicated-slot design's 2/12 actors bypassed the InferenceServer
+    # full-time (it has no per-request head_params, so tempered games
+    # take the direct batch-1 path) and out-produced the server-queued
+    # base pairs ~4x, inflating the intended ~17% row share to ~44% and
+    # halving the PG/value effective batch. Sides draw INDEPENDENTLY:
+    # tempered play is graded against the true temp-1 policy it will
+    # actually face, and the untempered side of a mixed game pushes
+    # ordinary PG/value rows played under opponent-switch pressure —
+    # coverage the old explorer-vs-explorer pairing kept locked inside
+    # Q-only rows. Frozen-opponent sides (nothing trainable, and league
+    # payoff reads would be polluted) and eval actors never temper;
+    # tempered PFSP games are also skipped from payoff updates. Because
+    # the temp is applied to the logits BEFORE the policy metrics are
+    # computed, the recorded behaviour policy IS the tempered
+    # distribution, so v-trace/Retrace ISRs are automatically correct.
+    # Explore trajectories are tagged at the actor: own-masked out of
+    # every PG/value/builder loss at the existing choke points, consumed
+    # ONLY by the observer Q critic. 0 disables. No parameter change, so
+    # the flip is checkpoint-safe.
+    # Range log-symmetric around 1 (median temp = 1.0). Not wider: 0.5
+    # already matches eval's sharpened temp, and both ends stay within
+    # 2x of the base policy so Retrace's ISR truncation keeps most of
+    # every trace.
+    explore_game_prob: float = 1.0 / 6.0
     explore_temp_range: tuple[float, float] = (0.5, 2.0)
     # Exploiter blocks run for hours while main's step (the checkpoint
     # pacing basis) barely moves; the active exploiter's own periodic save

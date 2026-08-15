@@ -217,9 +217,9 @@ def train_step(
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
 
-    # Exploration-ladder rows (config.num_explore_actors; previously the
+    # Exploration-ladder rows (config.explore_game_prob; previously the
     # stage-4 cross-population intake, removed 2026-08-15): trajectories
-    # from raised-temperature actors may train ONLY the observer Q critic.
+    # from raised-temperature games may train ONLY the observer Q critic.
     # This is the single choke point — own-masking policy/value masks here
     # removes explore rows from every PG/value/KL/aux/entropy term and
     # both advantage-EMA updates downstream; the Q block builds its own

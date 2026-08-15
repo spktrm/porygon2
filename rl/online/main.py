@@ -118,7 +118,10 @@ def run_training_actor_pair(
             trajectory = future1.result()
             future2.result()
 
-            if not is_trainable:
+            # Tempered games are excluded from the payoff table: PFSP
+            # weights, verification picks and promotion bars should read
+            # the base policy's strength, not a temp-2 explorer's.
+            if not is_trainable and not bool(np.asarray(trajectory.explore).item()):
                 player.update_player_league_stats(
                     player_params, opponent_params, trajectory
                 )
@@ -577,20 +580,21 @@ def main(args: argparse.Namespace):
             population,
             num_player_actors,
         )
-        # The LAST num_explore_actors actor slots are the exploration
-        # ladder: each samples a fresh per-game temperature (log-uniform
-        # over explore_temp_range) and its trajectories are explore-tagged
-        # (Q-critic-only rows). With an even count the ladder pairs face
-        # EACH OTHER — a game where both sides actually switch is exactly
-        # the opponent-switch-pressure state mirror self-play stopped
-        # producing.
-        num_explore = min(learner_config.num_explore_actors, num_player_actors)
-        first_explore_slot = num_player_actors - num_explore
+        # Exploration ladder: every actor independently draws a per-game
+        # explore coin (explore_game_prob) and, on explore games, a fresh
+        # log-uniform temperature — no dedicated ladder slots. Dedicated
+        # slots bypassed the InferenceServer full-time and out-produced
+        # the server-queued base pairs ~4x (44% row share instead of the
+        # intended ~17%); a per-game coin makes the trajectory share equal
+        # the probability by construction, and tempered play is spread
+        # across the whole matchmaking mix. The untempered side of a
+        # mixed game still pushes ordinary PG/value rows — played against
+        # an exploring opponent, which is exactly the opponent-switch-
+        # pressure coverage mirror self-play stopped producing.
         for game_id in range(num_player_actors // 2):
             actors = []
             for player_id in range(2):
                 slot = game_id * 2 + player_id
-                is_explore = slot >= first_explore_slot
                 actors.append(
                     PlayerActor(
                         agent=learning_agent,
@@ -599,11 +603,9 @@ def main(args: argparse.Namespace):
                         learner=learner,
                         rng_seed=len(new_threads) + salt + slot,
                         population=population,
-                        inference_client=None if is_explore else inference_server,
-                        explore=is_explore,
-                        explore_temp_range=(
-                            learner_config.explore_temp_range if is_explore else None
-                        ),
+                        inference_client=inference_server,
+                        explore_game_prob=learner_config.explore_game_prob,
+                        explore_temp_range=learner_config.explore_temp_range,
                     )
                 )
             new_threads.append(
