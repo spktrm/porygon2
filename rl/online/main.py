@@ -391,6 +391,12 @@ def main(args: argparse.Namespace):
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
+    # No separate exploration Agents: head_params is a per-call traced
+    # argument of Agent.step_player now, so ladder actors share
+    # learning_agent and pass their per-game sampled temperature
+    # themselves (see PlayerActor). They bypass the batched
+    # InferenceServer (which serves everyone at the base temperature) the
+    # same way eval actors do.
 
     # One batched-inference server for ALL training PlayerActors across
     # the three populations (rl/online/inference.py). Same apply_fn and
@@ -411,8 +417,8 @@ def main(args: argparse.Namespace):
 
     logger.info("Loading main's train state...")
     mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
-    player_state, builder_state, league, controller_bytes = load_train_state(
-        learner_config, player_state, builder_state, mode=mode
+    player_state, builder_state, league, controller_bytes, resume_state = (
+        load_train_state(learner_config, player_state, builder_state, mode=mode)
     )
     player_state = jax.device_put(player_state)
     builder_state = jax.device_put(builder_state)
@@ -483,6 +489,12 @@ def main(args: argparse.Namespace):
             # (wandb_runs[...]/pop.wandb_run), never the bare wandb.log().
             reinit="create_new",
         )
+        # Default x-axis = the population's own monotonic lifetime_step
+        # (logged with every learner metric; carried across resumes and
+        # attempt re-forks — see PopulationState.lifetime_step). Without
+        # this, charts plot against _step (log-call count) and every
+        # resume/re-fork draws a sawtooth or paints over earlier x-ranges.
+        wandb_runs[pop_name].define_metric("*", step_metric="lifetime_step")
         logger.info(
             "WandB serialized run (%s): %s (id=%s, resumed=%s)",
             pop_name,
@@ -565,19 +577,35 @@ def main(args: argparse.Namespace):
             population,
             num_player_actors,
         )
+        # The LAST num_explore_actors actor slots are the exploration
+        # ladder: each samples a fresh per-game temperature (log-uniform
+        # over explore_temp_range) and its trajectories are explore-tagged
+        # (Q-critic-only rows). With an even count the ladder pairs face
+        # EACH OTHER — a game where both sides actually switch is exactly
+        # the opponent-switch-pressure state mirror self-play stopped
+        # producing.
+        num_explore = min(learner_config.num_explore_actors, num_player_actors)
+        first_explore_slot = num_player_actors - num_explore
         for game_id in range(num_player_actors // 2):
-            actors = [
-                PlayerActor(
-                    agent=learning_agent,
-                    env=env_func(f"{population}:p{player_id}g{game_id:02d}"),
-                    unroll_length=learner_config.unroll_length,
-                    learner=learner,
-                    rng_seed=len(new_threads) + salt,
-                    population=population,
-                    inference_client=inference_server,
+            actors = []
+            for player_id in range(2):
+                slot = game_id * 2 + player_id
+                is_explore = slot >= first_explore_slot
+                actors.append(
+                    PlayerActor(
+                        agent=learning_agent,
+                        env=env_func(f"{population}:p{player_id}g{game_id:02d}"),
+                        unroll_length=learner_config.unroll_length,
+                        learner=learner,
+                        rng_seed=len(new_threads) + salt + slot,
+                        population=population,
+                        inference_client=None if is_explore else inference_server,
+                        explore=is_explore,
+                        explore_temp_range=(
+                            learner_config.explore_temp_range if is_explore else None
+                        ),
+                    )
                 )
-                for player_id in range(2)
-            ]
             new_threads.append(
                 threading.Thread(
                     target=run_training_actor_pair,
@@ -651,6 +679,10 @@ def main(args: argparse.Namespace):
     # lazily, via the same spawn_actor_pool callback, the instant
     # Learner._reset_population first creates them.
     spawn_actor_pool("main")
+    # A checkpoint-mode restart that stopped mid-exploiter-block resumes
+    # that block (restored populations get their pools via the same
+    # callback — which needs `learner` bound, hence after construction).
+    learner.restore_populations(resume_state)
 
     crashed = False
     try:

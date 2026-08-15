@@ -84,3 +84,91 @@ def test_ckpt_dir_discovery(tmp_path):
 
 def test_most_recent_ckpt_dir_empty_root(tmp_path):
     assert checkpoint.most_recent_ckpt_dir(str(tmp_path)) is None
+
+
+def test_population_state_roundtrip(tmp_path, params):
+    ckpt_dir = str(tmp_path / "ckpt_00000100")
+    host = {"fork_step": 50010, "budget_anchor_frames": 123456, "created_at_frame": 0}
+    checkpoint.save_population_state(
+        ckpt_dir,
+        "main_exploiter",
+        player_state_components=dict(
+            params=params, scalars={"step_count": 40000, "frame_count": 7}
+        ),
+        builder_state_components=dict(params={"w": np.ones(2)}),
+        host=host,
+        controller_bytes=b"plasticity",
+    )
+    blob = checkpoint.load_population_state(ckpt_dir, "main_exploiter")
+    tree_equal(blob["player_state"]["params"], params)
+    assert blob["player_state"]["scalars"]["step_count"] == 40000
+    tree_equal(blob["builder_state"]["params"], {"w": np.ones(2)})
+    assert blob["host"] == host
+    assert blob["controllers"] == b"plasticity"
+    # Not in this checkpoint at all.
+    assert checkpoint.load_population_state(ckpt_dir, "league_exploiter") is None
+
+
+def test_scheduler_state_roundtrip_and_absence(tmp_path):
+    ckpt_dir = str(tmp_path / "ckpt_00000100")
+    os.makedirs(ckpt_dir)
+    # Pre-resume checkpoints have no scheduler file.
+    assert checkpoint.load_scheduler_state(ckpt_dir) is None
+    sched = {"active": "main_exploiter", "rotation_idx": 1, "populations": ["main_exploiter"]}
+    checkpoint.save_scheduler_state(ckpt_dir, sched)
+    assert checkpoint.load_scheduler_state(ckpt_dir) == sched
+
+
+def test_loaders_skip_writer_scratch_files(tmp_path, params):
+    """A process killed mid-_dump leaves '<name>.tmp.<pid>.<tid>' beside the
+    completed component; the loaders must skip it (2026-08-15: a truncated
+    tmp file fed to pickle aborted an otherwise-healthy block resume)."""
+    ckpt_dir = str(tmp_path / "ckpt_00000100")
+    checkpoint.save_population_state(
+        ckpt_dir,
+        "main_exploiter",
+        player_state_components=dict(params=params),
+        builder_state_components=dict(params={}),
+        host={},
+    )
+    stray = tmp_path / "ckpt_00000100" / "populations" / "main_exploiter" / "player" / "opt_state.tmp.1234.5678"
+    stray.write_bytes(b"\x80\x05truncated")
+    blob = checkpoint.load_population_state(ckpt_dir, "main_exploiter")
+    assert set(blob["player_state"]) == {"params"}
+
+    checkpoint.save_train_state(
+        ckpt_dir,
+        learner_config={},
+        player_state_components=dict(params=params),
+        builder_state_components=dict(params={}),
+        league_bytes=b"x",
+    )
+    (tmp_path / "ckpt_00000100" / "player" / "params.tmp.1.2").write_bytes(b"junk")
+    full = checkpoint.load_full(ckpt_dir)
+    assert set(full["player_state"]) == {"params"}
+
+
+def test_load_resume_state_ignores_unlisted_population_dirs(tmp_path, params):
+    """The scheduler's populations list is the source of truth: a stale
+    populations/ subdir left behind by an earlier write into the same ckpt
+    dir (after that population's block ended) must not be resurrected."""
+    from rl.online.artifact import _load_resume_state
+
+    ckpt_dir = str(tmp_path / "ckpt_00000100")
+    for name in ("main_exploiter", "league_exploiter"):
+        checkpoint.save_population_state(
+            ckpt_dir,
+            name,
+            player_state_components=dict(params=params),
+            builder_state_components=dict(params={}),
+            host={},
+        )
+    checkpoint.save_scheduler_state(
+        ckpt_dir,
+        {"active": "main_exploiter", "rotation_idx": 1, "populations": ["main_exploiter"]},
+    )
+    resume = _load_resume_state(ckpt_dir)
+    assert set(resume["populations"]) == {"main_exploiter"}
+    assert resume["scheduler"]["active"] == "main_exploiter"
+    # Pre-resume checkpoint (no scheduler file) -> None.
+    assert _load_resume_state(str(tmp_path / "ckpt_00000001")) is None

@@ -27,6 +27,7 @@ GitPython==3.1.46
 grpcio==1.78.0
 grpcio-tools==1.78.0
 h11==0.16.0
+filelock==3.32.3
 humanize==4.15.0
 idna==3.11
 importlib_resources==6.5.2

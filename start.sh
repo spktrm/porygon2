@@ -33,6 +33,21 @@ for run in api.runs(f'{api.default_entity}/pokemon-rl', filters={'state': 'runni
 " 2>&1 || echo "  (skipping wandb cleanup — could not reach the API, e.g. network issue)"
 sleep 5
 
+# Graceful stop first: Ctrl-C the learner so its KeyboardInterrupt
+# handler writes a synchronous full checkpoint (main + live exploiter
+# populations + scheduler) before the session is killed. A hard kill
+# mid-background-write leaves stray "<component>.tmp.<pid>.<tid>" files
+# (loader skips them since 2026-08-15, but the state since the last
+# periodic save is still lost) — with this, a deliberate restart loses
+# nothing. Bounded wait, then the kill below is the backstop either way.
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+  tmux send-keys -t "$SESSION":service.1 C-c 2>/dev/null || true
+  for _ in $(seq 1 45); do
+    pgrep -f 'rl\.online\.main' >/dev/null || break
+    sleep 2
+  done
+fi
+
 # Start clean
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
@@ -62,7 +77,12 @@ tmux send-keys  -t "$SESSION":service.1 "source env/bin/activate" C-m
 # process startup (MALLOC_ARENA_MAX, PYTHONMALLOC, LD_*). Sourcing here
 # covers both classes from one file. Single-quoted so expansion happens
 # in the pane shell.
-tmux send-keys  -t "$SESSION":service.1 'set -a; [ -f .env ] && source .env || echo "WARNING: no .env found — see .env.example (MALLOC_ARENA_MAX etc. unset)"; set +a' C-m
+# unset LOAD_STATE_MODE first: the pane inherits the tmux server's
+# environment, which can carry an export from a long-gone .env revision
+# (sourced with set -a in whatever shell first started the server). A
+# commented-out line in today's .env can't clear it, and a stale "params"
+# silently resets step counts + league on every launch.
+tmux send-keys  -t "$SESSION":service.1 'unset LOAD_STATE_MODE; set -a; [ -f .env ] && source .env || echo "WARNING: no .env found — see .env.example (MALLOC_ARENA_MAX etc. unset)"; set +a' C-m
 # Inject the captured arguments at the end of the python command
 tmux send-keys  -t "$SESSION":service.1 "python -m rl.online.main $ARGS" C-m
 

@@ -19,22 +19,6 @@ from tqdm import tqdm
 import wandb
 from rl import checkpoint
 
-# Optional: renders the league win-rate heatmap (_get_league_winrate_heatmap).
-# Guarded rather than a hard top-level dependency — this codebase has already
-# hit real deployment-sync friction this session (files/config not landing on
-# the training box before a restart); crashing the ENTIRE training process
-# over a missing plotting library for a supplementary visualization would be
-# a disproportionate failure mode. Add matplotlib to requirements.txt and
-# `pip install` it on the training box to actually get the heatmap panel.
-try:
-    import matplotlib
-
-    matplotlib.use("Agg")  # headless — no display server on a training box
-    import matplotlib.pyplot as plt
-
-    _MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    _MATPLOTLIB_AVAILABLE = False
 from rl.environment.data import (
     CAT_VF_SUPPORT,
     FLAT_MODALITY_MASK,
@@ -233,18 +217,20 @@ def train_step(
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
 
-    # Stage-4 cross-population intake (docs/q-critic-plan.md): rows drawn
-    # from another population's buffer may train ONLY the observer Q
-    # critic. This is the single choke point — own-masking policy/value
-    # masks here removes foreign rows from every PG/value/KL/aux/entropy
-    # term and both advantage-EMA updates downstream; the Q block builds
-    # its own mask from the pre-masked q_row_mask so it alone consumes the
-    # foreign data (with target_actor_ratio already being exactly the
-    # main-pi-over-foreign-behaviour ISR Retrace truncates on).
+    # Exploration-ladder rows (config.num_explore_actors; previously the
+    # stage-4 cross-population intake, removed 2026-08-15): trajectories
+    # from raised-temperature actors may train ONLY the observer Q critic.
+    # This is the single choke point — own-masking policy/value masks here
+    # removes explore rows from every PG/value/KL/aux/entropy term and
+    # both advantage-EMA updates downstream; the Q block builds its own
+    # mask from the pre-masked q_row_mask so it alone consumes the
+    # exploration data (with target_actor_ratio already being exactly the
+    # policy-over-tempered-behaviour ISR Retrace truncates on — the heads
+    # record the TEMPERED distribution as the behaviour policy).
     q_row_mask = value_mask
     own_rows = None
-    if not isinstance(batch.foreign, tuple):
-        own_rows = jnp.logical_not(batch.foreign[0].astype(bool))  # (B,)
+    if not isinstance(batch.explore, tuple):
+        own_rows = jnp.logical_not(batch.explore[0].astype(bool))  # (B,)
         policy_mask = policy_mask & own_rows[None, :]
         value_mask = value_mask & own_rows[None, :]
 
@@ -348,10 +334,10 @@ def train_step(
         # Q(s, a) exists wherever an action was actually taken — including
         # forced single-option steps (policy_mask excludes those; the Q
         # regression must not) — but not on terminal rows. Built from the
-        # PRE-own-masked row mask: foreign intake rows train the Q critic.
+        # PRE-own-masked row mask: explore intake rows train the Q critic.
         q_mask = q_row_mask & jnp.logical_not(player_transitions.env_output.done)
         if own_rows is not None:
-            training_logs["player_q_foreign_frac"] = average(
+            training_logs["player_q_explore_frac"] = average(
                 jnp.logical_not(own_rows)[None, :].astype(jnp.float32)
                 * jnp.ones_like(q_mask, dtype=jnp.float32),
                 q_mask,
@@ -608,11 +594,11 @@ def train_step(
                 player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
             )
             if own_rows is not None:
-                # Does main's Q actually fit the exploiter-generated
+                # Does the Q head actually fit the explore-actor-generated
                 # returns it is digesting? Persistent gap vs player_q_r2
                 # = the intake is too off-policy to learn from (Retrace
                 # cutting every trace) rather than free counterfactuals.
-                q_logs["player_q_r2_foreign"] = q_context_r2(
+                q_logs["player_q_r2_explore"] = q_context_r2(
                     q_mask & jnp.logical_not(own_rows)[None, :]
                 )
 
@@ -668,10 +654,15 @@ def train_step(
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
 
+    prev_player_state = player_state
+    # An all-explore batch (explore rows are Q-CE-only, so policy_mask can
+    # be empty) makes mean/std with `where=` NaN, and one NaN batch poisons
+    # the advantage EMAs forever — freeze them on such batches instead.
+    has_policy_rows = policy_mask.any()
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
-        # Own frames only: foreign intake rows must not advance the league
+        # Own frames only: explore intake rows must not advance the league
         # add cadence (add_player_min_frames counts main's own play).
         frame_count=player_state.frame_count
         + (
@@ -689,16 +680,36 @@ def train_step(
         # a 100-step time constant), and a slow EMA mis-scales the policy
         # gradient for ~1k steps after every distribution shift — bandit
         # arm switches most visibly.
-        ema_adv_mean=optax.incremental_update(
-            player_targets.advantages.mean(where=policy_mask),
+        ema_adv_mean=jnp.where(
+            has_policy_rows,
+            optax.incremental_update(
+                player_targets.advantages.mean(where=policy_mask),
+                player_state.ema_adv_mean,
+                config.player_adv_ema_rate,
+            ),
             player_state.ema_adv_mean,
-            config.player_adv_ema_rate,
         ),
-        ema_adv_std=optax.incremental_update(
-            player_targets.advantages.std(where=policy_mask),
+        ema_adv_std=jnp.where(
+            has_policy_rows,
+            optax.incremental_update(
+                player_targets.advantages.std(where=policy_mask),
+                player_state.ema_adv_std,
+                config.player_adv_ema_rate,
+            ),
             player_state.ema_adv_std,
-            config.player_adv_ema_rate,
         ),
+    )
+    # A non-finite loss or gradient must never reach the params or the EMA
+    # scalars: one poisoned update is permanent, and the next periodic save
+    # then overwrites the last good checkpoint with it. Keep the previous
+    # state wholesale and log the skip.
+    player_update_finite = jnp.isfinite(player_loss_val) & jnp.isfinite(
+        optax.global_norm(player_grads)
+    )
+    player_state = jax.tree.map(
+        lambda new, old: jnp.where(player_update_finite, new, old),
+        player_state,
+        prev_player_state,
     )
 
     training_logs.update(player_logs)
@@ -720,6 +731,7 @@ def train_step(
             / (value_mask.sum() + 1e-8),
             player_state_adv_mean=player_state.ema_adv_mean,
             player_state_adv_std=player_state.ema_adv_std,
+            player_update_skipped=1.0 - player_update_finite.astype(jnp.float32),
         )
     )
     training_logs.update(
@@ -926,6 +938,7 @@ def train_step(
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
             )
         )
+        prev_builder_state = builder_state
         builder_state = builder_state.apply_gradients(grads=builder_grads)
         builder_state = builder_state.replace(
             step_count=builder_state.step_count + 1,
@@ -935,6 +948,18 @@ def train_step(
                 builder_state.target_params,
                 config.builder_ema_update_rate,
             ),
+        )
+        # Same non-finite gate as the player update above.
+        builder_update_finite = jnp.isfinite(builder_loss_val) & jnp.isfinite(
+            optax.global_norm(builder_grads)
+        )
+        builder_state = jax.tree.map(
+            lambda new, old: jnp.where(builder_update_finite, new, old),
+            builder_state,
+            prev_builder_state,
+        )
+        training_logs["builder_update_skipped"] = 1.0 - builder_update_finite.astype(
+            jnp.float32
         )
 
     training_logs.update(collect_batch_telemetry_data(batch, config))
@@ -1030,10 +1055,10 @@ def _stack_and_pad_batch(
             if isinstance(stacked_trajectory.reuse_count, tuple)
             else stacked_trajectory.reuse_count
         ),
-        foreign=(
+        explore=(
             ()
-            if isinstance(stacked_trajectory.foreign, tuple)
-            else stacked_trajectory.foreign
+            if isinstance(stacked_trajectory.explore, tuple)
+            else stacked_trajectory.explore
         ),
         rng_key=rng_key,
     )
@@ -1188,6 +1213,15 @@ class PopulationState:
     # schedules on it anymore); kept because "how much has this population
     # actually trained" is the first question when judging an attempt.
     frames_trained_total: int = 0
+    # Monotonic train-tick counter over this population's WHOLE wandb-run
+    # lifetime: unlike host_step it is carried across attempt re-forks
+    # (_reset_population) and restored from the checkpoint's host blob, so
+    # it never rewinds or resets. Logged as "lifetime_step" with every
+    # metric and set as the run's default x-axis (wandb.define_metric in
+    # main.py) — charts read as cumulative training progress instead of
+    # the sawtooth/overdraw that _step (log-call count) and the
+    # per-attempt counters produce across resumes and re-forks.
+    lifetime_step: int = 0
     # frame_count at this population's last terminal outcome that did NOT
     # rebuild it (league_exploiter's continue/perturb fates in
     # _apply_terminal_outcome) — the dwell and frame-budget checks in
@@ -1244,12 +1278,6 @@ class Learner:
         # wire it up" convention elsewhere in this file.
         self._spawn_actor_pool = spawn_actor_pool
 
-        if not _MATPLOTLIB_AVAILABLE:
-            logger.warning(
-                "matplotlib not installed — league_winrate_heatmap will not "
-                "be logged. `pip install matplotlib` to enable it."
-            )
-
         # train_step's config is a static jit arg. Used to need pinning to
         # a canonical value because the OLD per-phase design constructed a
         # genuinely distinct config.replace(pin_opponent_steps=...) for
@@ -1271,12 +1299,13 @@ class Learner:
 
         # Block-sequential scheduler state (see _select_population): whose
         # block it is right now, and which exploiter population is next in
-        # the rotation when main finishes its current window. Always starts
-        # at main — an exploiter attempt's state is deliberately not
-        # resumable across a restart (see _write_checkpoint), so a restart
-        # always re-opens with a main window. Initialised BEFORE the
-        # populations dict: _build_population reads self._active to decide
-        # whether the new population's actor run_gate starts open.
+        # the rotation when main finishes its current window. Starts at
+        # main here; a checkpoint-mode restart then restores the saved
+        # scheduler state via restore_populations (called by main.py after
+        # construction), resuming an in-progress exploiter block where it
+        # stopped. Initialised BEFORE the populations dict:
+        # _build_population reads self._active to decide whether the new
+        # population's actor run_gate starts open.
         self._active: PopulationName = "main"
         self._rotation_idx: int = 0
 
@@ -1486,10 +1515,108 @@ class Learner:
         pop = self._build_population(
             name, player_state, builder_state, wandb_run, fork_step=fork_step
         )
+        # The lifetime counter survives the re-fork: it tracks the wandb
+        # RUN's cumulative training, not this attempt's.
+        if existing is not None:
+            pop.lifetime_step = existing.lifetime_step
         self.populations[name] = pop
         self._start_population_workers(pop)
         pop.wandb_run.log(
             {"population_created": 1, "fork_step": fork_step},
+            commit=False,
+        )
+        if self._spawn_actor_pool is not None:
+            self._spawn_actor_pool(name)
+
+    def restore_populations(self, resume_state: dict | None) -> None:
+        """Resumes an in-progress exploiter block from a checkpoint's saved
+        scheduler + population states (artifact._load_resume_state's shape).
+        Called by main.py once, after construction and before train() — a
+        checkpoint-mode restart therefore picks the block back up exactly
+        where it stopped (the active exploiter keeps its params, opt_state,
+        own step/frame counters, and dwell/budget anchors) instead of
+        discarding the attempt and re-forking fresh.
+
+        Never fatal, per-population: an unreadable blob just leaves that
+        population uncreated (it re-forks fresh at its next block), and an
+        active population that failed to restore falls back to a main
+        window — the pre-resume behaviour in both cases."""
+        if not resume_state:
+            return
+        for name, blob in (resume_state.get("populations") or {}).items():
+            if name not in _EXPLOITER_ROTATION:
+                continue
+            try:
+                self._restore_population(name, blob)
+            except Exception:
+                logger.exception(
+                    "Population %s could not be restored from the checkpoint "
+                    "— it will re-fork fresh at its next block.",
+                    name,
+                )
+        scheduler = resume_state.get("scheduler") or {}
+        self._rotation_idx = int(scheduler.get("rotation_idx", 0)) % len(
+            _EXPLOITER_ROTATION
+        )
+        active = scheduler.get("active", "main")
+        if active != "main" and self.populations.get(active) is None:
+            active = "main"
+        self._set_active(active)
+        if active != "main":
+            tqdm.write(f"Exploiter block resumes: {active} owns the GPU.")
+
+    def _restore_population(self, name: PopulationName, blob: dict) -> None:
+        """Rebuilds one exploiter population from its checkpointed state —
+        the resume-time counterpart of _reset_population's fork path. The
+        TrainState skeleton (apply_fn/tx/init_fn) comes from main's host
+        copy, exactly like _fork_population; every array field is then
+        replaced wholesale with the checkpoint's own components, so nothing
+        of main's current values leaks in."""
+        assert name != "main" and self.populations.get(name) is None
+        main = self.populations["main"]
+        host_player = jax.device_get(main.player_state)
+        host_builder = jax.device_get(main.builder_state)
+        pc = blob["player_state"]
+        bc = blob["builder_state"]
+        player_state = host_player.replace(
+            params=pc["params"],
+            target_params=pc["target_params"],
+            opt_state=pc["opt_state"],
+            step_count=pc["scalars"]["step_count"],
+            frame_count=pc["scalars"]["frame_count"],
+            ema_adv_mean=pc["scalars"]["ema_adv_mean"],
+            ema_adv_std=pc["scalars"]["ema_adv_std"],
+        )
+        builder_state = host_builder.replace(
+            params=bc["params"],
+            target_params=bc["target_params"],
+            opt_state=bc["opt_state"],
+            step_count=bc["scalars"]["step_count"],
+            frame_count=bc["scalars"]["frame_count"],
+        )
+        host = blob.get("host") or {}
+        pop = self._build_population(
+            name,
+            jax.device_put(player_state),
+            jax.device_put(builder_state),
+            self._pending_wandb_runs[name],
+            controller_bytes=blob.get("controllers"),
+            fork_step=host.get("fork_step"),
+        )
+        # Host-side counters that live outside the TrainState: without the
+        # budget anchor a continued league_exploiter would measure its
+        # dwell/timeout window from 0 and could time out or dwell-gate
+        # wrongly; created_at_frame keeps frames_trained_total honest.
+        pop.budget_anchor_frames = int(host.get("budget_anchor_frames", 0))
+        if host.get("created_at_frame") is not None:
+            pop.created_at_frame = int(host["created_at_frame"])
+        self.populations[name] = pop
+        # No _start_population_workers here: train() starts workers for
+        # every population in self.populations at entry, and this only ever
+        # runs before train() (unlike _reset_population, which runs while
+        # the train loop is already live and must start them itself).
+        pop.wandb_run.log(
+            {"population_resumed": 1, "fork_step": pop.fork_step or 0},
             commit=False,
         )
         if self._spawn_actor_pool is not None:
@@ -1553,26 +1680,6 @@ class Learner:
 
     # --- per-population background workers -----------------------------------
 
-    def _sample_foreign(self, n: int) -> list:
-        """Stage-4 intake draw: up to n trajectories split evenly across
-        whichever exploiter populations exist and hold data, read without
-        touching their reuse/eviction accounting. Returns fewer (possibly
-        none — early process life, or exploiters not yet created) and the
-        caller tops the minibatch back up from main's own store."""
-        sources = [
-            p.player_replay
-            for name, p in self.populations.items()
-            if name != "main" and p.player_state is not None and len(p.player_replay)
-        ]
-        if n <= 0 or not sources:
-            return []
-        random.shuffle(sources)
-        out = []
-        for i, store in enumerate(sources):
-            want = -(-(n - len(out)) // (len(sources) - i))  # ceil of even split
-            out.extend(store.sample_readonly(want))
-        return out[:n]
-
     def host_to_device_worker(self, pop: PopulationState):
         """Background thread to batch data and push to this population's
         own GPU queue."""
@@ -1595,23 +1702,6 @@ class Learner:
                 if pop.done:
                     break
 
-                # Stage-4 cross-population intake: main replaces a fraction
-                # of its minibatch with read-only draws from the exploiter
-                # buffers (Q-critic-only rows — see the foreign own-masking
-                # in train_step). Drawn BEFORE taking main's own store lock
-                # (different stores' locks, never nested), and own_n shrinks
-                # to match so batch shape stays constant for the jit.
-                foreign_rows = []
-                if (
-                    pop.name == "main"
-                    and self.config.player_q_enabled
-                    and self.config.player_q_foreign_fraction > 0
-                ):
-                    foreign_rows = self._sample_foreign(
-                        int(round(minibatch_size * self.config.player_q_foreign_fraction))
-                    )
-                own_n = minibatch_size - len(foreign_rows)
-
                 sample_cond = pop.player_replay._sample_cv
                 with sample_cond:
                     sample_cond.wait_for(
@@ -1620,21 +1710,24 @@ class Learner:
                     )
                     if pop.done:
                         break
-                    batch = pop.player_replay.sample(own_n)
+                    batch = pop.player_replay.sample(minibatch_size)
 
-                # Tag EVERY trajectory (all-False for non-main populations
-                # too) so the shared train_step jit sees one pytree
-                # structure; foreign rows also need a reuse_count array for
-                # uniform stacking (excluded from the plasticity fresh/
-                # replay split by the same own-masking).
+                # Normalise the exploration-ladder tag every trajectory
+                # carries (explore actors mark theirs explore=True at
+                # construction — see PlayerActor; Q-critic-only rows via
+                # the explore own-masking in train_step). Trajectories
+                # from before the field was populated stack as False, so
+                # the shared train_step jit always sees one pytree
+                # structure across every population's batches.
                 batch = [
-                    t.replace(foreign=np.array([False])) for t in batch
-                ] + [
                     t.replace(
-                        foreign=np.array([True]),
-                        reuse_count=np.array([0], dtype=np.int32),
+                        explore=(
+                            np.array([False])
+                            if isinstance(t.explore, tuple)
+                            else np.asarray(t.explore).reshape(1)
+                        )
                     )
-                    for t in foreign_rows
+                    for t in batch
                 ]
 
                 add_cond = pop.player_replay._add_cv
@@ -1695,6 +1788,8 @@ class Learner:
                     payload["controller_bytes"],
                     step_count=payload["step_count"],
                     frame_count=payload["frame_count"],
+                    scheduler=payload.get("scheduler"),
+                    populations=payload.get("populations"),
                 )
                 if payload["upload_to_cloud"]:
                     pop.wandb_run.log_artifact(
@@ -1720,7 +1815,12 @@ class Learner:
         resuming without it silently forgets an in-flight plasticity
         recovery, clearing the cooldown that stops a second
         shrink-and-perturb from hitting a convalescing net."""
-        state = {"plasticity": pop.plasticity.state_dict()}
+        state = {
+            "plasticity": pop.plasticity.state_dict(),
+            # Monotonic per-run x-axis counter (see PopulationState.
+            # lifetime_step) — restored so charts never rewind at a resume.
+            "lifetime_step": pop.lifetime_step,
+        }
         return pickle.dumps(state)
 
     def _restore_controller_state(
@@ -1758,6 +1858,10 @@ class Learner:
                 )
 
         _restore("plasticity", pop.plasticity.load_state_dict)
+        # Pre-lifetime_step checkpoints fall back to host_step — exact for
+        # main (never re-forked, host_step == lifetime) and a close lower
+        # bound for a restored exploiter (its current attempt's own step).
+        pop.lifetime_step = int(state.get("lifetime_step", pop.host_step))
         # Checkpoints written before the controller removals (entropy_ctrl
         # 2026-08-13; lambda_ctrl/exploit_ctrl 2026-08-14) carry those
         # sections — simply never read, same as any other extra section.
@@ -1897,6 +2001,7 @@ class Learner:
                         continue
 
                 pop.host_step += 1
+                pop.lifetime_step += 1
                 pop.frames_trained_total = (
                     int(jax.device_get(pop.player_state.frame_count))
                     - pop.created_at_frame
@@ -1912,15 +2017,10 @@ class Learner:
                 self._handle_periodic_tasks(pop, pop.host_step, logs)
 
         except KeyboardInterrupt:
-            # Only main persists across a restart — see _write_checkpoint's
-            # docstring: an in-progress, not-yet-terminal exploiter
-            # population's live state is exactly as disposable here as it
-            # already was in the old per-phase design (a non-promoted
-            # attempt's state was always scratch, deleted outright); a
-            # restart just re-forks it fresh from main's own restored
-            # state the next time _maybe_create_population's trigger
-            # fires. Only main needs a real resumable checkpoint.
-            logger.info("Keyboard interrupt received. Saving main's checkpoint...")
+            # One synchronous full-process save: _write_checkpoint bundles
+            # main plus every live exploiter population and the scheduler
+            # state, so a restart resumes whatever block was in progress.
+            logger.info("Keyboard interrupt received. Saving checkpoint...")
             main_pop = self.populations["main"]
             for pop in [main_pop]:
                 try:
@@ -2196,6 +2296,10 @@ class Learner:
         ):
             self._log_memory_diagnostics(logs)
 
+        # The default x-axis for every metric on this population's run
+        # (wandb.define_metric in main.py): monotonic across resumes AND
+        # attempt re-forks, unlike host_step/frames.
+        logs["lifetime_step"] = pop.lifetime_step
         pop.log_q.put(logs)
 
         # Every population's live entry needs refreshing, not just main's —
@@ -2207,12 +2311,24 @@ class Learner:
         if step % self.config.main_player_update_steps == 0:
             self.league.update_live(pop.live_key, self._create_params_container(pop))
 
-        # Only main gets a full, resumable (params+opt_state) periodic
-        # checkpoint — see the KeyboardInterrupt handler in train() for
-        # why an exploiter population's in-progress state doesn't need
-        # one: it's exactly as disposable as it already was pre-redesign.
-        if pop.name == "main" and step % self.config.save_interval_steps == 0:
-            self._write_checkpoint(pop)
+        # The periodic full checkpoint (main + every live exploiter
+        # population + scheduler state — see _write_checkpoint) paces on
+        # the ACTIVE population's own step counter, not main's: during an
+        # exploiter block main only ticks as filler and self-limits at the
+        # replay reuse cap, so a main-gated save could stall for the whole
+        # block, leaving an in-progress attempt unrecoverable. Block
+        # boundaries write one too (_begin_exploiter_block /
+        # _check_exploiter_transitions). Exploiters use the tighter
+        # exploiter_save_interval_steps: a block runs for hours, and the
+        # 2026-08-15 09:38 machine shutdown showed a 20k-of-its-own-steps
+        # cadence can lose a whole block segment.
+        save_interval = (
+            self.config.save_interval_steps
+            if pop.name == "main"
+            else self.config.exploiter_save_interval_steps
+        )
+        if pop.name == self._active and step % save_interval == 0:
+            self._write_checkpoint(self.populations["main"])
 
         if pop.name == "main" and step % self.config.manage_league_interval == 0:
             self._manage_league(pop, step)
@@ -2223,17 +2339,17 @@ class Learner:
         self._check_oom_guard(pop, step)
 
     def _write_checkpoint(self, pop: PopulationState, synchronous: bool = False) -> str:
-        """Only ever called for "main" — a full, resumable (params+
-        opt_state) periodic/interrupt/OOM-guard checkpoint only makes
-        sense for the population meant to survive a process restart.
-        main_exploiter/league_exploiter's in-progress, not-yet-terminal
-        state is exactly as disposable as it already was pre-redesign (a
-        non-promoted exploiter attempt's state was always scratch,
-        deleted outright); a restart just re-forks them fresh from main's
-        own restored state the next time _maybe_create_population's
-        trigger fires. Their durable output is what _add_player_to_league
-        already writes on promotion/timeout — a params-only snapshot,
-        exactly like any other league member.
+        """Only ever called for "main" (the checkpoint dir is keyed to
+        main's step_count), but saves the WHOLE process: main's full
+        resumable state, plus every live exploiter population's own full
+        state (params+opt_state+host counters, under populations/{name}/)
+        and the block-sequential scheduler's state (whose block it is,
+        rotation index) — so a restart resumes an in-progress exploiter
+        block exactly where it stopped instead of discarding the attempt
+        and re-forking fresh (the pre-2026-08-15 behaviour; user
+        explicitly wants a 40k-step exploiter attempt picked back up, not
+        thrown away). Their durable terminal output is still what
+        _add_player_to_league writes on promotion/timeout.
 
         Everything host-side/fast happens synchronously here (device
         pulls, small in-memory serializations); only the actual disk
@@ -2264,14 +2380,55 @@ class Learner:
                 frame_count=host_builder_state.frame_count,
             ),
         )
-        # No pop.name component: every call site (OOM-guard, periodic save,
-        # KeyboardInterrupt) only ever passes pop=main, and load_train_state
-        # (artifact.py's _ckpt_root/_get_checkpoint_path/load_from_checkpoint)
-        # expects the checkpoint directly under ckpt_{step:08}/ with no
-        # population subdirectory — see _ckpt_root's docstring. Nesting it
-        # under pop.name here (always "main" in practice) silently produced
-        # a checkpoint the loader could never find, surfacing as
-        # FileNotFoundError on the next resume.
+        # Live exploiter populations ride along under populations/{name}/
+        # (never at the checkpoint root: load_from_checkpoint expects
+        # main's components directly under ckpt_{step:08}/ — see
+        # _ckpt_root's docstring; nesting main under a population subdir
+        # once produced a checkpoint the loader could never find). Their
+        # host-side counters that live outside the TrainState (fork_step,
+        # budget anchor) are saved too — without budget_anchor_frames a
+        # resumed league_exploiter would mis-measure its dwell/timeout
+        # window from the wrong anchor.
+        populations_payload: dict[str, dict] = {}
+        for pname in _EXPLOITER_ROTATION:
+            epop = self.populations.get(pname)
+            if epop is None or epop.player_state is None:
+                continue
+            host_ep = jax.device_get(epop.player_state)
+            host_eb = jax.device_get(epop.builder_state)
+            populations_payload[pname] = dict(
+                player_components=dict(
+                    params=host_ep.params,
+                    target_params=host_ep.target_params,
+                    opt_state=host_ep.opt_state,
+                    scalars=dict(
+                        step_count=host_ep.step_count,
+                        frame_count=host_ep.frame_count,
+                        ema_adv_mean=host_ep.ema_adv_mean,
+                        ema_adv_std=host_ep.ema_adv_std,
+                    ),
+                ),
+                builder_components=dict(
+                    params=host_eb.params,
+                    target_params=host_eb.target_params,
+                    opt_state=host_eb.opt_state,
+                    scalars=dict(
+                        step_count=host_eb.step_count,
+                        frame_count=host_eb.frame_count,
+                    ),
+                ),
+                host=dict(
+                    fork_step=epop.fork_step,
+                    budget_anchor_frames=epop.budget_anchor_frames,
+                    created_at_frame=epop.created_at_frame,
+                ),
+                controllers=self.controller_state_bytes(epop),
+            )
+        scheduler_payload = dict(
+            active=self._active,
+            rotation_idx=self._rotation_idx,
+            populations=sorted(populations_payload),
+        )
         save_path = os.path.abspath(
             os.path.join(
                 f"./ckpts/gen{self.config.generation}",
@@ -2295,6 +2452,8 @@ class Learner:
             step_count=int(np.asarray(host_player_state.step_count)),
             frame_count=int(np.asarray(host_player_state.frame_count)),
             upload_to_cloud=upload_to_cloud,
+            scheduler=scheduler_payload,
+            populations=populations_payload,
         )
         if synchronous:
             return write_checkpoint_components(
@@ -2306,6 +2465,8 @@ class Learner:
                 payload["controller_bytes"],
                 step_count=payload["step_count"],
                 frame_count=payload["frame_count"],
+                scheduler=payload["scheduler"],
+                populations=payload["populations"],
             )
         pop.ckpt_q.put(payload)
         return save_path
@@ -2364,6 +2525,11 @@ class Learner:
             if self.populations.get(name) is not None:
                 self._set_active(name)
                 tqdm.write(f"Exploiter block begins: {name} owns the GPU.")
+                # Checkpoint the block transition itself: the freshly-forked
+                # (or continuing) population and the scheduler handoff are
+                # on disk before any block training happens, so a crash
+                # mid-block resumes the block, not main's stale window.
+                self._write_checkpoint(self.populations["main"])
                 return
 
     def _check_exploiter_transitions(self, pop: PopulationState) -> None:
@@ -2431,6 +2597,10 @@ class Learner:
 
         self._set_active("main")
         tqdm.write(f"Exploiter block ends: {name} -> main's next window.")
+        # Persist the handoff: without this, a crash after the terminal
+        # outcome but before the next periodic save would resume a block
+        # that already ended (replaying its promotion/timeout).
+        self._write_checkpoint(self.populations["main"])
 
     def _apply_terminal_outcome(
         self,
@@ -2514,13 +2684,12 @@ class Learner:
 
     def _check_oom_guard(self, pop: PopulationState, step: int) -> None:
         """Self-monitoring safety valve, not a leak fix: if available RAM
-        drops below config.oom_guard_min_available_fraction, save main's
-        checkpoint now and raise OOMGuardTriggered — better to stop on our
-        own terms with a guaranteed-complete checkpoint than let the
-        kernel's OOM killer pick an arbitrary moment (possibly mid-write)
-        to SIGKILL this process. Only main is saved — see _write_checkpoint's
-        docstring for why an exploiter population's in-progress state
-        doesn't need a resumable checkpoint at all. Available RAM is a
+        drops below config.oom_guard_min_available_fraction, save a
+        full-process checkpoint now (main + live exploiter populations +
+        scheduler — see _write_checkpoint) and raise OOMGuardTriggered —
+        better to stop on our own terms with a guaranteed-complete
+        checkpoint than let the kernel's OOM killer pick an arbitrary
+        moment (possibly mid-write) to SIGKILL this process. Available RAM is a
         process-wide fact, not per-population, so this only actually runs
         once per check interval regardless of which population's tick it's
         attached to (whichever happens to hit the interval boundary first
@@ -2537,7 +2706,7 @@ class Learner:
         ):
             logger.warning(
                 "Available memory fraction %.3f < oom_guard_min_available_fraction "
-                "%.3f @ population %s step %d — saving main's checkpoint and "
+                "%.3f @ population %s step %d — saving a checkpoint and "
                 "stopping before the kernel OOM-kills this process.",
                 available_fraction,
                 self.config.oom_guard_min_available_fraction,
@@ -2742,14 +2911,17 @@ class Learner:
         """Full pairwise win-rate matrix over the whole shared payoff
         table: live main, both live exploiter populations (when they
         exist), and every historical snapshot with an origin-labelled
-        row — logged as a wandb Image alongside (not replacing) the
-        per-opponent line-graph metrics above. Live-vs-live cells come
+        row — logged by hijacking wandb's built-in confusion-matrix
+        custom chart (wandb/confusion_matrix/v1): the preset just renders
+        a (row label, column label, value) table as a value-coloured
+        grid, which is exactly a payoff matrix's shape. Interactive
+        (hover shows exact values), no matplotlib figure render on the
+        train-loop thread, no image upload per log. The one cosmetic
+        price of borrowing the preset is its fixed axis captions
+        (Actual/Predicted — read as home/away). Live-vs-live cells come
         from real games too (main_exploiter's live-target branch, main's
         verification branch); a pair that has never actually played just
         shows the table's prior."""
-        if not _MATPLOTLIB_AVAILABLE:
-            return {}
-
         current = self.league.get_live(pop.live_key)
         others = self._winrate_tracked_opponents()
         if not others:
@@ -2767,25 +2939,28 @@ class Learner:
         labels = ["main (live)"] + live_labels + [self._ref_label(p) for p in others]
         matrix = np.asarray(self.league.get_winrate((all_players, all_players)))
 
-        width = max(0.6 * len(labels) + 2, 5.0)
-        height = max(0.6 * len(labels) + 2, 4.5)
-        fig, ax = plt.subplots(figsize=(width, height))
-        im = ax.imshow(matrix, vmin=0.0, vmax=1.0, cmap="RdYlGn")
-        ax.set_xticks(range(len(labels)))
-        ax.set_yticks(range(len(labels)))
-        ax.set_xticklabels(labels, rotation=45, ha="right")
-        ax.set_yticklabels(labels)
-        ax.set_xlabel("away")
-        ax.set_ylabel("home (row beats column)")
-        ax.set_title("league payoff table (ME/LE = exploiter origin)", fontsize=12)
-        for i in range(len(labels)):
-            for j in range(len(labels)):
-                ax.text(
-                    j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", fontsize=7
-                )
-        fig.colorbar(im, ax=ax, label="win rate")
-        fig.tight_layout()
-
-        image = wandb.Image(fig)
-        plt.close(fig)
-        return {"league_winrate_heatmap": image}
+        # Column names match the preset's field keys verbatim — the vega
+        # spec selects by field name, so renaming them to home/away would
+        # just break the mapping without fixing the axis captions.
+        table = wandb.Table(
+            columns=["Actual", "Predicted", "nPredictions"],
+            data=[
+                [home, away, float(matrix[i, j])]
+                for i, home in enumerate(labels)
+                for j, away in enumerate(labels)
+            ],
+        )
+        chart = wandb.plot_table(
+            "wandb/confusion_matrix/v1",
+            table,
+            fields={
+                "Actual": "Actual",
+                "Predicted": "Predicted",
+                "nPredictions": "nPredictions",
+            },
+            string_fields={
+                "title": "league payoff table (row beats column; "
+                "ME/LE = exploiter origin)"
+            },
+        )
+        return {"league_winrate_heatmap": chart}

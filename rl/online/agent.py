@@ -45,25 +45,37 @@ class Agent:
         self.builder_head_params = builder_head_params
 
         dummy_func = lambda *args, **kwargs: None
-        self._player_apply_fn = functools.partial(
-            player_apply_fn or dummy_func, head_params=player_head_params
-        )
-        self._builder_apply_fn = functools.partial(
-            builder_apply_fn or dummy_func, head_params=builder_head_params
-        )
+        # head_params is a per-CALL argument of the jitted steps (a traced
+        # pytree of scalars, one trace regardless of value), not baked in
+        # via functools.partial: the exploration ladder samples a fresh
+        # continuous temperature every game (see PlayerActor), which a
+        # baked-in python float would turn into one recompile per value.
+        self._player_apply_fn = player_apply_fn or dummy_func
+        self._builder_apply_fn = builder_apply_fn or dummy_func
         self._gpu_lock = gpu_lock or nullcontext()
 
     def step_builder(
         self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput
     ) -> BuilderAgentOutput:
         with self._gpu_lock:
-            return self._step_builder(rng_key, params, actor_input)
+            return self._step_builder(rng_key, params, actor_input, self.builder_head_params)
 
     def step_player(
-        self, rng_key: jax.Array, params: Params, actor_input: PlayerActorInput
+        self,
+        rng_key: jax.Array,
+        params: Params,
+        actor_input: PlayerActorInput,
+        head_params: HeadParams | None = None,
     ) -> PlayerAgentOutput:
+        """head_params overrides this Agent's default for one call — the
+        exploration ladder's per-game sampled temperature."""
         with self._gpu_lock:
-            return self._step_player(rng_key, params, actor_input)
+            return self._step_player(
+                rng_key,
+                params,
+                actor_input,
+                self.player_head_params if head_params is None else head_params,
+            )
 
     @overload
     def _step_builder(
@@ -71,6 +83,7 @@ class Agent:
         rng_key,
         params: Params,
         actor_input: BuilderEnvOutput,
+        head_params: HeadParams = ...,
     ) -> BuilderAgentOutput: ...
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step_builder(
@@ -78,6 +91,7 @@ class Agent:
         rng_key: jax.Array,
         params: Params,
         actor_input: BuilderActorInput,
+        head_params: HeadParams = HeadParams(),
     ) -> BuilderAgentOutput:
 
         actor_input: BuilderActorInput = BuilderActorInput(
@@ -89,6 +103,7 @@ class Agent:
             params,
             actor_input,
             BuilderActorOutput(),
+            head_params=head_params,
             rngs={"sampling": rng_key},
         )
         # Remove the padding from above.
@@ -104,6 +119,7 @@ class Agent:
         rng_key: jax.Array,
         params: Params,
         actor_input: PlayerActorInput,
+        head_params: HeadParams = ...,
     ) -> PlayerAgentOutput: ...
     @functools.partial(jax.jit, static_argnums=(0,))
     def _step_player(
@@ -111,6 +127,7 @@ class Agent:
         rng_key: jax.Array,
         params: Params,
         actor_input: PlayerActorInput,
+        head_params: HeadParams = HeadParams(),
     ) -> PlayerAgentOutput:
         """For a given single-step, unbatched timestep, output the chosen action."""
         # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
@@ -127,6 +144,7 @@ class Agent:
             params,
             actor_input,
             PlayerActorOutput(),
+            head_params=head_params,
             rngs={"sampling": rng_key},
         )
         # Remove the padding from above.

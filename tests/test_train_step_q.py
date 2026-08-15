@@ -98,20 +98,20 @@ def test_train_step_player_q_smoke():
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_q_head_gradient_norm"]) > 0.0
 
-    # Stage-4 foreign-row contract, tested at its extreme: an all-foreign
+    # Explore-row contract, tested at its extreme: an all-explore
     # batch must silence every actor/value loss (masks sum to zero) while
     # the Q critic still trains on it.
-    batch_foreign = batch.replace(foreign=np.ones((1, B), dtype=bool))
+    batch_explore = batch.replace(explore=np.ones((1, B), dtype=bool))
     with jax.default_device(jax.devices("cpu")[0]):
-        _, _, logs_foreign = train_step(
-            player_state, builder_state, batch_foreign, config
+        _, _, logs_explore = train_step(
+            player_state, builder_state, batch_explore, config
         )
-    assert float(logs_foreign["player_policy_mask_sum"]) == 0.0
-    assert float(logs_foreign["player_value_mask_sum"]) == 0.0
-    assert float(logs_foreign["player_q_foreign_frac"]) == 1.0
-    assert "player_q_r2_foreign" in logs_foreign
-    assert np.isfinite(np.asarray(logs_foreign["player_loss_q"], dtype=np.float32))
-    assert float(logs_foreign["player_q_head_gradient_norm"]) > 0.0
+    assert float(logs_explore["player_policy_mask_sum"]) == 0.0
+    assert float(logs_explore["player_value_mask_sum"]) == 0.0
+    assert float(logs_explore["player_q_explore_frac"]) == 1.0
+    assert "player_q_r2_explore" in logs_explore
+    assert np.isfinite(np.asarray(logs_explore["player_loss_q"], dtype=np.float32))
+    assert float(logs_explore["player_q_head_gradient_norm"]) > 0.0
 
     # Observer contract: with player_q_enabled=False nothing q-flavoured
     # may appear (and the loss must not reference undefined q terms).

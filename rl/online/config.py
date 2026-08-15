@@ -525,16 +525,39 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_q_coef: float = 0.5
     # Retrace trace parameter; matches player_lambda's 0.8 default.
     player_q_lambda: float = 0.8
-    # Stage 4 (docs/q-critic-plan.md) — cross-population Retrace intake:
-    # this fraction of each MAIN minibatch is drawn read-only from the
-    # exploiter populations' replay buffers and trains ONLY the observer Q
-    # critic (foreign rows are own-masked out of every actor/value/builder
-    # loss in train_step; Retrace's ISR truncation vs the stored exploiter
-    # behaviour policy handles the off-policyness). The exploiters are the
-    # ones generating switching evidence — this is the channel by which
-    # main's critic digests it. 0 disables. No parameter change either
-    # way, so the flip is checkpoint-safe. Requires player_q_enabled.
-    player_q_foreign_fraction: float = 0.25
+    # Agent57/Ape-X-style exploration ladder (replaces stage 4's
+    # cross-population intake, removed 2026-08-15: it conflated another
+    # agent's policy evidence with main's own action values, and its
+    # frozen-between-blocks stock went stale — foreign-row Q R² 0.27 vs
+    # 0.84 own). The LAST num_explore_actors player-actor slots of every
+    # population's pool sample each GAME at a fresh temperature drawn
+    # log-uniform from explore_temp_range (the continuous analogue of
+    # R2D2's geometrically-spaced per-actor epsilon ladder; base actors
+    # sample at 1.0). Because the temp is applied to the logits BEFORE
+    # the policy metrics are computed, the recorded behaviour policy IS
+    # the tempered distribution, so v-trace/Retrace ISRs are
+    # automatically correct. Their trajectories are tagged explore=True
+    # at the actor: own-masked out of every PG/value/builder loss at the
+    # existing choke points, consumed ONLY by the observer Q critic —
+    # grounded counterfactual coverage (switches included) from main's
+    # OWN policy family, no cross-agent mixing. 0 disables. No parameter
+    # change, so the flip is checkpoint-safe.
+    # Log-symmetric around 1 (median temp = 1.0): the >1 side generates
+    # the counterfactual coverage, the <1 side makes the explore pair's
+    # opponent sharper than the base policy so those counterfactuals get
+    # graded against strong play rather than explorer-vs-explorer noise
+    # (R2D2's ladder spans near-greedy to wild for the same reason). Not
+    # wider: 0.5 already matches eval's sharpened temp, and both ends
+    # stay within 2x of the base policy so Retrace's ISR truncation
+    # keeps most of every trace.
+    num_explore_actors: int = 2
+    explore_temp_range: tuple[float, float] = (0.5, 2.0)
+    # Exploiter blocks run for hours while main's step (the checkpoint
+    # pacing basis) barely moves; the active exploiter's own periodic save
+    # paces on ITS step counter at this tighter interval so a mid-block
+    # kill (the 2026-08-15 09:38 machine shutdown lost a block segment)
+    # costs minutes, not the whole block since its boundary save.
+    exploiter_save_interval_steps: int = 5000
 
     ## Builder
     builder_value_loss_coef: float = 0.5

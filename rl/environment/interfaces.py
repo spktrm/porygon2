@@ -221,14 +221,16 @@ class Trajectory:
     # learner's sampling path.
     reuse_count: ArrayLike = ()
 
-    # Stage-4 cross-population intake flag, shape (1,) per trajectory —
-    # (1, B) once batched. True = this row was read from ANOTHER
-    # population's buffer and may train only the observer Q critic (every
-    # actor/value/builder loss own-masks it out in train_step). Attached
-    # at batch-assembly time by Learner.host_to_device_worker — always
-    # present in the online path (all-False for non-main populations) so
-    # the shared train_step jit sees ONE pytree structure. () outside it.
-    foreign: ArrayLike = ()
+    # Exploration-ladder flag, shape (1,) per trajectory — (1, B) once
+    # batched. True = this trajectory was played by a raised-temperature
+    # explore actor (config.num_explore_actors) and may train only the
+    # observer Q critic: every actor/value/builder loss own-masks it out
+    # in train_step, so the policy's training distribution stays clean
+    # while the critic gets counterfactual coverage. Set at construction
+    # by PlayerActor; normalised at batch-assembly time (all-False when
+    # unset) so the shared train_step jit sees ONE pytree structure. ()
+    # outside the online path.
+    explore: ArrayLike = ()
 
 
 @dataclass

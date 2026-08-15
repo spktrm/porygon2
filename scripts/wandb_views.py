@@ -19,6 +19,16 @@ Requires `pip install wandb-workspaces` and a logged-in wandb credential.
 
 import argparse
 
+import wandb.util
+
+# wandb 0.28 moved generate_id out of wandb.util; wandb_workspaces'
+# view-name generator still looks for it there. Shim it back before the
+# wandb_workspaces import so saving a view doesn't AttributeError.
+if not hasattr(wandb.util, "generate_id"):
+    from wandb.sdk.lib import runid
+
+    wandb.util.generate_id = runid.generate_id
+
 import wandb_workspaces.reports.v2 as wr
 import wandb_workspaces.workspaces as ws
 
@@ -183,8 +193,8 @@ def rl_sections():
                     # Retrace return after a voluntary switch vs after a
                     # move, both over states offering both modalities. If
                     # the data itself says switches lose, the negative
-                    # gap is honest and the fix is opponent pressure
-                    # (stage 4), not the improvement term.
+                    # gap is honest and the fix is opponent pressure /
+                    # exploration coverage, not the improvement term.
                     "Empirical returns: voluntary switch vs move",
                     [
                         "player_q_target_voluntary_switch",
@@ -192,15 +202,16 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Stage 4 — cross-population intake. foreign_frac is
-                    # the realised share of Q training data drawn from
-                    # exploiter buffers (0 until the exploiters exist);
-                    # r2_foreign persistently below player_q_r2 means the
-                    # intake is too off-policy to learn from (Retrace
-                    # cutting every trace) rather than free switching
-                    # counterfactuals.
-                    "Cross-population Q intake",
-                    ["player_q_foreign_frac", "player_q_r2_foreign"],
+                    # Exploration-ladder Q intake (replaced stage 4's
+                    # cross-population intake 2026-08-15). explore_frac
+                    # is the realised share of Q training data from the
+                    # raised-temperature actors (~their share of the
+                    # actor pool); r2_explore persistently below
+                    # player_q_r2 means the tempered rows are too
+                    # off-policy to learn from (Retrace cutting every
+                    # trace) rather than free switching counterfactuals.
+                    "Exploration-ladder Q intake",
+                    ["player_q_explore_frac", "player_q_r2_explore"],
                 ),
                 lp(
                     "Q loss & head gradient",
@@ -290,11 +301,24 @@ def rl_sections():
                     [],
                     regex="^league_main_v_.*_winrate$",
                 ),
-                wr.MediaBrowser(
-                    title="League win-rate heatmap (full pairwise matrix)",
-                    media_keys=["league_winrate_heatmap"],
-                    num_columns=1,
-                    gallery_axis="step",
+                # The learner logs the payoff matrix by hijacking wandb's
+                # confusion-matrix preset (learner._get_league_winrate_
+                # heatmap): plot_table under key "league_winrate_heatmap"
+                # stores its table at "<key>_table". Interactive grid,
+                # replaces the old matplotlib MediaBrowser image panel.
+                wr.CustomChart(
+                    query={
+                        "summaryTable": {"tableKey": "league_winrate_heatmap_table"}
+                    },
+                    chart_name="wandb/confusion_matrix/v1",
+                    chart_fields={
+                        "Actual": "Actual",
+                        "Predicted": "Predicted",
+                        "nPredictions": "nPredictions",
+                    },
+                    chart_strings={
+                        "title": "league payoff table (row beats column)"
+                    },
                 ),
                 lp(
                     "Plasticity controller",

@@ -20,6 +20,7 @@ from rl.environment.utils import (
     split_rng,
 )
 from rl.model.builder_model import get_packed_team_string
+from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
@@ -65,6 +66,8 @@ class PlayerActor:
         is_eval: bool = False,
         population: Population = "main",
         inference_client: InferenceServer | None = None,
+        explore: bool = False,
+        explore_temp_range: tuple[float, float] | None = None,
     ):
         self._agent = agent
         self._env = env
@@ -92,6 +95,28 @@ class PlayerActor:
         # single-generic-exploiter design's pin_opponent_steps did.
         self.population = population
         self._live_key = _LIVE_KEY_BY_POPULATION[population]
+        # Exploration-ladder actor (config.num_explore_actors /
+        # explore_temp_range): samples a FRESH temperature per game —
+        # log-uniform over the range, the continuous analogue of R2D2's
+        # geometrically-spaced per-actor epsilon ladder — and every
+        # trajectory it produces is tagged so train_step routes it to the
+        # observer Q critic only (see Trajectory.explore). Per-game, not
+        # per-actor: an unroll is one padded game, so one draw per unroll
+        # gives a coherent behaviour policy per game and a continuous
+        # spectrum across games. The recorded log_policy always reflects
+        # the tempered logits, so Retrace's ISRs are correct for free.
+        # Explore actors never route via the InferenceServer (it serves
+        # everyone at the base temperature).
+        self._explore = explore
+        self._explore_temp_range = explore_temp_range
+        if explore:
+            assert inference_client is None, (
+                "explore actors sample per-game temperatures via their own "
+                "Agent; the batched InferenceServer has no per-request "
+                "head_params"
+            )
+            assert explore_temp_range is not None
+        self._temp_rng = np.random.default_rng(rng_seed)
 
     def clip_actor_history(self, timestep: PlayerActorInput, min_length: int = 64):
         return PlayerActorInput(
@@ -168,6 +193,16 @@ class PlayerActor:
 
         player_actor_input = self._env.reset(team_tokens)
 
+        # One temperature per game (unrolls are one padded game): drawn
+        # log-uniform over explore_temp_range for ladder actors, base
+        # HeadParams otherwise (None -> the agent's own default).
+        head_params = None
+        if self._explore:
+            lo, hi = self._explore_temp_range
+            head_params = HeadParams(
+                temp=float(np.exp(self._temp_rng.uniform(np.log(lo), np.log(hi))))
+            )
+
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
@@ -184,6 +219,7 @@ class PlayerActor:
                     player_subkeys[player_step_index],
                     player_params,
                     player_actor_input_clipped,
+                    head_params=head_params,
                 )
             player_transition = PlayerTransition(
                 env_output=player_actor_input_clipped.env,
@@ -217,6 +253,7 @@ class PlayerActor:
             player_transitions=player_trajectory,
             player_packed_history=player_actor_input.packed_history,
             player_history=player_actor_input.history,
+            explore=np.array([self._explore]),
         )
 
     def split_rng(self) -> jax.Array:

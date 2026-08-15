@@ -335,6 +335,8 @@ def write_checkpoint_components(
     controller_bytes: bytes | None,
     step_count: int,
     frame_count: int,
+    scheduler: dict | None = None,
+    populations: dict[str, dict] | None = None,
 ) -> str:
     """The actual checkpoint disk I/O, given already-host-side components.
 
@@ -343,6 +345,10 @@ def write_checkpoint_components(
     payload without needing live TrainState/League objects — those aren't
     safe to hand across threads once the training loop has moved on to
     donating/mutating them for the next step.
+
+    `scheduler`/`populations` carry the block-sequential scheduler's state
+    and every live exploiter population's own resumable state, so a restart
+    picks an in-progress exploiter block back up instead of discarding it.
     """
     os.makedirs(save_path, exist_ok=True)
     checkpoint.save_train_state(
@@ -353,6 +359,19 @@ def write_checkpoint_components(
         league_bytes,
         controller_bytes,
     )
+    for name, blob in (populations or {}).items():
+        checkpoint.save_population_state(
+            save_path,
+            name,
+            blob["player_components"],
+            blob["builder_components"],
+            blob["host"],
+            blob.get("controllers"),
+        )
+    if scheduler is not None:
+        # Written AFTER the populations it lists: a reader that sees this
+        # scheduler file can trust every listed populations/ dir exists.
+        checkpoint.save_scheduler_state(save_path, scheduler)
     manifest = dict(
         step_count=step_count,
         frame_count=frame_count,
@@ -443,13 +462,48 @@ def load_from_scratch(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
     """
     No-op on state; simply initializes a fresh league.
     """
     tqdm.write("Starting training from scratch.")
     league = _init_league(learner_config, player_state, builder_state)
-    return player_state, builder_state, league, None
+    return player_state, builder_state, league, None, None
+
+
+def _load_resume_state(ckpt_path: str) -> dict | None:
+    """The block-sequential scheduler state plus every live exploiter
+    population's own saved state, or None (pre-resume checkpoint, or the
+    blob is unreadable). Never fatal — losing an in-progress exploiter
+    block degrades to the old re-fork-fresh behaviour, which must not be
+    able to fail an otherwise-healthy resume of main."""
+    try:
+        scheduler = checkpoint.load_scheduler_state(ckpt_path)
+        if scheduler is None:
+            return None
+        populations = {}
+        # The scheduler's own list is the source of truth, NOT a dir scan:
+        # repeated writes into one ckpt dir (main's step is frozen during
+        # an exploiter block) can leave a stale populations/ subdir behind
+        # after that population's block ended.
+        for name in scheduler.get("populations", []):
+            blob = checkpoint.load_population_state(ckpt_path, name)
+            if blob is not None:
+                populations[name] = blob
+        return dict(scheduler=scheduler, populations=populations)
+    except Exception:
+        logger.exception(
+            "exploiter population state in %s unreadable — resuming with a "
+            "main window instead (exploiter blocks re-fork fresh).",
+            ckpt_path,
+        )
+        return None
 
 
 def load_from_checkpoint(
@@ -457,10 +511,18 @@ def load_from_checkpoint(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
     """
-    Full restoration: loads params, opt_state, step counts, league, and the
-    host-side controller/plasticity state.
+    Full restoration: loads params, opt_state, step counts, league, the
+    host-side controller/plasticity state, and any in-progress exploiter
+    block (scheduler + per-population states, resumed by
+    Learner.restore_populations).
     """
     tqdm.write(f"Loading checkpoint from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=True)
@@ -516,7 +578,13 @@ def load_from_checkpoint(
         )
     )
 
-    return player_state, builder_state, league, ckpt_data.get("controllers")
+    return (
+        player_state,
+        builder_state,
+        league,
+        ckpt_data.get("controllers"),
+        _load_resume_state(ckpt_path),
+    )
 
 
 def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
@@ -557,7 +625,13 @@ def load_from_params(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
     """
     Params only: merges ckpt params into the freshly initialized trees, so
     modules added since the checkpoint keep their fresh init and everything
@@ -599,8 +673,10 @@ def load_from_params(
     league = _init_league(learner_config, player_state, builder_state)
 
     # Controllers start fresh too: params-mode is a new run whose training
-    # dynamics (lambda anneal, plasticity stall clock) do not carry over.
-    return player_state, builder_state, league, None
+    # dynamics (lambda anneal, plasticity stall clock) do not carry over —
+    # and neither does an in-progress exploiter block (its opt_state/league
+    # stats reference the old lineage).
+    return player_state, builder_state, league, None, None
 
 
 def load_train_state(
@@ -608,7 +684,13 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
     """Loads main's own state on a process (re)start. No more fork_from_ckpt/
     run_subdir (docs/exploiter-phase-plan.md's 2026-08-12 three-population
     redesign): exploiter populations are never loaded from a separate
