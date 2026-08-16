@@ -199,18 +199,30 @@ class EntityAttentionPool(nn.Module):
 
 
 class RoundBlock(nn.Module):
-    """One trunk round over the unified [state | action | value] sequence.
+    """One trunk round over three SEPARATE residual streams — state,
+    action, value — with explicit directional decodes replacing the old
+    fused [state | action | value] sequence + block attention mask
+    (redesign 2026-08-16). Per round:
 
-    Canonical decoder-layer shape: masked self-attention, a gated
-    cross-read of the world-model history states, then one wide FFW — the
-    attention sublayers are attention-only, so a round carries a single
-    FFW instead of one per block. Information-flow rules live in the
-    attention mask rather than in module topology: state tokens attend
-    state only (never the action or value streams), action tokens attend
-    state + actions (options can compare with each other), value tokens
-    attend state only. Every residual write is behind a zero-init gate so
-    a round starts as a no-op; nn.scan-ned num_rounds times with stacked
-    params so every round has its own weights.
+        1. state self-attention
+        2. action self-attention (options compare with each other)
+        3. history -> state decode (only state reads the recurrent
+           history states now; action and value receive it via state)
+        4. state -> action decode
+        5. action -> state decode (NEW information path the fused block
+           mask forbade: option evaluations feed back into the state
+           stream, giving the two streams shared depth across rounds)
+        6. state -> value read (value tokens keep their old semantics:
+           read state, never read back)
+        7. one FFW, params shared across the three streams (per-token, so
+           identical math to the old single FFW over the fused sequence)
+
+    Every residual write stays behind a zero-init gate so a round starts
+    as a no-op; nn.scan-ned num_rounds times with stacked params so every
+    round has its own weights. A query row whose key set is entirely
+    invalid (e.g. a terminal row, where no action slot is legal) receives
+    a ZERO attention output, not NaN: MultiHeadAttention masks the
+    attention probs back to 0 after the -1e9-masked softmax.
     """
 
     cfg: ConfigDict
@@ -218,12 +230,13 @@ class RoundBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        seq: jax.Array,
-        attn_mask: jax.Array,
-        seq_valid: jax.Array,
+        streams: tuple[jax.Array, jax.Array, jax.Array],
+        state_valid: jax.Array,
+        action_valid: jax.Array,
         history_context: jax.Array,
         history_mask: jax.Array,
     ):
+        state, action, value = streams
         rcfg = self.cfg.round
         mha_kwargs = dict(
             num_heads=rcfg.num_heads,
@@ -232,38 +245,52 @@ class RoundBlock(nn.Module):
             model_size=rcfg.model_size,
             qk_layer_norm=rcfg.qk_layer_norm,
             use_bias=rcfg.use_bias,
-            dtype=seq.dtype,
+            dtype=state.dtype,
             collect_intermediates=COLLECT_INTERMEDIATES,
         )
+        value_valid = jnp.ones(value.shape[0], dtype=jnp.bool_)
 
         def gate(name: str) -> jax.Array:
             return self.param(name, nn.initializers.zeros_init(), (1,)).astype(
-                seq.dtype
+                state.dtype
             )
 
-        seq_ln = layer_norm(seq)
-        self_attn = MultiHeadAttention(name="self_attn", **mha_kwargs)(
-            q=seq_ln, kv=seq_ln, mask=attn_mask
-        )
-        seq = seq + gate("self_gate") * self_attn
+        def attend(name: str, q, q_valid, kv, kv_valid):
+            return MultiHeadAttention(name=name, **mha_kwargs)(
+                q=layer_norm(q),
+                kv=layer_norm(kv),
+                mask=create_attention_mask(q_valid, kv_valid),
+            )
 
-        # Every row (state, action and value tokens alike) reads the
-        # per-entity recurrent history states directly.
-        history_attn = MultiHeadAttention(name="history_cross", **mha_kwargs)(
-            q=layer_norm(seq),
-            kv=layer_norm(history_context),
-            mask=create_attention_mask(seq_valid, history_mask),
+        state = state + gate("state_self_gate") * attend(
+            "state_self_attn", state, state_valid, state, state_valid
         )
-        seq = seq + gate("history_gate") * history_attn
+        action = action + gate("action_self_gate") * attend(
+            "action_self_attn", action, action_valid, action, action_valid
+        )
+        state = state + gate("history_gate") * attend(
+            "history_cross", state, state_valid, history_context, history_mask
+        )
+        action = action + gate("state_to_action_gate") * attend(
+            "state_to_action", action, action_valid, state, state_valid
+        )
+        state = state + gate("action_to_state_gate") * attend(
+            "action_to_state", state, state_valid, action, action_valid
+        )
+        value = value + gate("value_read_gate") * attend(
+            "state_to_value", value, value_valid, state, state_valid
+        )
 
-        ffw = FFWMLP(hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias)(
-            layer_norm(seq)
-        )
-        seq = seq + gate("ffw_gate") * ffw
+        ffw = FFWMLP(hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias)
+        ffw_gate = gate("ffw_gate")
+        state = state + ffw_gate * ffw(layer_norm(state))
+        action = action + ffw_gate * ffw(layer_norm(action))
+        value = value + ffw_gate * ffw(layer_norm(value))
 
         # Hard-zero invalid rows so padded tokens never accumulate content.
-        seq = jnp.where(seq_valid[..., None], seq, 0)
-        return seq, None
+        state = jnp.where(state_valid[..., None], state, 0)
+        action = jnp.where(action_valid[..., None], action, 0)
+        return (state, action, value), None
 
 
 class Encoder(nn.Module):
@@ -423,10 +450,10 @@ class Encoder(nn.Module):
         self.input_norm_my_moves = MLP(input_mlp_shape, name="input_norm_my_moves")
         self.input_norm_opp_moves = MLP(input_mlp_shape, name="input_norm_opp_moves")
 
-        # Round trunk: one RoundBlock over the unified
-        # [state | action | value] sequence, scanned num_rounds times with
-        # stacked params, so every round has its own weights and rounds can
-        # specialize instead of iterating one shared refinement operator.
+        # Round trunk: one RoundBlock over the (state, action, value)
+        # stream triple, scanned num_rounds times with stacked params, so
+        # every round has its own weights and rounds can specialize
+        # instead of iterating one shared refinement operator.
         # All residual gates are zero-init, so each round starts as a no-op.
         # Rematted with nothing_saveable — checkpoint_dots would save the
         # very matmul outputs (the wide FFW hiddens) that dominate trunk
@@ -1283,36 +1310,17 @@ class Encoder(nn.Module):
             )
         value_tokens = self.value_embeddings.astype(self.cfg.dtype)
 
-        # Unified trunk sequence [state | action | value]. Information-flow
-        # rules are declarative — one static block mask instead of
-        # per-stream decoder topology: state rows attend state only (they
-        # never read the action or value streams), action rows attend
-        # state + actions (options can compare with each other), value rows
-        # attend state only. Combined with per-token validity for keys.
-        n_state = state_sequence.shape[0]
-        n_action = action_tokens.shape[0]
-        n_value = value_tokens.shape[0]
-
-        seq = jnp.concatenate((state_sequence, action_tokens, value_tokens), axis=0)
-        seq_valid = jnp.concatenate(
-            (state_mask, output_state_mask, jnp.ones(n_value, dtype=jnp.bool_)),
-            axis=0,
+        # Three separate residual streams — state, action, value — refined
+        # by the round trunk's explicit directional decodes (see
+        # RoundBlock). Bulk of computation: scanned num_rounds times with
+        # per-round (stacked) weights.
+        (_, action_queries, value_queries), _ = self.round_trunk(
+            (state_sequence, action_tokens, value_tokens),
+            state_mask,
+            output_state_mask,
+            history_context,
+            history_mask,
         )
-
-        allowed = np.zeros((n_state + n_action + n_value,) * 2, dtype=bool)
-        allowed[:n_state, :n_state] = True
-        allowed[n_state : n_state + n_action, : n_state + n_action] = True
-        allowed[n_state + n_action :, :n_state] = True
-        attn_mask = allowed[None] & create_attention_mask(seq_valid, seq_valid)
-
-        # Bulk of computation: the round trunk, scanned num_rounds times
-        # with per-round (stacked) weights.
-        seq, _ = self.round_trunk(
-            seq, attn_mask, seq_valid, history_context, history_mask
-        )
-
-        action_queries = seq[n_state : n_state + n_action]
-        value_queries = seq[n_state + n_action :]
 
         # Head-facing embeddings from the final round's raw residual
         # streams: the per-group out-norms (hoisted out of the trunk) keep
