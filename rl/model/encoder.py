@@ -339,14 +339,21 @@ class RoundBlock(nn.Module):
             history_mask,
         )
 
+        # FFW params stay shared across streams (per-token, same math as
+        # one FFW over a fused sequence) but each stream gets its OWN
+        # residual gate — different streams have no reason to take
+        # same-magnitude FFW steps. Exception: value_all/value_own share
+        # one gate, part of the rungs-differ-only-by-mask contract.
         ffw = FFWMLP(hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias)
-        ffw_gate = gate("ffw_gate")
-        state = state + ffw_gate * ffw(layer_norm(state))
-        opp = opp + ffw_gate * ffw(layer_norm(opp))
-        action = action + ffw_gate * ffw(layer_norm(action))
-        value_all = value_all + ffw_gate * ffw(layer_norm(value_all))
-        value_own = value_own + ffw_gate * ffw(layer_norm(value_own))
-        value_public = value_public + ffw_gate * ffw(layer_norm(value_public))
+        state = state + gate("state_ffw_gate") * ffw(layer_norm(state))
+        opp = opp + gate("opp_ffw_gate") * ffw(layer_norm(opp))
+        action = action + gate("action_ffw_gate") * ffw(layer_norm(action))
+        value_ffw_gate = gate("value_ffw_gate")
+        value_all = value_all + value_ffw_gate * ffw(layer_norm(value_all))
+        value_own = value_own + value_ffw_gate * ffw(layer_norm(value_own))
+        value_public = value_public + gate("value_public_ffw_gate") * ffw(
+            layer_norm(value_public)
+        )
 
         # Hard-zero invalid rows so padded tokens never accumulate content.
         state = jnp.where(state_valid[..., None], state, 0)
