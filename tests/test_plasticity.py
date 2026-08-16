@@ -165,3 +165,33 @@ class TestShrinkAndPerturb:
         )
         new_state = shrink_and_perturb_player_state(state, jax.random.PRNGKey(0), 0.5)
         assert new_state.params["params"]["encoder"].dtype == jnp.bfloat16
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_probe_runs_on_real_batch(real_model_and_trajectory):
+    """Regression: the probe unpacks the encoder's return value, which the
+    2026-08-16 value-ladder change grew from 2 to 4 outputs — the mismatch
+    crashed the live run at the first probe interval (host_step 1000)
+    because nothing exercised this wiring."""
+    from rl.environment.interfaces import Batch, PlayerTransition
+    from rl.online.learner import Learner
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    probe = Learner._make_plasticity_probe(None, network)
+    # Probe vmaps over axis 1 (batch); the shared fixture is unbatched, so
+    # re-add a batch axis of 1.
+    batched = jax.tree.map(lambda x: np.asarray(x)[:, None], actor_input)
+    batch = Batch(
+        player_transitions=PlayerTransition(env_output=batched.env),
+        player_packed_history=batched.packed_history,
+        player_history=batched.history,
+    )
+    logs = probe(params, batch)
+    for key in (
+        "plasticity_action_emb_dormant_frac",
+        "plasticity_action_emb_srank_frac",
+        "plasticity_value_emb_dormant_frac",
+        "plasticity_value_emb_srank_frac",
+    ):
+        assert np.isfinite(np.asarray(logs[key], dtype=np.float32)), key
