@@ -101,12 +101,12 @@ class PlayerActorOutput:
     # this empty for the same replay-size reason as aux_value_logits.
     q_logits: ArrayLike = ()
     # Learner-only (cfg.train): (T, n_bins) categorical logits of the
-    # counterfactual value ladder — `own` sees the deployable information
+    # counterfactual value ladder — `private` sees the deployable information
     # set (no opponent team sheet), `public` sees the history context only.
     # The main value_head reads the privileged everything-stream. Gaps
     # between the three expectations are per-state value-of-information
     # readouts.
-    own_value_logits: ArrayLike = ()
+    private_value_logits: ArrayLike = ()
     public_value_logits: ArrayLike = ()
 
 

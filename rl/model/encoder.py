@@ -216,18 +216,18 @@ class RoundBlock(nn.Module):
         4. state -> action decode (kv = state rows only, never opp)
         5. action -> state decode (option evaluations feed back into the
            state stream, giving the two streams shared depth)
-        6. value-ladder reads. `all` and `own` are deliberately ONE
-           module, ONE fused read with per-rung key masks (`all` sees
-           [state | opp], `own` sees state only) and — upstream — one
-           shared query init and one shared output head: the two rungs
-           differ ONLY in what the mask exposes, so their expectation gap
-           is informational by construction (no estimator confound), and
-           with an empty sheet the two streams are bitwise identical.
+        6. value-ladder reads. `all` and `private` share one fused read
+           module with per-rung key masks (`all` sees [state | opp],
+           `private` sees state only) but are otherwise INDEPENDENT
+           estimators — separate query inits and separate residual gates
+           (user decision 2026-08-16; the earlier fully-shared variant
+           made the gap confound-free at the cost of specialisation).
            `public` reads the recurrent history context only (its
            information set differs structurally, so it keeps its own
            stream/read/head).
         7. one FFW, params shared across every stream (per-token, so
-           identical math to a single FFW over one fused sequence)
+           identical math to a single FFW over one fused sequence), each
+           stream behind its own gate
 
     Every residual write stays behind a zero-init gate so a round starts
     as a no-op; nn.scan-ned num_rounds times with stacked params so every
@@ -251,7 +251,7 @@ class RoundBlock(nn.Module):
         history_context: jax.Array,
         history_mask: jax.Array,
     ):
-        state, opp, action, value_all, value_own, value_public = streams
+        state, opp, action, value_all, value_private, value_public = streams
         rcfg = self.cfg.round
         mha_kwargs = dict(
             num_heads=rcfg.num_heads,
@@ -313,24 +313,25 @@ class RoundBlock(nn.Module):
             "action_to_state", state, state_valid, action, action_valid
         )
 
-        # Fused value-ladder read: one module, per-rung key masks. `all`
-        # rows may read [state | opp]; `own` rows read the state slice
-        # only — the ONLY difference between the rungs anywhere in the
-        # network.
+        # Fused value-ladder read: one shared module, per-rung key masks —
+        # `all` rows may read [state | opp]; `private` rows read the state
+        # slice only. Separate residual gates per rung (independent
+        # estimators, matching their separate query inits).
         value_allowed = np.zeros((2 * n_value, n_state + n_opp), dtype=bool)
         value_allowed[:n_value, :] = True
         value_allowed[n_value:, :n_state] = True
         value_read = attend(
             "value_read",
-            jnp.concatenate((value_all, value_own), axis=0),
+            jnp.concatenate((value_all, value_private), axis=0),
             jnp.ones(2 * n_value, dtype=jnp.bool_),
             state_opp,
             state_opp_valid,
             allowed=value_allowed,
         )
-        value_read_gate = gate("value_read_gate")
-        value_all = value_all + value_read_gate * value_read[:n_value]
-        value_own = value_own + value_read_gate * value_read[n_value:]
+        value_all = value_all + gate("value_all_read_gate") * value_read[:n_value]
+        value_private = (
+            value_private + gate("value_private_read_gate") * value_read[n_value:]
+        )
         value_public = value_public + gate("value_public_read_gate") * attend(
             "history_to_value_public",
             value_public,
@@ -342,15 +343,17 @@ class RoundBlock(nn.Module):
         # FFW params stay shared across streams (per-token, same math as
         # one FFW over a fused sequence) but each stream gets its OWN
         # residual gate — different streams have no reason to take
-        # same-magnitude FFW steps. Exception: value_all/value_own share
-        # one gate, part of the rungs-differ-only-by-mask contract.
+        # same-magnitude FFW steps.
         ffw = FFWMLP(hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias)
         state = state + gate("state_ffw_gate") * ffw(layer_norm(state))
         opp = opp + gate("opp_ffw_gate") * ffw(layer_norm(opp))
         action = action + gate("action_ffw_gate") * ffw(layer_norm(action))
-        value_ffw_gate = gate("value_ffw_gate")
-        value_all = value_all + value_ffw_gate * ffw(layer_norm(value_all))
-        value_own = value_own + value_ffw_gate * ffw(layer_norm(value_own))
+        value_all = value_all + gate("value_all_ffw_gate") * ffw(
+            layer_norm(value_all)
+        )
+        value_private = value_private + gate("value_private_ffw_gate") * ffw(
+            layer_norm(value_private)
+        )
         value_public = value_public + gate("value_public_ffw_gate") * ffw(
             layer_norm(value_public)
         )
@@ -359,7 +362,7 @@ class RoundBlock(nn.Module):
         state = jnp.where(state_valid[..., None], state, 0)
         opp = jnp.where(opp_valid[..., None], opp, 0)
         action = jnp.where(action_valid[..., None], action, 0)
-        return (state, opp, action, value_all, value_own, value_public), None
+        return (state, opp, action, value_all, value_private, value_public), None
 
 
 class Encoder(nn.Module):
@@ -427,15 +430,20 @@ class Encoder(nn.Module):
         )
 
         # Value-query groups, an information ladder (2026-08-16): `all`
-        # reads state + the opponent's privileged team sheet, `own` reads
-        # state only (the deployable baseline), `public` reads the history
-        # context only. `all` and `own` deliberately SHARE one query init
-        # (and downstream one read module and one output head): the rungs
-        # differ only in what the value-read mask exposes, so their
-        # expectation gap is a pure value-of-information readout — and
-        # with an empty sheet the two streams are bitwise identical.
-        self.value_embeddings = self.param(
-            "value_embeddings", embedding_init, (4, entity_size)
+        # reads state + the opponent's privileged team sheet, `private`
+        # reads state only (the deployable baseline), `public` reads the
+        # history context only. Each rung has its OWN query init (user
+        # decision 2026-08-16, replacing the earlier shared-init variant):
+        # rungs are independent estimators specialised to their
+        # information route. The trade: the all-vs-private gap now
+        # includes an estimator component and the empty-sheet all==private
+        # equality no longer holds — read the ladder telemetry
+        # accordingly.
+        self.all_value_embeddings = self.param(
+            "all_value_embeddings", embedding_init, (4, entity_size)
+        )
+        self.private_value_embeddings = self.param(
+            "private_value_embeddings", embedding_init, (4, entity_size)
         )
         self.public_value_embeddings = self.param(
             "public_value_embeddings", embedding_init, (4, entity_size)
@@ -1397,9 +1405,9 @@ class Encoder(nn.Module):
             action_tokens = action_tokens.at[slot_indices].set(
                 q_norm(output_state_sequence[slot_indices])
             )
-        # Shared query init for the all/own rungs — see setup's comment.
-        value_all_tokens = self.value_embeddings.astype(self.cfg.dtype)
-        value_own_tokens = self.value_embeddings.astype(self.cfg.dtype)
+        # Shared query init for the all/private rungs — see setup's comment.
+        value_all_tokens = self.all_value_embeddings.astype(self.cfg.dtype)
+        value_private_tokens = self.private_value_embeddings.astype(self.cfg.dtype)
         value_public_tokens = self.public_value_embeddings.astype(self.cfg.dtype)
 
         # Separate residual streams — state, opp (privileged sheet,
@@ -1413,7 +1421,7 @@ class Encoder(nn.Module):
                 _,
                 action_queries,
                 value_all_queries,
-                value_own_queries,
+                value_private_queries,
                 value_public_queries,
             ),
             _,
@@ -1423,7 +1431,7 @@ class Encoder(nn.Module):
                 opp_private_embeddings,
                 action_tokens,
                 value_all_tokens,
-                value_own_tokens,
+                value_private_tokens,
                 value_public_tokens,
             ),
             state_mask,
@@ -1445,7 +1453,7 @@ class Encoder(nn.Module):
                 out_norm(action_queries[slot_indices])
             )
         value_embeddings = value_all_queries.reshape(-1)
-        own_value_embeddings = value_own_queries.reshape(-1)
+        private_value_embeddings = value_private_queries.reshape(-1)
         public_value_embeddings = value_public_queries.reshape(-1)
 
         # (NUM_ACTION_FEATURES, entity_size) and three (4 * entity_size,)
@@ -1455,7 +1463,7 @@ class Encoder(nn.Module):
         return (
             action_embeddings,
             value_embeddings,
-            own_value_embeddings,
+            private_value_embeddings,
             public_value_embeddings,
         )
 
@@ -1647,7 +1655,7 @@ class Encoder(nn.Module):
         (
             action_embeddings,
             value_embeddings,
-            own_value_embeddings,
+            private_value_embeddings,
             public_value_embeddings,
         ) = jax.vmap(self._batched_forward)(
             env_step, row_states, order_valid, field_state, history_latents
@@ -1656,6 +1664,6 @@ class Encoder(nn.Module):
         return (
             action_embeddings,
             value_embeddings,
-            own_value_embeddings,
+            private_value_embeddings,
             public_value_embeddings,
         )

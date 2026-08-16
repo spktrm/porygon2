@@ -1,6 +1,6 @@
 """Counterfactual value ladder (2026-08-16): the privileged
 opp_private_team input must be readable ONLY by the main (everything)
-value head — the policy and the own/public ladder heads must be bitwise
+value head — the policy and the private/public ladder heads must be bitwise
 invariant to it, or the policy would train on information that does not
 exist at deploy time."""
 
@@ -54,7 +54,7 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
     )
     # Same for the deployable and public ladder rungs.
     np.testing.assert_array_equal(
-        np.asarray(base.own_value_logits), np.asarray(priv.own_value_logits)
+        np.asarray(base.private_value_logits), np.asarray(priv.private_value_logits)
     )
     np.testing.assert_array_equal(
         np.asarray(base.public_value_logits),
@@ -70,23 +70,11 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
     )
 
 
-def test_all_rung_degrades_to_own_on_empty_sheet(real_model_and_trajectory):
-    """all and own share query init, read module, masks-apart, and output
-    head — with an EMPTY opponent sheet their streams see identical
-    inputs, so the two readouts must coincide (up to bf16 noise from the
-    vmapped-vs-direct head application). This is the no-estimator-confound
-    property: any all-vs-own gap is attributable to the sheet alone."""
-    from rl.model.heads import HeadParams
-
-    network, params, actor_input, actor_output = real_model_and_trajectory
-    params = _open_all_gates(params)
-    # ex.bin predates the field: the sheet is all-zero here.
-    out = network.apply(params, actor_input, actor_output, HeadParams())
-    np.testing.assert_allclose(
-        np.asarray(out.value_head.logits, dtype=np.float32),
-        np.asarray(out.own_value_logits, dtype=np.float32),
-        atol=1e-2,
-    )
+# NOTE (2026-08-16): the earlier empty-sheet all==private equality test was
+# removed deliberately — the rungs now have separate query inits and
+# residual gates (independent estimators per information route), so the
+# degradation identity no longer holds and the all-vs-private gap includes
+# an estimator component alongside the information value.
 
 
 def test_ladder_heads_present_and_shaped(real_model_and_trajectory):
@@ -96,9 +84,9 @@ def test_ladder_heads_present_and_shaped(real_model_and_trajectory):
     out = network.apply(params, actor_input, actor_output, HeadParams())
     T = actor_input.env.done.shape[0]
     n_bins = np.asarray(out.value_head.log_probs).shape[-1]
-    assert np.asarray(out.own_value_logits).shape == (T, n_bins)
+    assert np.asarray(out.private_value_logits).shape == (T, n_bins)
     assert np.asarray(out.public_value_logits).shape == (T, n_bins)
-    assert np.isfinite(np.asarray(out.own_value_logits, dtype=np.float32)).all()
+    assert np.isfinite(np.asarray(out.private_value_logits, dtype=np.float32)).all()
     assert np.isfinite(
         np.asarray(out.public_value_logits, dtype=np.float32)
     ).all()

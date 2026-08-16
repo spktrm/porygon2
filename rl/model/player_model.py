@@ -45,13 +45,14 @@ class Porygon2PlayerModel(nn.Module):
         self.macro_head = MacroHead(self.cfg.macro_head)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
         self.aux_v_head = MultiLambdaValueLogitHead(self.cfg.aux_v_head)
-        # Counterfactual value ladder (2026-08-16): the own rung (the
-        # deployable information set — no opponent sheet) deliberately has
-        # NO head of its own: it reads through the SAME v_head as the
-        # privileged main readout, and shares its query init and read
-        # module in the trunk, so the all-vs-own expectation gap is a pure
-        # value-of-information readout. Only public (history-context-only,
-        # a structurally different information set) gets its own head.
+        # Counterfactual value ladder (2026-08-16): all/private/public are
+        # independent estimators per information route (separate query
+        # inits and residual gates in the trunk; shared read module). The
+        # private rung (deployable information set — no opponent sheet)
+        # still reads through the SAME v_head as the privileged main
+        # readout — a deliberate remaining coupling that keeps the two
+        # rungs' output calibration comparable; public (history-context-
+        # only) gets its own head.
         self.public_v_head = CategoricalValueLogitHead(self.cfg.v_head)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
@@ -406,7 +407,7 @@ class Porygon2PlayerModel(nn.Module):
         (
             action_embeddings,
             value_embeddings,
-            own_value_embeddings,
+            private_value_embeddings,
             public_value_embeddings,
         ) = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
@@ -423,9 +424,9 @@ class Porygon2PlayerModel(nn.Module):
             outputs = outputs.replace(
                 aux_value_logits=self.aux_v_head(value_embeddings),
                 # Counterfactual value ladder, learner-only like the aux
-                # heads so replay transitions stay small. own reads the
+                # heads so replay transitions stay small. private reads the
                 # SHARED v_head — see setup.
-                own_value_logits=self.v_head(own_value_embeddings).logits,
+                private_value_logits=self.v_head(private_value_embeddings).logits,
                 public_value_logits=self.public_v_head(
                     public_value_embeddings
                 ).logits,

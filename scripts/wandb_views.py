@@ -145,12 +145,12 @@ def rl_sections():
                 lp(
                     # Main gamma=1 head (feeds advantages) vs the
                     # multi-lambda aux CE (representation shaping only)
-                    # vs the counterfactual ladder rungs (own/public).
+                    # vs the counterfactual ladder rungs (private/public).
                     "Value losses (main + aux + ladder)",
                     [
                         "player_loss_v_win",
                         "player_loss_v_aux",
-                        "player_loss_v_own",
+                        "player_loss_v_private",
                         "player_loss_v_public",
                     ],
                 ),
@@ -456,20 +456,25 @@ def rl_sections():
                 ),
                 lp(
                     # Counterfactual value ladder (2026-08-16): all
-                    # (privileged, the main head) vs own (deployable) vs
+                    # (privileged, the main head) vs private (deployable) vs
                     # public (history-only) — R2 per rung.
                     "Value ladder R2",
                     [
                         "player_value_head_r2",
-                        "player_value_own_r2",
+                        "player_value_private_r2",
                         "player_value_public_r2",
                     ],
                     range_y=(-1, 1),
                 ),
                 lp(
-                    # |all−own| prices the opponent's hidden team; |own−public|
-                    # prices private info over the public record. Signed
-                    # variants read systematic bias between rungs.
+                    # |all−private| prices the opponent's hidden team;
+                    # |private−public| prices private info over the public
+                    # record. Signed variants read systematic bias between
+                    # rungs. CAVEAT (2026-08-16): rungs are independent
+                    # estimators (separate query inits/gates), so gaps
+                    # include an estimator component on top of the
+                    # information value — judge trends, not absolute
+                    # levels, and read them alongside the ladder R2 panel.
                     "Value of information",
                     [
                         "player_value_info_gap_opp_abs",
