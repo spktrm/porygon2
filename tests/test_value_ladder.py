@@ -49,6 +49,24 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
     assert np.isfinite(lp).all()
 
 
+def test_all_rung_degrades_to_own_on_empty_sheet(real_model_and_trajectory):
+    """all and own share query init, read module, masks-apart, and output
+    head — with an EMPTY opponent sheet their streams see identical
+    inputs, so the two readouts must coincide (up to bf16 noise from the
+    vmapped-vs-direct head application). This is the no-estimator-confound
+    property: any all-vs-own gap is attributable to the sheet alone."""
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    # ex.bin predates the field: the sheet is all-zero here.
+    out = network.apply(params, actor_input, actor_output, HeadParams())
+    np.testing.assert_allclose(
+        np.asarray(out.value_head.logits, dtype=np.float32),
+        np.asarray(out.own_value_logits, dtype=np.float32),
+        atol=1e-2,
+    )
+
+
 def test_ladder_heads_present_and_shaped(real_model_and_trajectory):
     from rl.model.heads import HeadParams
 

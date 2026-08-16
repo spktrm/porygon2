@@ -199,28 +199,35 @@ class EntityAttentionPool(nn.Module):
 
 
 class RoundBlock(nn.Module):
-    """One trunk round over three SEPARATE residual streams — state,
-    action, value — with explicit directional decodes replacing the old
-    fused [state | action | value] sequence + block attention mask
-    (redesign 2026-08-16). Per round:
+    """One trunk round over separate residual streams — state, opp
+    (privileged team-sheet tokens), action, and the value ladder — with
+    explicit directional decodes replacing the old fused sequence + block
+    attention mask (redesign 2026-08-16). Per round:
 
-        1. state self-attention
+        1. fused [state | opp] self-attention under a block mask: state
+           rows attend state ONLY (the one leak-critical rule — the
+           policy decodes from state, so privileged rows must never write
+           into it), opp rows attend state + opp, so the opponent sheet
+           is CONTEXTUALISED against the live game each round instead of
+           read as static embeddings
         2. action self-attention (options compare with each other)
         3. history -> state decode (only state reads the recurrent
-           history states now; action and value receive it via state)
-        4. state -> action decode
-        5. action -> state decode (NEW information path the fused block
-           mask forbade: option evaluations feed back into the state
-           stream, giving the two streams shared depth across rounds)
-        6. value reads — three separate value streams forming an
-           information ladder, none of which is ever read back, so the
-           policy/state streams stay clean of privileged input:
-             - `all`    reads state + the opponent's privileged team-sheet
-               tokens (empty at deploy; masked rows degrade it to `own`)
-             - `own`    reads state only (the deployable baseline)
-             - `public` reads the recurrent history context only
+           history states; everything else receives it via state)
+        4. state -> action decode (kv = state rows only, never opp)
+        5. action -> state decode (option evaluations feed back into the
+           state stream, giving the two streams shared depth)
+        6. value-ladder reads. `all` and `own` are deliberately ONE
+           module, ONE fused read with per-rung key masks (`all` sees
+           [state | opp], `own` sees state only) and — upstream — one
+           shared query init and one shared output head: the two rungs
+           differ ONLY in what the mask exposes, so their expectation gap
+           is informational by construction (no estimator confound), and
+           with an empty sheet the two streams are bitwise identical.
+           `public` reads the recurrent history context only (its
+           information set differs structurally, so it keeps its own
+           stream/read/head).
         7. one FFW, params shared across every stream (per-token, so
-           identical math to the old single FFW over the fused sequence)
+           identical math to a single FFW over one fused sequence)
 
     Every residual write stays behind a zero-init gate so a round starts
     as a no-op; nn.scan-ned num_rounds times with stacked params so every
@@ -235,15 +242,16 @@ class RoundBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        streams: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+        streams: tuple[
+            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
+        ],
         state_valid: jax.Array,
-        action_valid: jax.Array,
-        opp_context: jax.Array,
         opp_valid: jax.Array,
+        action_valid: jax.Array,
         history_context: jax.Array,
         history_mask: jax.Array,
     ):
-        state, action, value_all, value_own, value_public = streams
+        state, opp, action, value_all, value_own, value_public = streams
         rcfg = self.cfg.round
         mha_kwargs = dict(
             num_heads=rcfg.num_heads,
@@ -255,23 +263,43 @@ class RoundBlock(nn.Module):
             dtype=state.dtype,
             collect_intermediates=COLLECT_INTERMEDIATES,
         )
-        value_valid = jnp.ones(value_all.shape[0], dtype=jnp.bool_)
+        n_state = state.shape[0]
+        n_opp = opp.shape[0]
+        n_value = value_all.shape[0]
+        value_valid = jnp.ones(n_value, dtype=jnp.bool_)
 
         def gate(name: str) -> jax.Array:
             return self.param(name, nn.initializers.zeros_init(), (1,)).astype(
                 state.dtype
             )
 
-        def attend(name: str, q, q_valid, kv, kv_valid):
+        def attend(name: str, q, q_valid, kv, kv_valid, allowed=None):
+            mask = create_attention_mask(q_valid, kv_valid)
+            if allowed is not None:
+                mask = mask & allowed[None]
             return MultiHeadAttention(name=name, **mha_kwargs)(
-                q=layer_norm(q),
-                kv=layer_norm(kv),
-                mask=create_attention_mask(q_valid, kv_valid),
+                q=layer_norm(q), kv=layer_norm(kv), mask=mask
             )
 
-        state = state + gate("state_self_gate") * attend(
-            "state_self_attn", state, state_valid, state, state_valid
+        # Fused [state | opp] self-attention. Block rule: state rows read
+        # state only; opp rows read state + opp. np mask — sizes are
+        # trace-static.
+        state_opp = jnp.concatenate((state, opp), axis=0)
+        state_opp_valid = jnp.concatenate((state_valid, opp_valid), axis=0)
+        state_opp_allowed = np.zeros((n_state + n_opp,) * 2, dtype=bool)
+        state_opp_allowed[:n_state, :n_state] = True
+        state_opp_allowed[n_state:, :] = True
+        state_opp_attn = attend(
+            "state_opp_self_attn",
+            state_opp,
+            state_opp_valid,
+            state_opp,
+            state_opp_valid,
+            allowed=state_opp_allowed,
         )
+        state = state + gate("state_self_gate") * state_opp_attn[:n_state]
+        opp = opp + gate("opp_self_gate") * state_opp_attn[n_state:]
+
         action = action + gate("action_self_gate") * attend(
             "action_self_attn", action, action_valid, action, action_valid
         )
@@ -284,16 +312,25 @@ class RoundBlock(nn.Module):
         state = state + gate("action_to_state_gate") * attend(
             "action_to_state", state, state_valid, action, action_valid
         )
-        value_all = value_all + gate("value_all_read_gate") * attend(
-            "state_to_value_all",
-            value_all,
-            value_valid,
-            jnp.concatenate((state, opp_context), axis=0),
-            jnp.concatenate((state_valid, opp_valid), axis=0),
+
+        # Fused value-ladder read: one module, per-rung key masks. `all`
+        # rows may read [state | opp]; `own` rows read the state slice
+        # only — the ONLY difference between the rungs anywhere in the
+        # network.
+        value_allowed = np.zeros((2 * n_value, n_state + n_opp), dtype=bool)
+        value_allowed[:n_value, :] = True
+        value_allowed[n_value:, :n_state] = True
+        value_read = attend(
+            "value_read",
+            jnp.concatenate((value_all, value_own), axis=0),
+            jnp.ones(2 * n_value, dtype=jnp.bool_),
+            state_opp,
+            state_opp_valid,
+            allowed=value_allowed,
         )
-        value_own = value_own + gate("value_own_read_gate") * attend(
-            "state_to_value_own", value_own, value_valid, state, state_valid
-        )
+        value_read_gate = gate("value_read_gate")
+        value_all = value_all + value_read_gate * value_read[:n_value]
+        value_own = value_own + value_read_gate * value_read[n_value:]
         value_public = value_public + gate("value_public_read_gate") * attend(
             "history_to_value_public",
             value_public,
@@ -305,6 +342,7 @@ class RoundBlock(nn.Module):
         ffw = FFWMLP(hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias)
         ffw_gate = gate("ffw_gate")
         state = state + ffw_gate * ffw(layer_norm(state))
+        opp = opp + ffw_gate * ffw(layer_norm(opp))
         action = action + ffw_gate * ffw(layer_norm(action))
         value_all = value_all + ffw_gate * ffw(layer_norm(value_all))
         value_own = value_own + ffw_gate * ffw(layer_norm(value_own))
@@ -312,8 +350,9 @@ class RoundBlock(nn.Module):
 
         # Hard-zero invalid rows so padded tokens never accumulate content.
         state = jnp.where(state_valid[..., None], state, 0)
+        opp = jnp.where(opp_valid[..., None], opp, 0)
         action = jnp.where(action_valid[..., None], action, 0)
-        return (state, action, value_all, value_own, value_public), None
+        return (state, opp, action, value_all, value_own, value_public), None
 
 
 class Encoder(nn.Module):
@@ -380,16 +419,16 @@ class Encoder(nn.Module):
             "enemy_target_bias", bias_init, (1, entity_size)
         )
 
-        # Three value-query groups, an information ladder (2026-08-16):
-        # `all` reads state + the opponent's privileged team sheet, `own`
-        # reads state only (the deployable baseline), `public` reads the
-        # history context only. Their readout gaps are per-state
-        # value-of-information estimates.
+        # Value-query groups, an information ladder (2026-08-16): `all`
+        # reads state + the opponent's privileged team sheet, `own` reads
+        # state only (the deployable baseline), `public` reads the history
+        # context only. `all` and `own` deliberately SHARE one query init
+        # (and downstream one read module and one output head): the rungs
+        # differ only in what the value-read mask exposes, so their
+        # expectation gap is a pure value-of-information readout — and
+        # with an empty sheet the two streams are bitwise identical.
         self.value_embeddings = self.param(
             "value_embeddings", embedding_init, (4, entity_size)
-        )
-        self.own_value_embeddings = self.param(
-            "own_value_embeddings", embedding_init, (4, entity_size)
         )
         self.public_value_embeddings = self.param(
             "public_value_embeddings", embedding_init, (4, entity_size)
@@ -1351,29 +1390,38 @@ class Encoder(nn.Module):
             action_tokens = action_tokens.at[slot_indices].set(
                 q_norm(output_state_sequence[slot_indices])
             )
+        # Shared query init for the all/own rungs — see setup's comment.
         value_all_tokens = self.value_embeddings.astype(self.cfg.dtype)
-        value_own_tokens = self.own_value_embeddings.astype(self.cfg.dtype)
+        value_own_tokens = self.value_embeddings.astype(self.cfg.dtype)
         value_public_tokens = self.public_value_embeddings.astype(self.cfg.dtype)
 
-        # Separate residual streams — state, action, and the three-value
-        # information ladder — refined by the round trunk's explicit
-        # directional decodes (see RoundBlock). Bulk of computation:
-        # scanned num_rounds times with per-round (stacked) weights.
+        # Separate residual streams — state, opp (privileged sheet,
+        # contextualised in-trunk behind the block mask), action, and the
+        # value-ladder — refined by the round trunk's explicit directional
+        # decodes (see RoundBlock). Bulk of computation: scanned
+        # num_rounds times with per-round (stacked) weights.
         (
-            (_, action_queries, value_all_queries, value_own_queries, value_public_queries),
+            (
+                _,
+                _,
+                action_queries,
+                value_all_queries,
+                value_own_queries,
+                value_public_queries,
+            ),
             _,
         ) = self.round_trunk(
             (
                 state_sequence,
+                opp_private_embeddings,
                 action_tokens,
                 value_all_tokens,
                 value_own_tokens,
                 value_public_tokens,
             ),
             state_mask,
-            output_state_mask,
-            opp_private_embeddings,
             opp_private_mask,
+            output_state_mask,
             history_context,
             history_mask,
         )
