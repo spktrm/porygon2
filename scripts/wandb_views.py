@@ -144,9 +144,15 @@ def rl_sections():
             panels=[
                 lp(
                     # Main gamma=1 head (feeds advantages) vs the
-                    # multi-lambda aux CE (representation shaping only).
-                    "Value losses (main + multi-lambda aux)",
-                    ["player_loss_v_win", "player_loss_v_aux"],
+                    # multi-lambda aux CE (representation shaping only)
+                    # vs the counterfactual ladder rungs (own/public).
+                    "Value losses (main + aux + ladder)",
+                    [
+                        "player_loss_v_win",
+                        "player_loss_v_aux",
+                        "player_loss_v_own",
+                        "player_loss_v_public",
+                    ],
                 ),
                 lp(
                     # R2 of expectations vs v-trace targets: main head
