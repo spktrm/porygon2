@@ -6,12 +6,20 @@ live learner (see no-agent-testing memory) and wandb must never try to
 sync.
 """
 
+import logging
 import os
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 os.environ.setdefault("WANDB_MODE", "disabled")
 os.environ.setdefault("TQDM_DISABLE", "1")
+
+# The persistent-compile-cache MISS/not-writing warnings and the
+# explain-cache-misses tracer notes are per-compile spam — thousands of
+# lines per fresh-architecture test run, useless in test output.
+logging.getLogger("jax._src.compiler").setLevel(logging.ERROR)
+logging.getLogger("jax._src.dispatch").setLevel(logging.ERROR)
+os.environ.setdefault("JAX_EXPLAIN_CACHE_MISSES", "false")
 
 import pytest
 
