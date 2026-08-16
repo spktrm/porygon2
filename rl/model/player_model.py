@@ -45,6 +45,14 @@ class Porygon2PlayerModel(nn.Module):
         self.macro_head = MacroHead(self.cfg.macro_head)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
         self.aux_v_head = MultiLambdaValueLogitHead(self.cfg.aux_v_head)
+        # Counterfactual value ladder (2026-08-16): own = deployable
+        # information set (no opponent sheet), public = history context
+        # only. Both read their OWN trunk value streams (encoder.py
+        # RoundBlock); learner-side CE against the same win targets as the
+        # main head; their expectation gaps to the main (privileged) head
+        # are per-state value-of-information readouts.
+        self.own_v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        self.public_v_head = CategoricalValueLogitHead(self.cfg.v_head)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected; a future
@@ -395,7 +403,12 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        action_embeddings, value_embeddings = self.encoder(
+        (
+            action_embeddings,
+            value_embeddings,
+            own_value_embeddings,
+            public_value_embeddings,
+        ) = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
@@ -408,7 +421,13 @@ class Porygon2PlayerModel(nn.Module):
             # value tokens — (T, K, n_bins) categorical logits, one row
             # per auxiliary discount, turned into CE losses learner-side.
             outputs = outputs.replace(
-                aux_value_logits=self.aux_v_head(value_embeddings)
+                aux_value_logits=self.aux_v_head(value_embeddings),
+                # Counterfactual value ladder, learner-only like the aux
+                # heads so replay transitions stay small.
+                own_value_logits=self.own_v_head(own_value_embeddings).logits,
+                public_value_logits=self.public_v_head(
+                    public_value_embeddings
+                ).logits,
             )
             if self.cfg.get("q_head") is not None and self.cfg.q_head.enabled:
                 # Observer all-action Q readout over the flat action grid

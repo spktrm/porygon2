@@ -523,6 +523,61 @@ def train_step(
             value_mask,
         )
 
+        # Counterfactual value ladder: own (deployable information set —
+        # no opponent sheet) and public (history-context-only) heads, CE
+        # against the SAME win targets as the privileged main head. Each
+        # rung learns the best value estimate its information set
+        # supports, so the expectation gaps between rungs are per-state
+        # value-of-information readouts: |all − own| prices the
+        # opponent's hidden team, |own − public| prices the agent's own
+        # private information over the public game record.
+        own_logits = learner_player_pred.own_value_logits.astype(jnp.float32)
+        public_logits = learner_player_pred.public_value_logits.astype(jnp.float32)
+        loss_v_own = average(
+            optax.softmax_cross_entropy(
+                logits=own_logits, labels=player_targets.win_returns
+            ),
+            value_mask,
+        )
+        loss_v_public = average(
+            optax.softmax_cross_entropy(
+                logits=public_logits, labels=player_targets.win_returns
+            ),
+            value_mask,
+        )
+        f32_support = cat_vf_support.astype(jnp.float32)
+        own_expectation = jax.nn.softmax(own_logits, axis=-1) @ f32_support
+        public_expectation = jax.nn.softmax(public_logits, axis=-1) @ f32_support
+        all_expectation = learner_value_head.expectation.astype(jnp.float32)
+        value_ladder_logs = dict(
+            player_loss_v_own=loss_v_own,
+            player_loss_v_public=loss_v_public,
+            player_value_own_r2=calculate_r2(
+                value_prediction=own_expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            player_value_public_r2=calculate_r2(
+                value_prediction=public_expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            # Signed means (bias of the richer estimate vs the poorer) and
+            # absolute means (the actual information value magnitude).
+            player_value_info_gap_opp=average(
+                all_expectation - own_expectation, value_mask
+            ),
+            player_value_info_gap_opp_abs=average(
+                jnp.abs(all_expectation - own_expectation), value_mask
+            ),
+            player_value_info_gap_private=average(
+                own_expectation - public_expectation, value_mask
+            ),
+            player_value_info_gap_private_abs=average(
+                jnp.abs(own_expectation - public_expectation), value_mask
+            ),
+        )
+
         # Per-row R2, keyed by lambda. The lambda=1.0 (Monte Carlo) row is
         # the calibration anchor: its gap to the main head is a direct
         # bootstrap-bias readout — large/growing gap means the critic is
@@ -604,11 +659,13 @@ def train_step(
             + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
             * loss_magnet_kl
             + config.player_aux_value_coef * loss_v_aux
+            + config.player_value_ladder_coef * (loss_v_own + loss_v_public)
             + config.player_q_coef * loss_q
         )
 
         return loss, dict(
             **q_logs,
+            **value_ladder_logs,
             # Loss values
             player_loss_pg=loss_pg,
             player_loss_upgo=loss_upgo,

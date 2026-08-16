@@ -18,6 +18,11 @@ class PlayerEnvOutput:
     # Private Info
     my_moveset: ArrayLike = ()
     private_team: ArrayLike = ()
+    # Privileged (training self-play only): the opponent's match-start team
+    # sheet, frozen at THEIR first request — all-zero at deploy time. Feeds
+    # ONLY the everything-value readout; the policy/state streams never see
+    # it (rl/model/encoder.py RoundBlock).
+    opp_private_team: ArrayLike = ()
 
     action_mask: ArrayLike = ()
 
@@ -95,6 +100,14 @@ class PlayerActorOutput:
     # src x tgt action grid (stage 1, docs/q-critic-plan.md). Actors leave
     # this empty for the same replay-size reason as aux_value_logits.
     q_logits: ArrayLike = ()
+    # Learner-only (cfg.train): (T, n_bins) categorical logits of the
+    # counterfactual value ladder — `own` sees the deployable information
+    # set (no opponent team sheet), `public` sees the history context only.
+    # The main value_head reads the privileged everything-stream. Gaps
+    # between the three expectations are per-state value-of-information
+    # readouts.
+    own_value_logits: ArrayLike = ()
+    public_value_logits: ArrayLike = ()
 
 
 @dataclass

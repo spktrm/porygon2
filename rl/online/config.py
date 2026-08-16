@@ -541,6 +541,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_aux_lambdas: tuple = (0.5, 0.9, 0.95, 1.0)
     player_aux_value_coef: float = 0.5
 
+    # Counterfactual value ladder (2026-08-16): shared coefficient for the
+    # own-info (no opponent sheet) and public-info (history-only) value
+    # heads' CE losses. Critic-only representation/diagnostic heads like
+    # the aux spectrum — the policy reads the main (privileged) head's
+    # advantages exclusively.
+    player_value_ladder_coef: float = 0.25
+
     # Observer all-action Q critic (stage 1, docs/q-critic-plan.md):
     # Retrace(lambda)-trained categorical Q over the flat action grid,
     # read off the same action embeddings as the policy heads. ZERO policy

@@ -448,6 +448,30 @@ def rl_sections():
                         "player_win_adv_std",
                     ],
                 ),
+                lp(
+                    # Counterfactual value ladder (2026-08-16): all
+                    # (privileged, the main head) vs own (deployable) vs
+                    # public (history-only) — R2 per rung.
+                    "Value ladder R2",
+                    [
+                        "player_value_head_r2",
+                        "player_value_own_r2",
+                        "player_value_public_r2",
+                    ],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    # |all−own| prices the opponent's hidden team; |own−public|
+                    # prices private info over the public record. Signed
+                    # variants read systematic bias between rungs.
+                    "Value of information",
+                    [
+                        "player_value_info_gap_opp_abs",
+                        "player_value_info_gap_private_abs",
+                        "player_value_info_gap_opp",
+                        "player_value_info_gap_private",
+                    ],
+                ),
             ],
         ),
         ws.Section(

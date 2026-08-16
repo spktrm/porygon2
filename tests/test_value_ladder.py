@@ -1,0 +1,64 @@
+"""Counterfactual value ladder (2026-08-16): the privileged
+opp_private_team input must be readable ONLY by the main (everything)
+value head — the policy and the own/public ladder heads must be bitwise
+invariant to it, or the policy would train on information that does not
+exist at deploy time."""
+
+import numpy as np
+import pytest
+
+pytestmark = [pytest.mark.gpu, pytest.mark.slow]
+
+
+def test_policy_and_ladder_invariant_to_opp_private_team(
+    real_model_and_trajectory,
+):
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+
+    # ex.bin predates the field, so the baseline input carries all-zero
+    # opp_private_team; the populated variant borrows the player's own
+    # private team as a structurally valid sheet.
+    populated = actor_input.replace(
+        env=actor_input.env.replace(
+            opp_private_team=actor_input.env.private_team
+        )
+    )
+
+    base = network.apply(params, actor_input, actor_output, HeadParams())
+    priv = network.apply(params, populated, actor_output, HeadParams())
+
+    # The policy pathway never touches the sheet: bitwise identical.
+    np.testing.assert_array_equal(
+        np.asarray(base.action_head.log_policy),
+        np.asarray(priv.action_head.log_policy),
+    )
+    # Same for the deployable and public ladder rungs.
+    np.testing.assert_array_equal(
+        np.asarray(base.own_value_logits), np.asarray(priv.own_value_logits)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(base.public_value_logits),
+        np.asarray(priv.public_value_logits),
+    )
+    # The main head is ALLOWED to differ, but at zero-init gates the
+    # value_all read contributes nothing yet, so no difference is asserted
+    # here — only that the privileged path stays finite and shaped.
+    lp = np.asarray(priv.value_head.log_probs, dtype=np.float32)
+    assert np.isfinite(lp).all()
+
+
+def test_ladder_heads_present_and_shaped(real_model_and_trajectory):
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    out = network.apply(params, actor_input, actor_output, HeadParams())
+    T = actor_input.env.done.shape[0]
+    n_bins = np.asarray(out.value_head.log_probs).shape[-1]
+    assert np.asarray(out.own_value_logits).shape == (T, n_bins)
+    assert np.asarray(out.public_value_logits).shape == (T, n_bins)
+    assert np.isfinite(np.asarray(out.own_value_logits, dtype=np.float32)).all()
+    assert np.isfinite(
+        np.asarray(out.public_value_logits, dtype=np.float32)
+    ).all()

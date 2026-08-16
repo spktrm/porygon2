@@ -172,21 +172,8 @@ def test_joint_tail_clip_shrinks_field_window_to_fit_packed_budget():
     )
 
 
-@pytest.fixture(scope="module")
-def real_model_and_trajectory():
-    import jax
-
-    from rl.environment.utils import get_ex_player_step
-    from rl.model.config import get_player_model_config
-    from rl.model.heads import HeadParams
-    from rl.model.player_model import get_player_model
-
-    network = get_player_model(get_player_model_config(generation=9, train=True))
-    actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    params = network.init(
-        __import__("jax").random.key(0), actor_input, actor_output, HeadParams()
-    )
-    return network, params, actor_input, actor_output
+# real_model_and_trajectory: session-scoped fixture in conftest.py, shared
+# with the other model-forward suites so the model initialises once.
 
 
 @pytest.mark.gpu

@@ -356,6 +356,17 @@ def process_state(
         .reshape(6, NUM_ENTITY_PRIVATE_FEATURES)
         .astype(np.int32)
     )
+    # Absent on deploy-time states, pre-feature exports (ex.bin, replay
+    # shards) and states built before the opponent's first request landed —
+    # all-unspecified rows, which the entity embedder masks out.
+    if state.opp_private_team:
+        opp_private_team = (
+            np.frombuffer(state.opp_private_team, dtype=np.int16)
+            .reshape(6, NUM_ENTITY_PRIVATE_FEATURES)
+            .astype(np.int32)
+        )
+    else:
+        opp_private_team = np.zeros((6, NUM_ENTITY_PRIVATE_FEATURES), dtype=np.int32)
     revealed_team = (
         np.frombuffer(state.revealed_team, dtype=np.int16)
         .reshape(6 * 2, NUM_ENTITY_REVEALED_FEATURES)
@@ -390,6 +401,7 @@ def process_state(
         done=is_done,
         win_reward=win_reward.astype(np.float32),
         private_team=private_team,
+        opp_private_team=opp_private_team,
         public_team=public_team,
         revealed_team=revealed_team,
         field=field,
