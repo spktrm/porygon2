@@ -4329,8 +4329,12 @@ export class StateHandler {
         return { publicBuffer, revealedBuffer };
     }
 
-    getPrivateTeam(playerIndex: number): Int16Array {
-        const request = this.player.getRequest();
+    getPrivateTeam(playerIndex: number, requestOverride?: AnyObject): Int16Array {
+        // requestOverride (used by TrainablePlayerAI.ensureFirstPrivateTeam
+        // with the frozen firstRequest) sources BOTH the current- and
+        // first-request views from the override, so the encoding is a
+        // static match-start team sheet rather than live battle state.
+        const request = requestOverride ?? this.player.getRequest();
         if (request === undefined) {
             throw new Error("Request is undefined");
         }
@@ -4340,7 +4344,7 @@ export class StateHandler {
             // encoding is public-view only.
             return new Int16Array(6 * numPrivateEntityNodeFeatures);
         }
-        const firstRequest = this.player.firstRequest!;
+        const firstRequest = requestOverride ?? this.player.firstRequest!;
         const requestPokemon = request.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
@@ -4732,6 +4736,20 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
+
+        // Privileged critic input, training self-play only: the opponent's
+        // match-start team sheet (their first request, frozen). Empty at
+        // deploy time — no opponent player object exists there — and the
+        // model masks all-unspecified rows out.
+        const oppSheet = this.player.opponent?.ensureFirstPrivateTeam();
+        state.setOppPrivateTeam(
+            new Uint8Array(
+                (
+                    oppSheet ??
+                    new Int16Array(6 * numPrivateEntityNodeFeatures)
+                ).buffer,
+            ),
+        );
 
         const { publicData, revealedData } = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicData.buffer));
