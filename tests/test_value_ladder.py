@@ -4,10 +4,27 @@ value head — the policy and the own/public ladder heads must be bitwise
 invariant to it, or the policy would train on information that does not
 exist at deploy time."""
 
+import jax
 import numpy as np
 import pytest
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
+
+
+def _open_all_gates(params):
+    """Residual gates are zero-init, which makes leak tests VACUOUS at
+    init: a broken attention mask would have its leaked contribution
+    multiplied by zero and pass anyway. Setting every *_gate param to 1
+    forces all residual writes live, so the invariance assertions below
+    genuinely exercise the masks."""
+
+    def open_gate(path, leaf):
+        names = [getattr(p, "key", "") for p in path]
+        if any(str(name).endswith("gate") for name in names):
+            return jax.numpy.ones_like(leaf)
+        return leaf
+
+    return jax.tree_util.tree_map_with_path(open_gate, params)
 
 
 def test_policy_and_ladder_invariant_to_opp_private_team(
@@ -16,6 +33,7 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
+    params = _open_all_gates(params)
 
     # ex.bin predates the field, so the baseline input carries all-zero
     # opp_private_team; the populated variant borrows the player's own
@@ -42,11 +60,14 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
         np.asarray(base.public_value_logits),
         np.asarray(priv.public_value_logits),
     )
-    # The main head is ALLOWED to differ, but at zero-init gates the
-    # value_all read contributes nothing yet, so no difference is asserted
-    # here — only that the privileged path stays finite and shaped.
+    # With gates open the privileged head MUST differ under a populated
+    # sheet — if it doesn't, the value_read mask is over-masking and the
+    # all rung never sees the sheet at all (the inverse failure mode).
     lp = np.asarray(priv.value_head.log_probs, dtype=np.float32)
     assert np.isfinite(lp).all()
+    assert not np.array_equal(
+        np.asarray(base.value_head.logits), np.asarray(priv.value_head.logits)
+    )
 
 
 def test_all_rung_degrades_to_own_on_empty_sheet(real_model_and_trajectory):
@@ -58,6 +79,7 @@ def test_all_rung_degrades_to_own_on_empty_sheet(real_model_and_trajectory):
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
+    params = _open_all_gates(params)
     # ex.bin predates the field: the sheet is all-zero here.
     out = network.apply(params, actor_input, actor_output, HeadParams())
     np.testing.assert_allclose(
