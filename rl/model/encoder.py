@@ -1282,6 +1282,17 @@ class Encoder(nn.Module):
         opp_private_embeddings, opp_private_mask = self._embed_private_entities(
             env_step.opp_private_team
         )
+        # Ownership signal, reusing the SAME side_bias the public embedder
+        # applies from the (relative) SIDE feature: without it the two
+        # sheets are content-identical through the shared embedder, and the
+        # value-`all` read over [state | opp] keys has no way to tell whose
+        # mon a row describes. Zero new params.
+        private_entity_embeddings = private_entity_embeddings + self.side_bias(
+            jnp.zeros((), dtype=jnp.int32)
+        ).astype(private_entity_embeddings.dtype)
+        opp_private_embeddings = opp_private_embeddings + self.side_bias(
+            jnp.ones((), dtype=jnp.int32)
+        ).astype(opp_private_embeddings.dtype)
 
         input_mask = jnp.concatenate(
             (
