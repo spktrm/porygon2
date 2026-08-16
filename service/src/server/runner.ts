@@ -704,21 +704,17 @@ function hpDiff(battle: Battle): number {
     return p1Total - p2Total;
 }
 
-const MAX_REQUEST_COUNT = 32 * 3;
-
 export function createBattle(
     options: {
         p1Name: string;
         p2Name: string;
         p1team: string | null;
         p2team: string | null;
-        maxRequestCount?: number;
         smogonFormat: string;
     },
     debug: boolean = false,
 ) {
     const { p1Name, p2Name, p1team, p2team } = options;
-    const maxRequestCount = options.maxRequestCount ?? MAX_REQUEST_COUNT;
     const smogonFormat = options.smogonFormat.replace("_ou_all_formats", "ou");
 
     const streams = BattleStreams.getPlayerStreams(
@@ -809,16 +805,6 @@ export function createBattle(
                         }
                     }
                 }
-            }
-
-            // Check request count fallback
-            if (
-                p1.requestCount >= maxRequestCount ||
-                p2.requestCount >= maxRequestCount
-            ) {
-                p1.finishEarly();
-                p2.finishEarly();
-                break;
             }
         }
         spectator.destroy();
