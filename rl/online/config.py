@@ -37,7 +37,38 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Half-life, in games, of the bias-corrected smoothed winrate/margin
     # series logged alongside the raw per-game values.
     eval_smoothing_halflife: int = 200
-    unroll_length: int = 128
+    # Loose per-game safety bound on the actor's env loop (rng keys are
+    # pre-split to this count), NOT a target length: the service's
+    # MAX_REQUEST_COUNT force-tie at 96 requests was removed alongside the
+    # chunked-unroll change (2026-08-16) — games now run to their natural
+    # outcome (Showdown's turn-limit/endless-battle clauses and the
+    # service's 40-turn HP-stall detector are the backstops), and chunking
+    # handles any length with fixed shapes. A game that somehow exceeds
+    # this bound ends with no done row; its trailing partial chunk is
+    # dropped (PlayerActor.unroll).
+    unroll_length: int = 1024
+    # Fixed-length chunked unrolls (2026-08-16): every stored trajectory is
+    # exactly player_chunk_length transitions; games longer than one chunk
+    # are split with a one-row overlap (each chunk's final row is
+    # bootstrap-only — trained as row 0 of the next chunk), so train_step
+    # sees ONE shape forever instead of a geometric bucket family (each
+    # bucket was a separate compiled variant with its own workspace; the
+    # first top-bucket batch ~20min into a session is what OOM'd
+    # 1786537634, the Aug-15 03:26 run, and the Aug-15 23:33 run alike).
+    # Targets bootstrap at the cut from the critic — with player_lambda
+    # 0.8 the direct reward horizon is ~5 steps, so a 64-step window
+    # changes targets only within a few steps of the boundary.
+    player_chunk_length: int = 64
+    # Fixed trailing history window stored per chunk (field-history rows;
+    # the packed caches store 2x this, matching process_state's
+    # max_packed_history = 2 * max_history ratio). Tokens before the
+    # chunk's own first request are burn-in context for the recurrent
+    # history scan — the scan starts from h0 over a trailing window, which
+    # is exactly the actor's own per-step computation, so training matches
+    # acting with no stored-carry staleness. Sized ~2.5x the typical
+    # tokens-per-request times chunk length; the
+    # player_chunk_history_underrun telemetry says when it is too small.
+    player_history_length: int = 256
 
     # Batch iteration params
     batch_size: int = 4

@@ -146,7 +146,7 @@ def geometric_bucket(length: int, lo: int, hi: int) -> int:
     correlated (e.g. all describing the same trajectory's game length),
     prefer computing one shared level via _bucket_level per field, taking
     their max, and applying it uniformly via _bucket_value — see
-    rl/online/learner.py's _stack_and_pad_batch.
+    rl/online/learner.py's batch assembly (now fixed-shape _stack_batch).
     """
     return _bucket_value(_bucket_level(length, lo), lo, hi)
 
@@ -194,6 +194,95 @@ def clip_packed_history(
         level, min_length, packed_history.revealed_cache.shape[0]
     )
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
+
+
+# All eight RELEVANT_ENTITY_IDX columns (the model's _RELEVANT_ENTITY_
+# FEATURES reads the first four; the service writes up to eight).
+_ALL_RELEVANT_IDX_COLUMNS = np.array(
+    [
+        FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{k}")
+        for k in range(8)
+    ]
+)
+
+
+def clip_history_windows_tail(
+    history: PlayerHistoryOutput,
+    packed_history: PlayerPackedHistoryOutput,
+    history_length: int,
+) -> tuple[PlayerHistoryOutput, PlayerPackedHistoryOutput]:
+    """Host-side fixed-length trailing windows: the last ``history_length``
+    field steps and the ``2 * history_length`` packed-cache rows they
+    reference, zero-padded to exactly those shapes. One fixed shape means
+    the learner never recompiles (chunked unrolls, 2026-08-16), unlike the
+    geometric clip_* functions above which round variable lengths UP.
+
+    The two axes CANNOT be cut independently: each field step names its
+    packed rows by absolute row index (RELEVANT_ENTITY_IDX*), so this
+    mirrors the service's own windowing (state.ts getHistory) exactly —
+    shrink the field window until its oldest step's first packed row
+    (IDX0; rows are appended per step, so per-step row blocks are
+    contiguous and ascending) fits the packed budget, slice the caches
+    from that row, and rebase the index columns to the new start."""
+    field = np.asarray(history.field)
+    valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
+    packed_valid = int(
+        np.asarray(
+            packed_history.revealed_cache[
+                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+            ]
+            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
+        ).sum()
+    )
+    max_packed_rows = 2 * history_length
+
+    keep_steps = min(valid_steps, history_length)
+    start_row = 0
+    while keep_steps > 0:
+        oldest_step = valid_steps - keep_steps
+        oldest_row = int(
+            field[oldest_step, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0]
+        )
+        if packed_valid - oldest_row <= max_packed_rows:
+            start_row = oldest_row
+            break
+        keep_steps -= 1
+
+    if keep_steps == 0 and valid_steps > 0:
+        # Degenerate guard, mirroring the service's max(1, ...): a single
+        # step referencing more than the whole packed budget cannot occur
+        # for real games, but never ship an empty window for a non-empty
+        # history.
+        keep_steps = 1
+        start_row = int(
+            field[valid_steps - 1, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0]
+        )
+
+    start_step = valid_steps - keep_steps
+    new_field = np.zeros((history_length, field.shape[1]), dtype=field.dtype)
+    new_field[:keep_steps] = field[start_step:valid_steps]
+    if start_row > 0 and keep_steps > 0:
+        # Rebase every index column of the kept rows; entries past a row's
+        # NUM_RELEVANT are padding the consumers mask out — clip keeps them
+        # in gather range regardless.
+        rebase_at = np.ix_(np.arange(keep_steps), _ALL_RELEVANT_IDX_COLUMNS)
+        new_field[rebase_at] = np.clip(
+            new_field[rebase_at] - start_row, 0, max_packed_rows - 1
+        )
+
+    packed_end = min(packed_valid, start_row + max_packed_rows)
+    keep_rows = max(0, packed_end - start_row)
+
+    def cut_packed(x) -> np.ndarray:
+        x = np.asarray(x)
+        out = np.zeros((max_packed_rows, *x.shape[1:]), dtype=x.dtype)
+        out[:keep_rows] = x[start_row:packed_end]
+        return out
+
+    return (
+        history.replace(field=new_field),
+        jax.tree.map(cut_packed, packed_history),
+    )
 
 
 def get_action_mask(state: EnvironmentState):

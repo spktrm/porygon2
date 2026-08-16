@@ -11,7 +11,11 @@ from rl.environment.data import (
     RESERVE_ENTITY_INDICES,
 )
 from rl.environment.interfaces import Trajectory
-from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
+from rl.environment.protos.features_pb2 import (
+    FieldFeature,
+    InfoFeature,
+    PackedSetFeature,
+)
 from rl.environment.protos.service_pb2 import ActionEnum
 from rl.online.config import Porygon2LearnerConfig
 
@@ -112,6 +116,37 @@ def collect_batch_telemetry_data(
     )
     early_valid_length = 5
 
+    # Chunked unrolls: only a game's terminal chunk carries the outcome at
+    # win_reward[-1] — outcome-derived stats read those columns only, and
+    # "early game" means early REQUESTS, not a chunk's first rows.
+    is_terminal_chunk = done.any(axis=0).astype(player_valid.dtype)  # (B,)
+    request_counts = batch.player_transitions.env_output.info[
+        ..., InfoFeature.INFO_FEATURE__REQUEST_COUNT
+    ]
+    early_rows = (request_counts < early_valid_length).astype(player_valid.dtype)
+
+    # History-window coverage: fraction of in-game rows whose request
+    # precedes the trailing window's first valid token — those rows read
+    # the h0 initial state instead of real context. Only a FULL window can
+    # have dropped tokens; a part-filled one covers the game from its
+    # start. Sustained non-zero here means player_history_length is too
+    # small for player_chunk_length.
+    field_valid = (
+        batch.player_history.field[..., FieldFeature.FIELD_FEATURE__VALID] > 0
+    )
+    field_requests = batch.player_history.field[
+        ..., FieldFeature.FIELD_FEATURE__REQUEST_COUNT
+    ]
+    window_first_request = jnp.where(
+        field_valid, field_requests, jnp.iinfo(jnp.int32).max
+    ).min(axis=0)
+    window_full = history_lengths >= config.player_history_length
+    history_underrun = (
+        (request_counts < window_first_request[None, :])
+        & window_full[None, :]
+        & (player_valid > 0)
+    )
+
     telemetry = dict(
         player_trajectory_length_mean=player_lengths.mean(),
         player_trajectory_length_min=player_lengths.min(),
@@ -121,15 +156,44 @@ def collect_batch_telemetry_data(
         move_ratio=move_ratio,
         switch_ratio=switch_ratio,
         wildcard_turn=wildcard_turn.mean(),
-        reward_mean=(final_reward @ CAT_VF_SUPPORT).mean(),
+        player_chunk_terminal_frac=is_terminal_chunk.mean(),
+        player_chunk_history_underrun=renormalize(
+            history_underrun.astype(player_valid.dtype), player_valid
+        ),
+        # Whole-game length, read off the terminal chunk's done row (its
+        # REQUEST_COUNT/TURN are game totals). The only game-length signal
+        # since chunking made trajectory_length chunk-local — and the
+        # distribution to watch now that the service's 96-request force-tie
+        # is gone (chunked-unrolls change, 2026-08-16).
+        game_length_requests_mean=renormalize(
+            (request_counts * done).max(axis=0).astype(jnp.float32),
+            is_terminal_chunk,
+        ),
+        game_length_requests_max=jnp.where(
+            is_terminal_chunk.any(),
+            (request_counts * done).max(axis=0).max(),
+            0,
+        ),
+        game_length_turns_mean=renormalize(
+            (
+                batch.player_transitions.env_output.info[
+                    ..., InfoFeature.INFO_FEATURE__TURN
+                ]
+                * done
+            )
+            .max(axis=0)
+            .astype(jnp.float32),
+            is_terminal_chunk,
+        ),
+        reward_mean=renormalize(final_reward @ CAT_VF_SUPPORT, is_terminal_chunk),
         value_expectation_mean=renormalize(player_value_expectation, player_valid),
         value_expectation_early_mean=renormalize(
-            player_value_expectation[:early_valid_length],
-            player_valid[:early_valid_length],
+            player_value_expectation, player_valid * early_rows
         ),
-        early_finish_rate=(jnp.abs(final_reward @ CAT_VF_SUPPORT) < 1)
-        .astype(jnp.float32)
-        .mean(),
+        early_finish_rate=renormalize(
+            (jnp.abs(final_reward @ CAT_VF_SUPPORT) < 1).astype(jnp.float32),
+            is_terminal_chunk,
+        ),
     )
 
     if config.smogon_format != "randombattle":

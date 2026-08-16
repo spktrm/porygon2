@@ -16,6 +16,7 @@ from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import (
     NUM_PACKED_SET_FEATURES,
     clip_history,
+    clip_history_windows_tail,
     clip_packed_history,
     split_rng,
 )
@@ -41,6 +42,32 @@ _LIVE_KEY_BY_POPULATION: dict[Population, int] = {
     "main_exploiter": MAIN_EXPLOITER_KEY,
     "league_exploiter": LEAGUE_EXPLOITER_KEY,
 }
+
+
+def chunk_spans(
+    num_steps: int, chunk_length: int, game_done: bool
+) -> list[tuple[int, int]]:
+    """Inclusive (start, end) row spans splitting a ``num_steps``-step game
+    into fixed-length chunks with a one-row overlap (stride
+    chunk_length - 1): each span's end row is the next span's start row —
+    the bootstrap-only row there, the trained row here. The final span may
+    be shorter than chunk_length (the caller pads it); it exists only when
+    the game actually ended (``game_done``) — a capped no-done game's
+    trailing partial segment carries no outcome and is dropped."""
+    stride = chunk_length - 1
+    spans: list[tuple[int, int]] = []
+    for chunk_index in range(1 + max(0, (num_steps - 2) // stride)):
+        start = chunk_index * stride
+        end = start + chunk_length - 1
+        if end <= num_steps - 1:
+            spans.append((start, end))
+            if end == num_steps - 1:
+                break
+        else:
+            if game_done:
+                spans.append((start, num_steps - 1))
+            break
+    return spans
 
 
 class ActorStopped(Exception):
@@ -135,13 +162,38 @@ class PlayerActor:
             tgt=agent_output.actor_output.action_head.tgt_index.item(),
         )
 
+    def _snapshot_window(self, actor_input: PlayerActorInput):
+        """Fixed-length trailing history window as of ``actor_input``'s
+        step — the burn-in-plus-chunk context stored with a chunk whose
+        LAST row this step is. The recurrent history scan runs from h0
+        over exactly such a trailing window at act time too (the service's
+        getHistory windows to NUM_HISTORY the same way), so training on
+        these windows matches acting with no stored-carry staleness."""
+        history_length = self._learner.config.player_history_length
+        history_window, packed_window = clip_history_windows_tail(
+            actor_input.history, actor_input.packed_history, history_length
+        )
+        return packed_window, history_window
+
     def unroll(
         self,
         rng_key: jax.Array,
         player_params: Params | ParamsContainer,
         head_params: HeadParams | None = None,
-    ) -> Trajectory:
-        """Run unroll_length agent/environment steps, returning the trajectory.
+    ) -> list[Trajectory]:
+        """Run one full game (up to unroll_length steps) and return it as a
+        list of fixed-length chunks of player_chunk_length transitions each.
+
+        Chunks are start-aligned with a ONE-ROW overlap (stride
+        player_chunk_length - 1): each chunk's final row is the next
+        chunk's first row. The learner trains every row except a chunk's
+        final one there (compute_player_targets masks it), and the final
+        row supplies the value bootstrap at the cut — so every step of the
+        game gets its policy-gradient signal exactly once. The game's
+        terminal chunk is the only one carrying the outcome reward; a
+        game truncated by the unroll_length cap without a done drops its
+        trailing partial segment (rare, and those steps have no outcome
+        signal to give).
 
         player_params is device-resident Params on the direct-Agent path,
         or the host ParamsContainer when routing through the batched
@@ -199,6 +251,12 @@ class PlayerActor:
 
         player_actor_input = self._env.reset(team_tokens)
 
+        chunk_length = self._learner.config.player_chunk_length
+        stride = chunk_length - 1
+        # Trailing history windows keyed by the step index they were taken
+        # at — one per chunk boundary, plus the final step's.
+        window_snapshots: dict[int, tuple] = {}
+
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
@@ -222,35 +280,51 @@ class PlayerActor:
                 agent_output=player_agent_output,
             )
             player_traj.append(player_transition)
+            if player_step_index > 0 and player_step_index % stride == 0:
+                window_snapshots[player_step_index] = self._snapshot_window(
+                    player_actor_input
+                )
             if player_actor_input_clipped.env.done.item():
                 break
 
             action = self.player_agent_output_to_action(player_agent_output)
             player_actor_input = self._env.step(action)
 
-        if len(player_traj) < self._unroll_length:
-            padding_step = PlayerTransition(
-                env_output=player_actor_input_clipped.env.replace(
-                    done=np.zeros_like(player_actor_input_clipped.env.done)
-                ),
-                agent_output=player_agent_output,
+        player_traj = jax.device_get(player_traj)
+        num_steps = len(player_traj)
+        game_done = bool(np.asarray(player_traj[-1].env_output.done).item())
+        final_window = self._snapshot_window(player_actor_input)
+
+        def make_chunk(rows: list[PlayerTransition], window) -> Trajectory:
+            if len(rows) < chunk_length:
+                # Same padding convention as the pre-chunk whole-game path:
+                # copies of the terminal step with done zeroed — cumsum-done
+                # masking in the learner excludes them, and win_reward /
+                # public_team survive at [-1] for the outcome consumers.
+                padding_step = PlayerTransition(
+                    env_output=rows[-1].env_output.replace(
+                        done=np.zeros_like(rows[-1].env_output.done)
+                    ),
+                    agent_output=rows[-1].agent_output,
+                )
+                rows = rows + [padding_step] * (chunk_length - len(rows))
+            packed_window, history_window = window
+            return Trajectory(
+                builder_transitions=builder_trajectory,
+                builder_history=builder_history,
+                player_transitions=jax.tree.map(lambda *xs: np.stack(xs), *rows),
+                player_packed_history=packed_window,
+                player_history=history_window,
+                explore=np.array([head_params is not None]),
             )
-            player_traj += [padding_step] * (self._unroll_length - len(player_traj))
 
-        # Pack the trajectory and reset parent state.
-        player_trajectory = jax.device_get(player_traj)
-        player_trajectory: PlayerTransition = jax.tree.map(
-            lambda *xs: np.stack(xs), *player_trajectory
-        )
-
-        return Trajectory(
-            builder_transitions=builder_trajectory,
-            builder_history=builder_history,
-            player_transitions=player_trajectory,
-            player_packed_history=player_actor_input.packed_history,
-            player_history=player_actor_input.history,
-            explore=np.array([head_params is not None]),
-        )
+        return [
+            make_chunk(
+                player_traj[start : end + 1],
+                window_snapshots.get(end, final_window),
+            )
+            for start, end in chunk_spans(num_steps, chunk_length, game_done)
+        ]
 
     def split_rng(self) -> jax.Array:
         self._rng_key, subkey = split_rng(self._rng_key)
@@ -290,15 +364,19 @@ class PlayerActor:
             player_params = jax.device_put(params_container.player_params)
         subkey = self.split_rng()
 
-        act_out = self.unroll(
+        chunks = self.unroll(
             rng_key=subkey, player_params=player_params, head_params=head_params
         )
         self.reset_game_id()
 
         if should_push_trajectory(self._is_eval, do_push, self._env.username):
-            act_out = jax.device_get(act_out)
-            self._learner.enqueue_traj(self.population, act_out)
-        return act_out
+            for chunk in chunks:
+                self._learner.enqueue_traj(self.population, chunk)
+        # Callers consume whole-game facts off the return value
+        # (win_reward[-1] payoff, public_team[-1] mon differential, the
+        # explore flag): the last chunk's padding rows copy the terminal
+        # step, so it serves all of them.
+        return chunks[-1]
 
     def pull_own_player(self) -> ParamsContainer:
         """This actor's own live population's current params — MAIN_KEY for

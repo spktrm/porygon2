@@ -156,6 +156,20 @@ def compute_player_targets(
     win_returns = targets_tm1
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
+    # Chunked unrolls: a chunk's final row is bootstrap-only — it anchors
+    # the recursions above (v_t / UPGO's init carry read its value) but
+    # takes no loss here, because chunks overlap by one row and that same
+    # step trains as row 0 of the NEXT chunk. Exception: a done row on the
+    # final position is the game's own terminal row (no next chunk) and
+    # keeps its value target (= the terminal reward). policy_mask below
+    # inherits this through value_mask; so do the aux-CE, Q-CE and EMA
+    # masks in train_step.
+    is_final_row = (
+        jnp.arange(value_mask.shape[0])[:, None] == value_mask.shape[0] - 1
+    )
+    value_mask = value_mask & (
+        ~is_final_row | batch.player_transitions.env_output.done.astype(jnp.bool_)
+    )
 
     # UPGO runs in scalar value space (the categorical machinery above
     # exists for the CE value loss; the cut decision is a scalar

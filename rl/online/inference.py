@@ -83,7 +83,7 @@ def _stack_axis0_to(target: int):
     ``target`` comes from ONE shared bucket level across the batch's
     history AND packed_history (computed in _run_group) rather than each
     leaf group's own max — the same reasoning as the learner's
-    _stack_and_pad_batch: both lengths describe the same fact (how far
+    the learner's old _stack_and_pad_batch: both lengths describe the same fact (how far
     the batch's longest game has run), so bucketing them independently
     makes XLA trace the PRODUCT of the two axes' bucket sets (4 field x
     5 packed = 20 combos) instead of the shared level's 5, on top of the

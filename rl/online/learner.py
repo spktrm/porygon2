@@ -33,12 +33,6 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import (
-    _bucket_level,
-    _bucket_value,
-    _history_level,
-    _packed_history_level,
-    clip_history,
-    clip_packed_history,
     close_tqdm_bar,
     next_tqdm_position,
 )
@@ -781,6 +775,15 @@ def train_step(
         )
 
         builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
+        # Chunked unrolls: compute_builder_targets reads the game outcome
+        # off player win_reward[-1], which only the game's TERMINAL chunk
+        # carries — a mid-game chunk's builder rows would grade the team
+        # against a zero payoff. average()-based builder losses are
+        # empty-mask-safe (0, not NaN) if a batch happens to hold no
+        # terminal chunk.
+        builder_valid = builder_valid & player_transitions.env_output.done.any(
+            axis=0
+        )[None, :].astype(jnp.bool_)
         if own_rows is not None:
             # Foreign rows carry the FOREIGN population's team-building
             # episode — main's builder must not imitate exploiter teams.
@@ -989,67 +992,28 @@ _TRAIN_STEP_JIT = jax.jit(
 )
 
 
-def _stack_and_pad_batch(
-    batch: list[Trajectory],
-    player_transition_min_length: int = 32,
-    player_history_min_length: int = 64,
-    rng_key: jax.Array = None,
-) -> Batch:
-    """Stacks a list of trajectories and pads them to a fixed resolution."""
+def _stack_batch(batch: list[Trajectory], rng_key: jax.Array = None) -> Batch:
+    """Stacks a list of fixed-shape trajectory chunks into a Batch.
+
+    Chunked unrolls (2026-08-16) made every stored trajectory exactly
+    (player_chunk_length, player_history_length)-shaped at the actor
+    (PlayerActor.unroll), so the geometric shared-bucket machinery that
+    used to live here — one clip level per batch, sized by the batch's
+    longest game — is gone, and with it the whole family of
+    _TRAIN_STEP_JIT shape variants it generated (each a separately
+    compiled executable with its own workspace: the first top-bucket
+    batch of a session, arriving once games ran long enough, is what
+    OOM'd sessions 1786537634 and 1786712180)."""
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
-    )
-
-    max_valid = (
-        stacked_trajectory.player_transitions.env_output.done.argmax(axis=0)
-        .max()
-        .item()
-    )
-
-    # One shared bucket level across player_transitions/history/packed_
-    # history instead of three independently-computed geometric_bucket()
-    # calls: all three lengths are different views of the same fact (how
-    # long this batch's games ran), so bucketing them independently lets
-    # XLA see the PRODUCT of each axis's distinct values as new shapes for
-    # _TRAIN_STEP_JIT, not just the sum — main's wider opponent/game-length
-    # diversity under the three-population redesign turned this from a
-    # latent inefficiency into frequent, ongoing recompilation (each
-    # permanently retained in JAX's compile cache) that both throttled
-    # main's step throughput and was a real contributor to the OOM-guard
-    # trip after ~1hr on 2026-08-12. Taking the max of each axis's own
-    # required level (rather than letting one field's level drive the
-    # others) means no field is ever truncated below what it individually
-    # needed — this only ever costs extra padding, never data loss.
-    level = max(
-        _bucket_level(max_valid, player_transition_min_length),
-        _history_level(stacked_trajectory.player_history, player_history_min_length),
-        _packed_history_level(
-            stacked_trajectory.player_packed_history, player_history_min_length
-        ),
-    )
-
-    num_valid = _bucket_value(
-        level,
-        player_transition_min_length,
-        stacked_trajectory.player_transitions.env_output.done.shape[0],
     )
 
     return Batch(
         builder_transitions=stacked_trajectory.builder_transitions,
         builder_history=stacked_trajectory.builder_history,
-        player_transitions=jax.tree.map(
-            lambda x: x[:num_valid], stacked_trajectory.player_transitions
-        ),
-        player_packed_history=clip_packed_history(
-            stacked_trajectory.player_packed_history,
-            min_length=player_history_min_length,
-            level=level,
-        ),
-        player_history=clip_history(
-            stacked_trajectory.player_history,
-            min_length=player_history_min_length,
-            level=level,
-        ),
+        player_transitions=stacked_trajectory.player_transitions,
+        player_packed_history=stacked_trajectory.player_packed_history,
+        player_history=stacked_trajectory.player_history,
         reuse_count=(
             ()
             if isinstance(stacked_trajectory.reuse_count, tuple)
@@ -1737,7 +1701,7 @@ class Learner:
                 pop.consumer_progress.update(minibatch_size)
 
                 init_key, batch_key = jax.random.split(init_key)
-                stacked = _stack_and_pad_batch(batch, rng_key=batch_key)
+                stacked = _stack_batch(batch, rng_key=batch_key)
                 while not pop.done:
                     try:
                         pop.device_q.put(stacked, timeout=1.0)
