@@ -5,14 +5,17 @@ Creates/refreshes two views:
   - pokemon-rl-offline -> "Critic health"  (offline critic / Phi ensemble)
 
 Panel keys mirror what rl/main.py and rl/offline/train.py log; when metrics
-are added or renamed, update the sections here and re-run. Note each run
-SAVES A NEW VIEW (the API matches by internal id, not display name), so
-delete the superseded view in the wandb UI afterwards — or pass the old
-view's URL via --update-url to edit it in place.
+are added or renamed, update the sections here and re-run. Each run without
+an --update-url SAVES A NEW VIEW (the API matches by internal id, not
+display name); superseded copies are then PRUNED automatically — after each
+save, every other view in the project with the SAME display name is
+deleted. Personal workspaces ("<user>'s workspace") and any differently
+named views are never touched. Pass --keep-old-views to skip pruning.
 
 Usage:
     python scripts/wandb_views.py [--entity ENTITY]
         [--update-rl-url URL] [--update-offline-url URL]
+        [--keep-old-views]
 
 Requires `pip install wandb-workspaces` and a logged-in wandb credential.
 """
@@ -31,6 +34,44 @@ if not hasattr(wandb.util, "generate_id"):
 
 import wandb_workspaces.reports.v2 as wr
 import wandb_workspaces.workspaces as ws
+from wandb_workspaces.workspaces import internal as ws_internal
+
+import wandb
+
+_LIST_VIEWS_QUERY = """
+query Views($entityName: String, $name: String, $viewType: String = "project-view") {
+  project(name: $name, entityName: $entityName) {
+    allViews(viewType: $viewType) {
+      edges { node { id name displayName } }
+    }
+  }
+}"""
+
+_DELETE_VIEW_MUTATION = """
+mutation DeleteView($id: ID) { deleteView(input: {id: $id}) { success } }"""
+
+
+def prune_stale_views(entity, project, display_name, keep_id):
+    """Deletes every saved view in the project whose display name matches
+    the view this script just saved, except the saved copy itself — the
+    duplicates left behind by past runs that saved new views instead of
+    updating in place. Matching on display name is the safety boundary:
+    personal workspaces ("<user>'s workspace") and hand-made views are
+    never touched."""
+    api = wandb.Api()
+    resp = ws_internal.execute_graphql(
+        api, _LIST_VIEWS_QUERY, {"entityName": entity, "name": project}
+    )
+    edges = ((resp.get("project") or {}).get("allViews") or {}).get("edges", [])
+    for edge in edges:
+        node = edge["node"]
+        if node["displayName"] != display_name or node["id"] == keep_id:
+            continue
+        result = ws_internal.execute_graphql(
+            api, _DELETE_VIEW_MUTATION, {"id": node["id"]}
+        )
+        ok = result.get("deleteView", {}).get("success")
+        print(f"{project}: pruned stale '{display_name}' view {node['id']} (ok={ok})")
 
 
 def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
@@ -417,11 +458,33 @@ def rl_sections():
                 lp("Reward mean", ["reward_mean"]),
                 lp("History & wildcard", ["history_lengths_mean", "wildcard_turn"]),
                 lp(
-                    "Trajectory lengths",
+                    # Whole-game length off terminal chunks' done rows — the
+                    # distribution to watch since the 96-request force-tie
+                    # was removed (2026-08-16).
+                    "Game length",
+                    [
+                        "game_length_requests_mean",
+                        "game_length_requests_max",
+                        "game_length_turns_mean",
+                    ],
+                ),
+                lp(
+                    # Chunked unrolls: valid rows per 64-row chunk (padding
+                    # share), terminal-chunk fraction (~1/chunks-per-game),
+                    # and history-window underrun (sustained >0 means
+                    # player_history_length is too small).
+                    "Chunk lengths",
                     [
                         "player_trajectory_length_mean",
                         "player_trajectory_length_min",
                         "player_trajectory_length_max",
+                    ],
+                ),
+                lp(
+                    "Chunk health",
+                    [
+                        "player_chunk_terminal_frac",
+                        "player_chunk_history_underrun",
                     ],
                 ),
                 lp(
@@ -609,6 +672,7 @@ def save_view(entity, project, name, sections, update_url, settings=None, force_
         workspace.settings = settings
     workspace.save()
     print(f"{project} view: {workspace.url}")
+    return workspace
 
 
 def main():
@@ -616,9 +680,14 @@ def main():
     parser.add_argument("--entity", default="jtwin")
     parser.add_argument("--update-rl-url", default=None)
     parser.add_argument("--update-offline-url", default=None)
+    parser.add_argument(
+        "--keep-old-views",
+        action="store_true",
+        help="Skip deleting superseded same-name views after saving.",
+    )
     args = parser.parse_args()
 
-    save_view(
+    rl_workspace = save_view(
         args.entity,
         "pokemon-rl",
         "Signal health",
@@ -633,13 +702,23 @@ def main():
         settings=ws.WorkspaceSettings(x_axis="training_step"),
         force_x="training_step",
     )
-    save_view(
+    offline_workspace = save_view(
         args.entity,
         "pokemon-rl-offline",
         "Critic health",
         offline_sections(),
         args.update_offline_url,
     )
+    if not args.keep_old_views:
+        prune_stale_views(
+            args.entity, "pokemon-rl", "Signal health", rl_workspace._internal_id
+        )
+        prune_stale_views(
+            args.entity,
+            "pokemon-rl-offline",
+            "Critic health",
+            offline_workspace._internal_id,
+        )
 
 
 if __name__ == "__main__":
