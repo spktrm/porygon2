@@ -96,10 +96,15 @@ class PlayerActorOutput:
     # empty so replay transitions stay small.
     aux_value_logits: ArrayLike = ()
     # Learner-only (cfg.train and q_head.enabled): (T, A, n_bins)
-    # categorical logits of the observer all-action Q critic over the flat
-    # src x tgt action grid (stage 1, docs/q-critic-plan.md). Actors leave
-    # this empty for the same replay-size reason as aux_value_logits.
+    # categorical logits of the all-action Q critic over the flat src x tgt
+    # action grid (docs/q-critic-plan.md). q_logits is the privileged rung
+    # (conditioned on value_all — drives the Retrace recursion);
+    # private_q_logits shares every head param but is conditioned on the
+    # deployable information set, and trains by CE against the same Retrace
+    # labels. Actors leave both empty for the same replay-size reason as
+    # aux_value_logits.
     q_logits: ArrayLike = ()
+    private_q_logits: ArrayLike = ()
     # Learner-only (cfg.train): (T, n_bins) categorical logits of the
     # counterfactual value ladder — `private` sees the deployable information
     # set (no opponent team sheet), `public` sees the history context only.

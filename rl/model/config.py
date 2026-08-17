@@ -141,21 +141,12 @@ def get_player_model_config(
     cfg.encoder.round.use_bias = encoder_use_bias
     cfg.encoder.round.qk_layer_norm = encoder_qk_layer_norm
 
-    # Per-modality untied src/tgt pointer heads over the action-slot
-    # embeddings: each modality owns num_blocks residual blocks per role
-    # plus its own q/k projections (asymmetric bilinear form — transposed
-    # and diagonal grid cells are independent). Depth restores the
-    # November finding that deep, modality-separated action decoders were
-    # necessary; per-modality params restore independent logit scales and
-    # gradient routing.
-    cfg.pi_head = ConfigDict()
-    cfg.pi_head.num_blocks = 2
-    cfg.pi_head.qk_logits = ConfigDict()
-    cfg.pi_head.qk_logits.num_heads = 1
-    cfg.pi_head.qk_logits.use_bias = True
-    cfg.pi_head.qk_logits.qk_layer_norm = True
-    cfg.pi_head.src_mlp = ConfigDict()
-    cfg.pi_head.tgt_mlp = ConfigDict()
+    # Within-modality (micro) readout: NO config block — the head is a
+    # parameter-less dot grid over the typed trunk streams (2026-08-17)
+    # plus three zero-init per-group scales. The modality depth the
+    # November experiments proved necessary lives in the round trunk
+    # (move/switch/target residual streams with per-type gates), not in
+    # per-modality head stacks.
 
     # Dedicated modality-level head: per-modality attention pooling over
     # src-slot embeddings, shared MLP, zero-init output layer (keeps the
@@ -195,19 +186,27 @@ def get_player_model_config(
         cfg.aux_v_head.num_heads * len(CAT_VF_SUPPORT),
     )
 
-    # Observer all-action Q head (learner-only; stage 1 of
+    # Privileged two-rung all-action Q head (learner-only;
     # docs/q-critic-plan.md): categorical logits over CAT_VF_SUPPORT per
-    # src x tgt cell, read off the same action embeddings as pi_head. One
-    # residual block per role — the readout leans on the trunk/decoder
-    # depth that already exists rather than duplicating pi_head's
-    # per-modality stacks. Params exist in the tree only when enabled
-    # (module never called otherwise), so flipping this on is an
-    # architecture change for checkpoint purposes.
+    # src x tgt cell, read off the same action embeddings as the policy
+    # heads and conditioned on a pooled value embedding — the one module
+    # is called twice, with the privileged value_all embedding (Q_all,
+    # drives Retrace) and the private value embedding (Q_private, the
+    # policy's information set), sharing every param across rungs. One
+    # residual block per role — the readout leans on the trunk depth that
+    # already exists. layer_sizes pins each role MLP's output back to
+    # entity_size: the conditioning concat doubles the input width, and
+    # the MLP default (output = input width) would break the residual.
+    # Params exist in the tree only when enabled (module never called
+    # otherwise), so flipping this on is an architecture change for
+    # checkpoint purposes.
     cfg.q_head = ConfigDict()
     cfg.q_head.enabled = q_head_enabled
     cfg.q_head.num_blocks = 1
     cfg.q_head.src_mlp = ConfigDict()
+    cfg.q_head.src_mlp.layer_sizes = entity_size
     cfg.q_head.tgt_mlp = ConfigDict()
+    cfg.q_head.tgt_mlp.layer_sizes = entity_size
     cfg.q_head.qk_logits = ConfigDict()
     cfg.q_head.qk_logits.num_heads = len(CAT_VF_SUPPORT)
     cfg.q_head.qk_logits.use_bias = True
@@ -218,9 +217,6 @@ def get_player_model_config(
         # log_policy/action_index, which the Retrace target code does not
         # yet consume. Fail loudly rather than train a silently-wrong Q.
         raise ValueError("q_head requires num_decision_slots == 1 (singles)")
-
-    for head in [cfg.pi_head]:
-        head.train = train
 
     return cfg
 

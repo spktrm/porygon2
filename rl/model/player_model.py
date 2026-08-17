@@ -26,9 +26,9 @@ from rl.model.heads import (
     HeadParams,
     MacroHead,
     MultiLambdaValueLogitHead,
-    PerModalityPolicyHead,
     QValueHead,
     SlotConditioning,
+    MicroHead,
     calculate_hierarchical_prior,
     compute_policy_metrics,
     sample_categorical,
@@ -41,7 +41,12 @@ class Porygon2PlayerModel(nn.Module):
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
-        self.pi_head = PerModalityPolicyHead(self.cfg.pi_head)
+        # Typed action streams (2026-08-17): the trunk carries move /
+        # switch / target slots as separate residual streams, so the
+        # within-modality readout is a parameter-less dot grid and the
+        # modality head pools typed spaces — depth lives in the trunk,
+        # not in per-modality head stacks.
+        self.micro_head = MicroHead()
         self.macro_head = MacroHead(self.cfg.macro_head)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
         self.aux_v_head = MultiLambdaValueLogitHead(self.cfg.aux_v_head)
@@ -60,21 +65,25 @@ class Porygon2PlayerModel(nn.Module):
             # doubles resume via load-mode "params" fresh-inits this.
             self.slot_conditioning = SlotConditioning()
         if self.cfg.get("q_head") is not None and self.cfg.q_head.enabled:
-            # Observer Q critic (stage 1, docs/q-critic-plan.md). Same
+            # Privileged two-rung Q critic (docs/q-critic-plan.md): the one
+            # bound module is called twice — conditioned on value_all
+            # (Q_all, privileged) and on the private value embedding
+            # (Q_private) — sharing all params, the same calibration
+            # coupling as v_head's private readout. Same
             # params-only-when-called convention as slot_conditioning:
             # checkpoints from q-disabled configs are unaffected, and a
             # resume across the flip goes through load-mode "params".
             self.q_head = QValueHead(self.cfg.q_head)
 
-    def _forward_pi_head(self, action_embeddings: jax.Array):
-        """Per-modality src x tgt pointer logits.
+    def _forward_micro_head(self, action_embeddings: jax.Array):
+        """Within-modality src x tgt dot logits over typed embeddings.
 
-        action_embeddings: (NUM_ACTION_FEATURES, entity_size), already
-        normed by the encoder's out-norms. Returns
-        (NUM_ACTION_FEATURES**2,) src x tgt logits, each cell scored by
-        its modality's own head.
+        action_embeddings: (NUM_ACTION_FEATURES, entity_size), the typed
+        trunk streams scattered back slot-aligned and normed by the
+        encoder's per-group out-norms. Returns (NUM_ACTION_FEATURES**2,)
+        src x tgt logits from the parameter-less dot readout.
         """
-        return self.pi_head(action_embeddings)
+        return self.micro_head(action_embeddings)
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
@@ -159,7 +168,7 @@ class Porygon2PlayerModel(nn.Module):
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
-        square_logits = self._forward_pi_head(action_embeddings) / temp
+        square_logits = self._forward_micro_head(action_embeddings) / temp
 
         # Hierarchical composition: a macro softmax over modalities times a
         # micro softmax within each modality, multiplied in log space. The
@@ -238,7 +247,7 @@ class Porygon2PlayerModel(nn.Module):
         provided so the learner's recompute conditions on the stored
         choice."""
         flat_valid_mask = valid_mask.reshape(-1)
-        square_logits = self._forward_pi_head(action_embeddings) / temp
+        square_logits = self._forward_micro_head(action_embeddings) / temp
 
         modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
         valid_per_modality = flat_valid_mask[:, None] & modality_oh
@@ -432,11 +441,19 @@ class Porygon2PlayerModel(nn.Module):
                 ).logits,
             )
             if self.cfg.get("q_head") is not None and self.cfg.q_head.enabled:
-                # Observer all-action Q readout over the flat action grid
-                # — (T, N*N, n_bins) categorical logits. Retrace targets
-                # and diagnostics live learner-side; nothing here feeds
-                # the policy (stage 1, docs/q-critic-plan.md).
-                outputs = outputs.replace(q_logits=self.q_head(action_embeddings))
+                # Two-rung all-action Q readout over the flat action grid
+                # — (T, N*N, n_bins) categorical logits per rung. Q_all is
+                # privileged via the value_all conditioning and drives the
+                # Retrace recursion; Q_private shares every param but sees
+                # only the policy's information set. Retrace targets and
+                # diagnostics live learner-side; nothing here feeds the
+                # policy (docs/q-critic-plan.md).
+                outputs = outputs.replace(
+                    q_logits=self.q_head(action_embeddings, value_embeddings),
+                    private_q_logits=self.q_head(
+                        action_embeddings, private_value_embeddings
+                    ),
+                )
         return outputs
 
 

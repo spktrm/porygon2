@@ -395,3 +395,35 @@ for indices in [
 ]:
     assert len(indices) == len(set(indices)), "Duplicate indices found"
     indices.sort()
+
+
+# Typed action-slot partition (2026-08-17): move / switch / target — the
+# canonical source for the encoder's typed residual streams and the policy
+# readout's per-type scales. Move slots are move-feature-derived (regular +
+# wildcard); switch slots are entity-derived (the reserve candidates —
+# battle-switch tgt keys / preview srcs — plus the two ALLY_i_SWITCH srcs
+# carrying the outgoing active); the remaining structural slots (ally/enemy
+# targets, TARGET_*, pass, default) only ever act as grid keys or
+# OTHER-modality srcs. The three groups partition all NUM_ACTION_FEATURES
+# slots (asserted below).
+MOVE_SLOT_INDICES = MOVE_INDICES
+SWITCH_SLOT_INDICES = np.sort(
+    np.concatenate([RESERVE_ENTITY_INDICES, ALLY_SWITCH_INDICES])
+)
+TARGET_SLOT_INDICES = np.setdiff1d(
+    np.arange(NUM_ACTION_FEATURES),
+    np.concatenate([MOVE_SLOT_INDICES, SWITCH_SLOT_INDICES]),
+)
+NUM_ACTION_SLOT_GROUPS = 3
+# Per-src-slot group id (0 = move, 1 = switch, 2 = target) and its
+# per-grid-cell broadcast: modality — and therefore group — is a function
+# of the src half only, like FLAT_MODALITY_MASK above.
+SRC_GROUP_MASK = np.full(NUM_ACTION_FEATURES, 2, dtype=np.int32)
+SRC_GROUP_MASK[MOVE_SLOT_INDICES] = 0
+SRC_GROUP_MASK[SWITCH_SLOT_INDICES] = 1
+FLAT_SRC_GROUP_MASK = np.repeat(SRC_GROUP_MASK, NUM_ACTION_FEATURES)
+
+assert (
+    len(MOVE_SLOT_INDICES) + len(SWITCH_SLOT_INDICES) + len(TARGET_SLOT_INDICES)
+    == NUM_ACTION_FEATURES
+), "Typed slot groups must partition the action slots"

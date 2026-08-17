@@ -12,6 +12,7 @@ from rl.environment.data import (
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     MOVE_INDICES,
+    MOVE_SLOT_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
@@ -20,7 +21,9 @@ from rl.environment.data import (
     PASS_INDICES,
     REGULAR_MOVE_INDICES,
     RESERVE_ENTITY_INDICES,
+    SWITCH_SLOT_INDICES,
     TARGET_INDICES,
+    TARGET_SLOT_INDICES,
     WILDCARD_MOVE_INDICES,
 )
 from rl.environment.interfaces import (
@@ -81,21 +84,14 @@ from rl.model.modules import (
     one_hot_concat_jax,
 )
 
-# Action-decoder slot groups, segregated by input provenance rather than by
-# behavioural modality. Move slots (regular + wildcard) are move-feature-derived
-# and share a decoder; switch slots are entity-derived — the reserve candidates
-# (battle-switch tgt keys / preview srcs) plus the two ALLY_i_SWITCH srcs that
-# carry the outgoing active entity; the remaining target and structural slots
-# (ally/enemy targets, TARGET_*, pass, default) only ever act as bilinear keys.
-# These three groups partition all NUM_ACTION_FEATURES slots.
-_MOVE_SLOTS = np.asarray(MOVE_INDICES)
-_SWITCH_SLOTS = np.concatenate(
-    [np.asarray(RESERVE_ENTITY_INDICES), np.asarray(ALLY_SWITCH_INDICES)]
-)
-_TARGET_STATIC_SLOTS = np.setdiff1d(
-    np.arange(NUM_ACTION_FEATURES),
-    np.concatenate([_MOVE_SLOTS, _SWITCH_SLOTS]),
-)
+# Typed action-slot groups (canonical partition lives in
+# rl/environment/data.py next to the modality masks): move slots are
+# move-feature-derived, switch slots entity-derived, target/structural
+# slots key-only. Since 2026-08-17 the groups are not just decoder
+# bookkeeping — each is its own residual stream through the round trunk.
+_MOVE_SLOTS = np.asarray(MOVE_SLOT_INDICES)
+_SWITCH_SLOTS = np.asarray(SWITCH_SLOT_INDICES)
+_TARGET_STATIC_SLOTS = np.asarray(TARGET_SLOT_INDICES)
 
 
 def _lifted_entity_vmap(method):
@@ -127,6 +123,16 @@ ACTION_DECODER_SLOT_GROUPS = (
     ("switch", _SWITCH_SLOTS),
     ("target", _TARGET_STATIC_SLOTS),
 )
+# Slot-aligned indices of the concatenated action stream's rows
+# ([move | switch | target] order) and the split points between groups —
+# the gather on the way into the trunk and the scatter back out are the
+# same permutation.
+ACTION_GROUP_SLOTS = np.concatenate(
+    [slot_indices for _, slot_indices in ACTION_DECODER_SLOT_GROUPS]
+)
+ACTION_GROUP_SPLITS = np.cumsum(
+    [len(slot_indices) for _, slot_indices in ACTION_DECODER_SLOT_GROUPS]
+)[:-1]
 
 # Intra-entity attribute-token types: rows of the shared token-type bias
 # table, giving the (otherwise permutation-invariant) intra-entity attention
@@ -199,35 +205,49 @@ class EntityAttentionPool(nn.Module):
 
 
 class RoundBlock(nn.Module):
-    """One trunk round over separate residual streams — state, opp
-    (privileged team-sheet tokens), action, and the value ladder — with
-    explicit directional decodes replacing the old fused sequence + block
-    attention mask (redesign 2026-08-16). Per round:
+    """One trunk round over two CONCATENATED group streams plus opp and
+    the value ladder (redesign 2026-08-17): the STATE stream is the
+    concat [private | public | field | prev_action | history] (history =
+    the recurrent history embeddings — rows + field state + pooled
+    latents — a full state-group member, not external read-only KV), the
+    ACTION stream is [move | switch | target]. The concats are built
+    ONCE by the encoder and carried through the scan as-is; substream
+    identity survives via per-substream input norms, static slice
+    boundaries (derived from the substream valid masks) and PER-SUBSTREAM
+    GATE VECTORS — each write to a group stream is scaled by its
+    substream's own zero-init scalar, broadcast over that substream's
+    rows. Per round:
 
-        1. fused [state | opp] self-attention under a block mask: state
-           rows attend state ONLY (the one leak-critical rule — the
-           policy decodes from state, so privileged rows must never write
-           into it), opp rows attend state + opp, so the opponent sheet
-           is CONTEXTUALISED against the live game each round instead of
-           read as static embeddings
-        2. action self-attention (options compare with each other)
-        3. history -> state decode (only state reads the recurrent
-           history states; everything else receives it via state)
-        4. state -> action decode (kv = state rows only, never opp)
-        5. action -> state decode (option evaluations feed back into the
-           state stream, giving the two streams shared depth)
-        6. value-ladder reads. `all` and `private` share one fused read
+        1. state self-attention: one module over the state concat,
+           per-substream gate vector. Within-type pairs are a subset of
+           this all-pairs attention, so there are no intra self-attn
+           modules
+        2. opp cross-read: opp reads [state | opp] (one module) so the
+           opponent sheet is CONTEXTUALISED against the live game each
+           round. Nothing that feeds the policy ever reads opp (the one
+           leak-critical rule — opp is consumed only by the value-`all`
+           read in step 4)
+        3. action self-attention: one module over the action concat,
+           per-type gate vector — option comparison, within- and
+           cross-type, in one all-pairs attention; then the EXCHANGE:
+           state -> action decode (q = action, kv = state rows only,
+           never opp), per-type gate vector, followed by action -> state
+           decode (q = state, kv = the updated action), per-substream
+           gate vector
+        4. value-ladder reads. `all` and `private` share one fused read
            module with per-rung key masks (`all` sees [state | opp],
            `private` sees state only) but are otherwise INDEPENDENT
            estimators — separate query inits and separate residual gates
-           (user decision 2026-08-16; the earlier fully-shared variant
-           made the gap confound-free at the cost of specialisation).
-           `public` reads the recurrent history context only (its
-           information set differs structurally, so it keeps its own
-           stream/read/head).
-        7. one FFW, params shared across every stream (per-token, so
-           identical math to a single FFW over one fused sequence), each
-           stream behind its own gate
+           (user decision 2026-08-16). `public` reads the RAW history
+           inputs (raw_history / raw_history_valid, the pre-trunk
+           recurrent embeddings) — NOT the state stream's history slice,
+           which mixes with private tokens in the state self-attention;
+           reading raw keeps the public rung's information set purely
+           public-historical
+        5. group-level FFWs: one state FFW, one action FFW (per-token,
+           applied to the group stream under its per-substream gate
+           vector); opp and the value rungs sit outside both groups and
+           keep their own FFWs
 
     Every residual write stays behind a zero-init gate so a round starts
     as a no-op; nn.scan-ned num_rounds times with stacked params so every
@@ -243,13 +263,24 @@ class RoundBlock(nn.Module):
     def __call__(
         self,
         streams: tuple[
-            jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
+            jax.Array,
         ],
-        state_valid: jax.Array,
+        private_valid: jax.Array,
+        public_valid: jax.Array,
+        field_valid: jax.Array,
+        prev_action_valid: jax.Array,
+        history_valid: jax.Array,
         opp_valid: jax.Array,
-        action_valid: jax.Array,
-        history_context: jax.Array,
-        history_mask: jax.Array,
+        move_valid: jax.Array,
+        switch_valid: jax.Array,
+        target_valid: jax.Array,
+        raw_history: jax.Array,
+        raw_history_valid: jax.Array,
     ):
         state, opp, action, value_all, value_private, value_public = streams
         rcfg = self.cfg.round
@@ -268,10 +299,45 @@ class RoundBlock(nn.Module):
         n_value = value_all.shape[0]
         value_valid = jnp.ones(n_value, dtype=jnp.bool_)
 
+        # Substream boundaries come from the (static) valid-mask shapes;
+        # the concat order is fixed by the encoder.
+        state_parts = (
+            ("private", private_valid.shape[0]),
+            ("public", public_valid.shape[0]),
+            ("field", field_valid.shape[0]),
+            ("prev_action", prev_action_valid.shape[0]),
+            ("history", history_valid.shape[0]),
+        )
+        action_parts = (
+            ("move", move_valid.shape[0]),
+            ("switch", switch_valid.shape[0]),
+            ("target", target_valid.shape[0]),
+        )
+        state_valid = jnp.concatenate(
+            (
+                private_valid,
+                public_valid,
+                field_valid,
+                prev_action_valid,
+                history_valid,
+            ),
+            axis=0,
+        )
+        action_valid = jnp.concatenate(
+            (move_valid, switch_valid, target_valid), axis=0
+        )
+
         def gate(name: str) -> jax.Array:
             return self.param(name, nn.initializers.zeros_init(), (1,)).astype(
                 state.dtype
             )
+
+        def group_gate(parts, pattern: str) -> jax.Array:
+            """Per-substream zero-init scalars broadcast to a (rows, 1)
+            gate vector over the group concat."""
+            return jnp.concatenate(
+                [jnp.broadcast_to(gate(pattern.format(name)), (n,)) for name, n in parts]
+            )[:, None]
 
         def attend(name: str, q, q_valid, kv, kv_valid, allowed=None):
             mask = create_attention_mask(q_valid, kv_valid)
@@ -281,42 +347,42 @@ class RoundBlock(nn.Module):
                 q=layer_norm(q), kv=layer_norm(kv), mask=mask
             )
 
-        # Fused [state | opp] self-attention. Block rule: state rows read
-        # state only; opp rows read state + opp. np mask — sizes are
-        # trace-static.
-        state_opp = jnp.concatenate((state, opp), axis=0)
-        state_opp_valid = jnp.concatenate((state_valid, opp_valid), axis=0)
-        state_opp_allowed = np.zeros((n_state + n_opp,) * 2, dtype=bool)
-        state_opp_allowed[:n_state, :n_state] = True
-        state_opp_allowed[n_state:, :] = True
-        state_opp_attn = attend(
-            "state_opp_self_attn",
-            state_opp,
-            state_opp_valid,
-            state_opp,
-            state_opp_valid,
-            allowed=state_opp_allowed,
+        # 1. State self-attention over the group concat, per-substream
+        # gate vector.
+        state = state + group_gate(state_parts, "{}_global_gate") * attend(
+            "state_global_attn", state, state_valid, state, state_valid
         )
-        state = state + gate("state_self_gate") * state_opp_attn[:n_state]
-        opp = opp + gate("opp_self_gate") * state_opp_attn[n_state:]
 
-        action = action + gate("action_self_gate") * attend(
-            "action_self_attn", action, action_valid, action, action_valid
+        # 2. Opp cross-read over [state | opp]; opp is never read by
+        # anything policy-facing.
+        opp = opp + gate("opp_read_gate") * attend(
+            "opp_cross_attn",
+            opp,
+            opp_valid,
+            jnp.concatenate((state, opp), axis=0),
+            jnp.concatenate((state_valid, opp_valid), axis=0),
         )
-        state = state + gate("history_gate") * attend(
-            "history_cross", state, state_valid, history_context, history_mask
+
+        # 3. Action self-attention over the group concat (per-type gate
+        # vector), then the state<->action exchange: state -> action
+        # decode (kv = state rows only, never opp), action -> state
+        # decode reading the updated options back.
+        action = action + group_gate(action_parts, "{}_global_gate") * attend(
+            "action_global_attn", action, action_valid, action, action_valid
         )
-        action = action + gate("state_to_action_gate") * attend(
+        action = action + group_gate(action_parts, "state_to_{}_gate") * attend(
             "state_to_action", action, action_valid, state, state_valid
         )
-        state = state + gate("action_to_state_gate") * attend(
+        state = state + group_gate(state_parts, "action_to_{}_gate") * attend(
             "action_to_state", state, state_valid, action, action_valid
         )
 
-        # Fused value-ladder read: one shared module, per-rung key masks —
-        # `all` rows may read [state | opp]; `private` rows read the state
-        # slice only. Separate residual gates per rung (independent
-        # estimators, matching their separate query inits).
+        # 4. Fused value-ladder read: one shared module, per-rung key
+        # masks — `all` rows may read [state | opp]; `private` rows read
+        # the state slice only. Separate residual gates per rung
+        # (independent estimators, matching their separate query inits).
+        state_opp = jnp.concatenate((state, opp), axis=0)
+        state_opp_valid = jnp.concatenate((state_valid, opp_valid), axis=0)
         value_allowed = np.zeros((2 * n_value, n_state + n_opp), dtype=bool)
         value_allowed[:n_value, :] = True
         value_allowed[n_value:, :n_state] = True
@@ -332,37 +398,82 @@ class RoundBlock(nn.Module):
         value_private = (
             value_private + gate("value_private_read_gate") * value_read[n_value:]
         )
+        # `public` rung reads the RAW pre-trunk history embeddings, not
+        # the state stream's history slice (which mixes with private
+        # tokens in the state self-attention) — its information set must
+        # stay purely public-historical.
         value_public = value_public + gate("value_public_read_gate") * attend(
             "history_to_value_public",
             value_public,
             value_valid,
-            history_context,
-            history_mask,
+            raw_history,
+            raw_history_valid,
         )
 
-        # FFW params stay shared across streams (per-token, same math as
-        # one FFW over a fused sequence) but each stream gets its OWN
-        # residual gate — different streams have no reason to take
-        # same-magnitude FFW steps.
-        ffw = FFWMLP(hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias)
-        state = state + gate("state_ffw_gate") * ffw(layer_norm(state))
-        opp = opp + gate("opp_ffw_gate") * ffw(layer_norm(opp))
-        action = action + gate("action_ffw_gate") * ffw(layer_norm(action))
-        value_all = value_all + gate("value_all_ffw_gate") * ffw(
+        # 5. Group-level FFWs with per-substream gate vectors; opp and
+        # the value rungs keep their own FFWs and scalar gates.
+        def ffw(name: str):
+            return FFWMLP(
+                hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias, name=name
+            )
+
+        state = state + group_gate(state_parts, "{}_ffw_gate") * ffw("state_ffw")(
+            layer_norm(state)
+        )
+        action = action + group_gate(action_parts, "{}_ffw_gate") * ffw("action_ffw")(
+            layer_norm(action)
+        )
+        opp = opp + gate("opp_ffw_gate") * ffw("opp_ffw")(layer_norm(opp))
+        value_all = value_all + gate("value_all_ffw_gate") * ffw("value_all_ffw")(
             layer_norm(value_all)
         )
         value_private = value_private + gate("value_private_ffw_gate") * ffw(
-            layer_norm(value_private)
-        )
+            "value_private_ffw"
+        )(layer_norm(value_private))
         value_public = value_public + gate("value_public_ffw_gate") * ffw(
-            layer_norm(value_public)
-        )
+            "value_public_ffw"
+        )(layer_norm(value_public))
 
         # Hard-zero invalid rows so padded tokens never accumulate content.
         state = jnp.where(state_valid[..., None], state, 0)
         opp = jnp.where(opp_valid[..., None], opp, 0)
         action = jnp.where(action_valid[..., None], action, 0)
-        return (state, opp, action, value_all, value_private, value_public), None
+        return (
+            state,
+            opp,
+            action,
+            value_all,
+            value_private,
+            value_public,
+        ), None
+
+
+class GroupNorm(nn.Module):
+    """Per-substream norm+MLP projections at a trunk-group boundary:
+    each named substream gets its own MLP, and the results are
+    concatenated in order into (or back out of) the group stream
+    RoundBlock carries. One class serves every boundary — the state and
+    action INPUT norms (each substream comes from a different generative
+    process, so each needs its own projection into trunk space) and the
+    action OUTPUT norms (the head-facing per-group spaces over the final
+    round's slices) — so all group-boundary projections are built
+    identically. The substream order fixes the slice boundaries
+    RoundBlock derives from the valid masks."""
+
+    substream_names: tuple[str, ...]
+    layer_sizes: tuple[int, ...] | None = None
+
+    @nn.compact
+    def __call__(self, substreams: tuple[jax.Array, ...]) -> jax.Array:
+        return jnp.concatenate(
+            [
+                MLP(self.layer_sizes, name=f"{name}_norm")(tokens)
+                for name, tokens in zip(
+                    self.substream_names, substreams, strict=True
+                )
+            ],
+            axis=0,
+        )
 
 
 class Encoder(nn.Module):
@@ -518,28 +629,41 @@ class Encoder(nn.Module):
             name="history_field_step_linear", use_bias=False, **dense_kwargs
         )
 
-        # Per-modality input projections: each input-token modality comes
-        # from a different generative process (its own SumEmbeddings /
-        # linears upstream), so each gets its own norm+MLP into the shared
-        # trunk space. The prev-action tokens especially need this — they
-        # are borrowed mixed-provenance action-slot embeddings with only an
-        # additive bias.
+        # Per-substream input projections, one GroupNorm per trunk group
+        # so state and action inputs are prepared identically. The
+        # prev-action tokens especially need theirs — they are borrowed
+        # mixed-provenance action-slot embeddings with only an additive
+        # bias; history gets one too now that it is a state substream
+        # rather than external read-only KV.
+        # No separate moveset state tokens (removed 2026-08-17): the
+        # opponent's revealed-move pp already lives in the public entity
+        # embeddings, and my per-move battle state (pp, disabled, wildcard
+        # availability) reaches the trunk through the move action stream's
+        # warm start and its action->state readbacks.
         input_mlp_shape = (4 * self.entity_size, self.entity_size)
-        self.input_norm_private = MLP(input_mlp_shape, name="input_norm_private")
-        self.input_norm_public = MLP(input_mlp_shape, name="input_norm_public")
-        self.input_norm_field = MLP(input_mlp_shape, name="input_norm_field")
-        self.input_norm_prev_action = MLP(
-            input_mlp_shape, name="input_norm_prev_action"
+        self.state_input_norm = GroupNorm(
+            substream_names=(
+                "private",
+                "public",
+                "field",
+                "prev_action",
+                "history",
+            ),
+            layer_sizes=input_mlp_shape,
+            name="state_input_norm",
         )
-        # Moveset tokens carry the per-move battle state (pp, disabled,
-        # wildcard availability) that the entity move tokens (move-ID only)
-        # lack; without them the trunk — and therefore the value estimate —
-        # is blind to pp, locks and spent tera.
-        self.input_norm_my_moves = MLP(input_mlp_shape, name="input_norm_my_moves")
-        self.input_norm_opp_moves = MLP(input_mlp_shape, name="input_norm_opp_moves")
+        self.action_input_norm = GroupNorm(
+            substream_names=tuple(
+                group_name for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+            ),
+            layer_sizes=input_mlp_shape,
+            name="action_input_norm",
+        )
 
-        # Round trunk: one RoundBlock over the (state, action, value)
-        # stream triple, scanned num_rounds times with stacked params, so
+        # Round trunk: one RoundBlock over the concatenated state stream
+        # [private | public | field | prev_action | history], opp, the
+        # concatenated action stream [move | switch | target], and the
+        # value ladder, scanned num_rounds times with stacked params, so
         # every round has its own weights and rounds can specialize
         # instead of iterating one shared refinement operator.
         # All residual gates are zero-init, so each round starts as a no-op.
@@ -563,24 +687,17 @@ class Encoder(nn.Module):
             in_axes=nn.broadcast,
             length=self.num_rounds,
         )(self.cfg, name="round_trunk")
-        # Per-provenance action-query warm starts (applied once, before the
-        # round scan): each group's borrowed slot embeddings get their own
-        # norm+MLP into the query space.
-        self.action_norms = [
-            MLP(
-                (4 * self.entity_size, self.entity_size),
-                name=f"action_norm_{group_name}",
-            )
-            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
-        ]
         # Head-facing output norms, hoisted out of the trunk so it carries
         # raw residual streams; applied once to the final round's action
-        # tokens, keeping the move/switch/target slots in their own spaces
-        # for the pointer and macro heads.
-        self.action_out_norms = [
-            MLP(name=f"action_out_norm_{group_name}")
-            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
-        ]
+        # stream, keeping the move/switch/target slices in their own
+        # spaces for the readout and macro heads. Same GroupNorm class as
+        # the input side (identity-size MLPs).
+        self.action_out_norm = GroupNorm(
+            substream_names=tuple(
+                group_name for group_name, _ in ACTION_DECODER_SLOT_GROUPS
+            ),
+            name="action_out_norm",
+        )
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1265,10 +1382,10 @@ class Encoder(nn.Module):
             revealed_entity_mask,
         ) = self._embed_public_entities(env_step)
 
-        # Existence masks (move revealed / set), not action legality: a
-        # disabled or pp-locked move is still state the trunk should see.
-        my_move_embeddings, my_move_mask = self._embed_moves(env_step.my_moveset)
-        opp_move_embeddings, opp_move_mask = self._embed_moves(env_step.opp_moveset)
+        # My moveset embeddings carry per-move battle state (pp, disabled,
+        # wildcard availability); they warm-start the move action stream
+        # below and reach the value ladder via the action->state readbacks.
+        my_move_embeddings, _ = self._embed_moves(env_step.my_moveset)
 
         private_entity_embeddings, private_entity_mask = self._embed_private_entities(
             env_step.private_team
@@ -1293,15 +1410,6 @@ class Encoder(nn.Module):
         opp_private_embeddings = opp_private_embeddings + self.side_bias(
             jnp.ones((), dtype=jnp.int32)
         ).astype(opp_private_embeddings.dtype)
-
-        input_mask = jnp.concatenate(
-            (
-                private_entity_mask,
-                revealed_entity_mask,
-                jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool),
-            ),
-            axis=-1,
-        )
 
         output_state_sequence = jnp.zeros(
             (NUM_ACTION_FEATURES, self.entity_size), dtype=self.cfg.dtype
@@ -1355,35 +1463,13 @@ class Encoder(nn.Module):
             axis=0,
         )
 
-        # Project each input modality into the shared trunk space with its
-        # own norm+MLP before concatenating into one sequence. The moveset
-        # tokens (mine and the opponent's revealed set) are state content,
-        # distinct from the move action slots below: they let the state
-        # stream — and through it the value estimate — see pp, disabled
-        # moves and wildcard availability.
-        state_sequence = jnp.concatenate(
-            (
-                self.input_norm_private(private_entity_embeddings),
-                self.input_norm_public(revealed_entity_embeddings),
-                self.input_norm_field(field_embeddings),
-                self.input_norm_prev_action(prev_action_tokens),
-                self.input_norm_my_moves(my_move_embeddings),
-                self.input_norm_opp_moves(opp_move_embeddings),
-            ),
-            axis=0,
-        )
-
+        field_valid = jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool)
         prev_action_doubles_mask = jnp.array(
             [
                 env_step.info[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION],
                 env_step.info[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION],
             ],
             dtype=jnp.bool,
-        )
-
-        state_mask = jnp.concatenate(
-            (input_mask, prev_action_doubles_mask, my_move_mask, opp_move_mask),
-            axis=0,
         )
 
         output_state_mask = env_step.action_mask.any(axis=0) | env_step.action_mask.any(
@@ -1394,13 +1480,15 @@ class Encoder(nn.Module):
         # Per-entity recurrent history (12 rows, PUBLIC_ORDER-aligned with
         # the public team, masked to mapped rows), the field history state,
         # and the attention-pooled latent summaries (shared with — and
-        # warm-startable from — the offline outcome critic); every trunk
-        # round cross-reads it.
-        history_context = jnp.concatenate(
+        # warm-startable from — the offline outcome critic). Since
+        # 2026-08-17 the concat is a full state-group SUBSTREAM through
+        # the trunk; the raw copy is also passed for value_public's read
+        # (public-information-set purity — see RoundBlock).
+        history_tokens = jnp.concatenate(
             (history_row_states, history_field_state[None], history_latents),
             axis=0,
         )
-        history_mask = jnp.concatenate(
+        history_valid = jnp.concatenate(
             (
                 history_row_valid,
                 jnp.ones(1 + history_latents.shape[0], dtype=jnp.bool_),
@@ -1408,24 +1496,43 @@ class Encoder(nn.Module):
             axis=0,
         )
 
-        # Warm-start the action tokens with their per-provenance input norms.
-        action_tokens = jnp.zeros_like(output_state_sequence)
-        for q_norm, (_, slot_indices) in zip(
-            self.action_norms, ACTION_DECODER_SLOT_GROUPS
-        ):
-            action_tokens = action_tokens.at[slot_indices].set(
-                q_norm(output_state_sequence[slot_indices])
-            )
+        typed_action_valids = tuple(
+            output_state_mask[slot_indices]
+            for _, slot_indices in ACTION_DECODER_SLOT_GROUPS
+        )
         # Shared query init for the all/private rungs — see setup's comment.
         value_all_tokens = self.all_value_embeddings.astype(self.cfg.dtype)
         value_private_tokens = self.private_value_embeddings.astype(self.cfg.dtype)
         value_public_tokens = self.public_value_embeddings.astype(self.cfg.dtype)
 
-        # Separate residual streams — state, opp (privileged sheet,
-        # contextualised in-trunk behind the block mask), action, and the
-        # value-ladder — refined by the round trunk's explicit directional
-        # decodes (see RoundBlock). Bulk of computation: scanned
-        # num_rounds times with per-round (stacked) weights.
+        # Both group streams are built the SAME way: per-substream
+        # norm+MLP projections concatenated once by a GroupNorm,
+        # then carried through the scan as-is (RoundBlock exchanges
+        # between them and gates writes per substream) — state =
+        # [private | public | field | prev_action | history], action =
+        # [move | switch | target] (typed slices gathered from the
+        # warm-started slot-aligned sequence) — plus opp (privileged
+        # sheet, contextualised in-trunk, value-`all`-only) and the value
+        # ladder. Bulk of computation: scanned num_rounds times with
+        # per-round (stacked) weights.
+        state_tokens = self.state_input_norm(
+            (
+                private_entity_embeddings,
+                revealed_entity_embeddings,
+                field_embeddings,
+                prev_action_tokens,
+                history_tokens,
+            )
+        )
+        action_tokens = self.action_input_norm(
+            tuple(
+                jnp.split(
+                    output_state_sequence[ACTION_GROUP_SLOTS],
+                    ACTION_GROUP_SPLITS,
+                    axis=0,
+                )
+            )
+        )
         (
             (
                 _,
@@ -1438,31 +1545,38 @@ class Encoder(nn.Module):
             _,
         ) = self.round_trunk(
             (
-                state_sequence,
+                state_tokens,
                 opp_private_embeddings,
                 action_tokens,
                 value_all_tokens,
                 value_private_tokens,
                 value_public_tokens,
             ),
-            state_mask,
+            private_entity_mask,
+            revealed_entity_mask,
+            field_valid,
+            prev_action_doubles_mask,
+            history_valid,
             opp_private_mask,
-            output_state_mask,
-            history_context,
-            history_mask,
+            *typed_action_valids,
+            history_tokens,
+            history_valid,
         )
 
-        # Head-facing embeddings from the final round's raw residual
-        # streams: the per-group out-norms (hoisted out of the trunk) keep
-        # the move/switch/target slots in their own spaces for the pointer
-        # and macro heads.
-        action_embeddings = jnp.zeros_like(output_state_sequence)
-        for out_norm, (_, slot_indices) in zip(
-            self.action_out_norms, ACTION_DECODER_SLOT_GROUPS
-        ):
-            action_embeddings = action_embeddings.at[slot_indices].set(
-                out_norm(action_queries[slot_indices])
+        # Head-facing embeddings from the final round's raw action
+        # stream: the GroupNorm out-norms keep the move/switch/target
+        # slices in their own spaces, scattered back slot-aligned so the
+        # flat src x tgt grid contract (action indexing, Q head, learner
+        # metrics) is untouched.
+        action_embeddings = (
+            jnp.zeros_like(output_state_sequence)
+            .at[ACTION_GROUP_SLOTS]
+            .set(
+                self.action_out_norm(
+                    tuple(jnp.split(action_queries, ACTION_GROUP_SPLITS, axis=0))
+                )
             )
+        )
         value_embeddings = value_all_queries.reshape(-1)
         private_value_embeddings = value_private_queries.reshape(-1)
         public_value_embeddings = value_public_queries.reshape(-1)
