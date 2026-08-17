@@ -366,11 +366,19 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # grid's accidental sharpness cap, and at 0.01 the magnet lost the
     # arm-wrestle — chocolate-silence-1307 collapsed to normalised entropy
     # 0.27 (modality 0.17) by 190k while magnet KL climbed to 1.44, and
-    # eval strength regressed from its 56k peak. Judge by normalised
-    # entropy holding in the ~0.5-0.65 band through 100k; if a static coef
-    # can't hold it, the proper fix is a PI controller on the coef with a
-    # target-entropy schedule (same pattern as the replay-KL controller).
-    player_magnet_kl_coef: float = 0.05
+    # eval strength regressed from its 56k peak. 0.1 (up from 0.05,
+    # 2026-08-17): the entropy-regularisation timeline showed the longest
+    # stable lineages (Oct-Nov 2025, 400-580k steps, 2.0-2.9 nats whole
+    # lifetime) ran ~2.8-5.4x today's effective entropy pressure (mostly a
+    # 4x per-head structural factor), while the current 0.7-0.9 nat
+    # operating point is the lowest outside the collapse regimes and the
+    # switch-collapse pattern reads as under-regularisation. Judge by
+    # normalised entropy holding in the ~0.5-0.65 band through 100k
+    # (magnet KL level flat, not climbing); revert to 0.05 on overshoot.
+    # If a static coef can't hold the band, the proper fix is a PI
+    # controller on the coef with a target-entropy schedule (same pattern
+    # as the replay-KL controller).
+    player_magnet_kl_coef: float = 0.1
 
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
@@ -451,7 +459,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # at 0.08 on that axis) is now watched on the dashboard, not
     # auto-corrected.
 
-    # BT-rating telemetry (rl/online/bandit.py): every bandit_window_steps
+    # BT-rating telemetry (rl/online/ratings.py): every bandit_window_steps
     # the learner fits a Bradley-Terry rating for main against the frozen
     # league snapshots from the payoff table the league already keeps,
     # and logs it plus the exploitability auditors (worst-matchup drift,
@@ -466,7 +474,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # removed, 2026-08-14, for UPGO + fixed player_lambda) and the
     # exploitability controller (the rating itself needs hundreds of
     # games per point, so it stays an auditor, never a control signal —
-    # see bandit.py).
+    # see ratings.py). The bandit_ field and metric prefixes are kept for
+    # wandb continuity across lineages.
     bandit_window_steps: int = 20_000
     bandit_min_games_per_opponent: float = 20.0
     bandit_min_rated_opponents: int = 2
