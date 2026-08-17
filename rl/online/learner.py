@@ -43,7 +43,7 @@ from rl.online.artifact import (
     Porygon2PlayerTrainState,
     write_checkpoint_components,
 )
-from rl.online.bandit import rating_logs
+from rl.online.ratings import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.controllers import PILogController
@@ -212,21 +212,18 @@ def train_step(
     value_mask = player_targets.value_mask
 
     # Exploration-ladder rows (config.explore_game_prob; previously the
-    # stage-4 cross-population intake, removed 2026-08-15): trajectories
-    # from raised-temperature games may train ONLY the observer Q critic.
-    # This is the single choke point — own-masking policy/value masks here
-    # removes explore rows from every PG/value/KL/aux/entropy term and
-    # both advantage-EMA updates downstream; the Q block builds its own
-    # mask from the pre-masked q_row_mask so it alone consumes the
-    # exploration data (with target_actor_ratio already being exactly the
-    # policy-over-tempered-behaviour ISR Retrace truncates on — the heads
-    # record the TEMPERED distribution as the behaviour policy).
-    q_row_mask = value_mask
+    # stage-4 cross-population intake, removed 2026-08-15) train EVERY
+    # player loss since 2026-08-17: the heads record the TEMPERED
+    # distribution as the behaviour policy, so target_actor_ratio is the
+    # exact policy-over-tempered-behaviour ISR that v-trace/IMPACT/Retrace
+    # already truncate on — tempered rows are ordinary off-policy rows.
+    # own_rows survives only where tempered play would distort a signal
+    # that has no correction path: league add cadence (frame_count), the
+    # plasticity memorisation gap, the builder losses, and the replay
+    # controller's KL set-point.
     own_rows = None
     if not isinstance(batch.explore, tuple):
         own_rows = jnp.logical_not(batch.explore[0].astype(bool))  # (B,)
-        policy_mask = policy_mask & own_rows[None, :]
-        value_mask = value_mask & own_rows[None, :]
 
     # Per-lambda v-trace distribution targets for the multi-lambda aux
     # value heads, bootstrapped from each lambda's OWN fast-target readout
@@ -262,8 +259,8 @@ def train_step(
         fresh = batch.reuse_count[0] == 0
         replayed = ~fresh
         if own_rows is not None:
-            # Foreign rows carry reuse_count 0 but a zeroed value_mask —
-            # counting them as "fresh" would drag fresh_err toward 0.
+            # Tempered-play value errors would contaminate the fresh/replay
+            # memorisation gap — grade it on standard-temperature play only.
             fresh = fresh & own_rows
             replayed = replayed & own_rows
         fresh_err = per_traj_err.mean(where=fresh)
@@ -313,10 +310,11 @@ def train_step(
         flat_action_mask, jnp.log(jnp.maximum(magnet_prior, 1e-9)), 0.0
     )
 
-    # Observer Q critic (stage 1, docs/q-critic-plan.md): Retrace targets
-    # from the fast EMA target's all-action Q readout and reference
-    # policy. Zero policy influence — the head trains, the diagnostics
-    # log, nothing reaches the actor loss.
+    # Two-rung Q critic (docs/q-critic-plan.md): Retrace targets from the
+    # fast EMA target's PRIVILEGED all-action Q readout (Q_all — value_all
+    # conditioning) and reference policy; the Q_private rung trains by CE
+    # against the same labels. Zero policy influence — the heads train,
+    # the diagnostics log, nothing reaches the actor loss.
     if config.player_q_enabled:
         q_target_probs, q_retrace_g, q_all_target, q_v_exp = compute_q_targets(
             batch,
@@ -327,9 +325,8 @@ def train_step(
         )
         # Q(s, a) exists wherever an action was actually taken — including
         # forced single-option steps (policy_mask excludes those; the Q
-        # regression must not) — but not on terminal rows. Built from the
-        # PRE-own-masked row mask: explore intake rows train the Q critic.
-        q_mask = q_row_mask & jnp.logical_not(player_transitions.env_output.done)
+        # regression must not) — but not on terminal rows.
+        q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
         if own_rows is not None:
             training_logs["player_q_explore_frac"] = average(
                 jnp.logical_not(own_rows)[None, :].astype(jnp.float32)
@@ -338,8 +335,10 @@ def train_step(
             )
 
         # Both readouts estimate the same state value from the same target
-        # params: their absolute gap is the Q head's calibration debt to
-        # the V head (q-critic-plan.md stage-1 acceptance metric).
+        # params AND the same (privileged) information set, so their
+        # absolute gap is pure calibration debt of the Q head to the V
+        # head (q-critic-plan.md stage-1 acceptance metric) — no
+        # information-deficit component since the value_all conditioning.
         training_logs["player_q_ev_gap"] = average(
             jnp.abs(
                 q_v_exp - player_target_pred.value_head.expectation.astype(jnp.float32)
@@ -347,15 +346,24 @@ def train_step(
             q_mask,
         )
         # The direct "what does the critic think switching is worth"
-        # readout: best legal switch's E[Q] minus best legal move's, over
-        # states offering both. The number the switch-collapse
-        # investigation (Aug 2026) had no way to measure.
+        # readout, graded on the POLICY'S information set (Q_private — the
+        # question is what a deployable critic believes, so the privileged
+        # rung would answer the wrong one): best legal switch's E[Q] minus
+        # best legal move's, over states offering both. The number the
+        # switch-collapse investigation (Aug 2026) had no way to measure.
+        q_private_all_target = jax.nn.softmax(
+            player_target_pred.private_q_logits.astype(jnp.float32), axis=-1
+        ) @ cat_vf_support.astype(jnp.float32)
         switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
         move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
         valid_switch = flat_action_mask & switch_cells
         valid_move = flat_action_mask & move_cells
-        best_switch = jnp.max(jnp.where(valid_switch, q_all_target, -jnp.inf), axis=-1)
-        best_move = jnp.max(jnp.where(valid_move, q_all_target, -jnp.inf), axis=-1)
+        best_switch = jnp.max(
+            jnp.where(valid_switch, q_private_all_target, -jnp.inf), axis=-1
+        )
+        best_move = jnp.max(
+            jnp.where(valid_move, q_private_all_target, -jnp.inf), axis=-1
+        )
         has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
         training_logs["player_q_switch_move_gap"] = average(
             jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
@@ -593,29 +601,50 @@ def train_step(
             for k, lam in enumerate(config.player_aux_lambdas)
         }
 
-        # Observer Q CE (stage 1, docs/q-critic-plan.md): the taken
-        # action's categorical Q logits against the two-hot Retrace
-        # target. Config-static branch — the jit variant without the head
-        # never traces this.
+        # Two-rung Q CE (docs/q-critic-plan.md): each rung's taken-action
+        # categorical logits against the SAME two-hot Retrace target
+        # (labels come from the privileged Q_all recursion; Q_private is
+        # its deployable-information sibling, all head params shared).
+        # Config-static branch — the jit variant without the head never
+        # traces this.
         q_logs = {}
         loss_q = 0.0
+        loss_q_private = 0.0
         if config.player_q_enabled:
-            learner_q_logits_taken = jnp.take_along_axis(
-                learner_player_pred.q_logits.astype(jnp.float32),
-                player_actor_action_head.action_index[..., None, None],
-                axis=-2,
-            ).squeeze(-2)
+
+            def q_taken(q_logits):
+                return jnp.take_along_axis(
+                    q_logits.astype(jnp.float32),
+                    player_actor_action_head.action_index[..., None, None],
+                    axis=-2,
+                ).squeeze(-2)
+
+            learner_q_logits_taken = q_taken(learner_player_pred.q_logits)
+            learner_q_private_logits_taken = q_taken(
+                learner_player_pred.private_q_logits
+            )
             loss_q = average(
                 optax.softmax_cross_entropy(
                     logits=learner_q_logits_taken, labels=q_target_probs
                 ),
                 q_mask,
             )
+            loss_q_private = average(
+                optax.softmax_cross_entropy(
+                    logits=learner_q_private_logits_taken, labels=q_target_probs
+                ),
+                q_mask,
+            )
             q_taken_pred = jax.nn.softmax(
                 learner_q_logits_taken, axis=-1
             ) @ cat_vf_support.astype(jnp.float32)
+            q_private_taken_pred = jax.nn.softmax(
+                learner_q_private_logits_taken, axis=-1
+            ) @ cat_vf_support.astype(jnp.float32)
 
-            # Calibration by context. Forced switches stay data-rich
+            # Calibration by context, graded on Q_private (the contexts
+            # exist to interpret the Q_private switch/move gap, so they
+            # must grade the same rung). Forced switches stay data-rich
             # through a switch collapse; voluntary ones starve. Calibrated
             # forced + degraded voluntary = starvation artefact; both
             # calibrated with the gap still negative = the critic means it
@@ -624,7 +653,7 @@ def train_step(
                 return jnp.where(
                     context_mask.any(),
                     calculate_r2(
-                        value_prediction=q_taken_pred,
+                        value_prediction=q_private_taken_pred,
                         value_target=q_retrace_g,
                         mask=context_mask,
                     ),
@@ -633,8 +662,14 @@ def train_step(
 
             q_logs = dict(
                 player_loss_q=loss_q,
+                player_loss_q_private=loss_q_private,
                 player_q_r2=calculate_r2(
                     value_prediction=q_taken_pred,
+                    value_target=q_retrace_g,
+                    mask=q_mask,
+                ),
+                player_q_private_r2=calculate_r2(
+                    value_prediction=q_private_taken_pred,
                     value_target=q_retrace_g,
                     mask=q_mask,
                 ),
@@ -644,9 +679,10 @@ def train_step(
             )
             if own_rows is not None:
                 # Does the Q head actually fit the explore-actor-generated
-                # returns it is digesting? Persistent gap vs player_q_r2
-                # = the intake is too off-policy to learn from (Retrace
-                # cutting every trace) rather than free counterfactuals.
+                # returns it is digesting? Persistent gap vs the full-mask
+                # r2 = the tempered rows are too off-policy to learn from
+                # (Retrace cutting every trace) rather than free
+                # counterfactuals.
                 q_logs["player_q_r2_explore"] = q_context_r2(
                     q_mask & jnp.logical_not(own_rows)[None, :]
                 )
@@ -660,7 +696,9 @@ def train_step(
             * loss_magnet_kl
             + config.player_aux_value_coef * loss_v_aux
             + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
-            + config.player_q_coef * loss_q
+            # One coefficient for both rungs — same estimator family on
+            # the same labels, mirroring the value-ladder coef above.
+            + config.player_q_coef * (loss_q + loss_q_private)
         )
 
         return loss, dict(
@@ -685,6 +723,18 @@ def train_step(
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
             # KL values
             player_learner_actor_forward_kl=loss_actor_forward_kl,
+            # Own-rows-only variant: the replay reuse-cap controller's
+            # set-point must not drift with the tempered explore rows now
+            # inside policy_mask (see _update_replay_controller).
+            player_learner_actor_forward_kl_own=(
+                loss_actor_forward_kl
+                if own_rows is None
+                else forward_kl_loss(
+                    policy_ratio=learner_actor_ratio,
+                    log_policy_ratio=learner_actor_log_ratio,
+                    valid=policy_mask & own_rows[None, :],
+                )
+            ),
             player_learner_actor_backward_kl=loss_actor_backward_kl,
             player_learner_target_forward_kl=loss_target_forward_kl,
             player_learner_target_backward_kl=loss_target_backward_kl,
@@ -706,9 +756,11 @@ def train_step(
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
 
     prev_player_state = player_state
-    # An all-explore batch (explore rows are Q-CE-only, so policy_mask can
-    # be empty) makes mean/std with `where=` NaN, and one NaN batch poisons
-    # the advantage EMAs forever — freeze them on such batches instead.
+    # A batch with an empty policy_mask (every row forced single-option
+    # or terminal — rare but possible) makes mean/std with `where=` NaN,
+    # and one NaN batch poisons the advantage EMAs forever — freeze them
+    # on such batches instead. (Explore rows train the policy since
+    # 2026-08-17, so an all-explore batch no longer trips this.)
     has_policy_rows = policy_mask.any()
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
@@ -729,8 +781,8 @@ def train_step(
         # Advantage stats use their own, much faster EMA rate: they are
         # scalars estimated from ~180 samples per batch (well-averaged at
         # a 100-step time constant), and a slow EMA mis-scales the policy
-        # gradient for ~1k steps after every distribution shift — bandit
-        # arm switches most visibly.
+        # gradient for ~1k steps after every distribution shift — league
+        # snapshot adds and exploiter block switches most visibly.
         ema_adv_mean=jnp.where(
             has_policy_rows,
             optax.incremental_update(
@@ -842,8 +894,11 @@ def train_step(
             axis=0
         )[None, :].astype(jnp.bool_)
         if own_rows is not None:
-            # Foreign rows carry the FOREIGN population's team-building
-            # episode — main's builder must not imitate exploiter teams.
+            # Explore rows stay out of the builder losses: builder targets
+            # are corrected only by the builder's own ISR — there is no
+            # correction path for the PLAYER's raised temperature, so a
+            # tempered game's outcome grades the team under deliberately
+            # noisy piloting.
             builder_valid = builder_valid & own_rows[None, :]
 
         # Compute builder targets inside train_step (JAX/JIT compatible).
@@ -1738,11 +1793,11 @@ class Learner:
 
                 # Normalise the exploration-ladder tag every trajectory
                 # carries (explore actors mark theirs explore=True at
-                # construction — see PlayerActor; Q-critic-only rows via
-                # the explore own-masking in train_step). Trajectories
-                # from before the field was populated stack as False, so
-                # the shared train_step jit always sees one pytree
-                # structure across every population's batches.
+                # construction — see PlayerActor; train_step keeps those
+                # rows out of the league/plasticity/builder signals only).
+                # Trajectories from before the field was populated stack
+                # as False, so the shared train_step jit always sees one
+                # pytree structure across every population's batches.
                 batch = [
                     t.replace(
                         explore=(
@@ -1904,7 +1959,10 @@ class Learner:
         config = self.config
         if not config.player_replay_ctrl_enabled:
             return
-        kl = host_logs.get("player_learner_actor_forward_kl")
+        # The _own variant excludes tempered explore rows (which train the
+        # policy since 2026-08-17 but would inflate the mean KL and make
+        # the controller silently cut the reuse cap).
+        kl = host_logs.get("player_learner_actor_forward_kl_own")
         if kl is not None and np.isfinite(kl):
             pop.replay_ctrl_kl_sum += float(kl)
             pop.replay_ctrl_kl_count += 1

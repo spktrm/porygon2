@@ -1,8 +1,8 @@
-"""Eager (unjitted) train_step smoke with the observer Q head enabled —
-the stage-1 wiring test for docs/q-critic-plan.md: model Q readout ->
-Retrace targets -> CE loss -> gradients, end to end on the bundled
-ex.bin trajectory. CPU-pinned so it can run next to a live learner
-(randombattle config, so the builder branch self-skips).
+"""Eager (unjitted) train_step smoke with the two-rung Q head enabled —
+the wiring test for docs/q-critic-plan.md: model Q_all/Q_private
+readouts -> Retrace targets -> CE losses -> gradients, end to end on the
+bundled ex.bin trajectory. CPU-pinned so it can run next to a live
+learner (randombattle config, so the builder branch self-skips).
 
 Marked slow (~3 min eager): deselect with `-m "not slow"` for the quick
 suite."""
@@ -78,7 +78,9 @@ def test_train_step_player_q_smoke():
     assert int(new_player_state.step_count) == 1
     for key in (
         "player_loss_q",
+        "player_loss_q_private",
         "player_q_r2",
+        "player_q_private_r2",
         "player_q_ev_gap",
         "player_q_switch_move_gap",
         # Gap discriminators: per-context calibration + data coverage +
@@ -98,18 +100,24 @@ def test_train_step_player_q_smoke():
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_q_head_gradient_norm"]) > 0.0
 
-    # Explore-row contract, tested at its extreme: an all-explore
-    # batch must silence every actor/value loss (masks sum to zero) while
-    # the Q critic still trains on it.
+    # Explore-row contract (2026-08-17), tested at its extreme: an
+    # all-explore batch trains EVERY player loss — the tempered rows carry
+    # exact ISRs, so policy/value masks stay live — while the explore-only
+    # signals (league cadence, plasticity, builder) mask them elsewhere.
     batch_explore = batch.replace(explore=np.ones((1, B), dtype=bool))
     with jax.default_device(jax.devices("cpu")[0]):
         _, _, logs_explore = train_step(
             player_state, builder_state, batch_explore, config
         )
-    assert float(logs_explore["player_policy_mask_sum"]) == 0.0
-    assert float(logs_explore["player_value_mask_sum"]) == 0.0
+    assert float(logs_explore["player_policy_mask_sum"]) > 0.0
+    assert float(logs_explore["player_value_mask_sum"]) > 0.0
+    assert np.isfinite(np.asarray(logs_explore["player_loss_pg"], dtype=np.float32))
+    assert np.isfinite(
+        np.asarray(logs_explore["player_loss_v_win"], dtype=np.float32)
+    )
     assert float(logs_explore["player_q_explore_frac"]) == 1.0
     assert "player_q_r2_explore" in logs_explore
+    assert "player_learner_actor_forward_kl_own" in logs_explore
     assert np.isfinite(np.asarray(logs_explore["player_loss_q"], dtype=np.float32))
     assert float(logs_explore["player_q_head_gradient_norm"]) > 0.0
 
@@ -128,4 +136,5 @@ def test_train_step_player_q_smoke():
             player_state_off, builder_state_off, batch, config_off
         )
     assert "player_loss_q" not in logs_off
+    assert "player_loss_q_private" not in logs_off
     assert "player_q_switch_move_gap" not in logs_off

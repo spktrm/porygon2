@@ -86,9 +86,10 @@ def rating_logs(
     min_games_per_opponent: float,
     min_rated_opponents: int,
 ) -> dict[str, float]:
-    """BT-rating telemetry without any arm machinery — used when the
-    bandit is disabled so the strength-vs-frozen-pool signal (the only
-    self-play-pure absolute progress measure) stays on the dashboard."""
+    """BT-rating telemetry — keeps the strength-vs-frozen-pool signal
+    (the only self-play-pure absolute progress measure) on the dashboard.
+    The bandit_ metric prefix is historical (see module docstring), kept
+    for wandb continuity across lineages."""
     with league.lock:
         snap_keys = [
             s

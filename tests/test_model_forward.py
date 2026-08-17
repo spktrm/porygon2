@@ -53,8 +53,8 @@ def test_forward_outputs_finite_and_shaped(model_and_inputs):
 
 
 def test_q_head_forward_shapes_and_gating(model_and_inputs):
-    """q_head_enabled adds a (T, A, n_bins) observer Q readout (stage 1,
-    docs/q-critic-plan.md) — and adds params, so the default config must
+    """q_head_enabled adds the two-rung (T, A, n_bins) Q readouts
+    (docs/q-critic-plan.md) — and adds params, so the default config must
     keep producing q-free trees (checkpoint compatibility)."""
 
     from rl.environment.utils import get_ex_player_step
@@ -80,6 +80,12 @@ def test_q_head_forward_shapes_and_gating(model_and_inputs):
     q_logits = np.asarray(out.q_logits, dtype=np.float32)
     assert q_logits.shape == (T, A, 3)
     assert np.isfinite(q_logits).all()
+    private_q_logits = np.asarray(out.private_q_logits, dtype=np.float32)
+    assert private_q_logits.shape == (T, A, 3)
+    assert np.isfinite(private_q_logits).all()
+    # The rungs share every head param but not their conditioning input —
+    # identical outputs would mean the conditioning is dead.
+    assert not np.array_equal(q_logits, private_q_logits)
     # Full-support log_policy is present in train mode — the Retrace
     # target's expectation bootstrap depends on it.
     assert np.asarray(out.action_head.log_policy).shape[-1] == A

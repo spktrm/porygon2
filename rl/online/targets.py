@@ -246,8 +246,9 @@ def compute_q_targets(
     isr: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Retrace(lambda) targets for the observer Q head (stage 1,
-    docs/q-critic-plan.md).
+    """Retrace(lambda) targets for the Q critic (docs/q-critic-plan.md),
+    computed from the privileged Q_all rung; the Q_private rung trains by
+    CE against the same labels learner-side.
 
     Scalar-space recursion (like upgo_returns) with a two-hot projection
     back onto CAT_VF_SUPPORT for the CE loss. Expectation bootstrap —
