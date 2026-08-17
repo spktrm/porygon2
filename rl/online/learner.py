@@ -1,10 +1,15 @@
+import collections
 import dataclasses
+import gc
+import json
 import logging
 import os
 import pickle
 import queue
 import random
+import sys
 import threading
+import time
 from _thread import LockType
 from contextlib import nullcontext
 from typing import Callable, Literal
@@ -2314,9 +2319,51 @@ class Learner:
             key = prefix.rstrip("-").lower().replace("-", "_")
             logs[f"diag_py_threads_{key}"] = count
 
+        # Heap census: attributes host RSS the byte-exact counters below
+        # (replay buffers, league cache) don't cover — e.g. the ~3GB the
+        # 2026-08-18 exploiter-fork jump left unexplained by thread counts
+        # and league cache alone. sys.getsizeof is shallow (a dict/list's
+        # own overhead, not its contents), but that's exactly what surfaces
+        # a genuine culprit: a huge COUNT of one type (numpy arrays, proto
+        # objects, EnvironmentState instances) dominating aggregate bytes.
+        # Logged to the console, not wandb — dynamic top-N, not a stable
+        # scalar key. gc.get_objects() walks the whole heap, so this rides
+        # the same 5000-step cadence as the rest of this function.
+        try:
+            counts = collections.Counter()
+            sizes = collections.Counter()
+            for obj in gc.get_objects():
+                t = type(obj).__name__
+                counts[t] += 1
+                sizes[t] += sys.getsizeof(obj)
+            top = sizes.most_common(15)
+            logger.info(
+                "Heap census (top-15 by approx shallow size): %s",
+                ", ".join(f"{t}={counts[t]}objs/{sz / 2**20:.1f}MB" for t, sz in top),
+            )
+        except Exception:
+            logger.exception("Heap census failed")
+
         for name, pop in self.populations.items():
             logs[f"diag_player_replay_mb_{name}"] = pop.player_replay.nbytes() / 2**20
             logs[f"diag_builder_replay_mb_{name}"] = pop.builder_replay.nbytes() / 2**20
+        try:
+            with open("runtime/service_memory.json") as f:
+                node_stats = json.load(f)
+            # Service writes every 10s; 60s is a generous staleness bound
+            # in case the file is left over from a service that's since died.
+            if time.time() - node_stats["ts"] < 60:
+                for key in (
+                    "rss_mb",
+                    "heap_used_mb",
+                    "num_workers",
+                    "worker_heap_used_mb",
+                    "workers_reported",
+                ):
+                    logs[f"diag_node_{key}"] = node_stats[key]
+        except Exception:
+            pass  # service not up, stats file stale/absent, or race on the rename
+
         entries, cache_bytes = self.league.cache_stats()
         logs["diag_league_cache_entries"] = entries
         logs["diag_league_cache_mb"] = cache_bytes / 2**20

@@ -570,6 +570,50 @@ def rl_sections():
                 lp("Training step", ["training_step"], smooth=0),
             ],
         ),
+        ws.Section(
+            # Fed by learner.py's _log_memory_diagnostics (main-only, every
+            # memory_diag_interval steps) plus the service's own 10s
+            # process.memoryUsage() write — see index.ts:writeMemoryStats.
+            name="Memory",
+            panels=[
+                lp(
+                    "Process RSS (MB)",
+                    ["diag_rss_mb", "diag_node_rss_mb"],
+                    smooth=0,
+                ),
+                lp(
+                    # node's own heap is the tiny GameServer coordinator
+                    # thread only (Node quirk — memoryUsage() can't see
+                    # another isolate's heap); worker_heap_used_mb is the
+                    # actual dex/sim data, summed across all 6 workers.
+                    "Node heap used (MB): coordinator vs workers",
+                    ["diag_node_heap_used_mb", "diag_node_worker_heap_used_mb"],
+                    smooth=0,
+                ),
+                lp(
+                    "Thread counts",
+                    ["diag_os_threads", "diag_py_threads", "diag_node_num_workers"],
+                    smooth=0,
+                ),
+                lp(
+                    "Python thread buckets",
+                    [],
+                    regex="^diag_py_threads_",
+                    smooth=0,
+                ),
+                lp(
+                    "Replay buffer bytes (MB)",
+                    [],
+                    regex="^diag_(player|builder)_replay_mb_",
+                    smooth=0,
+                ),
+                lp(
+                    "League cache",
+                    ["diag_league_cache_mb", "diag_league_cache_entries"],
+                    smooth=0,
+                ),
+            ],
+        ),
     ]
 
 

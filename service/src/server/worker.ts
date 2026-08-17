@@ -43,6 +43,26 @@ export class WorkerHandler {
     constructor(port: MessagePort | null | undefined) {
         this.port = port;
         this.setupMessageHandler();
+        // Each worker is its own V8 isolate: process.memoryUsage() called
+        // from GameServer only ever sees the coordinator thread's own
+        // heap, never this one (a Node quirk, not a bug — heap stats are
+        // per-isolate, RSS is process-wide). Self-report periodically so
+        // the coordinator can attribute the ~150MB/worker dex-data
+        // baseline instead of only seeing it as opaque process RSS.
+        setInterval(() => this.reportMemoryStats(), 10_000);
+    }
+
+    private reportMemoryStats(): void {
+        if (!this.port) {
+            return;
+        }
+        const mem = process.memoryUsage();
+        this.port.postMessage({
+            type: "memory_stats",
+            heapUsedMb: mem.heapUsed / 2 ** 20,
+            heapTotalMb: mem.heapTotal / 2 ** 20,
+            externalMb: mem.external / 2 ** 20,
+        });
     }
 
     private setupMessageHandler(): void {

@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Worker } from "worker_threads";
 import path from "path";
+import fs from "fs";
 import http from "http";
 import {
     ClientRequest,
@@ -16,6 +17,15 @@ import { availableParallelism } from "node:os";
 
 const WORKER_PATH = path.resolve(__dirname, "../server/worker.js");
 
+// Best-effort bridge to the learner's wandb log: the learner's own
+// _log_memory_diagnostics (main-only, main.py-side) reads this file and
+// folds it into the same periodic diag_* wandb row it already logs for
+// the python process, so node RSS shows up next to diag_rss_mb without
+// giving this service a wandb dependency of its own.
+const MEMORY_STATS_DIR = path.resolve(__dirname, "../../../runtime");
+const MEMORY_STATS_PATH = path.join(MEMORY_STATS_DIR, "service_memory.json");
+const MEMORY_STATS_INTERVAL_MS = 10_000;
+
 interface WorkerInfo {
     worker: Worker;
     id: number;
@@ -28,6 +38,14 @@ export class WorkerPool {
     private er = 0; // round-robin counter for eval actors
 
     private readonly sessionToWorkerIndex = new Map<string, number>();
+
+    // Per-worker self-reported process.memoryUsage() (worker.ts's
+    // reportMemoryStats) — the only way to see each isolate's own heap,
+    // since the coordinator's own process.memoryUsage() can't see it.
+    private readonly workerMemoryStats = new Map<
+        number,
+        { heapUsedMb: number; heapTotalMb: number; externalMb: number }
+    >();
 
     constructor(
         private readonly logger: pino.Logger,
@@ -42,7 +60,34 @@ export class WorkerPool {
             const worker = new Worker(WORKER_PATH);
             const info: WorkerInfo = { worker, id: i };
 
-            worker.on("message", (buf: Buffer) => this.onWorkerMsg(buf));
+            worker.on(
+                "message",
+                (
+                    data:
+                        | Buffer
+                        | Uint8Array
+                        | {
+                              type: string;
+                              heapUsedMb: number;
+                              heapTotalMb: number;
+                              externalMb: number;
+                          },
+                ) => {
+                    // Same posture as worker.ts's own incoming handler:
+                    // protobuf responses arrive as Uint8Array (Buffer is a
+                    // subclass, so this covers both), typed messages as a
+                    // plain tagged object.
+                    if (data instanceof Uint8Array) {
+                        this.onWorkerMsg(Buffer.from(data));
+                    } else if (data?.type === "memory_stats") {
+                        this.workerMemoryStats.set(info.id, {
+                            heapUsedMb: data.heapUsedMb,
+                            heapTotalMb: data.heapTotalMb,
+                            externalMb: data.externalMb,
+                        });
+                    }
+                },
+            );
             worker.on("error", (err) =>
                 console.error(`[worker ${i}] error`, err),
             );
@@ -52,6 +97,32 @@ export class WorkerPool {
 
             this.workerInfos.push(info);
         }
+    }
+
+    /** Sum of the latest self-reported heap stats across all workers that
+     * have reported at least once — a fresher/live worker that hasn't hit
+     * its first 10s tick yet is simply absent, not zero, so totals grow in
+     * as workers report rather than under-counting from t=0. */
+    workerMemoryTotals(): {
+        heap_used_mb: number;
+        heap_total_mb: number;
+        external_mb: number;
+        workers_reported: number;
+    } {
+        let heapUsedMb = 0;
+        let heapTotalMb = 0;
+        let externalMb = 0;
+        for (const stats of this.workerMemoryStats.values()) {
+            heapUsedMb += stats.heapUsedMb;
+            heapTotalMb += stats.heapTotalMb;
+            externalMb += stats.externalMb;
+        }
+        return {
+            heap_used_mb: heapUsedMb,
+            heap_total_mb: heapTotalMb,
+            external_mb: externalMb,
+            workers_reported: this.workerMemoryStats.size,
+        };
     }
 
     /** Deterministic worker assignment for a training pairing: both sides
@@ -204,6 +275,10 @@ export class WorkerPool {
         for (const { worker } of this.workerInfos) worker.terminate();
     }
 
+    workerCount(): number {
+        return this.numWorkers;
+    }
+
     /** Fire-and-forget cleanup: tell the worker this session was last routed
      * to drop any pendingGames entry for gameId. A no-op if that session was
      * never routed, or if the entry was already consumed by a successful
@@ -228,6 +303,7 @@ export class GameServer {
     private actionCount: number;
     private throughputIntervalMs: number;
     private throughputInterval?: NodeJS.Timeout;
+    private memoryStatsInterval?: NodeJS.Timeout;
     private logger: pino.Logger;
     private pool: WorkerPool;
 
@@ -267,6 +343,45 @@ export class GameServer {
                 () => this.logThroughput(),
                 throughputIntervalMs,
             );
+        }
+
+        fs.mkdirSync(MEMORY_STATS_DIR, { recursive: true });
+        this.memoryStatsInterval = setInterval(
+            () => this.writeMemoryStats(),
+            MEMORY_STATS_INTERVAL_MS,
+        );
+    }
+
+    // Best-effort — a failed write here should never take the game server
+    // down. Atomic (tmp + rename) so a concurrent read from the learner
+    // side never sees a partial file, same posture as checkpoint writes.
+    private writeMemoryStats(): void {
+        try {
+            const mem = process.memoryUsage();
+            const workerMem = this.pool.workerMemoryTotals();
+            const tmpPath = `${MEMORY_STATS_PATH}.tmp.${process.pid}`;
+            fs.writeFileSync(
+                tmpPath,
+                JSON.stringify({
+                    rss_mb: mem.rss / 2 ** 20,
+                    heap_used_mb: mem.heapUsed / 2 ** 20,
+                    heap_total_mb: mem.heapTotal / 2 ** 20,
+                    external_mb: mem.external / 2 ** 20,
+                    array_buffers_mb: mem.arrayBuffers / 2 ** 20,
+                    num_workers: this.pool.workerCount(),
+                    // Coordinator-thread heap only (see workerMemoryStats'
+                    // doc comment) — worker_* below is the actual dex/sim
+                    // data, summed across every worker that's reported.
+                    worker_heap_used_mb: workerMem.heap_used_mb,
+                    worker_heap_total_mb: workerMem.heap_total_mb,
+                    worker_external_mb: workerMem.external_mb,
+                    workers_reported: workerMem.workers_reported,
+                    ts: Date.now() / 1000,
+                }),
+            );
+            fs.renameSync(tmpPath, MEMORY_STATS_PATH);
+        } catch (err) {
+            this.logger.warn(`Failed to write memory stats: ${err}`);
         }
     }
 
@@ -342,6 +457,9 @@ export class GameServer {
     public close(): void {
         if (this.throughputInterval) {
             clearInterval(this.throughputInterval);
+        }
+        if (this.memoryStatsInterval) {
+            clearInterval(this.memoryStatsInterval);
         }
         this.wss.close();
         this.logger.info("Game server closed");

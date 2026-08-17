@@ -323,7 +323,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # freeing Python objects doesn't guarantee the OS reclaims that memory,
     # so only a fresh process actually gets back to a clean memory state.
     oom_guard_enabled: bool = True
-    oom_guard_min_available_fraction: float = 0.10
+    oom_guard_min_available_fraction: float = 0.15
     oom_guard_check_interval: int = 1_000
 
     # Consecutive overdue-only adds before a perturbation. At 1 (the old

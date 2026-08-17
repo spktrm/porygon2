@@ -63,6 +63,26 @@ class TqdmLoggingHandler(logging.Handler):
             self.handleError(record)
 
 
+class JaxCacheNoiseFilter(logging.Filter):
+    """.env's JAX_EXPLAIN_CACHE_MISSES=1 logs a MISS line plus a "why not
+    persisted" line for every compile under
+    JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS — by design (see the .env
+    comment), and the overwhelming majority of what fires at startup, since
+    the small utility jits (jit__normal, jit_multiply, ...) are all
+    sub-2s and re-trigger on every restart. Drop that harmless pair only;
+    keep the rarer host-callback/process-id "not writing" reasons visible —
+    those are exactly what EXPLAIN_CACHE_MISSES was turned on to catch
+    (a real silent-miss regression looks like one of those, not this)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if msg.startswith("PERSISTENT COMPILATION CACHE MISS"):
+            return False
+        if "because it took <" in msg:
+            return False
+        return True
+
+
 # Wandb metric-key names for the service's evalActionMapping indices
 # (service/src/server/eval.ts).
 EVAL_BASELINE_NAMES = {0: "random", 1: "default", 2: "simpleheuristic"}
@@ -739,6 +759,7 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[TqdmLoggingHandler()],
     )
+    logging.getLogger("jax._src.compiler").addFilter(JaxCacheNoiseFilter())
     parser = argparse.ArgumentParser(description="Run the RL learner.")
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug mode", default=False
