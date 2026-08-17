@@ -2935,17 +2935,32 @@ class Learner:
         """Full pairwise win-rate matrix over the whole shared payoff
         table: live main, both live exploiter populations (when they
         exist), and every historical snapshot with an origin-labelled
-        row — logged by hijacking wandb's built-in confusion-matrix
-        custom chart (wandb/confusion_matrix/v1): the preset just renders
-        a (row label, column label, value) table as a value-coloured
-        grid, which is exactly a payoff matrix's shape. Interactive
-        (hover shows exact values), no matplotlib figure render on the
-        train-loop thread, no image upload per log. The one cosmetic
-        price of borrowing the preset is its fixed axis captions
-        (Actual/Predicted — read as home/away). Live-vs-live cells come
-        from real games too (main_exploiter's live-target branch, main's
-        verification branch); a pair that has never actually played just
-        shows the table's prior."""
+        row — logged through a custom Vega-Lite chart preset
+        (jtwin/league-payoff-heatmap-v10, registered once via
+        scripts/register_wandb_charts.py) instead of hijacking wandb's
+        confusion-matrix preset: proper axis titles (player/opponent, not
+        Actual/Predicted), a red/gold/green win-rate colour band per
+        cell, and a text label per cell. The colour is a chain of
+        condition/value tests on winrate with NO field bound directly to
+        the colour channel — every version that bound colour to a table
+        field (scale.range, scale.scheme+domain+clamp, a literal
+        per-cell hex column with scale: null) rendered as either an
+        unrelated colour or one flat colour for every cell in wandb's
+        actual custom-chart panel, confirmed via wandb's own GraphQL API
+        (spec stored correctly) and a neutral Vega-Lite renderer (spec
+        renders correctly outside wandb) — so wandb's Vega2 runtime does
+        not honour a field-bound colour channel here. Condition/value
+        (no field) is the one pattern proven to render correctly (the
+        text mark's black/white choice used exactly this pattern the
+        whole time). Interactive (hover shows exact values), no
+        matplotlib figure render on the train-loop thread, no image
+        upload per log. row_idx/col_idx carry insertion order so the
+        chart's ordinal axes sort by league structure rather than
+        wandb's default alphabetical sort (which would scramble "main
+        (live)" / "ME (live)" / snapshot labels together). Live-vs-live
+        cells come from real games too (main_exploiter's live-target
+        branch, main's verification branch); a pair that has never
+        actually played just shows the table's prior."""
         current = self.league.get_live(pop.live_key)
         others = self._winrate_tracked_opponents()
         if not others:
@@ -2963,24 +2978,23 @@ class Learner:
         labels = ["main (live)"] + live_labels + [self._ref_label(p) for p in others]
         matrix = np.asarray(self.league.get_winrate((all_players, all_players)))
 
-        # Column names match the preset's field keys verbatim — the vega
-        # spec selects by field name, so renaming them to home/away would
-        # just break the mapping without fixing the axis captions.
         table = wandb.Table(
-            columns=["Actual", "Predicted", "nPredictions"],
+            columns=["row", "row_idx", "col", "col_idx", "winrate"],
             data=[
-                [home, away, float(matrix[i, j])]
-                for i, home in enumerate(labels)
-                for j, away in enumerate(labels)
+                [row, i, col, j, float(matrix[i, j])]
+                for i, row in enumerate(labels)
+                for j, col in enumerate(labels)
             ],
         )
         chart = wandb.plot_table(
-            "wandb/confusion_matrix/v1",
+            "jtwin/league-payoff-heatmap-v10",
             table,
             fields={
-                "Actual": "Actual",
-                "Predicted": "Predicted",
-                "nPredictions": "nPredictions",
+                "row": "row",
+                "row_idx": "row_idx",
+                "col": "col",
+                "col_idx": "col_idx",
+                "winrate": "winrate",
             },
             string_fields={
                 "title": "league payoff table (row beats column; "

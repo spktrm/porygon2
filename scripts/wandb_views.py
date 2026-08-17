@@ -348,20 +348,26 @@ def rl_sections():
                     [],
                     regex="^league_main_v_.*_winrate$",
                 ),
-                # The learner logs the payoff matrix by hijacking wandb's
-                # confusion-matrix preset (learner._get_league_winrate_
-                # heatmap): plot_table under key "league_winrate_heatmap"
-                # stores its table at "<key>_table". Interactive grid,
-                # replaces the old matplotlib MediaBrowser image panel.
+                # The learner logs the payoff matrix through a custom
+                # Vega-Lite preset registered once via
+                # scripts/register_wandb_charts.py (learner._get_league_
+                # winrate_heatmap): plot_table under key
+                # "league_winrate_heatmap" stores its table at
+                # "<key>_table". Interactive grid with proper axis
+                # titles and a diverging win-rate colour scale —
+                # replaces both the old matplotlib MediaBrowser image
+                # panel and the later confusion-matrix-preset hijack.
                 wr.CustomChart(
                     query={
                         "summaryTable": {"tableKey": "league_winrate_heatmap_table"}
                     },
-                    chart_name="wandb/confusion_matrix/v1",
+                    chart_name="jtwin/league-payoff-heatmap-v10",
                     chart_fields={
-                        "Actual": "Actual",
-                        "Predicted": "Predicted",
-                        "nPredictions": "nPredictions",
+                        "row": "row",
+                        "row_idx": "row_idx",
+                        "col": "col",
+                        "col_idx": "col_idx",
+                        "winrate": "winrate",
                     },
                     chart_strings={
                         "title": "league payoff table (row beats column)"
