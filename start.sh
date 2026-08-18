@@ -83,7 +83,14 @@ tmux send-keys  -t "$SESSION":service.1 "source env/bin/activate" C-m
 # commented-out line in today's .env can't clear it, and a stale "params"
 # silently resets step counts + league on every launch.
 tmux send-keys  -t "$SESSION":service.1 'unset LOAD_STATE_MODE; set -a; [ -f .env ] && source .env || echo "WARNING: no .env found — see .env.example (MALLOC_ARENA_MAX etc. unset)"; set +a' C-m
-# Inject the captured arguments at the end of the python command
-tmux send-keys  -t "$SESSION":service.1 "python -m rl.online.main $ARGS" C-m
+# Inject the captured arguments at the end of the python command. Piped
+# through tee into runtime/learner.log (timestamped, prior logs kept) so a
+# postmortem survives even if tmux itself dies (e.g. a host reboot) —
+# logging.basicConfig only writes to the pane otherwise. `set -o pipefail`
+# so a learner crash still fails the pane command (not masked by tee's own
+# exit code); mkdir is idempotent, runtime/ is already gitignored.
+mkdir -p runtime
+LOG_FILE="runtime/learner_$(date +%Y%m%d_%H%M%S).log"
+tmux send-keys  -t "$SESSION":service.1 "set -o pipefail; python -m rl.online.main $ARGS 2>&1 | tee $(printf '%q' "$LOG_FILE")" C-m
 
 tmux attach -t "$SESSION"
