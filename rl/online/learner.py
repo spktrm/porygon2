@@ -156,17 +156,20 @@ def train_step(
     upgo_coef: jax.Array | None = None,
     magnet_coef: jax.Array | None = None,
     q_improve_coef: jax.Array | None = None,
+    q_boost_mix: jax.Array | None = None,
 ):
     """Train for a single step.
 
-    ``upgo_coef``, ``magnet_coef`` and ``q_improve_coef`` are RUNTIME
-    scalars (traced, not static — runtime values never recompile;
-    static-config scalars retained ~5GB of executables per distinct value
-    and OOM-killed run 1326). upgo_coef is config.player_upgo_coef,
-    zeroed by the caller during plasticity recovery (a freshly-perturbed
-    critic cuts UPGO returns in the wrong places). q_improve_coef carries
-    the host-side ramp of player_q_improve_coef and is zero for the
-    exploiter populations.
+    ``upgo_coef``, ``magnet_coef``, ``q_improve_coef`` and ``q_boost_mix``
+    are RUNTIME scalars (traced, not static — runtime values never
+    recompile; static-config scalars retained ~5GB of executables per
+    distinct value and OOM-killed run 1326). upgo_coef is
+    config.player_upgo_coef, zeroed by the caller during plasticity
+    recovery (a freshly-perturbed critic cuts UPGO returns in the wrong
+    places). q_improve_coef carries the host-side ramp of
+    player_q_improve_coef and is zero for the exploiter populations.
+    q_boost_mix is the stage-3 Q-boosting cross-fade weight
+    (docs/q-boosting-plan.md), same host-ramp/main-only treatment.
     """
 
     player_transitions = batch.player_transitions
@@ -282,27 +285,6 @@ def train_step(
         )
     player_targets = promote_map(player_targets, float_dtype)
 
-    if config.player_advantage_ema_enabled:
-        # Floor on the std divisor: as the policy converges true
-        # advantages shrink, and dividing by a vanishing std amplifies
-        # value-estimation noise into the actor precisely when the real
-        # signal is weakest. Below the floor, normalisation stops
-        # rescaling and the gradient is allowed to get small.
-        adv_std_divisor = jnp.maximum(
-            player_state.ema_adv_std, config.player_adv_std_floor
-        )
-        player_advantages = (
-            player_targets.advantages - player_state.ema_adv_mean
-        ) / adv_std_divisor
-        # UPGO shares the std divisor (both channels live on the same +-1
-        # value scale) but is NOT mean-recentered: its positive skew —
-        # extra credit along better-than-expected lines — is the
-        # mechanism, not a normalisation artefact to remove.
-        player_upgo_advantages = player_targets.upgo_advantages / adv_std_divisor
-    else:
-        player_advantages = player_targets.advantages
-        player_upgo_advantages = player_targets.upgo_advantages
-
     # Magnet policy for the KL regularizer: the hierarchical prior — uniform
     # over valid modalities, uniform within each modality — which is the init
     # policy of the hierarchically composed action head, so the KL decomposes
@@ -324,12 +306,14 @@ def train_step(
     # against the same labels. Zero policy influence — the heads train,
     # the diagnostics log, nothing reaches the actor loss.
     if config.player_q_enabled:
-        q_target_probs, q_retrace_g, q_all_target, q_v_exp = compute_q_targets(
-            batch,
-            q_logits=player_target_pred.q_logits,
-            target_log_policy=player_target_pred.action_head.log_policy,
-            isr=target_actor_ratio,
-            config=config,
+        q_target_probs, q_retrace_g, q_all_target, q_v_exp, q_taken_target = (
+            compute_q_targets(
+                batch,
+                q_logits=player_target_pred.q_logits,
+                target_log_policy=player_target_pred.action_head.log_policy,
+                isr=target_actor_ratio,
+                config=config,
+            )
         )
         # Q(s, a) exists wherever an action was actually taken — including
         # forced single-option steps (policy_mask excludes those; the Q
@@ -402,6 +386,139 @@ def train_step(
         training_logs["player_q_target_move"] = average(
             q_retrace_g, q_move_mask & has_both
         )
+
+        # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md): the
+        # Retrace return minus the target policy's Q expectation — the
+        # Fan & Farina estimator (arXiv 2605.19235), algebraically
+        # retrace_g − v_exp; unbiased at lambda=1 for any critic accuracy
+        # (their Thm 3.1), lower-MSE than the GAE family exactly where
+        # the policy must keep randomising. Masked to acted rows
+        # (retrace_g is already masked; v_exp is not).
+        q_boost_raw = (
+            q_retrace_g
+            if config.player_q_boost_variant == "multistep"
+            else q_taken_target
+        )
+        q_boost_advantages = (q_boost_raw - q_v_exp) * q_mask.astype(jnp.float32)
+
+        if config.player_q_boost_diagnostic_enabled:
+            # Stage 3a diagnostics (loss-free, on permanently): scale and
+            # agreement vs the v-trace advantage channel, Thm 3.1's
+            # Var_a~pi[Q] > 0 precondition, and fresh/replay calibration
+            # of the taken-action Q readout against its own realised
+            # Retrace targets (the plan's 3b gate, alongside
+            # player_value_r2_fresh as the same-subset V comparator).
+            win_adv = player_targets.advantages.astype(jnp.float32)
+            qb_mean = q_boost_advantages.mean(where=policy_mask)
+            training_logs["player_q_boost_adv_mean"] = qb_mean
+            training_logs["player_q_boost_adv_std"] = q_boost_advantages.std(
+                where=policy_mask
+            )
+            training_logs["player_q_boost_adv_corr"] = (
+                (q_boost_advantages - qb_mean)
+                * (win_adv - win_adv.mean(where=policy_mask))
+            ).mean(where=policy_mask) / (
+                q_boost_advantages.std(where=policy_mask)
+                * win_adv.std(where=policy_mask)
+                + 1e-8
+            )
+            training_logs["player_q_boost_adv_sign_agree"] = average(
+                (jnp.sign(q_boost_advantages) == jnp.sign(win_adv)).astype(
+                    jnp.float32
+                ),
+                policy_mask,
+            )
+            pi_target = (
+                jnp.exp(
+                    player_target_pred.action_head.log_policy.astype(jnp.float32)
+                )
+                * flat_action_mask
+            )
+            pi_target = pi_target / jnp.maximum(
+                pi_target.sum(axis=-1, keepdims=True), 1e-8
+            )
+            training_logs["player_q_action_var"] = average(
+                (pi_target * jnp.square(q_all_target - q_v_exp[..., None])).sum(
+                    axis=-1
+                ),
+                q_mask,
+            )
+            if not isinstance(batch.reuse_count, tuple):
+                fresh_cols = batch.reuse_count[0] == 0
+                replay_cols = ~fresh_cols
+                if own_rows is not None:
+                    # Same standard-temperature filter as the plasticity
+                    # gap: tempered rows would contaminate calibration.
+                    fresh_cols = fresh_cols & own_rows
+                    replay_cols = replay_cols & own_rows
+
+                def q_calibration_r2(cols):
+                    m = q_mask & cols[None, :]
+                    return jnp.where(
+                        m.any(),
+                        calculate_r2(
+                            value_prediction=q_taken_target,
+                            value_target=q_retrace_g,
+                            mask=m,
+                        ),
+                        0.0,
+                    )
+
+                training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(
+                    fresh_cols
+                )
+                training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(
+                    replay_cols
+                )
+                vm_fresh = value_mask & fresh_cols[None, :]
+                training_logs["player_value_r2_fresh"] = jnp.where(
+                    vm_fresh.any(),
+                    calculate_r2(
+                        value_prediction=player_target_pred.value_head.expectation.astype(
+                            jnp.float32
+                        ),
+                        value_target=(
+                            player_targets.win_returns @ cat_vf_support
+                        ).astype(jnp.float32),
+                        mask=vm_fresh,
+                    ),
+                    0.0,
+                )
+
+    # Advantage channel. Stage 3 Q-boosting cross-fades the Q-anchored
+    # advantage into the v-trace one PRE-normalisation, so the existing
+    # EMA mean/std fields and their update rule track the blended
+    # distribution verbatim — zero new pytree leaves, zero manifest risk.
+    # q_boost_mix is a host-ramped runtime scalar: zero for exploiter
+    # populations and while player_q_boost_enabled is off, so one
+    # compiled fn serves every population.
+    raw_advantages = player_targets.advantages
+    if config.player_q_enabled and q_boost_mix is not None:
+        raw_advantages = (
+            (1.0 - q_boost_mix) * raw_advantages.astype(jnp.float32)
+            + q_boost_mix * q_boost_advantages
+        ).astype(float_dtype)
+    if config.player_advantage_ema_enabled:
+        # Floor on the std divisor: as the policy converges true
+        # advantages shrink, and dividing by a vanishing std amplifies
+        # value-estimation noise into the actor precisely when the real
+        # signal is weakest. Below the floor, normalisation stops
+        # rescaling and the gradient is allowed to get small.
+        adv_std_divisor = jnp.maximum(
+            player_state.ema_adv_std, config.player_adv_std_floor
+        )
+        player_advantages = (
+            raw_advantages - player_state.ema_adv_mean
+        ) / adv_std_divisor
+        # UPGO shares the std divisor (both channels live on the same +-1
+        # value scale) but is NOT mean-recentered: its positive skew —
+        # extra credit along better-than-expected lines — is the
+        # mechanism, not a normalisation artefact to remove. It stays on
+        # the V channel: Q-boosting replaces only the v-trace advantage.
+        player_upgo_advantages = player_targets.upgo_advantages / adv_std_divisor
+    else:
+        player_advantages = raw_advantages
+        player_upgo_advantages = player_targets.upgo_advantages
 
     def player_loss_fn(params: Params):
 
@@ -855,10 +972,12 @@ def train_step(
         # a 100-step time constant), and a slow EMA mis-scales the policy
         # gradient for ~1k steps after every distribution shift — league
         # snapshot adds and exploiter block switches most visibly.
+        # raw_advantages, not player_targets.advantages: the EMA must
+        # track the (possibly Q-boost-blended) distribution it normalises.
         ema_adv_mean=jnp.where(
             has_policy_rows,
             optax.incremental_update(
-                player_targets.advantages.mean(where=policy_mask),
+                raw_advantages.mean(where=policy_mask),
                 player_state.ema_adv_mean,
                 config.player_adv_ema_rate,
             ),
@@ -867,7 +986,7 @@ def train_step(
         ema_adv_std=jnp.where(
             has_policy_rows,
             optax.incremental_update(
-                player_targets.advantages.std(where=policy_mask),
+                raw_advantages.std(where=policy_mask),
                 player_state.ema_adv_std,
                 config.player_adv_ema_rate,
             ),
@@ -1449,6 +1568,15 @@ class Learner:
         # purpose — a resume re-ramps over player_q_improve_ramp_steps,
         # which is harmless and keeps the anchor out of the checkpoint.
         self._q_improve_ramp_start: int | None = None
+        # Stage-3 Q-boosting cross-fade anchor, same treatment (a resume
+        # re-fades the advantage blend over player_q_boost_ramp_steps).
+        self._q_boost_ramp_start: int | None = None
+        if config.player_q_boost_enabled and not config.player_q_enabled:
+            raise ValueError(
+                "player_q_boost_enabled requires player_q_enabled: the "
+                "boosted advantage is retrace_g - v_exp from the Q critic "
+                "(docs/q-boosting-plan.md)."
+            )
 
         # Block-sequential scheduler state (see _select_population): whose
         # block it is right now, and which exploiter population is next in
@@ -2467,6 +2595,23 @@ class Learner:
                 / max(1, self.config.player_q_improve_ramp_steps),
             )
             q_improve_coef = self.config.player_q_improve_coef * ramp
+        # Stage-3 Q-boosting cross-fade: main only, linear 0->1 from first
+        # activation (docs/q-boosting-plan.md §3) — runtime scalar, the
+        # exploiter populations pass 0 through the same compiled fn.
+        q_boost_mix = 0.0
+        if (
+            self.config.player_q_enabled
+            and self.config.player_q_boost_enabled
+            and pop.name == "main"
+        ):
+            step = int(pop.player_state.step_count)
+            if self._q_boost_ramp_start is None:
+                self._q_boost_ramp_start = step
+            q_boost_mix = min(
+                1.0,
+                (step - self._q_boost_ramp_start)
+                / max(1, self.config.player_q_boost_ramp_steps),
+            )
         pop.player_state, pop.builder_state, logs = self._train_step_jit(
             pop.player_state,
             pop.builder_state,
@@ -2475,9 +2620,11 @@ class Learner:
             np.float32(upgo_coef),
             np.float32(self.config.player_magnet_kl_coef),
             np.float32(q_improve_coef),
+            np.float32(q_boost_mix),
         )
         if logs is not None and pop.name == "main":
             logs["player_q_improve_coef"] = q_improve_coef
+            logs["player_q_boost_mix"] = q_boost_mix
         return logs
 
     def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):

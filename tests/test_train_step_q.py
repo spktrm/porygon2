@@ -95,17 +95,39 @@ def test_train_step_player_q_smoke():
         # The per-module grad-norm loop picks the new head up by itself;
         # nonzero norm proves the CE loss actually reaches q_head params.
         "player_q_head_gradient_norm",
-        # Stage 2 improvement term (enabled by default since the
-        # 2026-08-18 unlock): the forward-KL loss plus its worth-it
+        # Stage 2 improvement term (observer since 2026-08-19: coef
+        # zeroed, diagnostics stay): the forward-KL loss plus its
         # readouts — p_q vs pi switch mass on real-choice states.
         "player_loss_q_improve",
         "player_q_improve_pq_switch_mass",
         "player_q_improve_pi_switch_mass",
         "player_q_improve_pq_entropy",
+        # Stage 3 Q-boosting (docs/q-boosting-plan.md): loss-free 3a
+        # diagnostics — blend candidate's scale/agreement vs the v-trace
+        # channel, plus Thm 3.1's Var_a~pi[Q] precondition readout.
+        # (Calibration r2 fresh/replay needs batch.reuse_count, absent
+        # in this minimal batch; player_q_boost_mix is host-side only.)
+        "player_q_boost_adv_mean",
+        "player_q_boost_adv_std",
+        "player_q_boost_adv_corr",
+        "player_q_boost_adv_sign_agree",
+        "player_q_action_var",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_q_head_gradient_norm"]) > 0.0
+
+    # Stage-3 blend path at full mix: the boosted advantage swaps in
+    # wholesale (runtime scalar, same compiled fn) and everything stays
+    # finite — the exploiter-side mix=0 case is the default-args run above.
+    with jax.default_device(jax.devices("cpu")[0]):
+        _, _, logs_boost = train_step(
+            player_state, builder_state, batch, config, q_boost_mix=np.float32(1.0)
+        )
+    assert np.isfinite(np.asarray(logs_boost["player_loss_pg"], dtype=np.float32))
+    assert np.isfinite(
+        np.asarray(logs_boost["player_state_adv_mean"], dtype=np.float32)
+    )
 
     # Explore-row contract (2026-08-17), tested at its extreme: an
     # all-explore batch trains EVERY player loss — the tempered rows carry
@@ -146,3 +168,4 @@ def test_train_step_player_q_smoke():
     assert "player_loss_q_private" not in logs_off
     assert "player_q_switch_move_gap" not in logs_off
     assert "player_loss_q_improve" not in logs_off
+    assert "player_q_boost_adv_mean" not in logs_off

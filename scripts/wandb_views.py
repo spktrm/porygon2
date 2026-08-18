@@ -268,9 +268,11 @@ def rl_sections():
         ),
         ws.Section(
             # Stage 2 (docs/q-critic-plan.md, enabled 2026-08-18 on the
-            # 1786951032 lineage — main population only, exploiters stay
-            # observer-only as the within-run contrast).
-            name="1.6 · Q improvement term (stage 2)",
+            # 1786951032 lineage; OBSERVER since 2026-08-19 — coef zeroed
+            # in favour of stage-3 Q-boosting, section 1.7. The p_q
+            # diagnostics stay live as the "what would the KL have
+            # pushed" readout).
+            name="1.6 · Q improvement term (stage 2, observer)",
             is_open=True,
             panels=[
                 lp(
@@ -312,6 +314,80 @@ def rl_sections():
                     "Abort watch: entropy & modality entropy",
                     [
                         "player_action_normalized_entropy",
+                        "player_normalized_modality_entropy",
+                    ],
+                ),
+            ],
+        ),
+        ws.Section(
+            # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md, LIVE
+            # from launch on the 2026-08-19 fresh lineage, in place of the
+            # stage-2 KL): PG advantage cross-faded from v-trace to
+            # retrace_g − v_exp, main population only.
+            name="1.7 · Q-boosting advantage (stage 3)",
+            is_open=True,
+            panels=[
+                lp(
+                    # Host-ramped cross-fade weight (0 -> 1 over
+                    # player_q_boost_ramp_steps). 1.0 = advantage fully
+                    # Q-anchored; drops to 0 instantly on abort
+                    # (player_q_boost_enabled=False, no recompile).
+                    "Blend mix (ramp)",
+                    ["player_q_boost_mix"],
+                    smooth=0,
+                ),
+                lp(
+                    # Agreement with the v-trace channel it replaces.
+                    # Moderate-positive is healthy (identical would make
+                    # the swap pointless, anti-correlated means one of
+                    # the two estimators is broken).
+                    "Boost vs v-trace advantage agreement",
+                    [
+                        "player_q_boost_adv_corr",
+                        "player_q_boost_adv_sign_agree",
+                    ],
+                ),
+                lp(
+                    # Same-order std vs the EMA-tracked (blended) channel
+                    # is the scale sanity check; mean near zero is the
+                    # empirical face of Thm 3.1's unbiasedness.
+                    "Boost advantage scale",
+                    [
+                        "player_q_boost_adv_mean",
+                        "player_q_boost_adv_std",
+                        "player_state_adv_std",
+                    ],
+                ),
+                lp(
+                    # Thm 3.1's precondition Var_a~pi[Q] > 0: near-zero
+                    # means the policy is already ~deterministic wherever
+                    # Q is evaluated, so boosting has no headroom to help
+                    # regardless of critic quality.
+                    "Thm 3.1 headroom: Var_a~pi[Q]",
+                    ["player_q_action_var"],
+                ),
+                lp(
+                    # The 3b gate the plan wanted BEFORE going live (this
+                    # lineage went live at launch instead): the Q readout
+                    # should calibrate at least as well as the V head on
+                    # fresh rows. q_fresh persistently below value_fresh =
+                    # the blend is anchored on the worse critic — back
+                    # the mix off.
+                    "Calibration r2: Q fresh/replay vs V fresh",
+                    [
+                        "player_q_calibration_r2_fresh",
+                        "player_q_calibration_r2_replay",
+                        "player_value_r2_fresh",
+                    ],
+                ),
+                lp(
+                    # Outcome + abort watch, same criteria as stage 2:
+                    # entropy/winrate cliff within ~2k steps of the ramp
+                    # -> flag off; switch_ratio is the number this whole
+                    # saga is about.
+                    "Outcome watch: switch ratio & modality entropy",
+                    [
+                        "switch_ratio",
                         "player_normalized_modality_entropy",
                     ],
                 ),

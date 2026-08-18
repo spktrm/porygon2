@@ -5,6 +5,7 @@ import chex
 from rl.config.common import AdamWConfig, BaseTrainingConfig
 
 PolicyObjectiveT = Literal["spo", "ppo"]
+QBoostVariantT = Literal["multistep", "onestep"]
 
 
 @chex.dataclass(frozen=True)
@@ -585,20 +586,48 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # ~10x the policy's mass even under today's switch-averse critic, so
     # the term's first-order push is pro-switch data generation. MAIN
     # POPULATION ONLY (host-gated in Learner._train_step): the exploiter
-    # blocks stay clean as a within-run contrast. Abort signature per the
-    # plan: entropy or winrate cliff within ~2k steps of enabling — zero
-    # the coef, keep the observer. Judge by player_q_improve_* logs plus
-    # switch_ratio / player_q_switch_move_gap / modality entropy.
+    # blocks stay clean as a within-run contrast.
     player_q_improve_enabled: bool = True
-    # Final coefficient (~0.01 x pg scale per the plan) reached after a
-    # host-side linear ramp from the step the term first activates;
-    # RUNTIME scalar into train_step, so ramping never recompiles.
-    player_q_improve_coef: float = 0.01
+    # COEF ZEROED 2026-08-19 (fresh no-checkpoint lineage): the stage-2 KL
+    # is superseded by the stage-3 Q-boosting advantage below — enabled=True
+    # with coef 0 is the plan's own observer posture, keeping the p_q
+    # diagnostics (player_q_improve_pq_* vs pi switch mass) live as the
+    # within-run "what would the KL have pushed" readout with zero loss
+    # influence. RUNTIME scalar into train_step, so flipping it back
+    # never recompiles.
+    player_q_improve_coef: float = 0.0
     player_q_improve_ramp_steps: int = 2000
     # Boltzmann temperature over the +/-1 categorical value support.
     # 0.1 = sharp but not argmax; tuned against p_q entropy / switch-mass
     # diagnostics on the live checkpoint before launch.
     player_q_improve_tau: float = 0.1
+    # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md; Fan & Farina,
+    # arXiv 2605.19235): cross-fade the PG advantage from the v-trace
+    # channel to retrace_g − v_exp — unbiased at lambda=1 for ANY critic
+    # accuracy (their Thm 3.1) and lower-MSE than the GAE family exactly
+    # where the policy must keep randomising (Var_a[Q] > 0), i.e. the
+    # mixed-strategy stay/switch states the collapse forms in. Blended
+    # PRE-normalisation so the existing ema_adv_mean/std fields serve
+    # verbatim (zero new pytree leaves). LIVE from launch on the
+    # 2026-08-19 fresh lineage, in place of the stage-2 KL (coef zeroed
+    # above): boosting repairs the credit signal itself where the KL
+    # propped the policy up with a Boltzmann prior. MAIN POPULATION ONLY
+    # (host-gated), exploiters stay clean as the within-run contrast.
+    # Abort = zero this flag; q_boost_mix forces to 0 next step, no
+    # recompile. Judge by switch_ratio, player_q_boost_adv_* agreement,
+    # player_q_calibration_r2_fresh vs player_value_r2_fresh, and the
+    # entropy-cliff watch inherited from stage 2.
+    player_q_boost_enabled: bool = True
+    # Loss-free Stage-3a diagnostics (player_q_boost_adv_*,
+    # player_q_action_var, calibration r2 fresh/replay); on permanently.
+    player_q_boost_diagnostic_enabled: bool = True
+    # multistep = retrace_g − v_exp (the paper's Thm 3.1 estimator);
+    # onestep = q_taken − v_exp fallback arm. Config-static: switching
+    # variants recompiles.
+    player_q_boost_variant: QBoostVariantT = "multistep"
+    # Linear cross-fade 0→1 over this many main-pop steps from first
+    # activation, mirroring player_q_improve_ramp_steps' host pattern.
+    player_q_boost_ramp_steps: int = 2000
     # Agent57/Ape-X-style exploration ladder (replaces stage 4's
     # cross-population intake, removed 2026-08-15: it conflated another
     # agent's policy evidence with main's own action values, and its

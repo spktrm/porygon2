@@ -245,7 +245,7 @@ def compute_q_targets(
     target_log_policy: jax.Array,
     isr: jax.Array,
     config: Porygon2LearnerConfig,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """Retrace(lambda) targets for the Q critic (docs/q-critic-plan.md),
     computed from the privileged Q_all rung; the Q_private rung trains by
     CE against the same labels learner-side.
@@ -268,12 +268,17 @@ def compute_q_targets(
     runs in f32: value readouts are precision-critical under the bf16
     training policy (see upgo_returns).
 
-    Returns (q_target_probs, retrace_g, q_all, v_exp):
+    Returns (q_target_probs, retrace_g, q_all, v_exp, q_taken):
       q_target_probs (T, B, n_bins) — CE labels for the taken action;
-      retrace_g      (T, B)         — the scalar Retrace returns (R2 diag);
-      q_all          (T, B, A)      — target net per-action E[Q], and
-      v_exp          (T, B)         — its policy expectation; the last two
-    are diagnostics only (player_q_switch_move_gap / player_q_ev_gap).
+      retrace_g      (T, B)         — the scalar Retrace returns (R2 diag,
+                                      and the Q-boosting advantage's
+                                      multistep numerator);
+      q_all          (T, B, A)      — target net per-action E[Q];
+      v_exp          (T, B)         — its policy expectation (the
+                                      Q-boosting baseline), and
+      q_taken        (T, B)         — E[Q] of the taken action (the
+                                      onestep Q-boosting variant).
+    q_all also feeds player_q_switch_move_gap / player_q_ev_gap.
     """
     support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
 
@@ -321,7 +326,7 @@ def compute_q_targets(
 
     retrace_g = jnp.clip(q_taken + errors, support[0], support[-1]) * mask
     q_target_probs = two_hot(retrace_g, support)
-    return q_target_probs, retrace_g, q_all, v_exp
+    return q_target_probs, retrace_g, q_all, v_exp, q_taken
 
 
 def compute_aux_value_targets(

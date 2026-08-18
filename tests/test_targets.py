@@ -170,10 +170,11 @@ class TestQTargetsHandExample:
         batch, q_logits, log_policy, isr, config_cls = self._inputs()
         lam = 0.8
         config = config_cls(player_q_lambda=lam)
-        probs, g, q_all, v_exp = compute_q_targets(
+        probs, g, q_all, v_exp, q_taken = compute_q_targets(
             batch, q_logits, log_policy, isr, config
         )
         np.testing.assert_allclose(np.asarray(q_all), 0.0, atol=1e-6)
+        np.testing.assert_allclose(np.asarray(q_taken), 0.0, atol=1e-6)
         np.testing.assert_allclose(np.asarray(v_exp), 0.0, atol=1e-6)
         np.testing.assert_allclose(np.asarray(g[0, 0]), lam, atol=1e-6)
         np.testing.assert_allclose(np.asarray(g[1, 0]), 1.0, atol=1e-6)
@@ -187,7 +188,7 @@ class TestQTargetsHandExample:
         # lam=1, on-policy: every acted step's target is the final outcome.
         batch, q_logits, log_policy, isr, config_cls = self._inputs()
         config = config_cls(player_q_lambda=1.0)
-        _, g, _, _ = compute_q_targets(batch, q_logits, log_policy, isr, config)
+        _, g, _, _, _ = compute_q_targets(batch, q_logits, log_policy, isr, config)
         np.testing.assert_allclose(np.asarray(g[:2, 0]), [1.0, 1.0], atol=1e-6)
 
     def test_off_policy_ratio_truncates(self):
@@ -196,10 +197,10 @@ class TestQTargetsHandExample:
         batch, q_logits, log_policy, _, config_cls = self._inputs()
         config = config_cls(player_q_lambda=1.0)
         big = jnp.full((3, 1), 10.0, dtype=jnp.float32)
-        _, g_big, _, _ = compute_q_targets(batch, q_logits, log_policy, big, config)
+        _, g_big, _, _, _ = compute_q_targets(batch, q_logits, log_policy, big, config)
         np.testing.assert_allclose(np.asarray(g_big[0, 0]), 1.0, atol=1e-6)
         zero = jnp.zeros((3, 1), dtype=jnp.float32)
-        _, g_zero, _, _ = compute_q_targets(batch, q_logits, log_policy, zero, config)
+        _, g_zero, _, _, _ = compute_q_targets(batch, q_logits, log_policy, zero, config)
         # Bootstrap on v_exp(s1) = 0, no correction from the outcome.
         np.testing.assert_allclose(np.asarray(g_zero[0, 0]), 0.0, atol=1e-6)
         # The last acted step's outcome enters through the terminal-anchor
@@ -222,14 +223,15 @@ class TestQTargetsOnExTrajectory:
         )
         q_logits = jnp.zeros((T, B, A, 3), dtype=jnp.float32)
         log_policy = jnp.full((T, B, A), -np.log(A), dtype=jnp.float32)
-        probs, g, q_all, v_exp = compute_q_targets(
+        probs, g, q_all, v_exp, q_taken = compute_q_targets(
             full, q_logits, log_policy, isr, config
         )
         assert probs.shape == (T, B, 3)
         assert g.shape == (T, B)
         assert q_all.shape == (T, B, A)
         assert v_exp.shape == (T, B)
-        for leaf in (probs, g, q_all, v_exp):
+        assert q_taken.shape == (T, B)
+        for leaf in (probs, g, q_all, v_exp, q_taken):
             assert np.isfinite(np.asarray(leaf)).all()
         # Retrace returns live on the reward support, and the CE labels
         # are distributions everywhere.
