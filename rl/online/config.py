@@ -686,5 +686,32 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_human_loss_coef: float = 1e-2
 
 
+@chex.dataclass(frozen=True)
+class RuntimeScalars:
+    """The TRACED complement of Porygon2LearnerConfig: per-step scalars the
+    host computes each call (ramps, plasticity gating, per-population
+    zeroing) and passes into the jitted train_step as ONE pytree argument.
+    These must never move into the static config above — config is a jit
+    static_argname, and static scalars retained ~5GB of executables per
+    distinct value and OOM-killed run 1326; as traced leaves they change
+    freely with zero recompiles. None falls back at the use site (to the
+    static coef for upgo/magnet, to 0 for the ramped Q terms); the live
+    Learner path always fills all four."""
+
+    # config.player_upgo_coef, zeroed by the host during plasticity
+    # recovery (a freshly-perturbed critic cuts UPGO returns in the wrong
+    # places).
+    upgo_coef: chex.Array | None = None
+    # config.player_magnet_kl_coef (the entropy watchdog escalates it
+    # host-side).
+    magnet_coef: chex.Array | None = None
+    # Host-side ramp of player_q_improve_coef; zero for the exploiter
+    # populations.
+    q_improve_coef: chex.Array | None = None
+    # Stage-3 Q-boosting cross-fade weight (docs/q-boosting-plan.md);
+    # zero for exploiters and while player_q_boost_enabled is off.
+    q_boost_mix: chex.Array | None = None
+
+
 def get_learner_config():
     return Porygon2LearnerConfig()

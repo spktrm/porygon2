@@ -50,7 +50,7 @@ from rl.online.artifact import (
 )
 from rl.online.ratings import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
-from rl.online.config import Porygon2LearnerConfig
+from rl.online.config import Porygon2LearnerConfig, RuntimeScalars
 from rl.online.controllers import PILogController
 from rl.online.league import (
     LEAGUE_EXPLOITER_KEY,
@@ -153,24 +153,19 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
-    upgo_coef: jax.Array | None = None,
-    magnet_coef: jax.Array | None = None,
-    q_improve_coef: jax.Array | None = None,
-    q_boost_mix: jax.Array | None = None,
+    scalars: RuntimeScalars = RuntimeScalars(),
 ):
     """Train for a single step.
 
-    ``upgo_coef``, ``magnet_coef``, ``q_improve_coef`` and ``q_boost_mix``
-    are RUNTIME scalars (traced, not static — runtime values never
-    recompile; static-config scalars retained ~5GB of executables per
-    distinct value and OOM-killed run 1326). upgo_coef is
-    config.player_upgo_coef, zeroed by the caller during plasticity
-    recovery (a freshly-perturbed critic cuts UPGO returns in the wrong
-    places). q_improve_coef carries the host-side ramp of
-    player_q_improve_coef and is zero for the exploiter populations.
-    q_boost_mix is the stage-3 Q-boosting cross-fade weight
-    (docs/q-boosting-plan.md), same host-ramp/main-only treatment.
+    ``scalars`` bundles the RUNTIME scalars (traced pytree, not static —
+    runtime values never recompile; static-config scalars retained ~5GB
+    of executables per distinct value and OOM-killed run 1326). Per-field
+    semantics and None fallbacks are documented on RuntimeScalars itself.
     """
+    upgo_coef = scalars.upgo_coef
+    magnet_coef = scalars.magnet_coef
+    q_improve_coef = scalars.q_improve_coef
+    q_boost_mix = scalars.q_boost_mix
 
     player_transitions = batch.player_transitions
     player_history = batch.player_history
@@ -2617,10 +2612,12 @@ class Learner:
             pop.builder_state,
             batch,
             self._jit_config,
-            np.float32(upgo_coef),
-            np.float32(self.config.player_magnet_kl_coef),
-            np.float32(q_improve_coef),
-            np.float32(q_boost_mix),
+            RuntimeScalars(
+                upgo_coef=np.float32(upgo_coef),
+                magnet_coef=np.float32(self.config.player_magnet_kl_coef),
+                q_improve_coef=np.float32(q_improve_coef),
+                q_boost_mix=np.float32(q_boost_mix),
+            ),
         )
         if logs is not None and pop.name == "main":
             logs["player_q_improve_coef"] = q_improve_coef

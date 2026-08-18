@@ -29,7 +29,7 @@ def test_train_step_player_q_smoke():
     from rl.model.config import get_builder_model_config, get_player_model_config
     from rl.model.player_model import get_player_model
     from rl.online.artifact import create_train_state
-    from rl.online.config import Porygon2LearnerConfig
+    from rl.online.config import Porygon2LearnerConfig, RuntimeScalars
     from rl.online.learner import train_step
 
     with jax.default_device(jax.devices("cpu")[0]):
@@ -122,7 +122,11 @@ def test_train_step_player_q_smoke():
     # finite — the exploiter-side mix=0 case is the default-args run above.
     with jax.default_device(jax.devices("cpu")[0]):
         _, _, logs_boost = train_step(
-            player_state, builder_state, batch, config, q_boost_mix=np.float32(1.0)
+            player_state,
+            builder_state,
+            batch,
+            config,
+            scalars=RuntimeScalars(q_boost_mix=np.float32(1.0)),
         )
     assert np.isfinite(np.asarray(logs_boost["player_loss_pg"], dtype=np.float32))
     assert np.isfinite(
