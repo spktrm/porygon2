@@ -105,13 +105,13 @@ def rl_sections():
                 lp(
                     "Smoothed winrate vs SimpleHeuristic",
                     [f"smoothed-wr-{SH}-{i}" for i in range(3)],
-                    x="training_step",
+                    x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
                     "Smoothed margin (alive-mon diff)",
                     [f"smoothed-margin-{SH}-{i}" for i in range(3)],
-                    x="training_step",
+                    x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
@@ -120,20 +120,20 @@ def rl_sections():
                     # NaN. Smoothed payoff reads as 2*winrate - 1.
                     "Raw payoff per actor (UI-smoothed)",
                     [f"ema-payoff-{SH}-{i}" for i in range(3)],
-                    x="training_step",
+                    x="lifetime_step",
                     smooth=0.95,
                 ),
                 lp(
                     "Main-params sanity check",
                     [f"main-payoff-{SH}-{i}" for i in range(3)]
                     + [f"main-margin-{SH}-{i}" for i in range(3)],
-                    x="training_step",
+                    x="lifetime_step",
                     smooth=0.9,
                 ),
                 lp(
                     "Eval games played",
                     [f"games-{SH}-{i}" for i in range(3)],
-                    x="training_step",
+                    x="lifetime_step",
                     smooth=0,
                 ),
             ],
@@ -618,7 +618,17 @@ def rl_sections():
                     ["player_frame_count", "builder_frame_count"],
                     smooth=0,
                 ),
-                lp("Training step", ["training_step"], smooth=0),
+                lp(
+                    # training_step (player_state.step_count) resets to 0
+                    # on an exploiter hard-reset/perturb re-fork;
+                    # lifetime_step never does — plotted together (against
+                    # the lifetime_step x-axis) a re-fork shows as
+                    # training_step visibly dropping while the x-axis
+                    # itself keeps climbing.
+                    "Training step (raw) vs lifetime step",
+                    ["training_step", "lifetime_step"],
+                    smooth=0,
+                ),
             ],
         ),
         ws.Section(
@@ -829,14 +839,23 @@ def main():
         "Signal health",
         rl_sections(),
         args.update_rl_url,
-        # Learner-step x-axis for every panel: all learner and eval log rows
-        # carry training_step (rl/learner/learner.py, rl/main.py), and it is
-        # comparable across runs unlike wandb's _step row counter. The
-        # offline project does not log this key, so it keeps the default.
-        # force_x pins it per panel — the workspace-level setting alone is
-        # overridden by the "Step" default materialised onto each panel.
-        settings=ws.WorkspaceSettings(x_axis="training_step"),
-        force_x="training_step",
+        # Learner-step x-axis for every panel: lifetime_step (not
+        # training_step = player_state.step_count) — the latter resets to
+        # 0 on an exploiter hard-reset/perturb re-fork (PopulationState's
+        # host_step is zeroed at fork; training_step tracks it), which
+        # would draw a sawtooth/overdraw on any main_exploiter/
+        # league_exploiter panel. lifetime_step is carried across re-forks
+        # by construction (rl/online/learner.py's PopulationState) and is
+        # already the run's own default step metric (main.py's
+        # define_metric("*", step_metric="lifetime_step")) — logged on
+        # every row, including the eval-actor rows that only log
+        # training_step themselves (wandb fills forward the run's last
+        # logged lifetime_step for those). The offline project does not
+        # log this key, so it keeps the default. force_x pins it per panel
+        # — the workspace-level setting alone is overridden by the "Step"
+        # default materialised onto each panel on save.
+        settings=ws.WorkspaceSettings(x_axis="lifetime_step"),
+        force_x="lifetime_step",
     )
     offline_workspace = save_view(
         args.entity,
