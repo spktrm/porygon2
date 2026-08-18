@@ -50,7 +50,24 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
     return { log: player.log.join("\n"), trajectory };
 }
 
+const EX_BIN_PATH = path.join(__dirname, "../../../rl/environment/ex.bin");
+
 async function runBattle() {
+    // ex.bin is a shape/init fixture for the python side (rl/environment/
+    // data.py loads it at import time) — it only changes when the env
+    // feature schema changes, so regenerating it on EVERY service start
+    // was pure startup cost (10 throwaway battles before the real server)
+    // plus a race: python importing while this rewrote the file died with
+    // FileNotFoundError. Skip when present; regenerate explicitly with
+    // `npm run generate-ex` after schema changes.
+    if (fs.existsSync(EX_BIN_PATH) && !process.argv.includes("--force")) {
+        console.log(
+            `${EX_BIN_PATH} exists — skipping example-batch generation ` +
+                `(run 'npm run generate-ex' after env schema changes).`,
+        );
+        return;
+    }
+
     const batch = new EnvironmentBatch();
     const battleLogs: string[] = [];
 
@@ -100,16 +117,15 @@ async function runBattle() {
         battleLogs.push(...trajectories.map((t) => t.log));
     }
 
-    // Save the very last state that was recorded.
-    const filePath = path.join(__dirname, "../../../rl/environment/ex.bin");
-    console.log(`Saving latest environment response to ${filePath}`);
+    // Save the very last state that was recorded. Write-then-rename so a
+    // concurrently-starting python process can never observe a partial
+    // file: rename is atomic, existence implies complete.
+    console.log(`Saving latest environment response to ${EX_BIN_PATH}`);
     const data = batch.serializeBinary();
-    fs.writeFile(filePath, Buffer.from(data), (err) => {
-        if (err) {
-            console.error("Failed to save the environment state:", err);
-        }
-        console.log("File saved successfully.");
-    });
+    const tmpPath = `${EX_BIN_PATH}.tmp`;
+    fs.writeFileSync(tmpPath, Buffer.from(data));
+    fs.renameSync(tmpPath, EX_BIN_PATH);
+    console.log("File saved successfully.");
 
     // Write battle log as txt
     for (let i = 0; i < battleLogs.length; i++) {

@@ -1,3 +1,5 @@
+from typing import Literal
+
 import jax
 import numpy as np
 
@@ -6,13 +8,32 @@ from rl.environment.interfaces import BuilderTransition
 from rl.environment.utils import split_rng
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
+from rl.online.league import LEAGUE_EXPLOITER_KEY, MAIN_EXPLOITER_KEY, MAIN_KEY
 from rl.online.learner import Learner
+
+Population = Literal["main", "main_exploiter", "league_exploiter"]
+_LIVE_KEY_BY_POPULATION: dict[Population, int] = {
+    "main": MAIN_KEY,
+    "main_exploiter": MAIN_EXPLOITER_KEY,
+    "league_exploiter": LEAGUE_EXPLOITER_KEY,
+}
 
 
 class BuilderActor:
-    """Manages the state of a single agent/environment interaction loop."""
+    """Manages the state of a single agent/environment interaction loop.
 
-    def __init__(self, agent: Agent, learner: Learner, rng_seed: int = 42):
+    Unlike PlayerActor, there is no matchmaking here — team-building isn't
+    adversarial — so the only population-awareness needed is reading/
+    writing this actor's own population's live params and builder_replay,
+    never another population's."""
+
+    def __init__(
+        self,
+        agent: Agent,
+        learner: Learner,
+        rng_seed: int = 42,
+        population: Population = "main",
+    ):
         self._agent = agent
         self._env = TeamBuilderEnvironment(
             generation=learner.config.generation,
@@ -20,14 +41,14 @@ class BuilderActor:
         )
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
+        self.population = population
 
     def split_rng(self) -> jax.Array:
         self._rng_key, subkey = split_rng(self._rng_key)
         return subkey
 
-    def pull_main_player(self) -> ParamsContainer:
-        league = self._learner.league
-        return league.get_main_player()
+    def pull_own_player(self) -> ParamsContainer:
+        return self._learner.league.get_live(_LIVE_KEY_BY_POPULATION[self.population])
 
     def unroll(self, rng_key: jax.Array, builder_params: Params) -> None:
         """Run unroll_length agent/environment steps, returning the trajectory."""
@@ -66,18 +87,18 @@ class BuilderActor:
             lambda *xs: np.stack(xs), *builder_trajectory
         )
 
-        add_cond = self._learner.builder_replay._add_cv
+        builder_replay = self._learner.populations[self.population].builder_replay
+        add_cond = builder_replay._add_cv
         with add_cond:
             add_cond.wait_for(
-                lambda: self._learner.done
-                or self._learner.builder_replay.ready_to_add()
+                lambda: self._learner.done or builder_replay.ready_to_add()
             )
             if self._learner.done:
                 return
-            self._learner.builder_replay.add_trajectory(
+            builder_replay.add_trajectory(
                 builder_trajectory, builder_actor_input.history
             )
 
-        sample_cond = self._learner.builder_replay._sample_cv
+        sample_cond = builder_replay._sample_cv
         with sample_cond:
             sample_cond.notify_all()

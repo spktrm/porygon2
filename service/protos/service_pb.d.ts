@@ -200,6 +200,11 @@ export class EnvironmentState extends jspb.Message {
   getHistoryPackedLength(): number;
   setHistoryPackedLength(value: number): void;
 
+  getOppPrivateTeam(): Uint8Array | string;
+  getOppPrivateTeam_asU8(): Uint8Array;
+  getOppPrivateTeam_asB64(): string;
+  setOppPrivateTeam(value: Uint8Array | string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): EnvironmentState.AsObject;
   static toObject(includeInstance: boolean, msg: EnvironmentState): EnvironmentState.AsObject;
@@ -227,6 +232,7 @@ export namespace EnvironmentState {
     field: Uint8Array | string,
     rqid: number,
     historyPackedLength: number,
+    oppPrivateTeam: Uint8Array | string,
   }
 }
 

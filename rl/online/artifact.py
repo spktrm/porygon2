@@ -15,7 +15,7 @@ import json
 import logging
 import os
 from collections.abc import Callable, Mapping
-from pprint import pprint
+from pprint import pformat
 from typing import Any, Literal
 
 import flax.linen as nn
@@ -26,6 +26,7 @@ import optax
 import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
+from tqdm import tqdm
 
 from rl import checkpoint
 from rl.config.common import AdamWConfig  # noqa: F401 (re-export convenience)
@@ -57,19 +58,18 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         smogon_format=learner_config.smogon_format,
         entity_size=int(model_cfg.entity_size),
         num_decision_slots=int(model_cfg.num_decision_slots),
-        pi_head="per_modality",
-        pi_head_num_blocks=int(model_cfg.pi_head.num_blocks),
+        pi_head="typed_streams_dot",
+        # Q head (docs/q-critic-plan.md): enabling adds params to the
+        # tree, so checkpoint-mode resumes across the flip must fail with
+        # a sentence. Absent from pre-q manifests -> skipped there. The
+        # variant string marks the privileged two-rung conditioning
+        # (2026-08-17) — the q_head subtree reshaped, so resumes from
+        # observer-Q checkpoints go through load-mode "params" (which
+        # fresh-inits q_head and carries everything else).
+        q_head=(
+            "privileged_two_rung" if learner_config.player_q_enabled else False
+        ),
     )
-
-
-def write_manifest(save_path: str, learner_config, player_state) -> None:
-    manifest = dict(
-        step_count=int(np.asarray(player_state.step_count)),
-        frame_count=int(np.asarray(player_state.frame_count)),
-        **_model_capabilities(learner_config),
-    )
-    with open(os.path.join(save_path, MANIFEST_NAME), "w") as f:
-        json.dump(manifest, f, indent=2)
 
 
 def read_manifest(ckpt_path: str) -> dict | None:
@@ -108,7 +108,7 @@ def check_manifest(ckpt_path: str, learner_config, strict: bool) -> None:
             f"architecture ({detail}); resume with load mode 'params' to "
             "merge, or start from scratch"
         )
-    print(f"manifest deltas vs current architecture ({detail}) — merging params")
+    tqdm.write(f"manifest deltas vs current architecture ({detail}) — merging params")
 
 
 class Porygon2PlayerTrainState(train_state.TrainState):
@@ -231,6 +231,16 @@ def create_train_state(
     return player_train_state, builder_train_state
 
 
+def _ckpt_root(learner_config: Porygon2LearnerConfig) -> str:
+    """Root directory for this process's checkpoints. No more run_subdir
+    exploiter namespacing (docs/exploiter-phase-plan.md's 2026-08-12
+    three-population redesign): only "main" ever gets a full, resumable
+    checkpoint — see Learner._write_checkpoint's docstring for why an
+    exploiter population's in-progress state doesn't need one at all, so
+    there's no second checkpoint tree left to collide with main's."""
+    return f"./ckpts/gen{learner_config.generation}/"
+
+
 def save_train_state(
     wandb_run: wandb.wandb_run.Run,
     learner_config: Porygon2LearnerConfig,
@@ -240,10 +250,16 @@ def save_train_state(
     controller_bytes: bytes | None = None,
 ):
     save_path = save_train_state_locally(
-        learner_config, player_state, builder_state, league, controller_bytes
+        learner_config,
+        player_state,
+        builder_state,
+        league,
+        controller_bytes,
     )
-    if learner_config.log_artifacts_online and (
-        player_state.step_count.item() % learner_config.cloud_save_interval_steps == 0
+    if (
+        learner_config.log_artifacts_online
+        and player_state.step_count.item() % learner_config.cloud_save_interval_steps
+        == 0
     ):
         wandb_run.log_artifact(
             artifact_or_path=save_path,
@@ -260,7 +276,10 @@ def save_train_state_locally(
     controller_bytes: bytes | None = None,
 ):
     save_path = os.path.abspath(
-        f"ckpts/gen{learner_config.generation}/ckpt_{player_state.step_count:08}"
+        os.path.join(
+            _ckpt_root(learner_config),
+            f"ckpt_{player_state.step_count:08}",
+        )
     )
     return save_state(
         save_path,
@@ -280,7 +299,6 @@ def save_state(
     league: League,
     controller_bytes: bytes | None = None,
 ):
-    os.makedirs(save_path, exist_ok=True)
     player_components = dict(
         params=player_state.params,
         target_params=player_state.target_params,
@@ -301,23 +319,123 @@ def save_state(
             frame_count=builder_state.frame_count,
         ),
     )
-    checkpoint.save_train_state(
+    return write_checkpoint_components(
         save_path,
         learner_config,
         player_components,
         builder_components,
         league.serialize(),
         controller_bytes,
+        step_count=int(np.asarray(player_state.step_count)),
+        frame_count=int(np.asarray(player_state.frame_count)),
     )
-    write_manifest(save_path, learner_config, player_state)
+
+
+def write_checkpoint_components(
+    save_path: str,
+    learner_config: Porygon2LearnerConfig,
+    player_components: dict[str, Any],
+    builder_components: dict[str, Any],
+    league_bytes: bytes,
+    controller_bytes: bytes | None,
+    step_count: int,
+    frame_count: int,
+    scheduler: dict | None = None,
+    populations: dict[str, dict] | None = None,
+) -> str:
+    """The actual checkpoint disk I/O, given already-host-side components.
+
+    Split out of save_state so a background writer thread
+    (Learner._checkpoint_writer_worker) can do this work from a queued
+    payload without needing live TrainState/League objects — those aren't
+    safe to hand across threads once the training loop has moved on to
+    donating/mutating them for the next step.
+
+    `scheduler`/`populations` carry the block-sequential scheduler's state
+    and every live exploiter population's own resumable state, so a restart
+    picks an in-progress exploiter block back up instead of discarding it.
+    """
+    os.makedirs(save_path, exist_ok=True)
+    checkpoint.save_train_state(
+        save_path,
+        learner_config,
+        player_components,
+        builder_components,
+        league_bytes,
+        controller_bytes,
+    )
+    for name, blob in (populations or {}).items():
+        checkpoint.save_population_state(
+            save_path,
+            name,
+            blob["player_components"],
+            blob["builder_components"],
+            blob["host"],
+            blob.get("controllers"),
+        )
+    if scheduler is not None:
+        # Written AFTER the populations it lists: a reader that sees this
+        # scheduler file can trust every listed populations/ dir exists.
+        checkpoint.save_scheduler_state(save_path, scheduler)
+    manifest = dict(
+        step_count=step_count,
+        frame_count=frame_count,
+        **_model_capabilities(learner_config),
+    )
+    with open(os.path.join(save_path, MANIFEST_NAME), "w") as f:
+        json.dump(manifest, f, indent=2)
     return save_path
 
 
 def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
-    """Finds the most recent checkpoint folder."""
-    save_path = f"./ckpts/gen{learner_config.generation}/"
+    """Finds the most recent checkpoint folder under this process's root."""
+    save_path = _ckpt_root(learner_config)
     os.makedirs(save_path, exist_ok=True)
     return checkpoint.most_recent_ckpt_dir(save_path)
+
+
+WANDB_RUNS_NAME = "wandb_runs.json"
+
+
+def _wandb_run_info_path(learner_config: Porygon2LearnerConfig) -> str:
+    return os.path.join(_ckpt_root(learner_config), WANDB_RUNS_NAME)
+
+
+def save_wandb_run_info(
+    learner_config: Porygon2LearnerConfig,
+    group: str,
+    run_ids: dict[str, str],
+) -> None:
+    """Persists this session's wandb identity (group + per-population run
+    ids) next to the checkpoints, so a checkpoint-mode restart resumes the
+    same wandb runs instead of opening a fresh session trio."""
+    path = _wandb_run_info_path(learner_config)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(dict(group=group, runs=run_ids), f, indent=2)
+
+
+def load_wandb_run_info(learner_config: Porygon2LearnerConfig) -> dict | None:
+    """The saved wandb session ({"group": ..., "runs": {pop: id}}), or None.
+
+    Only meaningful alongside a resumable checkpoint: if the checkpoint
+    tree is gone (archived, fresh start) the training lineage is gone too,
+    and resuming the old wandb runs would append an unrelated lineage's
+    metrics onto them — so a missing checkpoint invalidates the file.
+    """
+    if _get_checkpoint_path(learner_config) is None:
+        return None
+    try:
+        with open(_wandb_run_info_path(learner_config)) as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(info, dict) or not isinstance(info.get("group"), str):
+        return None
+    runs = info.get("runs")
+    if not isinstance(runs, dict):
+        return None
+    return info
 
 
 def _init_league(
@@ -349,13 +467,48 @@ def load_from_scratch(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
     """
     No-op on state; simply initializes a fresh league.
     """
-    print("Starting training from scratch.")
+    tqdm.write("Starting training from scratch.")
     league = _init_league(learner_config, player_state, builder_state)
-    return player_state, builder_state, league, None
+    return player_state, builder_state, league, None, None
+
+
+def _load_resume_state(ckpt_path: str) -> dict | None:
+    """The block-sequential scheduler state plus every live exploiter
+    population's own saved state, or None (pre-resume checkpoint, or the
+    blob is unreadable). Never fatal — losing an in-progress exploiter
+    block degrades to the old re-fork-fresh behaviour, which must not be
+    able to fail an otherwise-healthy resume of main."""
+    try:
+        scheduler = checkpoint.load_scheduler_state(ckpt_path)
+        if scheduler is None:
+            return None
+        populations = {}
+        # The scheduler's own list is the source of truth, NOT a dir scan:
+        # repeated writes into one ckpt dir (main's step is frozen during
+        # an exploiter block) can leave a stale populations/ subdir behind
+        # after that population's block ended.
+        for name in scheduler.get("populations", []):
+            blob = checkpoint.load_population_state(ckpt_path, name)
+            if blob is not None:
+                populations[name] = blob
+        return dict(scheduler=scheduler, populations=populations)
+    except Exception:
+        logger.exception(
+            "exploiter population state in %s unreadable — resuming with a "
+            "main window instead (exploiter blocks re-fork fresh).",
+            ckpt_path,
+        )
+        return None
 
 
 def load_from_checkpoint(
@@ -363,16 +516,24 @@ def load_from_checkpoint(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
     """
-    Full restoration: loads params, opt_state, step counts, league, and the
-    host-side controller/plasticity state.
+    Full restoration: loads params, opt_state, step counts, league, the
+    host-side controller/plasticity state, and any in-progress exploiter
+    block (scheduler + per-population states, resumed by
+    Learner.restore_populations).
     """
-    print(f"Loading checkpoint from {ckpt_path}")
+    tqdm.write(f"Loading checkpoint from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=True)
     ckpt_data = checkpoint.load_full(ckpt_path)
 
-    print("Checkpoint data:")
+    tqdm.write("Checkpoint data:")
     ckpt_player_state = ckpt_data["player_state"]
     ckpt_builder_state = ckpt_data["builder_state"]
     ckpt_league_bytes = ckpt_data["league"]
@@ -380,8 +541,8 @@ def load_from_checkpoint(
     builder_scalars = ckpt_builder_state["scalars"]
 
     # Debug prints (scalars only — heavy arrays excluded)
-    pprint(player_scalars)
-    pprint(builder_scalars)
+    tqdm.write(pformat(player_scalars))
+    tqdm.write(pformat(builder_scalars))
 
     # Restore League
     if ckpt_league_bytes is not None:
@@ -422,7 +583,13 @@ def load_from_checkpoint(
         )
     )
 
-    return player_state, builder_state, league, ckpt_data.get("controllers")
+    return (
+        player_state,
+        builder_state,
+        league,
+        ckpt_data.get("controllers"),
+        _load_resume_state(ckpt_path),
+    )
 
 
 def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
@@ -463,7 +630,13 @@ def load_from_params(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League]:
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
     """
     Params only: merges ckpt params into the freshly initialized trees, so
     modules added since the checkpoint keep their fresh init and everything
@@ -471,7 +644,7 @@ def load_from_params(
     the merged tree. Resets opt_state and counts (by keeping the input
     state's version of those) and starts a fresh league.
     """
-    print(f"Loading (merging) params only from {ckpt_path}")
+    tqdm.write(f"Loading (merging) params only from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=False)
     loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
     loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
@@ -484,9 +657,9 @@ def load_from_params(
     )
     for name, kept in (("player", player_kept_fresh), ("builder", builder_kept_fresh)):
         if kept:
-            print(f"{name}: {len(kept)} param subtrees kept fresh init:")
+            tqdm.write(f"{name}: {len(kept)} param subtrees kept fresh init:")
             for path in kept:
-                print(f"  {path}")
+                tqdm.write(f"  {path}")
 
     # target_params gets the same merged tree: leaving it at fresh init
     # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
@@ -505,8 +678,10 @@ def load_from_params(
     league = _init_league(learner_config, player_state, builder_state)
 
     # Controllers start fresh too: params-mode is a new run whose training
-    # dynamics (lambda anneal, plasticity stall clock) do not carry over.
-    return player_state, builder_state, league, None
+    # dynamics (lambda anneal, plasticity stall clock) do not carry over —
+    # and neither does an in-progress exploiter block (its opt_state/league
+    # stats reference the old lineage).
+    return player_state, builder_state, league, None, None
 
 
 def load_train_state(
@@ -514,8 +689,23 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
-) -> tuple[Porygon2PlayerTrainState, Porygon2BuilderTrainState, League, bytes | None]:
-
+) -> tuple[
+    Porygon2PlayerTrainState,
+    Porygon2BuilderTrainState,
+    League,
+    bytes | None,
+    dict | None,
+]:
+    """Loads main's own state on a process (re)start. No more fork_from_ckpt/
+    run_subdir (docs/exploiter-phase-plan.md's 2026-08-12 three-population
+    redesign): exploiter populations are never loaded from a separate
+    checkpoint file at all — Learner._fork_population creates them
+    in-process by copying main's current live params, the instant this
+    process actually has a live main to fork from. Every promoted or
+    timed-out exploiter snapshot is already a normal, permanent
+    PlayerRef in the (persisted) League by the time this runs — there is
+    no separate "pending promotions" merge step anymore.
+    """
     latest_ckpt = _get_checkpoint_path(learner_config)
 
     # 1. Force Scratch
@@ -530,10 +720,10 @@ def load_train_state(
     # per-run), but now at warning level so it can't scroll by unnoticed.
     if not latest_ckpt:
         logger.warning(
-            "LOAD_STATE_MODE=%r but no checkpoint found under ./ckpts/gen%s/ "
+            "LOAD_STATE_MODE=%r but no checkpoint found under %s "
             "— starting from scratch.",
             mode,
-            learner_config.generation,
+            _ckpt_root(learner_config),
         )
         return load_from_scratch(learner_config, player_state, builder_state)
 

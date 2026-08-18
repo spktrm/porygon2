@@ -43,6 +43,26 @@ export class WorkerHandler {
     constructor(port: MessagePort | null | undefined) {
         this.port = port;
         this.setupMessageHandler();
+        // Each worker is its own V8 isolate: process.memoryUsage() called
+        // from GameServer only ever sees the coordinator thread's own
+        // heap, never this one (a Node quirk, not a bug — heap stats are
+        // per-isolate, RSS is process-wide). Self-report periodically so
+        // the coordinator can attribute the ~150MB/worker dex-data
+        // baseline instead of only seeing it as opaque process RSS.
+        setInterval(() => this.reportMemoryStats(), 10_000);
+    }
+
+    private reportMemoryStats(): void {
+        if (!this.port) {
+            return;
+        }
+        const mem = process.memoryUsage();
+        this.port.postMessage({
+            type: "memory_stats",
+            heapUsedMb: mem.heapUsed / 2 ** 20,
+            heapTotalMb: mem.heapTotal / 2 ** 20,
+            externalMb: mem.external / 2 ** 20,
+        });
     }
 
     private setupMessageHandler(): void {
@@ -50,9 +70,25 @@ export class WorkerHandler {
             throw new Error("Worker must be run as a worker thread");
         }
 
-        this.port.on("message", (data: Buffer) => {
-            this.handleMessage(data);
-        });
+        this.port.on(
+            "message",
+            (data: Buffer | Uint8Array | { type: string; gameId: string }) => {
+                // postMessage() transfers protobuf payloads as plain
+                // Uint8Array (serializeBinary()'s return type), NOT a Node
+                // Buffer — Buffer.isBuffer() is false for those, which
+                // silently dropped every reset/step request here (neither
+                // branch matched, no log, no error). Buffer is itself a
+                // Uint8Array subclass, so this covers both.
+                if (data instanceof Uint8Array) {
+                    this.handleMessage(Buffer.from(data));
+                } else if (data?.type === "evict_pending_game") {
+                    // Fire-and-forget cleanup from index.ts's disconnect
+                    // handler (WorkerPool.evictPendingGame). No-op if the
+                    // entry was already consumed by a successful pairing.
+                    this.pendingGames.delete(data.gameId);
+                }
+            },
+        );
     }
 
     private getPlayerFromUsername(userName: string) {
@@ -105,6 +141,12 @@ export class WorkerHandler {
         const opponent = this.pendingGames.get(gameId);
 
         if (opponent !== undefined) {
+            // Remove the pairing immediately: any of the checks below can
+            // throw, and a throw here must not leave this gameId
+            // permanently stuck in pendingGames (it would never be reused,
+            // and the waiting opponent's promise would never resolve).
+            this.pendingGames.delete(gameId);
+
             if (opponent.playerDetails.userName === userName) {
                 throw new Error(
                     `User ${userName} attempted to match with themselves on gameId ${gameId}`,
@@ -137,16 +179,13 @@ export class WorkerHandler {
             this.playerMapping.set(opponent.playerDetails.userName, player1);
             this.playerMapping.set(userName, player2);
 
-            // 3. Remove the game from pending now that it has started
-            this.pendingGames.delete(gameId);
-
-            // 4. "Wake up" the waiting opponent
+            // 3. "Wake up" the waiting opponent
             opponent.resolve({
                 player: player1,
                 opponentDetails: details,
             });
 
-            // 5. Return the args for the *current* player
+            // 4. Return the args for the *current* player
             return Promise.resolve({
                 player: player2,
                 opponentDetails: opponent.playerDetails,
@@ -256,6 +295,21 @@ export class WorkerHandler {
         workerResponse.setEnvironmentResponse(environmentResponse);
 
         this.sendMessage(taskId, workerResponse);
+
+        // Eager cleanup: this was the game's final state, so nothing will
+        // ever be requested from this player again — the python actor's
+        // next contact is a reset, and gameId-hash routing (index.ts)
+        // usually lands that reset on a DIFFERENT worker, so the old
+        // "destroy on next reset of the same username" path here left one
+        // finished battle (two client Battles + the full sim Battle via
+        // the stream refs) retained per username per worker indefinitely.
+        // destroy() also ends the BattleStream, which is what actually
+        // frees the sim Battle on the early-finish path (no `end` line
+        // ever arrives there).
+        if (player.done) {
+            player.destroy();
+            this.playerMapping.delete(userName);
+        }
     }
 
     private resetPlayerFromUserName(

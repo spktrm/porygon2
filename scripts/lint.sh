@@ -13,6 +13,7 @@ npx prettier data/src/**/*.ts -w
 run_in_dir_or_file embeddings/*.py
 run_in_dir_or_file inference/*.py
 run_in_dir_or_file rl/**/*.py
+run_in_dir_or_file tests/**/*.py
 run_in_dir_or_file scrape/*.py
 run_in_dir_or_file rl/*.py
 run_in_dir_or_file embeddings/*.py

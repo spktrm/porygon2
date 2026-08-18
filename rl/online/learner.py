@@ -1,12 +1,18 @@
+import collections
+import dataclasses
+import gc
+import json
 import logging
 import os
 import pickle
 import queue
 import random
+import sys
 import threading
-import traceback
+import time
 from _thread import LockType
 from contextlib import nullcontext
+from typing import Callable, Literal
 
 import jax
 import jax.numpy as jnp
@@ -17,31 +23,43 @@ from tqdm import tqdm
 
 import wandb
 from rl import checkpoint
-from rl.environment.data import CAT_VF_SUPPORT, STOI, PackedSetFeature
+
+from rl.environment.data import (
+    CAT_VF_SUPPORT,
+    FLAT_MODALITY_MASK,
+    STOI,
+    PackedSetFeature,
+)
 from rl.environment.interfaces import (
     Batch,
     BuilderActorInput,
     PlayerActorInput,
     Trajectory,
 )
-from rl.environment.utils import clip_history, clip_packed_history, geometric_bucket
+from rl.environment.protos.service_pb2 import ModalityEnum
+from rl.environment.utils import (
+    close_tqdm_bar,
+    next_tqdm_position,
+)
 from rl.model.heads import HeadParams, calculate_hierarchical_prior
 from rl.model.utils import Params, ParamsContainer
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
-    save_train_state,
+    write_checkpoint_components,
 )
-from rl.online.bandit import rating_logs
+from rl.online.ratings import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.controllers import (
-    AdaptivityController,
-    ExploitabilityController,
-    LambdaGapController,
-    PILogController,
+from rl.online.controllers import PILogController
+from rl.online.league import (
+    LEAGUE_EXPLOITER_KEY,
+    LIVE_KEYS,
+    MAIN_EXPLOITER_KEY,
+    MAIN_KEY,
+    League,
+    PlayerRef,
 )
-from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.loss import (
     backward_kl_loss,
     forward_kl_loss,
@@ -57,11 +75,77 @@ from rl.online.targets import (
     compute_aux_value_targets,
     compute_builder_targets,
     compute_player_targets,
+    compute_q_targets,
 )
 from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
+
+PopulationName = Literal["main", "main_exploiter", "league_exploiter"]
+POPULATION_NAMES: tuple[PopulationName, ...] = (
+    "main",
+    "main_exploiter",
+    "league_exploiter",
+)
+_LIVE_KEY_BY_POPULATION: dict[PopulationName, int] = {
+    "main": MAIN_KEY,
+    "main_exploiter": MAIN_EXPLOITER_KEY,
+    "league_exploiter": LEAGUE_EXPLOITER_KEY,
+}
+# Block-sequential rotation order: each time main finishes a training
+# window (a routine league addition in _manage_league), the NEXT exploiter
+# population in this cycle gets the GPU for one full attempt — trained to
+# its own terminal outcome (promotion or frame-budget timeout), exactly
+# AlphaStar's ready_to_checkpoint shape — before control returns to main.
+# See _select_population for the scheduling model.
+_EXPLOITER_ROTATION: tuple[PopulationName, ...] = (
+    "main_exploiter",
+    "league_exploiter",
+)
+_FRAME_BUDGET_FIELD = {
+    "main_exploiter": "main_exploiter_frame_budget",
+    "league_exploiter": "league_exploiter_frame_budget",
+}
+# Per-population step-count namespace (docs/exploiter-phase-plan.md's
+# three-population redesign): each population runs its OWN step counter
+# from its own creation/reset point (not main's absolute counter), and all
+# three are now permanently visible in the SAME shared League (no more
+# restart-merge boundary hiding an exploiter's own step counter from
+# main's) — so all three need disjoint PlayerRef.step_count ranges, not
+# just promotions vs. main like the old 2-way offset. Sized far above any
+# plausible single-population step count (~200k-step target, see
+# porygon2-1m-step-target memory).
+_STEP_OFFSET = {
+    "main": 0,
+    "main_exploiter": 100_000_000,
+    "league_exploiter": 200_000_000,
+}
+
+
+class ExploiterBudgetExhausted(Exception):
+    """No longer used to unwind a phase (there are no phases) — kept only
+    as a marker exception type in case external tooling still references
+    it. rl.online.learner.Learner now handles an exploiter's non-promotion
+    timeout in-process (see _check_exploiter_transitions) by resetting
+    that population directly, not by raising."""
+
+
+class OOMGuardTriggered(Exception):
+    """Raised by Learner._check_oom_guard when available system RAM drops
+    below config.oom_guard_min_available_fraction — a self-monitoring
+    safety valve, not a leak fix in itself. A full checkpoint has already
+    been written by the time this is raised. rl.online.main stops the
+    whole process on this (same as a Ctrl-C interrupt) rather than
+    continuing in the same process: freeing Python objects doesn't
+    guarantee the OS actually reclaims that memory, so the only way to get
+    back to a genuinely clean memory state is a fresh process — the user
+    (or whatever supervises this box) needs to relaunch, which will resume
+    from the checkpoint this exception carries."""
+
+    def __init__(self, checkpoint_path: str):
+        super().__init__(checkpoint_path)
+        self.checkpoint_path = checkpoint_path
 
 
 def train_step(
@@ -69,15 +153,20 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
-    adv_lambda: jax.Array | None = None,
+    upgo_coef: jax.Array | None = None,
     magnet_coef: jax.Array | None = None,
+    q_improve_coef: jax.Array | None = None,
 ):
     """Train for a single step.
 
-    ``adv_lambda`` and ``magnet_coef`` are RUNTIME scalars (traced, not
-    static) driven by the lambda/entropy controllers — runtime values
-    never recompile; see compute_player_targets for the OOM history
-    behind this rule.
+    ``upgo_coef``, ``magnet_coef`` and ``q_improve_coef`` are RUNTIME
+    scalars (traced, not static — runtime values never recompile;
+    static-config scalars retained ~5GB of executables per distinct value
+    and OOM-killed run 1326). upgo_coef is config.player_upgo_coef,
+    zeroed by the caller during plasticity recovery (a freshly-perturbed
+    critic cuts UPGO returns in the wrong places). q_improve_coef carries
+    the host-side ramp of player_q_improve_coef and is zero for the
+    exploiter populations.
     """
 
     player_transitions = batch.player_transitions
@@ -125,11 +214,24 @@ def train_step(
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
         config=config,
-        adv_lambda=adv_lambda,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
+
+    # Exploration-ladder rows (config.explore_game_prob; previously the
+    # stage-4 cross-population intake, removed 2026-08-15) train EVERY
+    # player loss since 2026-08-17: the heads record the TEMPERED
+    # distribution as the behaviour policy, so target_actor_ratio is the
+    # exact policy-over-tempered-behaviour ISR that v-trace/IMPACT/Retrace
+    # already truncate on — tempered rows are ordinary off-policy rows.
+    # own_rows survives only where tempered play would distort a signal
+    # that has no correction path: league add cadence (frame_count), the
+    # plasticity memorisation gap, the builder losses, and the replay
+    # controller's KL set-point.
+    own_rows = None
+    if not isinstance(batch.explore, tuple):
+        own_rows = jnp.logical_not(batch.explore[0].astype(bool))  # (B,)
 
     # Per-lambda v-trace distribution targets for the multi-lambda aux
     # value heads, bootstrapped from each lambda's OWN fast-target readout
@@ -163,8 +265,14 @@ def train_step(
         vm = value_mask.astype(value_sq_err.dtype)
         per_traj_err = (value_sq_err * vm).sum(axis=0) / (vm.sum(axis=0) + 1e-8)
         fresh = batch.reuse_count[0] == 0
+        replayed = ~fresh
+        if own_rows is not None:
+            # Tempered-play value errors would contaminate the fresh/replay
+            # memorisation gap — grade it on standard-temperature play only.
+            fresh = fresh & own_rows
+            replayed = replayed & own_rows
         fresh_err = per_traj_err.mean(where=fresh)
-        replay_err = per_traj_err.mean(where=~fresh)
+        replay_err = per_traj_err.mean(where=replayed)
         training_logs.update(
             {
                 "plasticity_fresh_value_err": fresh_err,
@@ -180,11 +288,20 @@ def train_step(
         # value-estimation noise into the actor precisely when the real
         # signal is weakest. Below the floor, normalisation stops
         # rescaling and the gradient is allowed to get small.
+        adv_std_divisor = jnp.maximum(
+            player_state.ema_adv_std, config.player_adv_std_floor
+        )
         player_advantages = (
             player_targets.advantages - player_state.ema_adv_mean
-        ) / jnp.maximum(player_state.ema_adv_std, config.player_adv_std_floor)
+        ) / adv_std_divisor
+        # UPGO shares the std divisor (both channels live on the same +-1
+        # value scale) but is NOT mean-recentered: its positive skew —
+        # extra credit along better-than-expected lines — is the
+        # mechanism, not a normalisation artefact to remove.
+        player_upgo_advantages = player_targets.upgo_advantages / adv_std_divisor
     else:
         player_advantages = player_targets.advantages
+        player_upgo_advantages = player_targets.upgo_advantages
 
     # Magnet policy for the KL regularizer: the hierarchical prior — uniform
     # over valid modalities, uniform within each modality — which is the init
@@ -200,6 +317,91 @@ def train_step(
     magnet_log_policy = jnp.where(
         flat_action_mask, jnp.log(jnp.maximum(magnet_prior, 1e-9)), 0.0
     )
+
+    # Two-rung Q critic (docs/q-critic-plan.md): Retrace targets from the
+    # fast EMA target's PRIVILEGED all-action Q readout (Q_all — value_all
+    # conditioning) and reference policy; the Q_private rung trains by CE
+    # against the same labels. Zero policy influence — the heads train,
+    # the diagnostics log, nothing reaches the actor loss.
+    if config.player_q_enabled:
+        q_target_probs, q_retrace_g, q_all_target, q_v_exp = compute_q_targets(
+            batch,
+            q_logits=player_target_pred.q_logits,
+            target_log_policy=player_target_pred.action_head.log_policy,
+            isr=target_actor_ratio,
+            config=config,
+        )
+        # Q(s, a) exists wherever an action was actually taken — including
+        # forced single-option steps (policy_mask excludes those; the Q
+        # regression must not) — but not on terminal rows.
+        q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
+        if own_rows is not None:
+            training_logs["player_q_explore_frac"] = average(
+                jnp.logical_not(own_rows)[None, :].astype(jnp.float32)
+                * jnp.ones_like(q_mask, dtype=jnp.float32),
+                q_mask,
+            )
+
+        # Both readouts estimate the same state value from the same target
+        # params AND the same (privileged) information set, so their
+        # absolute gap is pure calibration debt of the Q head to the V
+        # head (q-critic-plan.md stage-1 acceptance metric) — no
+        # information-deficit component since the value_all conditioning.
+        training_logs["player_q_ev_gap"] = average(
+            jnp.abs(
+                q_v_exp - player_target_pred.value_head.expectation.astype(jnp.float32)
+            ),
+            q_mask,
+        )
+        # The direct "what does the critic think switching is worth"
+        # readout, graded on the POLICY'S information set (Q_private — the
+        # question is what a deployable critic believes, so the privileged
+        # rung would answer the wrong one): best legal switch's E[Q] minus
+        # best legal move's, over states offering both. The number the
+        # switch-collapse investigation (Aug 2026) had no way to measure.
+        q_private_all_target = jax.nn.softmax(
+            player_target_pred.private_q_logits.astype(jnp.float32), axis=-1
+        ) @ cat_vf_support.astype(jnp.float32)
+        switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+        move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
+        valid_switch = flat_action_mask & switch_cells
+        valid_move = flat_action_mask & move_cells
+        best_switch = jnp.max(
+            jnp.where(valid_switch, q_private_all_target, -jnp.inf), axis=-1
+        )
+        best_move = jnp.max(
+            jnp.where(valid_move, q_private_all_target, -jnp.inf), axis=-1
+        )
+        has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
+        training_logs["player_q_switch_move_gap"] = average(
+            jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
+        )
+
+        # Discriminators for a negative gap: starved switch cells vs a
+        # genuine judgement. The CE only trains the taken action's cell,
+        # so a collapsing switch_ratio starves voluntary-switch cells of
+        # gradient while forced replacements (post-faint, no legal move)
+        # keep flowing regardless of policy. Coverage says how bad the
+        # starvation is; the conditional Retrace means are the
+        # head-independent answer to "do voluntary switches actually lead
+        # to worse outcomes than moves from the same kind of state?".
+        taken_switch = jnp.take(switch_cells, player_actor_action_head.action_index)
+        has_move = valid_move.any(axis=-1)
+        q_voluntary_switch_mask = q_mask & taken_switch & has_move
+        q_forced_switch_mask = q_mask & taken_switch & jnp.logical_not(has_move)
+        q_move_mask = q_mask & jnp.logical_not(taken_switch)
+        training_logs["player_q_switch_target_frac"] = average(
+            taken_switch.astype(jnp.float32), q_mask
+        )
+        training_logs["player_q_voluntary_switch_target_frac"] = average(
+            (taken_switch & has_move).astype(jnp.float32), q_mask
+        )
+        training_logs["player_q_target_voluntary_switch"] = average(
+            q_retrace_g, q_voluntary_switch_mask
+        )
+        training_logs["player_q_target_move"] = average(
+            q_retrace_g, q_move_mask & has_both
+        )
 
     def player_loss_fn(params: Params):
 
@@ -225,6 +427,17 @@ def train_step(
         loss_pg = policy_gradient_loss(
             policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
             advantages=player_advantages,
+            valid=policy_mask,
+            threshold=config.player_ppo_clip_threshold,
+            objective=config.player_policy_objective,
+        )
+        # UPGO PG term (AlphaStar: v-trace loss + UPGO loss, summed) —
+        # same surrogate/clipping, the outcome-conditional advantage
+        # channel. upgo_coef is the runtime scalar (0 during plasticity
+        # recovery).
+        loss_upgo = policy_gradient_loss(
+            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
+            advantages=player_upgo_advantages,
             valid=policy_mask,
             threshold=config.player_ppo_clip_threshold,
             objective=config.player_policy_objective,
@@ -279,34 +492,12 @@ def train_step(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
 
-        # player_commit_cov: batch CORRELATION between how much
-        # probability the policy put on the action it took and the
-        # advantage that action earned. Positive means the policy's
-        # confidence is being validated; near zero or negative means it
-        # is confidently choosing actions that are not paying. Telemetry
-        # only now — it used to drive the adaptivity controller's PI
-        # action, removed after repeated bugs (see AdaptivityController's
-        # class docstring). Still logged because it's a real, informative
-        # signal to watch, just not acted on by anything anymore.
-        #
-        # Correlation, not covariance: cov = corr * sd(log pi) * sd(adv),
-        # and sd(log pi) shrinks as the policy sharpens — i.e. the raw
-        # covariance partly measures policy entropy, coupling it to
-        # whatever might read it. Normalising leaves the relationship
-        # alone, bounded in [-1, 1].
-        #
-        # Blind to actions the policy never takes — this is exactly why
-        # it was never trusted alone; the entropy floors are the hard
-        # backstop for modality collapse, independent of this signal.
-        commit_lp = learner_log_prob
-        commit_adv = player_advantages
-        lp_dev = commit_lp - average(commit_lp, policy_mask)
-        adv_dev = commit_adv - average(commit_adv, policy_mask)
-        lp_sd = jnp.sqrt(average(jnp.square(lp_dev), policy_mask))
-        adv_sd = jnp.sqrt(average(jnp.square(adv_dev), policy_mask))
-        commit_cov = average(lp_dev * adv_dev, policy_mask) / jnp.maximum(
-            lp_sd * adv_sd, 1e-6
-        )
+        # (player_commit_cov removed 2026-08-14 at the user's request: as
+        # a correlation with the advantages the policy itself generated,
+        # it largely measured what it was correlated with. With the
+        # adaptivity controller also gone, modality collapse has NO
+        # automated backstop — watch player_normalized_modality_entropy
+        # on the dashboard; 1330 died at 0.08 on that axis.)
 
         # Multi-gamma auxiliary value heads (Metamon/AMAGO-style): each
         # row is a categorical value readout for one auxiliary discount,
@@ -348,6 +539,61 @@ def train_step(
             value_mask,
         )
 
+        # Counterfactual value ladder: private (deployable information set —
+        # no opponent sheet) and public (history-context-only) heads, CE
+        # against the SAME win targets as the privileged main head. Each
+        # rung learns the best value estimate its information set
+        # supports, so the expectation gaps between rungs are per-state
+        # value-of-information readouts: |all − private| prices the
+        # opponent's hidden team, |private − public| prices the agent's own
+        # private information over the public game record.
+        private_logits = learner_player_pred.private_value_logits.astype(jnp.float32)
+        public_logits = learner_player_pred.public_value_logits.astype(jnp.float32)
+        loss_v_private = average(
+            optax.softmax_cross_entropy(
+                logits=private_logits, labels=player_targets.win_returns
+            ),
+            value_mask,
+        )
+        loss_v_public = average(
+            optax.softmax_cross_entropy(
+                logits=public_logits, labels=player_targets.win_returns
+            ),
+            value_mask,
+        )
+        f32_support = cat_vf_support.astype(jnp.float32)
+        private_expectation = jax.nn.softmax(private_logits, axis=-1) @ f32_support
+        public_expectation = jax.nn.softmax(public_logits, axis=-1) @ f32_support
+        all_expectation = learner_value_head.expectation.astype(jnp.float32)
+        value_ladder_logs = dict(
+            player_loss_v_private=loss_v_private,
+            player_loss_v_public=loss_v_public,
+            player_value_private_r2=calculate_r2(
+                value_prediction=private_expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            player_value_public_r2=calculate_r2(
+                value_prediction=public_expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            # Signed means (bias of the richer estimate vs the poorer) and
+            # absolute means (the actual information value magnitude).
+            player_value_info_gap_opp=average(
+                all_expectation - private_expectation, value_mask
+            ),
+            player_value_info_gap_opp_abs=average(
+                jnp.abs(all_expectation - private_expectation), value_mask
+            ),
+            player_value_info_gap_private=average(
+                private_expectation - public_expectation, value_mask
+            ),
+            player_value_info_gap_private_abs=average(
+                jnp.abs(private_expectation - public_expectation), value_mask
+            ),
+        )
+
         # Per-row R2, keyed by lambda. The lambda=1.0 (Monte Carlo) row is
         # the calibration anchor: its gap to the main head is a direct
         # bootstrap-bias readout — large/growing gap means the critic is
@@ -363,18 +609,176 @@ def train_step(
             for k, lam in enumerate(config.player_aux_lambdas)
         }
 
+        # Two-rung Q CE (docs/q-critic-plan.md): each rung's taken-action
+        # categorical logits against the SAME two-hot Retrace target
+        # (labels come from the privileged Q_all recursion; Q_private is
+        # its deployable-information sibling, all head params shared).
+        # Config-static branch — the jit variant without the head never
+        # traces this.
+        q_logs = {}
+        q_improve_logs = {}
+        loss_q = 0.0
+        loss_q_private = 0.0
+        loss_q_improve = 0.0
+        if config.player_q_enabled:
+
+            def q_taken(q_logits):
+                return jnp.take_along_axis(
+                    q_logits.astype(jnp.float32),
+                    player_actor_action_head.action_index[..., None, None],
+                    axis=-2,
+                ).squeeze(-2)
+
+            learner_q_logits_taken = q_taken(learner_player_pred.q_logits)
+            learner_q_private_logits_taken = q_taken(
+                learner_player_pred.private_q_logits
+            )
+            loss_q = average(
+                optax.softmax_cross_entropy(
+                    logits=learner_q_logits_taken, labels=q_target_probs
+                ),
+                q_mask,
+            )
+            loss_q_private = average(
+                optax.softmax_cross_entropy(
+                    logits=learner_q_private_logits_taken, labels=q_target_probs
+                ),
+                q_mask,
+            )
+
+            # Stage 2 improvement term (docs/q-critic-plan.md §5): forward
+            # KL from p_q ∝ exp(E[Q̄]/τ) over legal actions to the learner
+            # policy, as a CE (H(p_q) carries no gradient wrt θ). Q̄ from
+            # the EMA target's PRIVATE rung — no gradient path into the Q
+            # head, and the target distribution lives in the policy's own
+            # information set, so it is realisable rather than asking π to
+            # guess the opponent's team. Weighted by the q_improve_coef
+            # runtime scalar (zero for exploiters); the switch-mass logs
+            # below are the "was it worth it" readout: p_q's switch mass
+            # vs π's in states where both a switch and a non-switch action
+            # are legal — the slice the ratchet starves.
+            if config.player_q_improve_enabled:
+                q_bar = jax.nn.softmax(
+                    player_target_pred.private_q_logits.astype(jnp.float32),
+                    axis=-1,
+                ) @ cat_vf_support.astype(jnp.float32)
+                pq_logits = jnp.where(
+                    flat_action_mask,
+                    q_bar / config.player_q_improve_tau,
+                    -1e9,
+                )
+                pq = jax.nn.softmax(pq_logits, axis=-1)
+                pq_log = jax.nn.log_softmax(pq_logits, axis=-1)
+                loss_q_improve = average(
+                    jnp.where(
+                        flat_action_mask,
+                        pq * (pq_log - learner_log_policy),
+                        0.0,
+                    ).sum(axis=-1),
+                    policy_mask,
+                )
+
+                switch_actions = jnp.asarray(
+                    FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+                )
+                has_switch = (flat_action_mask & switch_actions).any(axis=-1)
+                has_other = (
+                    flat_action_mask & jnp.logical_not(switch_actions)
+                ).any(axis=-1)
+                switch_choice_mask = policy_mask & has_switch & has_other
+                pq_switch_mass = (pq * switch_actions).sum(axis=-1)
+                pi_switch_mass = (
+                    jnp.exp(learner_log_policy) * flat_action_mask * switch_actions
+                ).sum(axis=-1)
+                q_improve_logs = dict(
+                    player_loss_q_improve=loss_q_improve,
+                    player_q_improve_pq_switch_mass=average(
+                        pq_switch_mass, switch_choice_mask
+                    ),
+                    player_q_improve_pi_switch_mass=average(
+                        pi_switch_mass, switch_choice_mask
+                    ),
+                    player_q_improve_pq_entropy=average(
+                        -jnp.where(flat_action_mask, pq * pq_log, 0.0).sum(axis=-1),
+                        policy_mask,
+                    ),
+                )
+            q_taken_pred = jax.nn.softmax(
+                learner_q_logits_taken, axis=-1
+            ) @ cat_vf_support.astype(jnp.float32)
+            q_private_taken_pred = jax.nn.softmax(
+                learner_q_private_logits_taken, axis=-1
+            ) @ cat_vf_support.astype(jnp.float32)
+
+            # Calibration by context, graded on Q_private (the contexts
+            # exist to interpret the Q_private switch/move gap, so they
+            # must grade the same rung). Forced switches stay data-rich
+            # through a switch collapse; voluntary ones starve. Calibrated
+            # forced + degraded voluntary = starvation artefact; both
+            # calibrated with the gap still negative = the critic means it
+            # (0.0 sentinel when a batch has no steps in a context).
+            def q_context_r2(context_mask):
+                return jnp.where(
+                    context_mask.any(),
+                    calculate_r2(
+                        value_prediction=q_private_taken_pred,
+                        value_target=q_retrace_g,
+                        mask=context_mask,
+                    ),
+                    0.0,
+                )
+
+            q_logs = dict(
+                player_loss_q=loss_q,
+                player_loss_q_private=loss_q_private,
+                player_q_r2=calculate_r2(
+                    value_prediction=q_taken_pred,
+                    value_target=q_retrace_g,
+                    mask=q_mask,
+                ),
+                player_q_private_r2=calculate_r2(
+                    value_prediction=q_private_taken_pred,
+                    value_target=q_retrace_g,
+                    mask=q_mask,
+                ),
+                player_q_r2_move=q_context_r2(q_move_mask),
+                player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
+                player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
+            )
+            if own_rows is not None:
+                # Does the Q head actually fit the explore-actor-generated
+                # returns it is digesting? Persistent gap vs the full-mask
+                # r2 = the tempered rows are too off-policy to learn from
+                # (Retrace cutting every trace) rather than free
+                # counterfactuals.
+                q_logs["player_q_r2_explore"] = q_context_r2(
+                    q_mask & jnp.logical_not(own_rows)[None, :]
+                )
+
         loss = (
             config.player_policy_loss_coef * loss_pg
+            + (config.player_upgo_coef if upgo_coef is None else upgo_coef) * loss_upgo
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
             * loss_magnet_kl
             + config.player_aux_value_coef * loss_v_aux
+            + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
+            # One coefficient for both rungs — same estimator family on
+            # the same labels, mirroring the value-ladder coef above.
+            + config.player_q_coef * (loss_q + loss_q_private)
+            # Stage 2 improvement term; coef is a host-ramped runtime
+            # scalar, zero for exploiter populations.
+            + (0.0 if q_improve_coef is None else q_improve_coef) * loss_q_improve
         )
 
         return loss, dict(
+            **q_logs,
+            **q_improve_logs,
+            **value_ladder_logs,
             # Loss values
             player_loss_pg=loss_pg,
+            player_loss_upgo=loss_upgo,
             player_loss_v_win=loss_v_win,
             player_loss_v_aux=loss_v_aux,
             player_loss_kl=loss_actor_backward_kl,
@@ -386,12 +790,23 @@ def train_step(
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
-            player_commit_cov=commit_cov,
             # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
             # KL values
             player_learner_actor_forward_kl=loss_actor_forward_kl,
+            # Own-rows-only variant: the replay reuse-cap controller's
+            # set-point must not drift with the tempered explore rows now
+            # inside policy_mask (see _update_replay_controller).
+            player_learner_actor_forward_kl_own=(
+                loss_actor_forward_kl
+                if own_rows is None
+                else forward_kl_loss(
+                    policy_ratio=learner_actor_ratio,
+                    log_policy_ratio=learner_actor_log_ratio,
+                    valid=policy_mask & own_rows[None, :],
+                )
+            ),
             player_learner_actor_backward_kl=loss_actor_backward_kl,
             player_learner_target_forward_kl=loss_target_forward_kl,
             player_learner_target_backward_kl=loss_target_backward_kl,
@@ -412,10 +827,24 @@ def train_step(
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
 
+    prev_player_state = player_state
+    # A batch with an empty policy_mask (every row forced single-option
+    # or terminal — rare but possible) makes mean/std with `where=` NaN,
+    # and one NaN batch poisons the advantage EMAs forever — freeze them
+    # on such batches instead. (Explore rows train the policy since
+    # 2026-08-17, so an all-explore batch no longer trips this.)
+    has_policy_rows = policy_mask.any()
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
-        frame_count=player_state.frame_count + player_valid.sum(),
+        # Own frames only: explore intake rows must not advance the league
+        # add cadence (add_player_min_frames counts main's own play).
+        frame_count=player_state.frame_count
+        + (
+            player_valid.sum()
+            if own_rows is None
+            else (player_valid & own_rows[None, :]).sum()
+        ),
         target_params=optax.incremental_update(
             player_state.params,
             player_state.target_params,
@@ -424,18 +853,38 @@ def train_step(
         # Advantage stats use their own, much faster EMA rate: they are
         # scalars estimated from ~180 samples per batch (well-averaged at
         # a 100-step time constant), and a slow EMA mis-scales the policy
-        # gradient for ~1k steps after every distribution shift — bandit
-        # arm switches most visibly.
-        ema_adv_mean=optax.incremental_update(
-            player_targets.advantages.mean(where=policy_mask),
+        # gradient for ~1k steps after every distribution shift — league
+        # snapshot adds and exploiter block switches most visibly.
+        ema_adv_mean=jnp.where(
+            has_policy_rows,
+            optax.incremental_update(
+                player_targets.advantages.mean(where=policy_mask),
+                player_state.ema_adv_mean,
+                config.player_adv_ema_rate,
+            ),
             player_state.ema_adv_mean,
-            config.player_adv_ema_rate,
         ),
-        ema_adv_std=optax.incremental_update(
-            player_targets.advantages.std(where=policy_mask),
+        ema_adv_std=jnp.where(
+            has_policy_rows,
+            optax.incremental_update(
+                player_targets.advantages.std(where=policy_mask),
+                player_state.ema_adv_std,
+                config.player_adv_ema_rate,
+            ),
             player_state.ema_adv_std,
-            config.player_adv_ema_rate,
         ),
+    )
+    # A non-finite loss or gradient must never reach the params or the EMA
+    # scalars: one poisoned update is permanent, and the next periodic save
+    # then overwrites the last good checkpoint with it. Keep the previous
+    # state wholesale and log the skip.
+    player_update_finite = jnp.isfinite(player_loss_val) & jnp.isfinite(
+        optax.global_norm(player_grads)
+    )
+    player_state = jax.tree.map(
+        lambda new, old: jnp.where(player_update_finite, new, old),
+        player_state,
+        prev_player_state,
     )
 
     training_logs.update(player_logs)
@@ -457,6 +906,7 @@ def train_step(
             / (value_mask.sum() + 1e-8),
             player_state_adv_mean=player_state.ema_adv_mean,
             player_state_adv_std=player_state.ema_adv_std,
+            player_update_skipped=1.0 - player_update_finite.astype(jnp.float32),
         )
     )
     training_logs.update(
@@ -506,6 +956,22 @@ def train_step(
         )
 
         builder_valid = jnp.bitwise_not(builder_transitions.env_output.done)
+        # Chunked unrolls: compute_builder_targets reads the game outcome
+        # off player win_reward[-1], which only the game's TERMINAL chunk
+        # carries — a mid-game chunk's builder rows would grade the team
+        # against a zero payoff. average()-based builder losses are
+        # empty-mask-safe (0, not NaN) if a batch happens to hold no
+        # terminal chunk.
+        builder_valid = builder_valid & player_transitions.env_output.done.any(
+            axis=0
+        )[None, :].astype(jnp.bool_)
+        if own_rows is not None:
+            # Explore rows stay out of the builder losses: builder targets
+            # are corrected only by the builder's own ISR — there is no
+            # correction path for the PLAYER's raised temperature, so a
+            # tempered game's outcome grades the team under deliberately
+            # noisy piloting.
+            builder_valid = builder_valid & own_rows[None, :]
 
         # Compute builder targets inside train_step (JAX/JIT compatible).
         builder_targets = compute_builder_targets(
@@ -659,6 +1125,7 @@ def train_step(
                 builder_norm_adv_std=builder_advantages.std(where=builder_valid),
             )
         )
+        prev_builder_state = builder_state
         builder_state = builder_state.apply_gradients(grads=builder_grads)
         builder_state = builder_state.replace(
             step_count=builder_state.step_count + 1,
@@ -668,6 +1135,18 @@ def train_step(
                 builder_state.target_params,
                 config.builder_ema_update_rate,
             ),
+        )
+        # Same non-finite gate as the player update above.
+        builder_update_finite = jnp.isfinite(builder_loss_val) & jnp.isfinite(
+            optax.global_norm(builder_grads)
+        )
+        builder_state = jax.tree.map(
+            lambda new, old: jnp.where(builder_update_finite, new, old),
+            builder_state,
+            prev_builder_state,
+        )
+        training_logs["builder_update_skipped"] = 1.0 - builder_update_finite.astype(
+            jnp.float32
         )
 
     training_logs.update(collect_batch_telemetry_data(batch, config))
@@ -682,46 +1161,52 @@ def train_step(
     return player_state, builder_state, training_logs
 
 
-def _stack_and_pad_batch(
-    batch: list[Trajectory],
-    player_transition_min_length: int = 32,
-    player_history_min_length: int = 64,
-    rng_key: jax.Array = None,
-) -> Batch:
-    """Stacks a list of trajectories and pads them to a fixed resolution."""
+# Module-level, not per-Learner: exactly ONE Learner exists for the life of
+# the process now (three populations sharing it, not one per phase — see
+# docs/exploiter-phase-plan.md's three-population redesign), so this is
+# already only ever compiled once. Kept module-level anyway (rather than
+# built in __init__) since it's still shared across all three populations'
+# player_state/builder_state (identical architecture, identical shapes) —
+# the scheduler just swaps in whichever PopulationState's state is due to
+# train this tick.
+_TRAIN_STEP_JIT = jax.jit(
+    train_step,
+    static_argnames=["config"],
+    donate_argnames=["player_state", "builder_state"],
+)
+
+
+def _stack_batch(batch: list[Trajectory], rng_key: jax.Array = None) -> Batch:
+    """Stacks a list of fixed-shape trajectory chunks into a Batch.
+
+    Chunked unrolls (2026-08-16) made every stored trajectory exactly
+    (player_chunk_length, player_history_length)-shaped at the actor
+    (PlayerActor.unroll), so the geometric shared-bucket machinery that
+    used to live here — one clip level per batch, sized by the batch's
+    longest game — is gone, and with it the whole family of
+    _TRAIN_STEP_JIT shape variants it generated (each a separately
+    compiled executable with its own workspace: the first top-bucket
+    batch of a session, arriving once games ran long enough, is what
+    OOM'd sessions 1786537634 and 1786712180)."""
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
-    )
-
-    max_valid = (
-        stacked_trajectory.player_transitions.env_output.done.argmax(axis=0)
-        .max()
-        .item()
-    )
-
-    num_valid = num_valid = geometric_bucket(
-        max_valid,
-        player_transition_min_length,
-        stacked_trajectory.player_transitions.env_output.done.shape[0],
     )
 
     return Batch(
         builder_transitions=stacked_trajectory.builder_transitions,
         builder_history=stacked_trajectory.builder_history,
-        player_transitions=jax.tree.map(
-            lambda x: x[:num_valid], stacked_trajectory.player_transitions
-        ),
-        player_packed_history=clip_packed_history(
-            stacked_trajectory.player_packed_history,
-            min_length=player_history_min_length,
-        ),
-        player_history=clip_history(
-            stacked_trajectory.player_history, min_length=player_history_min_length
-        ),
+        player_transitions=stacked_trajectory.player_transitions,
+        player_packed_history=stacked_trajectory.player_packed_history,
+        player_history=stacked_trajectory.player_history,
         reuse_count=(
             ()
             if isinstance(stacked_trajectory.reuse_count, tuple)
             else stacked_trajectory.reuse_count
+        ),
+        explore=(
+            ()
+            if isinstance(stacked_trajectory.explore, tuple)
+            else stacked_trajectory.explore
         ),
         rng_key=rng_key,
     )
@@ -753,165 +1238,544 @@ def _embedding_stats(emb: jax.Array, valid: jax.Array) -> tuple[jax.Array, jax.A
     return dormant_frac, srank / d
 
 
+def _check_promotion_bar(
+    league: League,
+    home_key: int,
+    candidate_origin_filter: "Callable[[PlayerRef], bool]",
+    promote_winrate: float,
+    promote_min_games: float,
+) -> str | None:
+    """Returns a human-readable failure reason, or None if the bar is
+    cleared.
+
+    Moved from the former rl/online/promote_exploiter.py (deleted — its
+    CLI/manual-promotion path depended entirely on the old per-run
+    disposable-checkpoint model this redesign removes; see docs/
+    exploiter-phase-plan.md's 2026-08-12 note). home_key generalizes what
+    used to be a hardcoded MAIN_KEY: under the three-population design each
+    exploiter population has its OWN live identity, and the bar is checked
+    against ITS win-rate, not main's.
+
+    Checks win-rate vs. EVERY reliably-measured (>= promote_min_games
+    effective games) candidate in the population's own targeting pool
+    (candidate_origin_filter — lineage-restricted for main_exploiter,
+    unrestricted for league_exploiter, matching get_match()'s own filter)
+    — not a small fixed pinned set individually, since neither exploiter
+    population pins to one anymore (see player_actor.py). Same
+    aggregate-win-rate-over-a-population shape as main's own
+    _should_add_new_player "dominant" gate and _measure_exploitability:
+    the worst reliably-measured win-rate must still clear the bar, so a
+    strategy that crushes most of the pool and loses to one member hasn't
+    actually generalized.
+    """
+    candidates = [
+        ref for ref in league.players.values() if candidate_origin_filter(ref)
+    ]
+    rateable = [
+        ref
+        for ref in candidates
+        if league.games.get((home_key, ref.step_count), 0.0)
+        + league.games.get((ref.step_count, home_key), 0.0)
+        >= promote_min_games
+    ]
+    if not rateable:
+        return "no reliably-measured opponents yet"
+    win_rates = [
+        league._win_rate_by_steps(home_key, ref.step_count) for ref in rateable
+    ]
+    worst_idx = int(np.argmin(win_rates))
+    worst_winrate = win_rates[worst_idx]
+    if worst_winrate < promote_winrate:
+        return (
+            f"vs {rateable[worst_idx].step_count}: win-rate {worst_winrate:.3f} "
+            f"< {promote_winrate} (worst of {len(rateable)} reliably-measured "
+            "opponents)"
+        )
+    return None
+
+
+@dataclasses.dataclass
+class PopulationState:
+    """One live, continuously-training population's mutable state
+    (docs/exploiter-phase-plan.md's three-population redesign: MainPlayer,
+    MainExploiter, LeagueExploiter). ``main`` always exists from process
+    start; the two exploiter populations start with player_state=None and
+    are created lazily by Learner._maybe_create_population once there's
+    something worth exploiting.
+
+    Deliberately NOT shared across populations: player_state/builder_state
+    (genuinely independent search — separate optimizer momentum from
+    main's own trajectory), replay buffers (the user's explicit
+    requirement; cheap host RAM), and every controller/plasticity object
+    (each is pure-Python EMA/PI state over ONE lineage's own training
+    signal — sharing would corrupt every EMA the moment two populations'
+    gradients diverge).
+    """
+
+    name: PopulationName
+    live_key: int
+    wandb_run: wandb.wandb_run.Run
+    player_replay: PlayerTrajectoryStore
+    builder_replay: BuilderTrajectoryStore
+    plasticity: PlasticityController
+    player_state: Porygon2PlayerTrainState | None = None
+    builder_state: Porygon2BuilderTrainState | None = None
+    created_at_frame: int | None = None
+    # For an exploiter population: the main step_count it was forked from
+    # (recorded at creation/reset time — see Learner._fork_population).
+    fork_step: int | None = None
+    host_step: int = 0
+    device_q: "queue.Queue" = None
+    log_q: "queue.Queue" = None
+    ckpt_q: "queue.Queue" = None
+    # This population's own 3 internal background workers (host_to_device/
+    # log/checkpoint) — owned and joined entirely within this file.
+    worker_threads: list = dataclasses.field(default_factory=list)
+    # This population's PlayerActor/BuilderActor game-playing threads —
+    # constructed and started by main.py (Learner can't import
+    # player_actor.py/builder_actor.py without a circular import, since
+    # both already import Learner), registered here via
+    # Learner.register_actor_threads so a shutdown or reset waits for them
+    # too, not just the 3 internal workers.
+    actor_threads: list = dataclasses.field(default_factory=list)
+    stop_signal: list = dataclasses.field(default_factory=lambda: [False])
+    done: bool = False
+    # Block-sequential actor gating (Learner._set_active): set = this
+    # population's actor threads may play games; cleared = they idle
+    # between games (threading.Event wait, threads stay alive — no
+    # create/destroy churn). Only the population whose block it is has
+    # its gate set, so the full actor budget serves whoever is training.
+    run_gate: "threading.Event" = None
+    replay_pi: PILogController | None = None
+    # Fixed at config.player_replay_kl_target — the ExploitabilityController
+    # that used to scale it was removed 2026-08-14 (last of the adaptive
+    # hyperparameter loops; see rl/online/controllers.py's module docstring).
+    replay_kl_target: float = 0.045
+    replay_ctrl_kl_sum: float = 0.0
+    replay_ctrl_kl_count: int = 0
+    replay_ctrl_prev_adds: int = 0
+    replay_ctrl_prev_samples: int = 0
+    replay_realised_ratio: float = float("nan")
+    # Cumulative frames trained AS this population, since its own creation/
+    # last reset. Telemetry under the block-sequential scheduler (nothing
+    # schedules on it anymore); kept because "how much has this population
+    # actually trained" is the first question when judging an attempt.
+    frames_trained_total: int = 0
+    # Monotonic train-tick counter over this population's WHOLE wandb-run
+    # lifetime: unlike host_step it is carried across attempt re-forks
+    # (_reset_population) and restored from the checkpoint's host blob, so
+    # it never rewinds or resets. Logged as "lifetime_step" with every
+    # metric and set as the run's default x-axis (wandb.define_metric in
+    # main.py) — charts read as cumulative training progress instead of
+    # the sawtooth/overdraw that _step (log-call count) and the
+    # per-attempt counters produce across resumes and re-forks.
+    lifetime_step: int = 0
+    # frame_count at this population's last terminal outcome that did NOT
+    # rebuild it (league_exploiter's continue/perturb fates in
+    # _apply_terminal_outcome) — the dwell and frame-budget checks in
+    # _check_exploiter_transitions measure from here, so a continued
+    # attempt gets a full fresh window instead of instantly re-tripping
+    # the timeout on its inherited counter.
+    budget_anchor_frames: int = 0
+    consumer_progress: object = None
+    train_progress: object = None
+    plasticity_probe_jit: object = None
+
+    def __post_init__(self):
+        if self.device_q is None:
+            self.device_q = queue.Queue(maxsize=1)
+        if self.log_q is None:
+            self.log_q = queue.Queue(maxsize=64)
+        if self.ckpt_q is None:
+            self.ckpt_q = queue.Queue(maxsize=2)
+        if self.run_gate is None:
+            self.run_gate = threading.Event()
+
+
 class Learner:
+    """Owns exactly one shared League, one gpu_lock, and one compiled
+    train_step — and three PopulationState bundles (main always live; the
+    two exploiter populations created lazily). See docs/exploiter-phase-
+    plan.md's 2026-08-12 redesign note for the full design rationale."""
+
     def __init__(
         self,
+        config: Porygon2LearnerConfig,
+        league: League,
         player_state: Porygon2PlayerTrainState,
         builder_state: Porygon2BuilderTrainState,
-        config: Porygon2LearnerConfig,
-        wandb_run: wandb.wandb_run.Run,
-        league: League,
+        main_wandb_run: wandb.wandb_run.Run,
+        main_exploiter_wandb_run: wandb.wandb_run.Run,
+        league_exploiter_wandb_run: wandb.wandb_run.Run,
         gpu_lock: LockType | None = None,
         player_network=None,
         debug: bool = False,
         controller_bytes: bytes | None = None,
+        spawn_actor_pool: "Callable[[PopulationName], None] | None" = None,
     ):
-        self.player_state = player_state
-        self.builder_state = builder_state
         self.config = config
-        self.wandb_run = wandb_run
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
+        self.debug = debug
+        # Fires the instant a population is created/reset, so main.py's
+        # orchestration (which owns PlayerActor/BuilderActor construction —
+        # Learner can't import those without a circular import) can spin up
+        # that population's actor pool. None is fine for standalone/direct
+        # construction (tests, debug scripts): that population just never
+        # gets actors, matching today's "nothing passed in means don't
+        # wire it up" convention elsewhere in this file.
+        self._spawn_actor_pool = spawn_actor_pool
 
-        self.plasticity = PlasticityController(
-            enabled=config.plasticity_enabled,
-            overdue_trigger=config.plasticity_overdue_trigger,
-            recovery_winrate=config.plasticity_recovery_winrate,
-            cooldown_frames=config.plasticity_cooldown_frames,
-        )
+        # train_step's config is a static jit arg. Used to need pinning to
+        # a canonical value because the OLD per-phase design constructed a
+        # genuinely distinct config.replace(pin_opponent_steps=...) for
+        # every exploiter phase, invalidating the jit cache each time (the
+        # 1326 failure mode). Under this redesign there is exactly ONE
+        # Learner, constructed once, holding ONE config value for the life
+        # of the process — nothing ever varies it again, so there's nothing
+        # left to protect the jit cache key against. Kept as a separate
+        # attribute name (not literally self.config) only so a future
+        # per-population config override, if one is ever needed, has an
+        # obvious place to plug in without re-deriving this reasoning.
+        self._jit_config = config
 
-        # Advantage-lambda and magnet-coef runtime scalars (traced into
-        # train_step — never static config: each static value's recompile
-        # retained ~5GB host RAM and OOM-killed 1326). Driven by the
-        # controllers below.
-        self._current_lambda = float(config.player_adv_lambda)
-        self._current_magnet_coef = float(config.player_magnet_kl_coef)
-
-        self.lambda_ctrl: LambdaGapController | None = None
-        if config.lambda_ctrl_enabled:
-            self.lambda_ctrl = LambdaGapController(
-                initial_lambda=config.player_adv_lambda,
-                gap_target=config.lambda_ctrl_gap_target,
-                kp=config.lambda_ctrl_kp,
-                ki=config.lambda_ctrl_ki,
-                interval=config.lambda_ctrl_interval,
-                lambda_min=config.lambda_ctrl_min,
-                lambda_max=config.lambda_ctrl_max,
-                sensor_ema=config.lambda_ctrl_sensor_ema,
-            )
-
-        self.entropy_ctrl: AdaptivityController | None = None
-        if config.entropy_ctrl_enabled:
-            self.entropy_ctrl = AdaptivityController(
-                baseline_coef=config.player_magnet_kl_coef,
-                max_scale=config.entropy_ctrl_max_scale,
-                min_scale=config.entropy_ctrl_min_scale,
-                action_floor=config.entropy_ctrl_floor,
-                modality_floor=config.entropy_ctrl_modality_floor,
-                floor_gain=config.adapt_ctrl_floor_gain,
-                event_bump=config.adapt_ctrl_event_bump,
-            )
-
-        self.exploit_ctrl: ExploitabilityController | None = None
-        if config.exploit_ctrl_enabled:
-            self.exploit_ctrl = ExploitabilityController(
-                target=config.exploit_ctrl_target,
-                kp=config.exploit_ctrl_kp,
-                ki=config.exploit_ctrl_ki,
-                interval=config.exploit_ctrl_interval,
-                min_scale=config.exploit_ctrl_min_scale,
-                max_scale=config.exploit_ctrl_max_scale,
-                sensor_ema=config.exploit_ctrl_sensor_ema,
-            )
-        # Un-scaled targets the exploitability controller scales away
-        # from — stored once so each tick's adjustment is always relative
-        # to the configured baseline, never compounding on the previous
-        # tick's already-scaled value.
-        self._base_lambda_gap_target = float(config.lambda_ctrl_gap_target)
-        self._base_replay_kl_target = float(config.player_replay_kl_target)
-
-        self.done = False
-        self.builder_replay = BuilderTrajectoryStore(
-            max_size=self.config.builder_replay_buffer_capacity,
-            max_reuses=self.config.builder_replay_ratio,
-        )
-
-        is_not_randoms = self.config.smogon_format != "randombattle"
-        self.player_replay = PlayerTrajectoryStore(
-            max_size=self.config.player_replay_buffer_capacity,
-            max_reuses=self.config.player_replay_ratio,
-            need_tracking=is_not_randoms,
-        )
-
-        # Plasticity probe: jitted encoder-only forward measuring trunk
-        # representation health (dormant units, spectral rank) on the
-        # current train batch every plasticity_probe_interval steps.
-        # Requires the network module, which only main.py holds — probe is
-        # silently disabled when it isn't passed in.
         self._plasticity_probe_jit = None
         if player_network is not None and config.plasticity_probe_interval > 0:
             self._plasticity_probe_jit = self._make_plasticity_probe(player_network)
 
-        # Replay-ratio PI controller state (see config for the design).
-        # Owned by the wandb log worker thread, which already device-syncs
-        # every step's logs — the controller reads the actor KL there and
-        # drives player_replay.set_max_reuses, so the train loop never pays
-        # for it. Actuator is the shared PILogController (rl/online/
-        # controllers.py); the sensor here is a fixed-window mean of the
-        # actor KL rather than an EMA, since the per-batch measurement is
-        # noisy and the window is the smoother — a deliberate difference
-        # from the lambda/entropy controllers' EMA sensors, not an
-        # oversight.
-        self._replay_pi = PILogController(
-            initial_log=float(np.log(self.config.player_replay_ratio)),
-            log_min=float(np.log(self.config.player_replay_ratio_min)),
-            log_max=float(np.log(self.config.player_replay_ratio_max)),
-            kp=self.config.player_replay_ctrl_kp,
-            ki=self.config.player_replay_ctrl_ki,
+        self._train_step_jit = train_step if debug else _TRAIN_STEP_JIT
+        # Stage-2 improvement-term ramp anchor: the main-pop step at which
+        # the term first activates in THIS process. Restart-relative on
+        # purpose — a resume re-ramps over player_q_improve_ramp_steps,
+        # which is harmless and keeps the anchor out of the checkpoint.
+        self._q_improve_ramp_start: int | None = None
+
+        # Block-sequential scheduler state (see _select_population): whose
+        # block it is right now, and which exploiter population is next in
+        # the rotation when main finishes its current window. Starts at
+        # main here; a checkpoint-mode restart then restores the saved
+        # scheduler state via restore_populations (called by main.py after
+        # construction), resuming an in-progress exploiter block where it
+        # stopped. Initialised BEFORE the populations dict:
+        # _build_population reads self._active to decide whether the new
+        # population's actor run_gate starts open.
+        self._active: PopulationName = "main"
+        self._rotation_idx: int = 0
+
+        self.populations: dict[PopulationName, PopulationState] = {}
+        self.populations["main"] = self._build_population(
+            "main",
+            player_state,
+            builder_state,
+            main_wandb_run,
+            controller_bytes=controller_bytes,
         )
-        # Mutable copy of the KL target: the exploitability controller
-        # scales this away from _base_replay_kl_target, so the PI loop
-        # below must read the live value, not config directly.
-        self._replay_kl_target = self._base_replay_kl_target
-        self._replay_ctrl_kl_sum = 0.0
-        self._replay_ctrl_kl_count = 0
-        # Store-counter snapshots for the realised replay ratio
-        # (Δsamples/Δinserts per tick) — what the gate actually lets
-        # through, versus the cap, which is only what it permits.
-        self._replay_ctrl_prev_adds = 0
-        self._replay_ctrl_prev_samples = 0
-        self._replay_realised_ratio = float("nan")
+        # Held for lazy construction later — see _maybe_create_population.
+        self._pending_wandb_runs: dict[PopulationName, wandb.wandb_run.Run] = {
+            "main_exploiter": main_exploiter_wandb_run,
+            "league_exploiter": league_exploiter_wandb_run,
+        }
+        for name in ("main_exploiter", "league_exploiter"):
+            wandb_run = self._pending_wandb_runs[name]
+            wandb_run.log({"population_created": 0})
 
-        # Threading
-        self.device_q: queue.Queue[Batch] = queue.Queue(maxsize=1)
-        # Log dicts still hold device arrays when enqueued; the log worker
-        # pays the device sync so the train loop never blocks on the GPU.
-        # Bounded so a stalled wandb client applies backpressure instead of
-        # accumulating unbounded device references.
-        self._log_q: queue.Queue[dict | None] = queue.Queue(maxsize=64)
+        self.done = False
 
-        # Progress Bars
-        self.consumer_progress = tqdm(desc="consumer", smoothing=0.1)
-        self.train_progress = tqdm(desc="batches", smoothing=0.1)
+    # --- population construction / lifecycle --------------------------------
 
-        # JIT Compile
-        if debug:
-            self._train_step_jit = train_step
-        else:
-            # Donation requires that no pytree leaf appears twice across the
-            # donated states (params/target_params are deep-copied at
-            # creation/restore) and that nothing reads a state object after
-            # the call is dispatched — all periodic readers run on this
-            # thread after the rebind in _train_step.
-            self._train_step_jit = jax.jit(
-                train_step,
-                static_argnames=["config"],
-                donate_argnames=["player_state", "builder_state"],
-            )
+    def _build_population(
+        self,
+        name: PopulationName,
+        player_state: Porygon2PlayerTrainState,
+        builder_state: Porygon2BuilderTrainState,
+        wandb_run: wandb.wandb_run.Run,
+        controller_bytes: bytes | None = None,
+        fork_step: int | None = None,
+    ) -> PopulationState:
+        """Builds a fresh PopulationState around an already-constructed
+        player_state/builder_state. Controllers/plasticity/replay are
+        always fresh here, never shared with or copied from another
+        population — restore_controller_state (below) only ever runs for
+        cold-start main; a forked exploiter population never receives
+        controller_bytes at all (see Learner._fork_population): nothing
+        to un-inherit if nothing was ever inherited."""
+        config = self.config
+        plasticity = PlasticityController(
+            enabled=config.plasticity_enabled,
+            overdue_trigger=config.plasticity_overdue_trigger,
+            recovery_winrate=config.plasticity_recovery_winrate,
+            cooldown_frames=config.plasticity_cooldown_frames,
+            defer_to_exploiter=(
+                config.plasticity_defer_to_exploiter or config.auto_exploiter_enabled
+            ),
+        )
+        is_not_randoms = config.smogon_format != "randombattle"
+        pop = PopulationState(
+            name=name,
+            live_key=_LIVE_KEY_BY_POPULATION[name],
+            wandb_run=wandb_run,
+            player_replay=PlayerTrajectoryStore(
+                max_size=config.player_replay_buffer_capacity,
+                max_reuses=config.player_replay_ratio,
+                need_tracking=is_not_randoms,
+                name=name,
+            ),
+            builder_replay=BuilderTrajectoryStore(
+                max_size=config.builder_replay_buffer_capacity,
+                max_reuses=config.builder_replay_ratio,
+                name=name,
+            ),
+            plasticity=plasticity,
+            player_state=player_state,
+            builder_state=builder_state,
+            created_at_frame=int(jax.device_get(player_state.frame_count)),
+            # Seeded from the state's own (restored) step_count, NOT 0: the
+            # league keys main's snapshots by host_step + _STEP_OFFSET, and
+            # League.get_latest_player picks "newest" as max(key) — a
+            # session-local counter restarting at 0 made every post-restart
+            # add key smaller than the restored league's, so the stale
+            # pre-restart ref stayed "latest" forever, frames_passed never
+            # reset, and "overdue" fired on every league-management tick
+            # (the 2026-08-14 10:15 add storm; also the p_{step:08}
+            # snapshot-dir overwrite hazard once the counter caught up).
+            # Exploiter forks are unaffected: their states are zeroed at
+            # fork, so their host_step still starts at 0.
+            host_step=int(jax.device_get(player_state.step_count)),
+            fork_step=fork_step,
+            replay_pi=PILogController(
+                initial_log=float(np.log(config.player_replay_ratio)),
+                log_min=float(np.log(config.player_replay_ratio_min)),
+                log_max=float(np.log(config.player_replay_ratio_max)),
+                kp=config.player_replay_ctrl_kp,
+                ki=config.player_replay_ctrl_ki,
+            ),
+            replay_kl_target=float(config.player_replay_kl_target),
+            consumer_progress=tqdm(
+                desc=f"consumer-{name}", smoothing=0.1, position=next_tqdm_position()
+            ),
+            train_progress=tqdm(
+                desc=f"batches-{name}", smoothing=0.1, position=next_tqdm_position()
+            ),
+            plasticity_probe_jit=self._plasticity_probe_jit,
+        )
+        # Actor gate starts open only for the population whose block it
+        # currently is (main at cold start; the just-activated exploiter
+        # when _reset_population runs mid-block-transition) — everyone
+        # else's actors idle at the gate until _set_active opens it.
+        if name == self._active:
+            pop.run_gate.set()
+        self._restore_controller_state(pop, controller_bytes)
+        self.league.update_live(pop.live_key, self._create_params_container(pop))
+        return pop
 
-        # Last: the controllers and the plasticity controller must already
-        # exist before their checkpointed state is applied.
-        self.restore_controller_state(controller_bytes)
+    def _fork_population(self, name: PopulationName) -> tuple:
+        """Host round-trip copy of main's CURRENT live params into fresh,
+        independent player_state/builder_state — fresh optimizer state
+        (never copied from main: this is what makes the search genuinely
+        independent, not just biased matchmaking on main's own weights —
+        see docs/exploiter-phase-plan.md's rejected-alternatives section),
+        step_count/frame_count reset to 0 (this population's OWN age since
+        this fork/reset, not main's absolute counter — _STEP_OFFSET is
+        exactly what keeps that from colliding with main's or the other
+        exploiter population's own from-zero counters in the shared
+        League)."""
+        main = self.populations["main"]
+        host_player = jax.device_get(main.player_state)
+        host_builder = jax.device_get(main.builder_state)
+
+        player_params = jax.tree.map(lambda x: np.copy(x), host_player.params)
+        player_target_params = jax.tree.map(
+            lambda x: np.copy(x), host_player.target_params
+        )
+        builder_params = jax.tree.map(lambda x: np.copy(x), host_builder.params)
+        builder_target_params = jax.tree.map(
+            lambda x: np.copy(x), host_builder.target_params
+        )
+
+        zero_step = np.zeros_like(host_player.step_count)
+        zero_frame = np.zeros_like(host_player.frame_count)
+        # .replace() must be called on the HOST copies (host_player/
+        # host_builder), not main.player_state/main.builder_state: any
+        # field not explicitly overridden below is inherited as-is from
+        # whatever .replace() is called on. Calling it on the live device
+        # objects silently aliased ema_adv_mean/ema_adv_std (and base
+        # TrainState.step) to main's own live, continuously-donated
+        # buffers instead of copying them — main's very next train step
+        # would donate (free) that shared buffer, and the forked
+        # population's own next train step would then try to donate that
+        # same already-freed buffer, raising XLA's "Donation requested
+        # for invalid buffer".
+        player_state = host_player.replace(
+            params=player_params,
+            target_params=player_target_params,
+            opt_state=main.player_state.tx.init(player_params),
+            step_count=zero_step,
+            frame_count=zero_frame,
+        )
+        builder_state = host_builder.replace(
+            params=builder_params,
+            target_params=builder_target_params,
+            opt_state=main.builder_state.tx.init(builder_params),
+            step_count=np.zeros_like(host_builder.step_count),
+            frame_count=np.zeros_like(host_builder.frame_count),
+        )
+        return jax.device_put(player_state), jax.device_put(builder_state)
+
+    def _maybe_create_population(self, name: PopulationName) -> None:
+        """Need-driven creation (docs/exploiter-phase-plan.md): a population
+        is born the moment it's empty AND its target pool is non-empty —
+        main_exploiter needs >=1 origin=="main" historical snapshot,
+        league_exploiter needs >=1 snapshot of any origin. Called from
+        _begin_exploiter_block (main-window boundaries), decoupled from
+        which population the block actually activates."""
+        pop = self.populations.get(name)
+        if pop is not None:
+            return
+        candidates = [
+            ref
+            for ref in self.league.players.values()
+            if name != "main_exploiter" or ref.origin == "main"
+        ]
+        if not candidates:
+            return
+        self._reset_population(name, reason="created")
+
+    def _reset_population(self, name: PopulationName, reason: str) -> None:
+        """Creates (if new) or resets (if terminal outcome fired — see
+        _check_exploiter_transitions) an exploiter population: fresh fork
+        from main's current live params, fresh controllers/plasticity/
+        replay, fresh actor pool. Never called for "main"."""
+        assert name != "main"
+        existing = self.populations.get(name)
+        if existing is not None:
+            # Same teardown as a full process shutdown (_stop_population_
+            # workers), scoped to this one population: a population reset
+            # is exactly a scaled-down version of what used to be a whole
+            # phase boundary — an actor/worker thread that outlives it
+            # keeps this population's about-to-be-discarded state
+            # reachable, which is why this reuses the identical
+            # signal-then-join-then-fail-loudly-on-stragglers logic rather
+            # than a separate, easier-to-drift-out-of-sync copy of it.
+            self._stop_population_workers(existing)
+
+        player_state, builder_state = self._fork_population(name)
+        fork_step = int(
+            jax.device_get(self.populations["main"].player_state.step_count)
+        )
+        wandb_run = (
+            self._pending_wandb_runs[name] if existing is None else existing.wandb_run
+        )
+        pop = self._build_population(
+            name, player_state, builder_state, wandb_run, fork_step=fork_step
+        )
+        # The lifetime counter survives the re-fork: it tracks the wandb
+        # RUN's cumulative training, not this attempt's.
+        if existing is not None:
+            pop.lifetime_step = existing.lifetime_step
+        self.populations[name] = pop
+        self._start_population_workers(pop)
+        pop.wandb_run.log(
+            {"population_created": 1, "fork_step": fork_step},
+            commit=False,
+        )
+        if self._spawn_actor_pool is not None:
+            self._spawn_actor_pool(name)
+
+    def restore_populations(self, resume_state: dict | None) -> None:
+        """Resumes an in-progress exploiter block from a checkpoint's saved
+        scheduler + population states (artifact._load_resume_state's shape).
+        Called by main.py once, after construction and before train() — a
+        checkpoint-mode restart therefore picks the block back up exactly
+        where it stopped (the active exploiter keeps its params, opt_state,
+        own step/frame counters, and dwell/budget anchors) instead of
+        discarding the attempt and re-forking fresh.
+
+        Never fatal, per-population: an unreadable blob just leaves that
+        population uncreated (it re-forks fresh at its next block), and an
+        active population that failed to restore falls back to a main
+        window — the pre-resume behaviour in both cases."""
+        if not resume_state:
+            return
+        for name, blob in (resume_state.get("populations") or {}).items():
+            if name not in _EXPLOITER_ROTATION:
+                continue
+            try:
+                self._restore_population(name, blob)
+            except Exception:
+                logger.exception(
+                    "Population %s could not be restored from the checkpoint "
+                    "— it will re-fork fresh at its next block.",
+                    name,
+                )
+        scheduler = resume_state.get("scheduler") or {}
+        self._rotation_idx = int(scheduler.get("rotation_idx", 0)) % len(
+            _EXPLOITER_ROTATION
+        )
+        active = scheduler.get("active", "main")
+        if active != "main" and self.populations.get(active) is None:
+            active = "main"
+        self._set_active(active)
+        if active != "main":
+            tqdm.write(f"Exploiter block resumes: {active} owns the GPU.")
+
+    def _restore_population(self, name: PopulationName, blob: dict) -> None:
+        """Rebuilds one exploiter population from its checkpointed state —
+        the resume-time counterpart of _reset_population's fork path. The
+        TrainState skeleton (apply_fn/tx/init_fn) comes from main's host
+        copy, exactly like _fork_population; every array field is then
+        replaced wholesale with the checkpoint's own components, so nothing
+        of main's current values leaks in."""
+        assert name != "main" and self.populations.get(name) is None
+        main = self.populations["main"]
+        host_player = jax.device_get(main.player_state)
+        host_builder = jax.device_get(main.builder_state)
+        pc = blob["player_state"]
+        bc = blob["builder_state"]
+        player_state = host_player.replace(
+            params=pc["params"],
+            target_params=pc["target_params"],
+            opt_state=pc["opt_state"],
+            step_count=pc["scalars"]["step_count"],
+            frame_count=pc["scalars"]["frame_count"],
+            ema_adv_mean=pc["scalars"]["ema_adv_mean"],
+            ema_adv_std=pc["scalars"]["ema_adv_std"],
+        )
+        builder_state = host_builder.replace(
+            params=bc["params"],
+            target_params=bc["target_params"],
+            opt_state=bc["opt_state"],
+            step_count=bc["scalars"]["step_count"],
+            frame_count=bc["scalars"]["frame_count"],
+        )
+        host = blob.get("host") or {}
+        pop = self._build_population(
+            name,
+            jax.device_put(player_state),
+            jax.device_put(builder_state),
+            self._pending_wandb_runs[name],
+            controller_bytes=blob.get("controllers"),
+            fork_step=host.get("fork_step"),
+        )
+        # Host-side counters that live outside the TrainState: without the
+        # budget anchor a continued league_exploiter would measure its
+        # dwell/timeout window from 0 and could time out or dwell-gate
+        # wrongly; created_at_frame keeps frames_trained_total honest.
+        pop.budget_anchor_frames = int(host.get("budget_anchor_frames", 0))
+        if host.get("created_at_frame") is not None:
+            pop.created_at_frame = int(host["created_at_frame"])
+        self.populations[name] = pop
+        # No _start_population_workers here: train() starts workers for
+        # every population in self.populations at entry, and this only ever
+        # runs before train() (unlike _reset_population, which runs while
+        # the train loop is already live and must start them itself).
+        pop.wandb_run.log(
+            {"population_resumed": 1, "fork_step": pop.fork_step or 0},
+            commit=False,
+        )
+        if self._spawn_actor_pool is not None:
+            self._spawn_actor_pool(name)
+
+    # --- plasticity probe / trajectory intake --------------------------------
 
     def _make_plasticity_probe(self, network):
         """Builds the jitted plasticity probe: an encoder-only forward on
@@ -940,7 +1804,10 @@ class Learner:
                 packed_history=batch.player_packed_history,
                 history=batch.player_history,
             )
-            action_emb, value_emb = encode(params, actor_input)
+            # Encoder returns the action stream plus the three value-ladder
+            # readouts (all/private/public) since 2026-08-16; probe the
+            # action stream and the main (all) value readout as before.
+            action_emb, value_emb, _, _ = encode(params, actor_input)
             dones = batch.player_transitions.env_output.done
             valid = (jnp.cumsum(dones, axis=0) - dones) == 0
             logs = {}
@@ -952,116 +1819,179 @@ class Learner:
 
         return jax.jit(probe)
 
-    def enqueue_traj(self, traj: Trajectory):
-        """Called by actors to push data."""
-        add_cond = self.player_replay._add_cv
+    def enqueue_traj(self, population: PopulationName, traj: Trajectory):
+        """Called by actors to push data into their own population's
+        replay buffer."""
+        pop = self.populations[population]
+        add_cond = pop.player_replay._add_cv
         with add_cond:
-            add_cond.wait_for(lambda: self.done or self.player_replay.ready_to_add())
-            if self.done:
+            add_cond.wait_for(lambda: pop.done or pop.player_replay.ready_to_add())
+            if pop.done:
                 return
-            self.player_replay.add(traj)
+            pop.player_replay.add(traj)
 
-        sample_cond = self.player_replay._sample_cv
+        sample_cond = pop.player_replay._sample_cv
         with sample_cond:
             sample_cond.notify_all()
 
-    def host_to_device_worker(self):
-        """Background thread to batch data and push to GPU queue."""
+    # --- per-population background workers -----------------------------------
+
+    def host_to_device_worker(self, pop: PopulationState):
+        """Background thread to batch data and push to this population's
+        own GPU queue."""
         max_burst = 8
         minibatch_size = self.config.batch_size
         batch_size = minibatch_size * self.config.gradient_accumulation_steps
 
-        # Wait until replay buffer is at least replay_buffer_min_fill_fraction full before starting training
-        sample_cond = self.player_replay._sample_cv
+        sample_cond = pop.player_replay._sample_cv
         with sample_cond:
             sample_cond.wait_for(
-                lambda: self.done
-                or self.player_replay.is_min_fill_fraction_reached(
+                lambda: pop.done
+                or pop.player_replay.is_min_fill_fraction_reached(
                     self.config.replay_buffer_min_fill_fraction
                 )
             )
 
         init_key = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
-        while not self.done:
-            # Burst processing to minimize lock contention overhead
+        while not pop.done:
             for _ in range(max_burst):
-                if self.done:
+                if pop.done:
                     break
 
-                sample_cond = self.player_replay._sample_cv
+                sample_cond = pop.player_replay._sample_cv
                 with sample_cond:
                     sample_cond.wait_for(
-                        lambda: self.done
-                        or self.player_replay.ready_to_sample(batch_size)
+                        lambda: pop.done
+                        or pop.player_replay.ready_to_sample(batch_size)
                     )
-                    if self.done:
+                    if pop.done:
                         break
-                    batch = self.player_replay.sample(minibatch_size)
+                    batch = pop.player_replay.sample(minibatch_size)
 
-                add_cond = self.player_replay._add_cv
+                # Normalise the exploration-ladder tag every trajectory
+                # carries (explore actors mark theirs explore=True at
+                # construction — see PlayerActor; train_step keeps those
+                # rows out of the league/plasticity/builder signals only).
+                # Trajectories from before the field was populated stack
+                # as False, so the shared train_step jit always sees one
+                # pytree structure across every population's batches.
+                batch = [
+                    t.replace(
+                        explore=(
+                            np.array([False])
+                            if isinstance(t.explore, tuple)
+                            else np.asarray(t.explore).reshape(1)
+                        )
+                    )
+                    for t in batch
+                ]
+
+                add_cond = pop.player_replay._add_cv
                 with add_cond:
                     add_cond.notify_all()
 
-                self.consumer_progress.update(minibatch_size)
+                pop.consumer_progress.update(minibatch_size)
 
-                # Process pure data outside lock
                 init_key, batch_key = jax.random.split(init_key)
-                stacked = _stack_and_pad_batch(batch, rng_key=batch_key)
-                # Bounded put that re-checks done: an unbounded put can strand
-                # this thread forever if shutdown drains the queue between our
-                # done-check and the put.
-                while not self.done:
+                stacked = _stack_batch(batch, rng_key=batch_key)
+                while not pop.done:
                     try:
-                        self.device_q.put(stacked, timeout=1.0)
+                        pop.device_q.put(stacked, timeout=1.0)
                         break
                     except queue.Full:
                         continue
 
-        logger.info("host_to_device_worker exiting.")
+        logger.info("host_to_device_worker[%s] exiting.", pop.name)
 
-    def _wandb_log_worker(self):
-        """Background thread: drains log dicts, paying the device->host
-        transfer and wandb serialization here so the train loop never has to
-        synchronize with the GPU per step. A single consumer preserves wandb's
-        step ordering. Also hosts the replay-ratio controller, which needs
-        exactly the host-side per-step logs this thread already produces."""
+    def _wandb_log_worker(self, pop: PopulationState):
+        """Background thread: drains log dicts for this population,
+        paying the device->host transfer and wandb serialization here so
+        the train loop never has to synchronize with the GPU per step. A
+        single consumer per population preserves that population's own
+        wandb step ordering. Also hosts the replay-ratio controller, which
+        needs exactly the host-side per-step logs this thread already
+        produces."""
         while True:
-            logs = self._log_q.get()
+            logs = pop.log_q.get()
             if logs is None:
                 break
             try:
                 host_logs = jax.device_get(logs)
-                self._update_replay_controller(host_logs)
-                self._update_hyper_controllers(host_logs)
-                self.wandb_run.log(host_logs)
+                self._update_replay_controller(pop, host_logs)
+                pop.wandb_run.log(host_logs)
             except Exception:
-                logger.exception("wandb logging failed")
+                logger.exception("wandb logging failed for population %s", pop.name)
 
-    def controller_state_bytes(self) -> bytes:
-        """Host-side training dynamics for the checkpoint: controllers and
-        plasticity bookkeeping. Not parameters, but resuming without them
-        silently resets an in-flight plasticity recovery and re-anneals
-        lambda from scratch."""
-        state = {"plasticity": self.plasticity.state_dict()}
-        if self.lambda_ctrl is not None:
-            state["lambda_ctrl"] = self.lambda_ctrl.state_dict()
-        if self.entropy_ctrl is not None:
-            state["entropy_ctrl"] = self.entropy_ctrl.state_dict()
-        if self.exploit_ctrl is not None:
-            state["exploit_ctrl"] = self.exploit_ctrl.state_dict()
+    def _checkpoint_writer_worker(self, pop: PopulationState):
+        """Background thread: does the actual checkpoint disk I/O for
+        this population (and, every cloud_save_interval_steps, the wandb
+        artifact upload for main only) so the training loop never blocks
+        on it. Payloads are already fully host-side and pre-serialized by
+        the time they're queued (see _handle_periodic_tasks) — this thread
+        never touches a live device buffer or mutates self.league
+        directly, only writes what it was handed."""
+        while True:
+            payload = pop.ckpt_q.get()
+            if payload is None:
+                break
+            try:
+                save_path = write_checkpoint_components(
+                    payload["save_path"],
+                    payload["learner_config"],
+                    payload["player_components"],
+                    payload["builder_components"],
+                    payload["league_bytes"],
+                    payload["controller_bytes"],
+                    step_count=payload["step_count"],
+                    frame_count=payload["frame_count"],
+                    scheduler=payload.get("scheduler"),
+                    populations=payload.get("populations"),
+                )
+                if payload["upload_to_cloud"]:
+                    pop.wandb_run.log_artifact(
+                        artifact_or_path=save_path,
+                        name=f"latest-gen{payload['learner_config'].generation}",
+                        type="model",
+                    )
+            except Exception:
+                logger.exception(
+                    "Background checkpoint write failed for population %s @ "
+                    "step %s — the next periodic checkpoint will simply try "
+                    "again.",
+                    pop.name,
+                    payload.get("step_count"),
+                )
+
+    # --- controller state (main only ever restores from a real checkpoint) --
+
+    def controller_state_bytes(self, pop: PopulationState) -> bytes:
+        """Host-side training dynamics for the checkpoint — just the
+        plasticity bookkeeping now (the adaptive hyperparameter
+        controllers were all removed 2026-08-13/-14). Not parameters, but
+        resuming without it silently forgets an in-flight plasticity
+        recovery, clearing the cooldown that stops a second
+        shrink-and-perturb from hitting a convalescing net."""
+        state = {
+            "plasticity": pop.plasticity.state_dict(),
+            # Monotonic per-run x-axis counter (see PopulationState.
+            # lifetime_step) — restored so charts never rewind at a resume.
+            "lifetime_step": pop.lifetime_step,
+        }
         return pickle.dumps(state)
 
-    def restore_controller_state(self, data: bytes | None) -> None:
+    def _restore_controller_state(
+        self, pop: PopulationState, data: bytes | None
+    ) -> None:
         """Counterpart to controller_state_bytes. Missing sections (older
         checkpoints, or a controller disabled at save time) leave the
-        corresponding controller freshly initialised.
+        corresponding controller freshly initialised. Only ever called
+        with real data for "main" at cold start — a forked exploiter
+        population is always built with controller_bytes=None (see
+        _build_population's docstring), so this is a no-op for them.
 
         Never fatal: this state only saves a controller some re-warmup,
-        so a blob written by a superseded controller revision must not
-        be able to fail a resume. Run 1333 died at startup on exactly
-        that (KeyError 'cov_ema' restoring EntropyRateController state
-        into AdaptivityController) — each section is now isolated and a
-        bad one is logged and skipped."""
+        so a blob written by a superseded controller revision must not be
+        able to fail a resume."""
         if not data:
             return
         try:
@@ -1083,236 +2013,496 @@ class Learner:
                     name,
                 )
 
-        _restore("plasticity", self.plasticity.load_state_dict)
-        if self.lambda_ctrl is not None:
-            _restore("lambda_ctrl", self.lambda_ctrl.load_state_dict)
-            self._current_lambda = self.lambda_ctrl.value
-        if self.entropy_ctrl is not None:
-            _restore("entropy_ctrl", self.entropy_ctrl.load_state_dict)
-            self._current_magnet_coef = self.entropy_ctrl.value
-        if self.exploit_ctrl is not None:
-            _restore("exploit_ctrl", self.exploit_ctrl.load_state_dict)
-            # Reapply the restored scale immediately rather than leaving
-            # the other controllers' targets at their un-scaled baseline
-            # until the next manage_league_interval tick.
-            self._apply_exploit_scale()
+        _restore("plasticity", pop.plasticity.load_state_dict)
+        # Pre-lifetime_step checkpoints fall back to host_step — exact for
+        # main (never re-forked, host_step == lifetime) and a close lower
+        # bound for a restored exploiter (its current attempt's own step).
+        pop.lifetime_step = int(state.get("lifetime_step", pop.host_step))
+        # Checkpoints written before the controller removals (entropy_ctrl
+        # 2026-08-13; lambda_ctrl/exploit_ctrl 2026-08-14) carry those
+        # sections — simply never read, same as any other extra section.
 
-    def _update_hyper_controllers(self, host_logs: dict) -> None:
-        """Lambda and entropy controllers (rl/online/controllers.py).
-        Runs on the log worker like the replay controller — the sensors
-        are host-side per-step logs, and the actuators are plain floats
-        the train thread reads on its next step (GIL-atomic swap)."""
-        if self.lambda_ctrl is not None:
-            gap = host_logs.get("player_bootstrap_gap")
-            host_logs.update(
-                self.lambda_ctrl.update(
-                    None if gap is None else float(gap),
-                    recovering=self.plasticity.recovering,
-                )
-            )
-            self._current_lambda = self.lambda_ctrl.value
-        if self.entropy_ctrl is not None:
-            # Floor-only now (see AdaptivityController's class docstring
-            # for the removal history) — player_commit_cov is no longer
-            # consumed here at all, only the two hard entropy backstops,
-            # because a collapsed modality is invisible to the covariance
-            # (which is how 1330 lost switching while looking healthy) —
-            # the same reason those floors were never optional.
-            action_ent = host_logs.get("player_action_normalized_entropy")
-            modal_ent = host_logs.get("player_normalized_modality_entropy")
-            host_logs.update(
-                self.entropy_ctrl.update(
-                    None if action_ent is None else float(action_ent),
-                    None if modal_ent is None else float(modal_ent),
-                )
-            )
-            self._current_magnet_coef = self.entropy_ctrl.value
+    # No _update_hyper_controllers anymore: the magnet KL coef became a
+    # fixed config scalar when the AdaptivityController was removed
+    # (2026-08-13), and the advantage lambda went with the
+    # LambdaGapController (2026-08-14) — UPGO's per-step cut plus the
+    # fixed player_lambda replaced it (see targets.py). The replay
+    # reuse-cap controller below is the one remaining per-log-tick loop.
 
-    def _update_replay_controller(self, host_logs: dict) -> None:
+    def _update_replay_controller(self, pop: PopulationState, host_logs: dict) -> None:
         """Velocity-form PI loop holding the replayed-batch actor KL at
-        _replay_kl_target by adjusting the store's reuse cap.
-
-        The KL is averaged over player_replay_ctrl_interval steps per tick
-        (the per-batch measurement is noisy; the window is the smoother).
-        Working on log(cap) makes the control multiplicative, and clamping
-        log(cap) itself gives anti-windup for free: the integral action
-        cannot accumulate past the bounds. Adds the current cap to
-        host_logs so every wandb step carries it.
-
-        _replay_kl_target starts at config.player_replay_kl_target but the
-        exploitability controller may since have scaled it — read the live
-        value, not config, so that adjustment actually takes effect."""
+        pop.replay_kl_target by adjusting that population's own reuse
+        cap."""
         config = self.config
         if not config.player_replay_ctrl_enabled:
             return
-        kl = host_logs.get("player_learner_actor_forward_kl")
+        # The _own variant excludes tempered explore rows (which train the
+        # policy since 2026-08-17 but would inflate the mean KL and make
+        # the controller silently cut the reuse cap).
+        kl = host_logs.get("player_learner_actor_forward_kl_own")
         if kl is not None and np.isfinite(kl):
-            self._replay_ctrl_kl_sum += float(kl)
-            self._replay_ctrl_kl_count += 1
+            pop.replay_ctrl_kl_sum += float(kl)
+            pop.replay_ctrl_kl_count += 1
 
-        if self._replay_ctrl_kl_count >= config.player_replay_ctrl_interval:
-            kl_mean = self._replay_ctrl_kl_sum / self._replay_ctrl_kl_count
-            self._replay_ctrl_kl_sum = 0.0
-            self._replay_ctrl_kl_count = 0
+        if pop.replay_ctrl_kl_count >= config.player_replay_ctrl_interval:
+            kl_mean = pop.replay_ctrl_kl_sum / pop.replay_ctrl_kl_count
+            pop.replay_ctrl_kl_sum = 0.0
+            pop.replay_ctrl_kl_count = 0
 
-            err = (self._replay_kl_target - kl_mean) / self._replay_kl_target
-            self._replay_pi.step(err)
+            err = (pop.replay_kl_target - kl_mean) / pop.replay_kl_target
+            pop.replay_pi.step(err)
 
-            cap = int(round(np.exp(self._replay_pi.log)))
-            if cap != self.player_replay.max_reuses:
-                self.player_replay.set_max_reuses(cap)
+            cap = int(round(np.exp(pop.replay_pi.log)))
+            if cap != pop.player_replay.max_reuses:
+                pop.player_replay.set_max_reuses(cap)
 
-            adds = self.player_replay.total_adds
-            samples = self.player_replay.total_samples
-            delta_adds = adds - self._replay_ctrl_prev_adds
-            delta_samples = samples - self._replay_ctrl_prev_samples
-            self._replay_ctrl_prev_adds = adds
-            self._replay_ctrl_prev_samples = samples
+            adds = pop.player_replay.total_adds
+            samples = pop.player_replay.total_samples
+            delta_adds = adds - pop.replay_ctrl_prev_adds
+            delta_samples = samples - pop.replay_ctrl_prev_samples
+            pop.replay_ctrl_prev_adds = adds
+            pop.replay_ctrl_prev_samples = samples
             if delta_adds > 0:
-                self._replay_realised_ratio = delta_samples / delta_adds
+                pop.replay_realised_ratio = delta_samples / delta_adds
 
-        host_logs["player_replay_max_reuses"] = float(self.player_replay.max_reuses)
-        host_logs["player_replay_realised_ratio"] = self._replay_realised_ratio
+        host_logs["player_replay_max_reuses"] = float(pop.player_replay.max_reuses)
+        host_logs["player_replay_realised_ratio"] = pop.replay_realised_ratio
+
+    # --- unified scheduler ---------------------------------------------------
+
+    def _select_population(self) -> PopulationState | None:
+        """Block-sequential pick (replacing the old duty-cycle fraction
+        scheduler): exactly one population "owns" the GPU at a time
+        (self._active). Main owns it by default and trains until a routine
+        league addition closes its window (_manage_league →
+        _begin_exploiter_block); an exploiter population then owns it for
+        one FULL attempt — until its own promotion or frame-budget timeout
+        fires (_check_exploiter_transitions → _end_exploiter_block) —
+        before main's next window opens. No frame-share fractions: each
+        population trains to its own AlphaStar-style terminal condition,
+        sequentialising the concurrent league on one GPU instead of
+        simulating concurrency by interleaving.
+
+        Main-as-filler: when the active exploiter has no batch ready this
+        tick, main trains instead of letting the GPU idle. With actor
+        gating (_set_active) every population's pool is main-sized and
+        only the active one plays, so filler mostly happens in the
+        warm-up stretch right after a block switch (a fresh fork starts
+        with an empty replay buffer) and in transient production dips —
+        not as a steady tax. During an exploiter block main is therefore
+        "mostly frozen", not strictly frozen; note main's own gated-off
+        actors aren't refilling its buffer then, so sustained filler
+        self-limits at the replay reuse cap (the KL-bounded controller),
+        after which the GPU is exclusively the exploiter's.
+
+        The .empty() peek is race-free for our purposes: this (the train
+        loop) is the sole consumer of every device_q, so an observed
+        non-empty queue can't be emptied by anyone else before train()
+        collects it."""
+
+        def pickable(name: PopulationName) -> PopulationState | None:
+            pop = self.populations.get(name)
+            if (
+                pop is not None
+                and pop.player_state is not None
+                and pop.player_replay.is_min_fill_fraction_reached(
+                    self.config.replay_buffer_min_fill_fraction
+                )
+                and not pop.device_q.empty()
+            ):
+                return pop
+            return None
+
+        active = pickable(self._active)
+        if active is not None:
+            return active
+        if self._active != "main":
+            return pickable("main")
+        return None
 
     def train(self):
+        """Unified training loop across every live population — no more
+        one loop per phase. Each tick: pick a population
+        (_select_population), pull one batch from ITS device_q, train via
+        the shared compiled train_step under the shared gpu_lock, run its
+        own periodic tasks. Actor pools for every live population run
+        continuously and independently of whose turn it is to
+        gradient-update (see main.py) — this is what makes turn-switching
+        free of the fork/recompile cost the old per-phase design paid.
         """
-        High-level training loop.
-        Delegates computation to _execute_model_update and I/O to _handle_periodic_tasks.
-        """
-        transfer_thread = threading.Thread(
-            target=self.host_to_device_worker, daemon=True
-        )
-        transfer_thread.start()
-        log_thread = threading.Thread(target=self._wandb_log_worker, daemon=True)
-        log_thread.start()
-
-        # Host-side mirror of player_state.step_count: train_step increments
-        # the device counter by exactly one per call, so tracking it here
-        # keeps periodic-task scheduling free of per-step device syncs.
-        host_step = int(jax.device_get(self.player_state.step_count))
+        for pop in self.populations.values():
+            self._start_population_workers(pop)
 
         try:
             for _ in range(self.config.num_steps):
+                if self.done:
+                    break
+                pop = self._select_population()
+                if pop is None:
+                    # Nothing has a warm-enough replay buffer yet (e.g. at
+                    # process start, before main's own buffer fills), or
+                    # every ready population's device_q is momentarily
+                    # empty — brief wait rather than a busy spin.
+                    threading.Event().wait(timeout=0.1)
+                    continue
 
-                # 1. Fetch Data (Blocking)
-                batch = self.device_q.get()
+                try:
+                    # Never blocks: _select_population only returns a
+                    # population it observed a batch for, and this thread
+                    # is the sole consumer of every device_q.
+                    batch = pop.device_q.get_nowait()
+                except queue.Empty:
+                    continue
                 with self.gpu_lock:
                     batch = jax.device_put(batch)
-                    # 2. Update Model
-                    logs = self._train_step(batch)
-
+                    logs = self._train_step(pop, batch)
                     if logs is None:
-                        continue  # Skip this step if update failed
+                        continue
 
-                host_step += 1
-                # Representation-health probe on the batch just trained on.
-                # batch is not donated by the train step, so reusing it here
-                # is safe; results are device arrays synced by the log
-                # worker like every other metric.
+                pop.host_step += 1
+                pop.lifetime_step += 1
+                pop.frames_trained_total = (
+                    int(jax.device_get(pop.player_state.frame_count))
+                    - pop.created_at_frame
+                )
                 if (
-                    self._plasticity_probe_jit is not None
-                    and host_step % self.config.plasticity_probe_interval == 0
+                    pop.plasticity_probe_jit is not None
+                    and pop.host_step % self.config.plasticity_probe_interval == 0
                 ):
                     with self.gpu_lock:
                         logs.update(
-                            self._plasticity_probe_jit(self.player_state.params, batch)
+                            pop.plasticity_probe_jit(pop.player_state.params, batch)
                         )
-                self._handle_periodic_tasks(host_step, logs)
+                self._handle_periodic_tasks(pop, pop.host_step, logs)
 
         except KeyboardInterrupt:
+            # One synchronous full-process save: _write_checkpoint bundles
+            # main plus every live exploiter population and the scheduler
+            # state, so a restart resumes whatever block was in progress.
             logger.info("Keyboard interrupt received. Saving checkpoint...")
-            try:
-                save_train_state(
-                    self.wandb_run,
-                    self.config,
-                    jax.device_get(self.player_state),
-                    jax.device_get(self.builder_state),
-                    self.league,
-                    self.controller_state_bytes(),
-                )
-            except RuntimeError:
-                # An interrupt that lands mid train-step catches the state
-                # after its buffers were donated but before the rebind; the
-                # pre-step state is unrecoverable then, so skip the save
-                # rather than masking the interrupt with a donation error.
-                logger.exception(
-                    "Skipping interrupt checkpoint: train state was donated "
-                    "mid-step. Latest periodic checkpoint is unaffected."
-                )
+            main_pop = self.populations["main"]
+            for pop in [main_pop]:
+                try:
+                    self._write_checkpoint(pop, synchronous=True)
+                except RuntimeError:
+                    logger.exception(
+                        "Skipping interrupt checkpoint for population %s: "
+                        "train state was donated mid-step. Latest periodic "
+                        "checkpoint is unaffected.",
+                        pop.name,
+                    )
             raise
-        except Exception as e:
-            logger.error(f"Learner training crashed: {e}")
-            traceback.print_exc()
-            raise e
+        except Exception:
+            # logger.exception, NOT traceback.print_exc(): the logging
+            # handler routes through tqdm.write(), so the traceback prints
+            # cleanly above the progress bars — print_exc() wrote raw to
+            # stderr and got shredded line-by-line into the concurrent bar
+            # redraws (session 1786537634's OOM traceback was near-
+            # unreadable in the captured console for exactly this reason).
+            logger.exception("Learner training crashed")
+            raise
         finally:
             self.done = True
-            # device_q has maxsize=1; drain the single pending item (if any) to
-            # unblock host_to_device_worker if it is blocked on put().
-            try:
-                self.device_q.get_nowait()
-            except queue.Empty:
-                pass
+            for pop in self.populations.values():
+                # strict=False: process is exiting — a straggler here is
+                # tolerable (daemon threads die with the process), and
+                # raising would mask the real outcome, turning e.g. a
+                # clean Ctrl-C into a crash. Resets keep strict=True.
+                self._stop_population_workers(pop, strict=False)
+            tqdm.write("Training Finished.")
 
-            for cond in [
-                self.player_replay._add_cv,
-                self.player_replay._sample_cv,
-                self.builder_replay._add_cv,
-                self.builder_replay._sample_cv,
-            ]:
-                with cond:
-                    cond.notify_all()
+    def register_actor_threads(
+        self, population: PopulationName, threads: list[threading.Thread]
+    ) -> None:
+        """Called by main.py right after it constructs and starts a
+        population's PlayerActor/BuilderActor pool (in response to the
+        spawn_actor_pool callback, on creation, or after a reset) — Learner
+        can't spawn these itself without a circular import. Registering
+        them here means a shutdown or population reset waits for (and
+        straggler-checks) them exactly like the 3 internal workers,
+        instead of silently leaving them running against now-stale state."""
+        self.populations[population].actor_threads.extend(threads)
 
-            transfer_thread.join(timeout=10)
-
-            # Sentinel stops the log worker after it drains pending logs. The
-            # worker is a daemon, so a wedged wandb client can't hang exit.
-            self._log_q.put(None)
-            log_thread.join(timeout=30)
-            print("Training Finished.")
-
-    def _train_step(self, batch: Batch) -> dict | None:
-        """
-        Runs the JAX update, verifies gradients/loss, and updates internal state.
-        Returns training logs on success, or None if the step was invalid (e.g. NaN loss).
-        """
-        # 1. Run JAX Step (thread-safe)
-        self.player_state, self.builder_state, logs = self._train_step_jit(
-            self.player_state,
-            self.builder_state,
-            batch,
-            self.config,
-            np.float32(self._current_lambda),
-            np.float32(self._current_magnet_coef),
+    def _start_population_workers(self, pop: PopulationState) -> None:
+        transfer_thread = threading.Thread(
+            target=self.host_to_device_worker,
+            args=(pop,),
+            daemon=True,
+            name=f"transfer-{pop.name}",
         )
+        transfer_thread.start()
+        log_thread = threading.Thread(
+            target=self._wandb_log_worker,
+            args=(pop,),
+            daemon=True,
+            name=f"log-{pop.name}",
+        )
+        log_thread.start()
+        ckpt_thread = threading.Thread(
+            target=self._checkpoint_writer_worker,
+            args=(pop,),
+            daemon=True,
+            name=f"ckpt-{pop.name}",
+        )
+        ckpt_thread.start()
+        pop.worker_threads.extend([transfer_thread, log_thread, ckpt_thread])
 
+    def _stop_population_workers(
+        self, pop: PopulationState, strict: bool = True
+    ) -> None:
+        pop.done = True
+        pop.stop_signal[0] = True
+        # Wake actors idling at the block gate so they observe stop_signal
+        # immediately instead of on their next wait() timeout.
+        pop.run_gate.set()
+        try:
+            pop.device_q.get_nowait()
+        except queue.Empty:
+            pass
+        for cond in (
+            pop.player_replay._add_cv,
+            pop.player_replay._sample_cv,
+            pop.builder_replay._add_cv,
+            pop.builder_replay._sample_cv,
+        ):
+            with cond:
+                cond.notify_all()
+
+        for t in pop.worker_threads:
+            if t.name.startswith("transfer-"):
+                t.join(timeout=10)
+        pop.log_q.put(None)
+        for t in pop.worker_threads:
+            if t.name.startswith("log-"):
+                t.join(timeout=30)
+        pop.ckpt_q.put(None)
+        for t in pop.worker_threads:
+            if t.name.startswith("ckpt-"):
+                t.join(timeout=60)
+        # External actor threads (main.py's PlayerActor/BuilderActor pool,
+        # registered via register_actor_threads): already signalled via
+        # pop.stop_signal[0] above — just wait for them here.
+        for t in pop.actor_threads:
+            t.join(timeout=30)
+
+        all_threads = pop.worker_threads + pop.actor_threads
+        stragglers = [t for t in all_threads if t.is_alive()]
+        if stragglers:
+            logger.warning(
+                "%d worker thread(s) for population %s did not stop within "
+                "their join timeout: %s — giving a 30s grace period before "
+                "treating this as a hung shutdown.",
+                len(stragglers),
+                pop.name,
+                [t.name for t in stragglers],
+            )
+            for t in stragglers:
+                t.join(timeout=30)
+            stragglers = [t for t in stragglers if t.is_alive()]
+        if stragglers:
+            if strict:
+                raise RuntimeError(
+                    f"{len(stragglers)} worker thread(s) for population "
+                    f"{pop.name} never stopped: {[t.name for t in stragglers]}. "
+                    "Refusing to proceed with this population's state still "
+                    "reachable from a live thread."
+                )
+            # strict=False is the whole-PROCESS shutdown path (train()'s
+            # finally, incl. Ctrl-C): the straggler raise exists to stop a
+            # population RESET from rebuilding on top of state a leaked
+            # thread still holds (the 2026-08-11 RAM/VRAM leak) — at
+            # process exit there is no next phase to protect, every
+            # thread is a daemon that dies with the process, and raising
+            # here would convert a clean Ctrl-C into a "crashed" outcome
+            # (an actor blocked on the game-server websocket mid-game is
+            # normal at this point, not a leak).
+            logger.warning(
+                "%d thread(s) for population %s still alive at process "
+                "shutdown: %s — proceeding; they are daemons and exit "
+                "with the process.",
+                len(stragglers),
+                pop.name,
+                [t.name for t in stragglers],
+            )
+
+        # Return this population's 4 progress-bar rows to the shared pool
+        # (close_tqdm_bar) so the replacement fork reuses the same rows —
+        # without this, every exploiter reset leaked 4 dead rows and
+        # pushed all live bars one screen-row further down, unboundedly,
+        # for the life of the process. Closing is safe against any update
+        # racing in from a straggler: tqdm's close() flips .disable, which
+        # every update() checks first.
+        for bar in (
+            pop.consumer_progress,
+            pop.train_progress,
+            pop.player_replay._progress,
+            pop.builder_replay._progress,
+        ):
+            close_tqdm_bar(bar)
+
+    # Known python-thread name prefixes, for the census below — anything
+    # unrecognized lands in "other".
+    _THREAD_NAME_BUCKETS = (
+        "Selfplay-",
+        "BuilderActor-",
+        "EvalActor-",
+        "transfer-",
+        "log-",
+        "ckpt-",
+        "inference-server",
+        "ThreadPoolExecutor",
+    )
+
+    def _log_memory_diagnostics(self, logs: dict) -> None:
+        """Process-wide RAM attribution, riding main's periodic wandb logs
+        every memory_diag_interval steps (main-only, same convention as
+        _check_oom_guard: process-wide facts don't need three copies).
+
+        Motivated by session 1786537634: RSS climbed 5.9GB -> 17GB while
+        the OS thread count grew 478 -> 775 with no obvious owner, and
+        none of it was attributable from wandb alone. The bounded-by-
+        design consumers (replay buffers, league opponent cache) get
+        exact byte counts here; the thread census separates python
+        threads (named, bucketed below) from native ones — if
+        diag_os_threads far exceeds diag_py_threads, the growth lives in
+        native pools (XLA/CUDA/websocket internals), not python code."""
+        try:
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        logs["diag_rss_mb"] = int(line.split()[1]) / 1024.0
+                    elif line.startswith("Threads:"):
+                        logs["diag_os_threads"] = int(line.split()[1])
+        except Exception:
+            pass  # non-Linux — skip, same posture as _available_memory_fraction
+
+        py_threads = threading.enumerate()
+        logs["diag_py_threads"] = len(py_threads)
+        buckets = dict.fromkeys(self._THREAD_NAME_BUCKETS, 0)
+        buckets["other"] = 0
+        for t in py_threads:
+            for prefix in self._THREAD_NAME_BUCKETS:
+                if t.name.startswith(prefix):
+                    buckets[prefix] += 1
+                    break
+            else:
+                buckets["other"] += 1
+        for prefix, count in buckets.items():
+            key = prefix.rstrip("-").lower().replace("-", "_")
+            logs[f"diag_py_threads_{key}"] = count
+
+        # Heap census: attributes host RSS the byte-exact counters below
+        # (replay buffers, league cache) don't cover — e.g. the ~3GB the
+        # 2026-08-18 exploiter-fork jump left unexplained by thread counts
+        # and league cache alone. sys.getsizeof is shallow (a dict/list's
+        # own overhead, not its contents), but that's exactly what surfaces
+        # a genuine culprit: a huge COUNT of one type (numpy arrays, proto
+        # objects, EnvironmentState instances) dominating aggregate bytes.
+        # Logged to the console, not wandb — dynamic top-N, not a stable
+        # scalar key. gc.get_objects() walks the whole heap, so this rides
+        # the same 5000-step cadence as the rest of this function.
+        try:
+            counts = collections.Counter()
+            sizes = collections.Counter()
+            for obj in gc.get_objects():
+                t = type(obj).__name__
+                counts[t] += 1
+                sizes[t] += sys.getsizeof(obj)
+            top = sizes.most_common(15)
+            logger.info(
+                "Heap census (top-15 by approx shallow size): %s",
+                ", ".join(f"{t}={counts[t]}objs/{sz / 2**20:.1f}MB" for t, sz in top),
+            )
+        except Exception:
+            logger.exception("Heap census failed")
+
+        for name, pop in self.populations.items():
+            logs[f"diag_player_replay_mb_{name}"] = pop.player_replay.nbytes() / 2**20
+            logs[f"diag_builder_replay_mb_{name}"] = pop.builder_replay.nbytes() / 2**20
+        try:
+            with open("runtime/service_memory.json") as f:
+                node_stats = json.load(f)
+            # Service writes every 10s; 60s is a generous staleness bound
+            # in case the file is left over from a service that's since died.
+            if time.time() - node_stats["ts"] < 60:
+                for key in (
+                    "rss_mb",
+                    "heap_used_mb",
+                    "num_workers",
+                    "worker_heap_used_mb",
+                    "workers_reported",
+                ):
+                    logs[f"diag_node_{key}"] = node_stats[key]
+        except Exception:
+            pass  # service not up, stats file stale/absent, or race on the rename
+
+        entries, cache_bytes = self.league.cache_stats()
+        logs["diag_league_cache_entries"] = entries
+        logs["diag_league_cache_mb"] = cache_bytes / 2**20
+
+    def _train_step(self, pop: PopulationState, batch: Batch) -> dict | None:
+        """Runs the JAX update for pop via the shared compiled train_step,
+        rebinding the result onto pop (not self — every population takes
+        turns through the same compiled closure)."""
+        # upgo_coef zeroed during plasticity recovery: a freshly-perturbed
+        # critic cuts UPGO returns in the wrong places (the same regime
+        # the removed lambda controller handled by forcing lambda to its
+        # ceiling). Runtime scalar — flipping it never recompiles.
+        upgo_coef = 0.0 if pop.plasticity.recovering else self.config.player_upgo_coef
+        # Stage-2 improvement term: main only (the exploiter blocks stay
+        # clean as a within-run contrast), linearly ramped host-side from
+        # first activation — runtime scalar, so the ramp never recompiles.
+        q_improve_coef = 0.0
+        if (
+            self.config.player_q_enabled
+            and self.config.player_q_improve_enabled
+            and pop.name == "main"
+        ):
+            step = int(pop.player_state.step_count)
+            if self._q_improve_ramp_start is None:
+                self._q_improve_ramp_start = step
+            ramp = min(
+                1.0,
+                (step - self._q_improve_ramp_start)
+                / max(1, self.config.player_q_improve_ramp_steps),
+            )
+            q_improve_coef = self.config.player_q_improve_coef * ramp
+        pop.player_state, pop.builder_state, logs = self._train_step_jit(
+            pop.player_state,
+            pop.builder_state,
+            batch,
+            self._jit_config,
+            np.float32(upgo_coef),
+            np.float32(self.config.player_magnet_kl_coef),
+            np.float32(q_improve_coef),
+        )
+        if logs is not None and pop.name == "main":
+            logs["player_q_improve_coef"] = q_improve_coef
         return logs
 
-    def _handle_periodic_tasks(self, step: int, logs: dict):
-        """Handles logging, progress bars, and checkpointing."""
-
-        # Console Progress
-        self.train_progress.update(1)
+    def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):
+        """Handles logging, progress bars, and checkpointing for pop."""
+        pop.train_progress.update(1)
 
         if (
             self.config.smogon_format != "randombattle"
             and step % self.config.save_interval_steps == 0
         ):
-            logs.update(self._get_usage_counts())
+            logs.update(self._get_usage_counts(pop))
 
         if step % self.config.league_winrate_log_steps == 0:
-            logs.update(self._get_league_winrates())
-            logs.update(self.plasticity.logs())
-            if self.exploit_ctrl is not None:
-                logs.update(self.exploit_ctrl.logs())
+            # Payoff-table views are main-only: ONE dashboard holds the
+            # whole league's pairwise structure (rows labelled by origin,
+            # live exploiter populations included), instead of three
+            # partial copies of the same shared table. The exploiter
+            # populations' attempt progress is visible there too — their
+            # live rows vs. main and vs. their own targets.
+            if pop.name == "main":
+                logs.update(self._get_league_winrates(pop))
+                logs.update(self._get_league_winrate_heatmap(pop))
+            logs.update(pop.plasticity.logs())
 
-        # Rating window boundary: fit and log the BT rating and its
-        # exploitability auditors — the only strength-grounded absolute
-        # progress telemetry, logged every window regardless of which
-        # controller is driving (see bandit.py; these need hundreds of
-        # games per point, so they stay an auditor, never a control
-        # signal — the exploit controller above uses the raw win-rate
-        # table instead, which is available much sooner).
-        if step % self.config.bandit_window_steps == 0:
+        if pop.name == "main" and step % self.config.bandit_window_steps == 0:
             logs.update(
                 rating_logs(
                     self.league,
@@ -1321,138 +2511,471 @@ class Learner:
                 )
             )
 
-        # Hand off to the log worker; values may still be device arrays and
-        # are synced there, off the critical path.
-        self._log_q.put(logs)
+        if (
+            pop.name == "main"
+            and self.config.memory_diag_interval > 0
+            and step % self.config.memory_diag_interval == 0
+        ):
+            self._log_memory_diagnostics(logs)
 
-        # Main Player Update & Checkpoint
+        # The default x-axis for every metric on this population's run
+        # (wandb.define_metric in main.py): monotonic across resumes AND
+        # attempt re-forks, unlike host_step/frames.
+        logs["lifetime_step"] = pop.lifetime_step
+        pop.log_q.put(logs)
+
+        # Every population's live entry needs refreshing, not just main's —
+        # PlayerActor.pull_own_player() reads league.get_live(pop.live_key)
+        # for every population's own actors; leaving an exploiter
+        # population's entry pinned at its creation-time snapshot would
+        # mean its actors train forever against whatever it looked like
+        # the instant it was forked, never picking up its own progress.
         if step % self.config.main_player_update_steps == 0:
-            self._update_main_player_in_league()
+            self.league.update_live(pop.live_key, self._create_params_container(pop))
 
-        if step % self.config.save_interval_steps == 0:
-            save_train_state(
-                self.wandb_run,
-                self.config,
-                jax.device_get(self.player_state),
-                jax.device_get(self.builder_state),
-                self.league,
-                self.controller_state_bytes(),
+        # The periodic full checkpoint (main + every live exploiter
+        # population + scheduler state — see _write_checkpoint) paces on
+        # the ACTIVE population's own step counter, not main's: during an
+        # exploiter block main only ticks as filler and self-limits at the
+        # replay reuse cap, so a main-gated save could stall for the whole
+        # block, leaving an in-progress attempt unrecoverable. Block
+        # boundaries write one too (_begin_exploiter_block /
+        # _check_exploiter_transitions). Exploiters use the tighter
+        # exploiter_save_interval_steps: a block runs for hours, and the
+        # 2026-08-15 09:38 machine shutdown showed a 20k-of-its-own-steps
+        # cadence can lose a whole block segment.
+        save_interval = (
+            self.config.save_interval_steps
+            if pop.name == "main"
+            else self.config.exploiter_save_interval_steps
+        )
+        if pop.name == self._active and step % save_interval == 0:
+            self._write_checkpoint(self.populations["main"])
+
+        if pop.name == "main" and step % self.config.manage_league_interval == 0:
+            self._manage_league(pop, step)
+
+        if self.config.auto_exploiter_enabled:
+            self._check_exploiter_transitions(pop)
+
+        self._check_oom_guard(pop, step)
+
+    def _write_checkpoint(self, pop: PopulationState, synchronous: bool = False) -> str:
+        """Only ever called for "main" (the checkpoint dir is keyed to
+        main's step_count), but saves the WHOLE process: main's full
+        resumable state, plus every live exploiter population's own full
+        state (params+opt_state+host counters, under populations/{name}/)
+        and the block-sequential scheduler's state (whose block it is,
+        rotation index) — so a restart resumes an in-progress exploiter
+        block exactly where it stopped instead of discarding the attempt
+        and re-forking fresh (the pre-2026-08-15 behaviour; user
+        explicitly wants a 40k-step exploiter attempt picked back up, not
+        thrown away). Their durable terminal output is still what
+        _add_player_to_league writes on promotion/timeout.
+
+        Everything host-side/fast happens synchronously here (device
+        pulls, small in-memory serializations); only the actual disk
+        write goes to pop's own background writer, via a payload that's
+        already fully host-side (plain dicts/bytes/ints, never a live
+        TrainState or the live League object itself). synchronous=True
+        (Ctrl-C/OOM-guard path) writes inline instead, since there may be
+        no time left for the background writer to run."""
+        host_player_state = jax.device_get(pop.player_state)
+        host_builder_state = jax.device_get(pop.builder_state)
+        player_components = dict(
+            params=host_player_state.params,
+            target_params=host_player_state.target_params,
+            opt_state=host_player_state.opt_state,
+            scalars=dict(
+                step_count=host_player_state.step_count,
+                frame_count=host_player_state.frame_count,
+                ema_adv_mean=host_player_state.ema_adv_mean,
+                ema_adv_std=host_player_state.ema_adv_std,
+            ),
+        )
+        builder_components = dict(
+            params=host_builder_state.params,
+            target_params=host_builder_state.target_params,
+            opt_state=host_builder_state.opt_state,
+            scalars=dict(
+                step_count=host_builder_state.step_count,
+                frame_count=host_builder_state.frame_count,
+            ),
+        )
+        # Live exploiter populations ride along under populations/{name}/
+        # (never at the checkpoint root: load_from_checkpoint expects
+        # main's components directly under ckpt_{step:08}/ — see
+        # _ckpt_root's docstring; nesting main under a population subdir
+        # once produced a checkpoint the loader could never find). Their
+        # host-side counters that live outside the TrainState (fork_step,
+        # budget anchor) are saved too — without budget_anchor_frames a
+        # resumed league_exploiter would mis-measure its dwell/timeout
+        # window from the wrong anchor.
+        populations_payload: dict[str, dict] = {}
+        for pname in _EXPLOITER_ROTATION:
+            epop = self.populations.get(pname)
+            if epop is None or epop.player_state is None:
+                continue
+            host_ep = jax.device_get(epop.player_state)
+            host_eb = jax.device_get(epop.builder_state)
+            populations_payload[pname] = dict(
+                player_components=dict(
+                    params=host_ep.params,
+                    target_params=host_ep.target_params,
+                    opt_state=host_ep.opt_state,
+                    scalars=dict(
+                        step_count=host_ep.step_count,
+                        frame_count=host_ep.frame_count,
+                        ema_adv_mean=host_ep.ema_adv_mean,
+                        ema_adv_std=host_ep.ema_adv_std,
+                    ),
+                ),
+                builder_components=dict(
+                    params=host_eb.params,
+                    target_params=host_eb.target_params,
+                    opt_state=host_eb.opt_state,
+                    scalars=dict(
+                        step_count=host_eb.step_count,
+                        frame_count=host_eb.frame_count,
+                    ),
+                ),
+                host=dict(
+                    fork_step=epop.fork_step,
+                    budget_anchor_frames=epop.budget_anchor_frames,
+                    created_at_frame=epop.created_at_frame,
+                ),
+                controllers=self.controller_state_bytes(epop),
             )
+        scheduler_payload = dict(
+            active=self._active,
+            rotation_idx=self._rotation_idx,
+            populations=sorted(populations_payload),
+        )
+        save_path = os.path.abspath(
+            os.path.join(
+                f"./ckpts/gen{self.config.generation}",
+                f"ckpt_{int(np.asarray(host_player_state.step_count)):08}",
+            )
+        )
+        upload_to_cloud = (
+            pop.name == "main"
+            and self.config.log_artifacts_online
+            and int(np.asarray(host_player_state.step_count))
+            % self.config.cloud_save_interval_steps
+            == 0
+        )
+        payload = dict(
+            save_path=save_path,
+            learner_config=self.config,
+            player_components=player_components,
+            builder_components=builder_components,
+            league_bytes=self.league.serialize(),
+            controller_bytes=self.controller_state_bytes(pop),
+            step_count=int(np.asarray(host_player_state.step_count)),
+            frame_count=int(np.asarray(host_player_state.frame_count)),
+            upload_to_cloud=upload_to_cloud,
+            scheduler=scheduler_payload,
+            populations=populations_payload,
+        )
+        if synchronous:
+            return write_checkpoint_components(
+                payload["save_path"],
+                payload["learner_config"],
+                payload["player_components"],
+                payload["builder_components"],
+                payload["league_bytes"],
+                payload["controller_bytes"],
+                step_count=payload["step_count"],
+                frame_count=payload["frame_count"],
+                scheduler=payload["scheduler"],
+                populations=payload["populations"],
+            )
+        pop.ckpt_q.put(payload)
+        return save_path
 
-        if step % self.config.manage_league_interval == 0:
-            self._manage_league(step)
-
-    def _manage_league(self, step: int):
-        """Checks if a new player should be added to the league."""
-        reason = self._should_add_new_player()
+    def _manage_league(self, pop: PopulationState, step: int):
+        """Checks if a new player should be added to the league. main
+        only — exploiter populations' own historical additions happen via
+        their promotion/timeout path (_check_exploiter_transitions), not
+        this routine stagnation-driven one. A routine addition is also
+        what closes main's training window under the block-sequential
+        scheduler: the next exploiter in rotation takes the GPU."""
+        reason = self._should_add_new_player(pop)
         if reason is not None:
-            print(f"Adding new player to league @ {step} ({reason})")
-            self._add_player_to_league(step)
-            self.player_replay.reset_usage_counts()
-            self.plasticity.on_player_added(reason)
-            # A new opponent shifts the state distribution before any
-            # batch reflects it: raise diversity pressure now so the
-            # policy can adapt instead of defending habitual lines. The
-            # commitment covariance decays it back once the new lines
-            # start paying.
-            if self.entropy_ctrl is not None:
-                self.entropy_ctrl.bump()
+            tqdm.write(f"Adding new player to league @ {step} ({reason})")
+            self._add_player_to_league(pop, step, origin="main")
+            pop.player_replay.reset_usage_counts()
+            pop.plasticity.on_player_added(reason)
+            self._begin_exploiter_block()
 
-        self._update_plasticity(step)
-        self._update_exploit_controller()
+        self._update_plasticity(pop, step)
 
-    def _measure_exploitability(self) -> float | None:
-        """1 - main's win-rate against its worst historical league
-        snapshot — the same win_rates.min() _should_add_new_player already
-        computes for the "dominant" gate, reused here as a control sensor
-        rather than a one-shot threshold.
+    def _set_active(self, name: PopulationName) -> None:
+        """Makes `name` the block owner: scheduler preference
+        (_select_population) AND actor gating — only the active
+        population's actor threads play games (run_gate; checked between
+        games in main.py's actor loops), so the full actor budget serves
+        whoever is training. Every population's pool is main-sized now;
+        gating, not pool sizing, is what divides actor resources."""
+        self._active = name
+        for pop in self.populations.values():
+            if pop.name == name:
+                pop.run_gate.set()
+            else:
+                pop.run_gate.clear()
 
-        Snapshots only count once they clear exploit_ctrl_min_games_per_
-        opponent effective games against main — mirrors bandit.py's
-        _rateable_snapshot_keys, applied here because a freshly-added (or
-        lightly-played) snapshot reads near 0.5 by construction (main vs.
-        a near-identical recent self), which looks exactly like a real
-        exploitability hole otherwise. exploit_ctrl_min_historical then
-        gates on how many such rateable snapshots exist, so a lone one
-        (still Bayesian-prior-dominated even past the games bar, see
-        League._win_rate_by_steps) cannot swing the reading alone."""
-        current = self.league.get_main_player()
-        min_games = self.config.exploit_ctrl_min_games_per_opponent
-        rateable = [
-            v
-            for k, v in self.league.players.items()
-            if k != MAIN_KEY
-            and self.league.games.get((MAIN_KEY, k), 0.0)
-            + self.league.games.get((k, MAIN_KEY), 0.0)
-            >= min_games
-        ]
-        if len(rateable) < self.config.exploit_ctrl_min_historical:
+    def _begin_exploiter_block(self) -> None:
+        """Hands the GPU to the next exploiter population in
+        _EXPLOITER_ROTATION for one full attempt. Called when main closes
+        a training window (a routine league addition — including one hit
+        while main is only filling an exploiter's production gaps, hence
+        the _active guard: a block never pre-empts a running block).
+
+        Population creation is need-driven here: BOTH exploiter
+        populations are created the moment their target pool is non-empty
+        (not just the one being activated) so their wandb runs/workers
+        exist ahead of their first block; their actors stay gated
+        (run_gate) until their own block starts. A rotation slot whose
+        population still can't exist (empty target pool) is skipped."""
+        if not self.config.auto_exploiter_enabled or self._active != "main":
+            return
+        for name in _EXPLOITER_ROTATION:
+            self._maybe_create_population(name)
+        for _ in range(len(_EXPLOITER_ROTATION)):
+            name = _EXPLOITER_ROTATION[self._rotation_idx]
+            self._rotation_idx = (self._rotation_idx + 1) % len(_EXPLOITER_ROTATION)
+            if self.populations.get(name) is not None:
+                self._set_active(name)
+                tqdm.write(f"Exploiter block begins: {name} owns the GPU.")
+                # Checkpoint the block transition itself: the freshly-forked
+                # (or continuing) population and the scheduler handoff are
+                # on disk before any block training happens, so a crash
+                # mid-block resumes the block, not main's stale window.
+                self._write_checkpoint(self.populations["main"])
+                return
+
+    def _check_exploiter_transitions(self, pop: PopulationState) -> None:
+        """Terminal-outcome check for the ACTIVE exploiter population, on
+        its own train ticks only (pop.host_step is its own counter, so
+        the auto_exploiter_check_interval gate advances exactly when this
+        population actually trains). Either terminal outcome — promotion
+        or frame-budget timeout, AlphaStar's ready_to_checkpoint shape —
+        ends the population's block and re-opens main's next window;
+        population creation lives in _begin_exploiter_block now, not
+        here."""
+        name = pop.name
+        if name == "main" or name != self._active:
+            return
+        if pop.host_step % self.config.auto_exploiter_check_interval != 0:
+            return
+
+        frame_count = int(jax.device_get(pop.player_state.frame_count))
+        # Both windows measure from the last non-rebuilding terminal
+        # outcome (0 for a fresh fork), not from fork — a continued
+        # league_exploiter would otherwise time out again instantly.
+        frames_this_attempt = frame_count - pop.budget_anchor_frames
+        if frames_this_attempt < self.config.exploiter_min_dwell_frames:
+            return
+
+        failure = _check_promotion_bar(
+            self.league,
+            pop.live_key,
+            (
+                (lambda ref: ref.origin == "main")
+                if name == "main_exploiter"
+                else (lambda ref: True)
+            ),
+            self.config.exploiter_promote_winrate,
+            self.config.exploiter_promote_min_games,
+        )
+        frame_budget = getattr(self.config, _FRAME_BUDGET_FIELD[name])
+        timed_out = frames_this_attempt >= frame_budget
+
+        if failure is None:
+            self._add_player_to_league(pop, pop.host_step, origin=name)
+            logger.info(
+                "Population %s promoted @ own-step %d (fork of main @ " "%s).",
+                name,
+                pop.host_step,
+                pop.fork_step,
+            )
+            self._apply_terminal_outcome(pop, name, frame_count, "promoted")
+        elif timed_out:
+            # AlphaStar's checkpoint() publishes a Historical snapshot
+            # on EITHER outcome — even a non-promoted attempt is a
+            # legitimate, permanent sparring partner for future PFSP
+            # matchmaking, not wasted exploration.
+            self._add_player_to_league(pop, pop.host_step, origin=name)
+            logger.info(
+                "Population %s timed out without promotion @ own-step "
+                "%d (%s) — added as historical.",
+                name,
+                pop.host_step,
+                failure,
+            )
+            self._apply_terminal_outcome(pop, name, frame_count, "timeout")
+        else:
+            return
+
+        self._set_active("main")
+        tqdm.write(f"Exploiter block ends: {name} -> main's next window.")
+        # Persist the handoff: without this, a crash after the terminal
+        # outcome but before the next periodic save would resume a block
+        # that already ended (replaying its promotion/timeout).
+        self._write_checkpoint(self.populations["main"])
+
+    def _apply_terminal_outcome(
+        self,
+        pop: PopulationState,
+        name: PopulationName,
+        frame_count: int,
+        reason: str,
+    ) -> None:
+        """Decides an exploiter population's fate AFTER its snapshot was
+        published on a terminal outcome — wires config.main_exploiter_
+        reset_to_main and config.exploiter_hard_reset_prob, which
+        documented exactly this policy but were never read (both
+        populations unconditionally re-forked from main).
+
+        main_exploiter: fresh fork of live main — AlphaStar's fixed rule
+        for the role (reset_to_main=False degrades to the continue path).
+
+        league_exploiter, following AlphaStar's LeagueExploiter.
+        checkpoint() (25%: reset to original init / otherwise: keep
+        training): rolls exploiter_hard_reset_prob for a shrink-and-
+        perturb toward a fresh init draw — this codebase's stand-in for
+        "original init", since no supervised params exist — and otherwise
+        continues training its current weights un-reset. The continue
+        path is the one that matters strategically: with every reset
+        target being a fork of main, a league exploiter that survives
+        checkpoints is the league's only source of opponents that keep
+        drifting off main's own policy manifold.
+
+        Both non-rebuilding fates re-anchor budget_anchor_frames so the
+        next attempt gets a full dwell/timeout window."""
+        if name == "main_exploiter" and self.config.main_exploiter_reset_to_main:
+            self._reset_population(name, reason=reason)
+            return
+
+        if name == "league_exploiter" and (
+            random.random() < self.config.exploiter_hard_reset_prob
+        ):
+            rng = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
+            pop.player_state = shrink_and_perturb_player_state(
+                pop.player_state,
+                rng,
+                default_shrink=self.config.plasticity_default_shrink,
+                module_shrink=self.config.plasticity_module_shrink,
+            )
+            # Actors pull params via the league's live entry — push the
+            # perturbed weights now rather than waiting for the next
+            # periodic update_live.
+            self.league.update_live(pop.live_key, self._create_params_container(pop))
+            pop.budget_anchor_frames = frame_count
+            pop.wandb_run.log({"population_perturbed": 1}, commit=False)
+            logger.info(
+                "Population %s (%s): hard reset rolled (p=%.2f) — "
+                "shrink-and-perturbed toward fresh init.",
+                name,
+                reason,
+                self.config.exploiter_hard_reset_prob,
+            )
+            return
+
+        pop.budget_anchor_frames = frame_count
+        pop.wandb_run.log({"population_continued": 1}, commit=False)
+        logger.info("Population %s (%s): continues training un-reset.", name, reason)
+
+    @staticmethod
+    def _available_memory_fraction() -> float | None:
+        """Fraction of total system RAM currently available (reclaimable
+        caches counted as available, matching what actually predicts an
+        OOM kill), or None if it can't be determined (non-Linux, or
+        /proc/meminfo unreadable) — the caller treats None as "skip the
+        check", the same defensive posture as this codebase's other
+        optional-environment guards (e.g. the matplotlib import)."""
+        try:
+            with open("/proc/meminfo") as f:
+                meminfo = {}
+                for line in f:
+                    key, value = line.split(":", 1)
+                    meminfo[key] = int(value.strip().split()[0])  # kB
+            return meminfo["MemAvailable"] / meminfo["MemTotal"]
+        except Exception:
             return None
-        win_rates = self.league.get_winrate((current, rateable))
-        return float(1.0 - np.min(win_rates))
 
-    def _update_exploit_controller(self) -> None:
-        """Ticks the exploitability controller and reapplies its scale.
-        Separated from _apply_exploit_scale so a checkpoint restore can
-        reapply a just-loaded scale without re-stepping the PI loop."""
-        if self.exploit_ctrl is None:
+    def _check_oom_guard(self, pop: PopulationState, step: int) -> None:
+        """Self-monitoring safety valve, not a leak fix: if available RAM
+        drops below config.oom_guard_min_available_fraction, save a
+        full-process checkpoint now (main + live exploiter populations +
+        scheduler — see _write_checkpoint) and raise OOMGuardTriggered —
+        better to stop on our own terms with a guaranteed-complete
+        checkpoint than let the kernel's OOM killer pick an arbitrary
+        moment (possibly mid-write) to SIGKILL this process. Available RAM is a
+        process-wide fact, not per-population, so this only actually runs
+        once per check interval regardless of which population's tick it's
+        attached to (whichever happens to hit the interval boundary first
+        checks; that's fine, the reading barely changes tick to tick)."""
+        if (
+            not self.config.oom_guard_enabled
+            or step % self.config.oom_guard_check_interval != 0
+        ):
             return
-        self.exploit_ctrl.update(self._measure_exploitability())
-        self._apply_exploit_scale()
+        available_fraction = self._available_memory_fraction()
+        if (
+            available_fraction is not None
+            and available_fraction < self.config.oom_guard_min_available_fraction
+        ):
+            logger.warning(
+                "Available memory fraction %.3f < oom_guard_min_available_fraction "
+                "%.3f @ population %s step %d — saving a checkpoint and "
+                "stopping before the kernel OOM-kills this process.",
+                available_fraction,
+                self.config.oom_guard_min_available_fraction,
+                pop.name,
+                step,
+            )
+            save_path = self._write_checkpoint(
+                self.populations["main"], synchronous=True
+            )
+            raise OOMGuardTriggered(save_path)
 
-    def _apply_exploit_scale(self) -> None:
-        """Scales the lambda/replay controllers' TARGETS (not their
-        actuators) by the exploitability controller's caution scale.
-        Used to also scale the adaptivity controller's commit_target,
-        but that target no longer exists — AdaptivityController is
-        floor-only now (see its class docstring for why). The sign of
-        the adjustment differs per remaining target because "more
-        cautious" means something different for each: shrinking
-        lambda_ctrl_gap_target makes the lambda controller less willing
-        to trust the critic's bootstrap (lambda drifts toward the MC
-        anchor); shrinking the replay KL target allows less reuse,
-        keeping training data fresher — both read as "become more
-        conservative" even though the multiplier itself only ever grows
-        or shrinks uniformly."""
-        if self.exploit_ctrl is None:
-            return
-        scale = self.exploit_ctrl.value
-        if self.lambda_ctrl is not None:
-            self.lambda_ctrl.gap_target = self._base_lambda_gap_target / scale
-        self._replay_kl_target = self._base_replay_kl_target / scale
+    # (_measure_exploitability/_update_exploit_controller/_apply_exploit_
+    # scale removed 2026-08-14 with the ExploitabilityController — the
+    # worst-matchup win-rate signal still exists in _should_add_new_player's
+    # "dominant" gate and the league_main_winrate_min auditor; it just
+    # doesn't actuate anything anymore.)
 
-    def _should_add_new_player(self) -> AddReason | None:
+    def _should_add_new_player(self, pop: PopulationState) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.
+        main only."""
+        # Pacing is measured against main's OWN last checkpoint (AlphaStar
+        # MainPlayer.ready_to_checkpoint: steps since self._checkpoint_step),
+        # not the league's newest entry — an exploiter timeout-publication
+        # would otherwise become "latest" permanently (its offset key wins
+        # max()) with a frame count that never advances, firing an overdue
+        # add on every league-management tick.
+        latest = self.league.get_latest_player(origin="main")
+        current = self.league.get_live(pop.live_key)
 
-        The reason doubles as a bias-free stagnation signal: "dominant" adds
-        mean the main player keeps outgrowing its history, while consecutive
-        "overdue" adds mean it has stopped making progress against itself.
-        """
-        latest = self.league.get_latest_player()
-        current = self.league.get_main_player()
-
-        # Calculate frames passed since the last added player
         latest_frames = latest.player_frame_count if latest is not None else 0
         frames_passed = int(current.player_frame_count - latest_frames)
 
-        # Basic gate: minimum frames
         if frames_passed < self.config.add_player_min_frames:
             return None
 
         historical_players = [
-            v for k, v in self.league.players.items() if k != MAIN_KEY
+            v for k, v in self.league.players.items() if k not in LIVE_KEYS
         ]
 
-        # Initial population check
         if not historical_players:
             if (
-                int(self.player_state.step_count)
+                int(pop.player_state.step_count)
                 > self.config.minimum_historical_player_steps
             ):
                 return "initial"
             return None
 
-        # Winrate check
         win_rates = self.league.get_winrate((current, historical_players))
 
         if win_rates.min() > 0.7:
@@ -1461,128 +2984,219 @@ class Learner:
             return "overdue"
         return None
 
-    def _update_plasticity(self, step: int):
-        """Tracks recovery from the last perturbation and fires new ones."""
-        frame_count = int(jax.device_get(self.player_state.frame_count))
+    def _update_plasticity(self, pop: PopulationState, step: int):
+        """Tracks recovery from the last perturbation and fires new ones.
+        main only."""
+        frame_count = int(jax.device_get(pop.player_state.frame_count))
 
-        if self.plasticity.recovering:
-            ref = self.league.players.get(self.plasticity.recovery_ref_step)
+        if pop.plasticity.recovering:
+            ref = self.league.players.get(pop.plasticity.recovery_ref_step)
             if ref is None:
-                # Reference snapshot left the league; nothing to measure
-                # recovery against, so unblock the controller.
-                self.plasticity.check_recovery(1.0, frame_count)
+                pop.plasticity.check_recovery(1.0, frame_count)
             else:
-                main = self.league.get_main_player()
-                winrate = float(self.league.get_winrate((main, ref)).item())
-                self.plasticity.check_recovery(winrate, frame_count)
+                current = self.league.get_live(pop.live_key)
+                winrate = float(self.league.get_winrate((current, ref)).item())
+                pop.plasticity.check_recovery(winrate, frame_count)
 
-        if self.plasticity.should_perturb(frame_count):
-            self._apply_plasticity_update(step, frame_count)
+        if pop.plasticity.should_perturb(frame_count):
+            self._apply_plasticity_update(pop, step, frame_count)
 
-    def _apply_plasticity_update(self, step: int, frame_count: int):
-        """Shrink-and-perturb the player params to restore plasticity.
+    def _apply_plasticity_update(
+        self, pop: PopulationState, step: int, frame_count: int
+    ):
+        """Shrink-and-perturb the player params to restore plasticity."""
+        latest = self.league.get_latest_player(origin="main")
+        if latest is None or latest.step_count != step + _STEP_OFFSET[pop.name]:
+            self._add_player_to_league(pop, step, origin="main")
+            latest = self.league.get_latest_player(origin="main")
 
-        The pre-perturbation self must be in the league first — both to keep
-        its strength as a training signal and to serve as the recovery
-        benchmark. The trigger path usually just added it (the overdue add);
-        if not, snapshot now.
-        """
-        latest = self.league.get_latest_player()
-        if latest is None or latest.step_count != step:
-            self._add_player_to_league(step)
-            latest = self.league.get_latest_player()
-
-        print(
+        tqdm.write(
             f"Applying shrink-and-perturb plasticity update @ {step} "
             f"(recovery ref: player {latest.step_count})"
         )
         rng = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
-        self.player_state = shrink_and_perturb_player_state(
-            self.player_state,
+        pop.player_state = shrink_and_perturb_player_state(
+            pop.player_state,
             rng,
             default_shrink=self.config.plasticity_default_shrink,
             module_shrink=self.config.plasticity_module_shrink,
         )
-        self.plasticity.on_perturbation(latest.step_count, frame_count)
-        # Perturbation scrambles the policy's preferences: hold its
-        # options open (a larger bump than a league addition) while it
-        # re-forms them. Mirrors the lambda controller being pinned at
-        # its ceiling for the same reason.
-        if self.entropy_ctrl is not None:
-            self.entropy_ctrl.bump(self.config.adapt_ctrl_perturb_bump)
+        pop.plasticity.on_perturbation(latest.step_count, frame_count)
 
-    def _update_main_player_in_league(self):
-        self.league.update_main_player(self._create_params_container(MAIN_KEY))
-
-    def _create_params_container(self, step_key):
+    def _create_params_container(self, pop: PopulationState) -> ParamsContainer:
         return ParamsContainer(
-            player_frame_count=jax.device_get(self.player_state.frame_count).item(),
-            builder_frame_count=jax.device_get(self.builder_state.frame_count).item(),
-            step_count=step_key,
-            player_params=jax.device_get(self.player_state.params),
-            builder_params=jax.device_get(self.builder_state.params),
+            player_frame_count=jax.device_get(pop.player_state.frame_count).item(),
+            builder_frame_count=jax.device_get(pop.builder_state.frame_count).item(),
+            step_count=pop.live_key,
+            player_params=jax.device_get(pop.player_state.params),
+            builder_params=jax.device_get(pop.builder_state.params),
         )
 
-    def _add_player_to_league(self, step: int):
-        """Persist the current params as an opponent snapshot and register a ref.
+    def _add_player_to_league(
+        self, pop: PopulationState, step: int, origin: PopulationName
+    ):
+        """Persist the current params as an opponent snapshot and register
+        a ref. Only the params files are written (no optimiser state); the
+        league holds the lightweight ref and materialises the params
+        lazily when this player is actually drawn as an opponent.
 
-        Only the params files are written (no optimiser state); the league holds
-        the lightweight ref and materialises the params lazily when this player
-        is actually drawn as an opponent.
+        Unifies what used to be two separate near-identical code paths
+        (this method, and the former rl/online/promote_exploiter.py's
+        write_promoted_snapshot) — both were "write a params snapshot,
+        construct a PlayerRef, register it," differing only in which
+        directory root and what origin/parent_step to tag. One
+        population-aware path now serves main's own routine additions AND
+        both exploiter populations' promotions/timeout-publications.
         """
-        snapshot_dir = os.path.abspath(
-            f"./ckpts/gen{self.config.generation}/players/p_{step:08}"
-        )
+        league_step = step + _STEP_OFFSET[origin]
+        if origin == "main":
+            players_root = f"./ckpts/gen{self.config.generation}/players"
+        else:
+            players_root = f"./ckpts/gen{self.config.generation}/exploiters/{origin}"
+        snapshot_dir = os.path.abspath(f"{players_root}/p_{league_step:08}")
         checkpoint.save_param_snapshot(
             snapshot_dir,
             player_components=dict(
-                params=jax.device_get(self.player_state.params),
-                target_params=jax.device_get(self.player_state.target_params),
+                params=jax.device_get(pop.player_state.params),
+                target_params=jax.device_get(pop.player_state.target_params),
             ),
             builder_components=dict(
-                params=jax.device_get(self.builder_state.params),
-                target_params=jax.device_get(self.builder_state.target_params),
+                params=jax.device_get(pop.builder_state.params),
+                target_params=jax.device_get(pop.builder_state.target_params),
             ),
         )
         self.league.add_player(
             PlayerRef(
-                step_count=step,
+                step_count=league_step,
                 snapshot_dir=snapshot_dir,
-                player_frame_count=jax.device_get(self.player_state.frame_count).item(),
+                player_frame_count=jax.device_get(pop.player_state.frame_count).item(),
                 builder_frame_count=jax.device_get(
-                    self.builder_state.frame_count
+                    pop.builder_state.frame_count
                 ).item(),
                 player_key="params",
                 builder_key="params",
+                origin=origin,
+                parent_step=pop.fork_step if origin != "main" else None,
             )
         )
 
-    def _get_usage_counts(self):
+    def _get_usage_counts(self, pop: PopulationState):
         result = {}
-
         for key, counts in [
-            ("species", self.player_replay._species_counts),
-            ("items", self.player_replay._item_counts),
-            ("abilities", self.player_replay._ability_counts),
-            ("moves", self.player_replay._move_counts),
+            ("species", pop.player_replay._species_counts),
+            ("items", pop.player_replay._item_counts),
+            ("abilities", pop.player_replay._ability_counts),
+            ("moves", pop.player_replay._move_counts),
         ]:
             names = list(STOI[key])
             table = wandb.Table(columns=[key, "usage"])
             for name, count in zip(names, counts):
                 table.add_data(name, count)
             result[f"{key}_usage"] = table
-
         return result
 
-    def _get_league_winrates(self):
-        current = self.league.get_main_player()
-        others = [v for k, v in self.league.players.items() if k != MAIN_KEY]
+    def _winrate_tracked_opponents(self) -> list[PlayerRef]:
+        """Every historical league member. Payoff-table logging is
+        main-only now (one dashboard holds the one shared table), and
+        main draws from the whole population, so there is no
+        per-population filtering left to do."""
+        return [v for k, v in self.league.players.items() if k not in LIVE_KEYS]
 
+    @staticmethod
+    def _ref_label(ref: PlayerRef) -> str:
+        """Payoff-table label carrying provenance: main snapshots keep
+        their raw step count; exploiter-origin snapshots get an ME-/LE-
+        prefix with that population's OWN step count (the _STEP_OFFSET
+        namespace un-applied), so a row reads as who produced it — the
+        point of labelling is seeing the league's non-transitive
+        structure (which exploiters beat which mains) at a glance."""
+        prefix = {"main": "", "main_exploiter": "ME-", "league_exploiter": "LE-"}[
+            ref.origin
+        ]
+        return f"{prefix}{ref.step_count - _STEP_OFFSET[ref.origin]}"
+
+    def _get_league_winrates(self, pop: PopulationState):
+        current = self.league.get_live(pop.live_key)
+        others = self._winrate_tracked_opponents()
+        if not others:
+            return {}
+        win_rates = self.league.get_winrate((current, others))
+        # Origin-labelled keys ("league_main_v_ME-1834_winrate") still
+        # match scripts/wandb_views.py's ^league_main_v_.*_winrate$ panel
+        # regex.
+        return {
+            f"league_main_v_{self._ref_label(others[i])}_winrate": wr
+            for i, wr in enumerate(win_rates)
+        }
+
+    def _get_league_winrate_heatmap(self, pop: PopulationState):
+        """Full pairwise win-rate matrix over the whole shared payoff
+        table: live main, both live exploiter populations (when they
+        exist), and every historical snapshot with an origin-labelled
+        row — logged through a custom Vega-Lite chart preset
+        (jtwin/league-payoff-heatmap-v10, registered once via
+        scripts/register_wandb_charts.py) instead of hijacking wandb's
+        confusion-matrix preset: proper axis titles (player/opponent, not
+        Actual/Predicted), a red/gold/green win-rate colour band per
+        cell, and a text label per cell. The colour is a chain of
+        condition/value tests on winrate with NO field bound directly to
+        the colour channel — every version that bound colour to a table
+        field (scale.range, scale.scheme+domain+clamp, a literal
+        per-cell hex column with scale: null) rendered as either an
+        unrelated colour or one flat colour for every cell in wandb's
+        actual custom-chart panel, confirmed via wandb's own GraphQL API
+        (spec stored correctly) and a neutral Vega-Lite renderer (spec
+        renders correctly outside wandb) — so wandb's Vega2 runtime does
+        not honour a field-bound colour channel here. Condition/value
+        (no field) is the one pattern proven to render correctly (the
+        text mark's black/white choice used exactly this pattern the
+        whole time). Interactive (hover shows exact values), no
+        matplotlib figure render on the train-loop thread, no image
+        upload per log. row_idx/col_idx carry insertion order so the
+        chart's ordinal axes sort by league structure rather than
+        wandb's default alphabetical sort (which would scramble "main
+        (live)" / "ME (live)" / snapshot labels together). Live-vs-live
+        cells come from real games too (main_exploiter's live-target
+        branch, main's verification branch); a pair that has never
+        actually played just shows the table's prior."""
+        current = self.league.get_live(pop.live_key)
+        others = self._winrate_tracked_opponents()
         if not others:
             return {}
 
-        win_rates = self.league.get_winrate((current, others))
-        return {
-            f"league_main_v_{others[i].step_count}_winrate": wr
-            for i, wr in enumerate(win_rates)
-        }
+        live_rows, live_labels = [], []
+        for name in _EXPLOITER_ROTATION:
+            if name in self.populations:
+                live_rows.append(self.league.get_live(_LIVE_KEY_BY_POPULATION[name]))
+                live_labels.append(
+                    "ME (live)" if name == "main_exploiter" else "LE (live)"
+                )
+
+        all_players = [current] + live_rows + others
+        labels = ["main (live)"] + live_labels + [self._ref_label(p) for p in others]
+        matrix = np.asarray(self.league.get_winrate((all_players, all_players)))
+
+        table = wandb.Table(
+            columns=["row", "row_idx", "col", "col_idx", "winrate"],
+            data=[
+                [row, i, col, j, float(matrix[i, j])]
+                for i, row in enumerate(labels)
+                for j, col in enumerate(labels)
+            ],
+        )
+        chart = wandb.plot_table(
+            "jtwin/league-payoff-heatmap-v10",
+            table,
+            fields={
+                "row": "row",
+                "row_idx": "row_idx",
+                "col": "col",
+                "col_idx": "col_idx",
+                "winrate": "winrate",
+            },
+            string_fields={
+                "title": "league payoff table (row beats column; "
+                "ME/LE = exploiter origin)"
+            },
+        )
+        return {"league_winrate_heatmap": chart}

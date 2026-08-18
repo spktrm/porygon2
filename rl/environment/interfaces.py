@@ -18,6 +18,11 @@ class PlayerEnvOutput:
     # Private Info
     my_moveset: ArrayLike = ()
     private_team: ArrayLike = ()
+    # Privileged (training self-play only): the opponent's match-start team
+    # sheet, frozen at THEIR first request — all-zero at deploy time. Feeds
+    # ONLY the everything-value readout; the policy/state streams never see
+    # it (rl/model/encoder.py RoundBlock).
+    opp_private_team: ArrayLike = ()
 
     action_mask: ArrayLike = ()
 
@@ -90,6 +95,24 @@ class PlayerActorOutput:
     # K auxiliary discounts (multi-gamma value aux). Actors leave this
     # empty so replay transitions stay small.
     aux_value_logits: ArrayLike = ()
+    # Learner-only (cfg.train and q_head.enabled): (T, A, n_bins)
+    # categorical logits of the all-action Q critic over the flat src x tgt
+    # action grid (docs/q-critic-plan.md). q_logits is the privileged rung
+    # (conditioned on value_all — drives the Retrace recursion);
+    # private_q_logits shares every head param but is conditioned on the
+    # deployable information set, and trains by CE against the same Retrace
+    # labels. Actors leave both empty for the same replay-size reason as
+    # aux_value_logits.
+    q_logits: ArrayLike = ()
+    private_q_logits: ArrayLike = ()
+    # Learner-only (cfg.train): (T, n_bins) categorical logits of the
+    # counterfactual value ladder — `private` sees the deployable information
+    # set (no opponent team sheet), `public` sees the history context only.
+    # The main value_head reads the privileged everything-stream. Gaps
+    # between the three expectations are per-state value-of-information
+    # readouts.
+    private_value_logits: ArrayLike = ()
+    public_value_logits: ArrayLike = ()
 
 
 @dataclass
@@ -182,6 +205,10 @@ class BuilderTransition:
 class PlayerTargets:
     win_returns: ArrayLike = ()
     advantages: ArrayLike = ()
+    # AlphaStar-style UPGO advantages (targets.py upgo_returns) — a
+    # second, policy-gradient-only advantage channel; never touches the
+    # value loss.
+    upgo_advantages: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()
 
@@ -211,6 +238,17 @@ class Trajectory:
     # fresh-vs-replayed value-error plasticity diagnostic. () outside the
     # learner's sampling path.
     reuse_count: ArrayLike = ()
+
+    # Exploration-ladder flag, shape (1,) per trajectory — (1, B) once
+    # batched. True = this trajectory was played by a raised-temperature
+    # explore actor (config.num_explore_actors) and may train only the
+    # observer Q critic: every actor/value/builder loss own-masks it out
+    # in train_step, so the policy's training distribution stays clean
+    # while the critic gets counterfactual coverage. Set at construction
+    # by PlayerActor; normalised at batch-assembly time (all-False when
+    # unset) so the shared train_step jit sees ONE pytree structure. ()
+    # outside the online path.
+    explore: ArrayLike = ()
 
 
 @dataclass

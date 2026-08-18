@@ -7,6 +7,8 @@ from ml_collections import ConfigDict
 
 from rl.environment.data import (
     FLAT_MODALITY_MASK,
+    FLAT_SRC_GROUP_MASK,
+    NUM_ACTION_SLOT_GROUPS,
     NUM_MODALITY_FEATURES,
     SRC_MODALITY_MASK,
 )
@@ -98,100 +100,59 @@ def sample_categorical(logits: jax.Array, rng_key: jax.Array):
     return jax.random.categorical(rng_key, logits, axis=-1)
 
 
-class PairPolicyHead(nn.Module):
-    """Src x tgt pointer logits with untied role projections.
+class MicroHead(nn.Module):
+    """Parameter-less within-modality (micro) readout over the typed
+    trunk streams (2026-08-17, replacing PerModalityPolicyHead).
 
-    Replaces the parameter-free gram head. Separate src/tgt projections
-    make the bilinear form asymmetric, so transposed grid cells (both
-    simultaneously valid during team preview) and diagonal cells (pass)
-    are no longer tied to each other / to a squared norm, and a slot's
-    embedding stops doing double duty as query and key through the same
-    vector. One residual block per role restores the head-local depth the
-    November per-modality heads had (resnet + pointer projections).
+    The role and modality depth that previously lived in per-modality
+    src/tgt MLP stacks now lives in the round trunk: move / switch /
+    target slots travel every round as separate residual streams with
+    their own gates and out-norms, so by the time embeddings reach this
+    head the src and tgt halves of a grid cell are (structural diagonal
+    cells aside) vectors from different typed spaces — no slot does query
+    and key duty through one shared projection, the pathology that
+    retired the original parameter-free gram head. Diagonal cells (pass /
+    default) score a squared norm, which is harmless: they are OTHER-
+    modality singletons whose within-modality softmax is degenerate, so
+    the modality head alone decides them.
+
+    The readout is a scaled dot-product grid times a per-slot-group
+    ZERO-INIT scale. Zero init keeps every micro logit exactly 0 at model
+    init, preserving calculate_hierarchical_prior as the exact
+    init-policy anchor (the job the old modality_scale's ones-init did),
+    and each group owns its sharpness through its scalar plus its
+    stream's residual magnitudes — the per-modality logit-scale probe
+    showed distinct temperatures emerge when allowed (wildcard > move >
+    switch). Deliberately NO layer norm on either side: norming the dot
+    would freeze the logit scale the typed streams are supposed to own.
+    The downstream within-modality logsumexp removes per-modality shifts,
+    so these scales control sharpness only — the modality contest belongs
+    to MacroHead.
     """
-
-    cfg: ConfigDict
 
     @nn.compact
     def __call__(self, action_embeddings: jax.Array) -> jax.Array:
-        src = action_embeddings + MLP(**self.cfg.src_mlp.to_dict())(action_embeddings)
-        tgt = action_embeddings + MLP(**self.cfg.tgt_mlp.to_dict())(action_embeddings)
-        logits = PointerLogits(**self.cfg.qk_logits.to_dict())(src, tgt)
-        flat_logits = logits.squeeze(-1).reshape(-1)
-        # Per-modality logit scale. The shared bilinear grid ties
-        # within-modality logit SPREAD across modalities (one set of
-        # src/tgt projections must express move-choice and switch-choice
-        # sharpness at once); the November per-modality heads had
-        # independent scales, and beat this head in competition. The
-        # downstream within-modality logsumexp removes any per-modality
-        # shift, so this parameter controls sharpness only — it cannot
-        # move the modality contest, which MacroHead owns. Init 1.0
-        # reproduces the unscaled head exactly, preserving
-        # calculate_hierarchical_prior as the init-policy anchor.
-        modality_scale = self.param(
-            "modality_scale", nn.initializers.ones, (NUM_MODALITY_FEATURES,)
-        ).astype(flat_logits.dtype)
-        return flat_logits * modality_scale[FLAT_MODALITY_MASK]
-
-
-class PerModalityPolicyHead(nn.Module):
-    """Per-modality src x tgt pointer heads over the shared trunk output.
-
-    PairPolicyHead scored every modality through one set of role
-    projections, which (a) forces move/switch/wildcard preferences into a
-    common bilinear geometry and (b) mixes their gradients through shared
-    weights — the parametric entanglement the November per-modality heads
-    did not have. Its per-modality logit-scale probe confirmed distinct
-    temperatures emerge when allowed (wildcard > move > switch). Here each
-    modality owns the whole trunk-output → logit map: a stack of
-    pre-activation residual blocks per role plus its own pointer
-    projections, restoring November's head depth AND its gradient routing
-    (the policy gradient of a taken action only touches its own modality's
-    head, since other modalities' cells don't contribute to that action's
-    log-prob). Composition, sampling and the learner interface are
-    unchanged: the heads fill disjoint cells of one flat src x tgt grid,
-    still one categorical draw. An explicit modality scale is redundant
-    here — each head's pointer projections own their scale.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(self, action_embeddings: jax.Array) -> jax.Array:
-        num_slots = action_embeddings.shape[0]
-        flat_logits = jnp.zeros((num_slots * num_slots,), action_embeddings.dtype)
-        for modality in range(NUM_MODALITY_FEATURES):
-            src = action_embeddings
-            tgt = action_embeddings
-            for block in range(self.cfg.num_blocks):
-                src = src + MLP(
-                    **self.cfg.src_mlp.to_dict(), name=f"src_mlp_m{modality}_b{block}"
-                )(src)
-                tgt = tgt + MLP(
-                    **self.cfg.tgt_mlp.to_dict(), name=f"tgt_mlp_m{modality}_b{block}"
-                )(tgt)
-            logits = PointerLogits(
-                **self.cfg.qk_logits.to_dict(), name=f"qk_logits_m{modality}"
-            )(src, tgt)
-            flat_logits = jnp.where(
-                FLAT_MODALITY_MASK == modality,
-                logits.squeeze(-1).reshape(-1),
-                flat_logits,
-            )
-        return flat_logits
+        inv_sqrt_d = action_embeddings.shape[-1] ** -0.5
+        logits = (action_embeddings @ action_embeddings.T) * inv_sqrt_d
+        type_scale = self.param(
+            "type_scale", nn.initializers.zeros_init(), (NUM_ACTION_SLOT_GROUPS,)
+        ).astype(logits.dtype)
+        return logits.reshape(-1) * type_scale[FLAT_SRC_GROUP_MASK]
 
 
 class MacroHead(nn.Module):
     """Modality-level (macro) logits from per-modality pooled src slots.
 
     One learned query per modality attention-pools that modality's live
-    src-slot embeddings, then a shared MLP with a zero-initialised output
-    layer maps each pooled vector to a scalar. Owning the modality contest
-    with dedicated parameters keeps the (per-modality shift-invariant)
-    micro gradient from moving the macro decision through gram-logit
-    magnitude, which the old mean-pool of the square logits allowed. Zero
-    output init keeps macro logits exactly zero at init, so
-    calculate_hierarchical_prior remains the exact init-policy anchor.
+    src-slot embeddings — each modality's srcs live in exactly one typed
+    trunk stream (move+wildcard → move, switch → switch, other → target),
+    so the pools read typed spaces — then a shared MLP with a
+    zero-initialised output layer maps each pooled vector to a scalar.
+    Owning the modality contest with dedicated parameters keeps the
+    (per-modality shift-invariant) micro gradient from moving the macro
+    decision through dot-logit magnitude. Zero output init keeps macro
+    logits exactly zero at init, so calculate_hierarchical_prior remains
+    the exact init-policy anchor.
     """
 
     cfg: ConfigDict
@@ -302,6 +263,48 @@ class PolicyQKHead(nn.Module):
             log_policy=policy_metrics.log_policy,
             magnet_kl=policy_metrics.magnet_kl,
         )
+
+
+class QValueHead(nn.Module):
+    """All-action categorical Q readout, conditioned on a pooled value
+    embedding (docs/q-critic-plan.md).
+
+    Reads the SAME action-slot embeddings the policy heads read, plus a
+    pooled per-state conditioning vector that sets the head's information
+    set: the ONE bound instance is called twice — with the privileged
+    value_all embedding (Q_all, feeds the Retrace recursion) and with the
+    private value embedding (Q_private, the policy's information set) —
+    so all params are shared across rungs, the same calibration-coupling
+    trick as v_head's private readout. The conditioning enters by concat
+    into each role's residual MLP; scores every src x tgt grid cell with
+    one logit per CAT_VF_SUPPORT bin via a PointerLogits whose num_heads
+    is the bin count. Learner-only — gated in
+    Porygon2PlayerModel.__call__; never sampled from, so it has no
+    interaction with acting or replay. Handles arbitrary leading batch
+    dims (PointerLogits/MLP are einsum-based).
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, action_embeddings: jax.Array, cond: jax.Array) -> jax.Array:
+        src = action_embeddings
+        tgt = action_embeddings
+        entity_size = action_embeddings.shape[-1]
+        c = nn.Dense(entity_size, name="cond_proj", dtype=cond.dtype)(cond)
+        c = nn.LayerNorm(name="cond_norm", dtype=c.dtype)(c)
+        cb = jnp.broadcast_to(c[..., None, :], (*src.shape[:-1], entity_size))
+        for block in range(self.cfg.num_blocks):
+            src = src + MLP(**self.cfg.src_mlp.to_dict(), name=f"src_mlp_b{block}")(
+                jnp.concatenate([src, cb], axis=-1)
+            )
+            tgt = tgt + MLP(**self.cfg.tgt_mlp.to_dict(), name=f"tgt_mlp_b{block}")(
+                jnp.concatenate([tgt, cb], axis=-1)
+            )
+        # (..., N, N, n_bins) -> (..., N * N, n_bins): flat cell order
+        # matches the policy head's flat action indexing.
+        logits = PointerLogits(**self.cfg.qk_logits.to_dict())(src, tgt)
+        return logits.reshape(*logits.shape[:-3], -1, logits.shape[-1])
 
 
 # Alive-mon differential support: margins -6..+6, matching the offline

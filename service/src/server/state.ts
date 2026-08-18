@@ -712,16 +712,38 @@ function getNullPokemon() {
 
 const nullPokemon = getNullPokemon();
 
+// Warn once per distinct unmapped key per worker: cosmetic-forme
+// fallbacks (e.g. Vivillon patterns) are expected and harmless, but the
+// per-occurrence line printed thousands of times per session and buried
+// real errors in the pane (the 2026-08-13 worker crash was nearly
+// scrolled out by it). A NEW name appearing here still logs — that's
+// the signal worth keeping, in case a non-cosmetic species ever starts
+// falling back.
+const warnedEnumFallbacks = new Set<string>();
+// Memoised resolution per (enum, key-chain): the throwing path inside
+// IndexValueFromEnum captures a stack trace per Error, and unmapped
+// cosmetic formes hit it on EVERY encode — pure allocation churn in the
+// hot path. Bounded: key chains are drawn from the finite
+// species/moves/... vocabularies.
+const resolvedFallbackCache = new Map<string, number>();
+
 function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
+    const cacheKey = `${getPrefix(enumDatum)}|${keys.join("|")}`;
+    const cached = resolvedFallbackCache.get(cacheKey);
+    if (cached !== undefined) {
+        return cached;
+    }
     for (const key of keys) {
         try {
-            return IndexValueFromEnum(enumDatum, key);
+            const value = IndexValueFromEnum(enumDatum, key) as number;
+            resolvedFallbackCache.set(cacheKey, value);
+            return value;
         } catch (err) {
-            // Expected for unmapped cosmetic formes (e.g. Vivillon
-            // patterns) — the next key in the chain is the base species.
-            // One quiet line, not a stack trace: this is a fallback, not
-            // a failure.
-            console.warn(`enum fallback: ${(err as Error).message}`);
+            const message = (err as Error).message;
+            if (!warnedEnumFallbacks.has(message)) {
+                warnedEnumFallbacks.add(message);
+                console.warn(`enum fallback (first occurrence): ${message}`);
+            }
             continue;
         }
     }
@@ -4307,8 +4329,12 @@ export class StateHandler {
         return { publicBuffer, revealedBuffer };
     }
 
-    getPrivateTeam(playerIndex: number): Int16Array {
-        const request = this.player.getRequest();
+    getPrivateTeam(playerIndex: number, requestOverride?: AnyObject): Int16Array {
+        // requestOverride (used by TrainablePlayerAI.ensureFirstPrivateTeam
+        // with the frozen firstRequest) sources BOTH the current- and
+        // first-request views from the override, so the encoding is a
+        // static match-start team sheet rather than live battle state.
+        const request = requestOverride ?? this.player.getRequest();
         if (request === undefined) {
             throw new Error("Request is undefined");
         }
@@ -4318,7 +4344,7 @@ export class StateHandler {
             // encoding is public-view only.
             return new Int16Array(6 * numPrivateEntityNodeFeatures);
         }
-        const firstRequest = this.player.firstRequest!;
+        const firstRequest = requestOverride ?? this.player.firstRequest!;
         const requestPokemon = request.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
@@ -4710,6 +4736,20 @@ export class StateHandler {
 
         const privateTeam = this.getPrivateTeam(playerIndex);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
+
+        // Privileged critic input, training self-play only: the opponent's
+        // match-start team sheet (their first request, frozen). Empty at
+        // deploy time — no opponent player object exists there — and the
+        // model masks all-unspecified rows out.
+        const oppSheet = this.player.opponent?.ensureFirstPrivateTeam();
+        state.setOppPrivateTeam(
+            new Uint8Array(
+                (
+                    oppSheet ??
+                    new Int16Array(6 * numPrivateEntityNodeFeatures)
+                ).buffer,
+            ),
+        );
 
         const { publicData, revealedData } = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicData.buffer));

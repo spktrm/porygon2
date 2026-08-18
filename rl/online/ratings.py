@@ -15,8 +15,8 @@ signal: rating_logs reports bandit_rating_valid=0 rather than a number.
 
 Historical note: this module used to also hold LambdaBandit, a
 discounted-UCB bandit that retuned the main v-trace lambda from the
-per-window aligned rating gain. Retired in favour of the lambda
-gap-controller (rl/online/controllers.py) plus the exploitability
+per-window aligned rating gain. Retired in favour of the (since also
+removed, 2026-08-14) lambda gap-controller plus the exploitability
 controller: the bandit paid an extra exploration tax (it must sometimes
 hold an arm it suspects is worse just to keep the uncertainty estimate
 honest) on top of the rating signal's own latency (hundreds of games per
@@ -86,9 +86,10 @@ def rating_logs(
     min_games_per_opponent: float,
     min_rated_opponents: int,
 ) -> dict[str, float]:
-    """BT-rating telemetry without any arm machinery — used when the
-    bandit is disabled so the strength-vs-frozen-pool signal (the only
-    self-play-pure absolute progress measure) stays on the dashboard."""
+    """BT-rating telemetry — keeps the strength-vs-frozen-pool signal
+    (the only self-play-pure absolute progress measure) on the dashboard.
+    The bandit_ metric prefix is historical (see module docstring), kept
+    for wandb continuity across lineages."""
     with league.lock:
         snap_keys = [
             s
@@ -119,9 +120,8 @@ def rating_logs(
 def _rating_exploitability_logs(
     ratings: dict[int, float], wins: dict, draws: dict, games: dict
 ) -> dict[str, float]:
-    """Auditor metrics for the adaptivity controller — logged, never
-    controlled on (they need hundreds of games per point, far slower than
-    the covariance loop).
+    """Auditor metrics — logged, never controlled on (they need hundreds
+    of games per point, far too slow to drive anything).
 
     An under-regularised policy is EXPLOITABLE, which shows up two ways
     in the payoff table: main's worst matchup drifts toward (or below)

@@ -1,5 +1,6 @@
 import threading
 
+import jax
 import numpy as np
 from tqdm import tqdm
 
@@ -10,12 +11,13 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
+from rl.environment.utils import next_tqdm_position
 
 
 class BuilderTrajectoryStore:
     """Stores builder trajectories for later use by the learner."""
 
-    def __init__(self, max_size: int = 1000, max_reuses: int = 5):
+    def __init__(self, max_size: int = 1000, max_reuses: int = 5, name: str = ""):
         self._trajectories: dict[
             int, tuple[BuilderTransition, BuilderHistoryOutput]
         ] = {}
@@ -34,7 +36,8 @@ class BuilderTrajectoryStore:
         self._add_cv = threading.Condition(lock)
         self._sample_cv = threading.Condition(lock)
 
-        self._progress = tqdm(desc="builder_producer", smoothing=0.1)
+        desc = f"builder_producer-{name}" if name else "builder_producer"
+        self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
     @classmethod
     def from_trajectories(
@@ -55,6 +58,17 @@ class BuilderTrajectoryStore:
             limit = self._max_size
         return len(self._trajectories) >= limit
 
+    def nbytes(self) -> int:
+        """Total host bytes of stored trajectory arrays — RAM diagnostics
+        (Learner._log_memory_diagnostics)."""
+        with self._sample_cv:
+            return sum(
+                leaf.nbytes
+                for item in self._trajectories.values()
+                for leaf in jax.tree.leaves(item)
+                if hasattr(leaf, "nbytes")
+            )
+
     def ready_to_sample(self) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
         return np.any((self._reuses < self._max_reuses) & self._valid)
@@ -64,6 +78,34 @@ class BuilderTrajectoryStore:
         return len(self._trajectories) < self._max_size or np.any(
             self._reuses >= self._max_reuses
         )
+
+    def set_max_reuses(self, max_reuses: int):
+        """Thread-safe update of the per-trajectory reuse cap. See
+        PlayerTrajectoryStore.set_max_reuses — mirrored here so a caller
+        reusing one persistent store across phases (main.py) can reapply
+        each phase's own config value without reaching into a private
+        attribute."""
+        with self._add_cv:
+            self._max_reuses = int(max_reuses)
+            self._add_cv.notify_all()
+            self._sample_cv.notify_all()
+
+    def clear(self):
+        """Resets the store to empty.
+
+        Used when reusing one persistent store across phase transitions
+        (main <-> exploiter) instead of letting each phase allocate its own
+        — a fresh-per-phase store meant an actor thread that outlived its
+        phase (see main.py's straggler check) could keep writing into a
+        store from a phase that had already "ended," silently leaking
+        trajectories from the wrong model into whatever ran next. Only
+        safe to call once every actor thread from the previous phase has
+        actually stopped.
+        """
+        with self._add_cv:
+            self._trajectories = {}
+            self._reuses = np.zeros(self._max_size, dtype=int)
+            self._valid = np.zeros(self._max_size, dtype=bool)
 
     def add_trajectory(
         self, trajectory: BuilderTransition, history: BuilderHistoryOutput
@@ -82,7 +124,7 @@ class BuilderTrajectoryStore:
         else:
             available_indices = np.where(self._reuses >= self._max_reuses)[0]
             if len(available_indices) == 0:
-                print(
+                tqdm.write(
                     "Trajectory store is full and no trajectories are available for replacement."
                 )
                 return
@@ -123,6 +165,7 @@ class PlayerTrajectoryStore:
         max_size: int = 1000,
         max_reuses: int = 5,
         need_tracking: bool = False,
+        name: str = "",
     ):
         self._trajectories: dict[int, Trajectory] = {}
         self._reuses = np.zeros(max_size, dtype=int)
@@ -141,7 +184,8 @@ class PlayerTrajectoryStore:
         self.total_adds = 0
         self.total_samples = 0
 
-        self._progress = tqdm(desc="player_producer", smoothing=0.1)
+        desc = f"player_producer-{name}" if name else "player_producer"
+        self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
         # Tracking
         self.need_tracking = need_tracking
@@ -157,6 +201,17 @@ class PlayerTrajectoryStore:
         if limit is None:
             limit = self._max_size
         return len(self._trajectories) >= limit
+
+    def nbytes(self) -> int:
+        """Total host bytes of stored trajectory arrays — RAM diagnostics
+        (Learner._log_memory_diagnostics)."""
+        with self._sample_cv:
+            return sum(
+                leaf.nbytes
+                for item in self._trajectories.values()
+                for leaf in jax.tree.leaves(item)
+                if hasattr(leaf, "nbytes")
+            )
 
     def is_min_fill_fraction_reached(self, fraction: float = 0.5) -> bool:
         """Returns True if the store is at least ``fraction`` full.
@@ -193,6 +248,19 @@ class PlayerTrajectoryStore:
             self._max_reuses = int(max_reuses)
             self._add_cv.notify_all()
             self._sample_cv.notify_all()
+
+    def clear(self):
+        """Resets the store to empty — see BuilderTrajectoryStore.clear for
+        why this exists (one persistent store reused across phase
+        transitions, rather than a fresh one per phase)."""
+        with self._add_cv:
+            self._trajectories = {}
+            self._reuses = np.zeros(self._max_size, dtype=int)
+            self._valid = np.zeros(self._max_size, dtype=bool)
+            self.total_adds = 0
+            self.total_samples = 0
+            if self.need_tracking:
+                self.reset_usage_counts()
 
     def reset_usage_counts(self):
         # Called from the learner thread; takes the store lock so it can't
@@ -251,7 +319,7 @@ class PlayerTrajectoryStore:
         else:
             available_indices = np.where(self._reuses >= self._max_reuses)[0]
             if len(available_indices) == 0:
-                print(
+                tqdm.write(
                     "Trajectory store is full and no trajectories are available for replacement."
                 )
                 return

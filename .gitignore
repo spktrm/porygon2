@@ -1,4 +1,5 @@
 env/
+runtime/
 
 **/dist
 **/node_modules
@@ -39,9 +40,9 @@ replays/**/*.ckpt
 # viz ignores
 viz/*.json
 
-.claude/
 
 attn_weights/
 viz/
 
 **/.DS_Store
+docs/

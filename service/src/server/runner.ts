@@ -182,6 +182,15 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     prevOppFaintedCount: number;
 
     firstRequest: AnyObject | undefined;
+    // Training self-play only: the other TrainablePlayerAI in this battle,
+    // wired by createBattle after both players exist. Deploy-time players
+    // have no opponent object, so everything reading this must tolerate
+    // undefined (the opponent's private info simply does not exist there).
+    opponent: TrainablePlayerAI | undefined;
+    // This player's private team sheet as of its FIRST request, encoded
+    // lazily on first use and frozen — the opponent's state ships it as
+    // opp_private_team (privileged critic input).
+    firstPrivateTeam: Int16Array | undefined;
 
     constructor(
         userName: string,
@@ -213,6 +222,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.finishedEarly = false;
         this.rqid = -1;
         this.firstRequest = undefined;
+        this.opponent = undefined;
+        this.firstPrivateTeam = undefined;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -273,6 +284,31 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     createGameState(includeHistory: boolean = true): EnvironmentState {
         const stateHandler = new StateHandler(this);
         return stateHandler.build(includeHistory);
+    }
+
+    ensureFirstPrivateTeam(): Int16Array | undefined {
+        // Lazily encode this player's team sheet from its FROZEN first
+        // request (captured in getRequest at the actual first |request|
+        // line, independent of when anyone asks), so a late first call
+        // still yields match-start info — never the live battle state.
+        if (this.firstPrivateTeam === undefined) {
+            if (!this.getRequest() || this.firstRequest === undefined) {
+                return undefined;
+            }
+            try {
+                const handler = new StateHandler(this);
+                this.firstPrivateTeam = handler.getPrivateTeam(
+                    this.getPlayerIndex() as number,
+                    this.firstRequest,
+                );
+            } catch {
+                // Battle objects not fully ingested yet (first protocol
+                // chunks still streaming) — stay unset and retry on the
+                // opponent's next state build.
+                return undefined;
+            }
+        }
+        return this.firstPrivateTeam;
     }
 
     getRequest(): AnyObject {
@@ -653,9 +689,24 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.sendFinalState();
     }
 
+    // One-shot battle-stream teardown shared by BOTH players of a game,
+    // attached by createBattle — lets destroy() end the underlying
+    // BattleStream so the sim Battle (whose `log`/`inputLog`/Pokemon
+    // graph dwarfs the client-side views) is freed too. Without this, an
+    // early-finished game's BattleStream never sees an `end` and retains
+    // the full sim Battle for as long as either player object is
+    // reachable. MUST be once-only and swallow async errors:
+    // BattleStream._writeEnd unconditionally re-runs battle.destroy(),
+    // which throws on a second call (already-nulled internals), and
+    // writeEnd() is async so a plain try/catch around it catches
+    // nothing — the rejection killed workers as an unhandled 'error'
+    // (see the 2026-08-13 service crash).
+    endBattleStream: (() => void) | undefined;
+
     destroy() {
         this.privateBattle.destroy();
         this.publicBattle.destroy();
+        this.endBattleStream?.();
     }
 }
 
@@ -689,21 +740,17 @@ function hpDiff(battle: Battle): number {
     return p1Total - p2Total;
 }
 
-const MAX_REQUEST_COUNT = 32 * 3;
-
 export function createBattle(
     options: {
         p1Name: string;
         p2Name: string;
         p1team: string | null;
         p2team: string | null;
-        maxRequestCount?: number;
         smogonFormat: string;
     },
     debug: boolean = false,
 ) {
     const { p1Name, p2Name, p1team, p2team } = options;
-    const maxRequestCount = options.maxRequestCount ?? MAX_REQUEST_COUNT;
     const smogonFormat = options.smogonFormat.replace("_ou_all_formats", "ou");
 
     const streams = BattleStreams.getPlayerStreams(
@@ -731,6 +778,21 @@ export function createBattle(
 
     const p1 = new TrainablePlayerAI(p1spec.name, streams.p1, {}, debug);
     const p2 = new TrainablePlayerAI(p2spec.name, streams.p2, {}, debug);
+    p1.opponent = p2;
+    p2.opponent = p1;
+    // Shared once-guard: whichever player's cleanup runs first ends the
+    // stream (freeing the sim Battle); the second call is a no-op. The
+    // .catch swallows the async double-destroy TypeError class — by this
+    // point the battle is torn down either way, so there is nothing
+    // actionable in the rejection.
+    let battleStreamEnded = false;
+    const endBattleStream = () => {
+        if (battleStreamEnded) return;
+        battleStreamEnded = true;
+        streams.omniscient.writeEnd().catch(() => {});
+    };
+    p1.endBattleStream = endBattleStream;
+    p2.endBattleStream = endBattleStream;
 
     p1.start();
     p2.start();
@@ -781,16 +843,6 @@ export function createBattle(
                         }
                     }
                 }
-            }
-
-            // Check request count fallback
-            if (
-                p1.requestCount >= maxRequestCount ||
-                p2.requestCount >= maxRequestCount
-            ) {
-                p1.finishEarly();
-                p2.finishEarly();
-                break;
             }
         }
         spectator.destroy();

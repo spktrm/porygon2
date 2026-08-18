@@ -1,6 +1,50 @@
+import heapq
 import math
+import threading
 from collections.abc import Sequence
 from typing import TypeVar
+
+_tqdm_position_lock = threading.Lock()
+_tqdm_free_positions: list[int] = []
+_tqdm_positions_issued = 0
+
+
+def next_tqdm_position() -> int:
+    """Assigns each tqdm progress bar a unique, stable terminal row (via
+    tqdm's position= kwarg / ANSI cursor movement) instead of letting
+    concurrent bars fight over "the current line" with bare \\r redraws —
+    with up to 4 bars per population (player_producer/builder_producer/
+    consumer/batches) across 3 concurrently-training populations, that
+    fight is what corrupted terminal output into garbled interleaved
+    text. Call once per tqdm() construction, at bar-creation time, and
+    pair with close_tqdm_bar() at teardown: exploiter populations are
+    reset repeatedly, and without recycling rows each reset would place
+    its 4 new bars one screen-row lower, leaving the dead rows above
+    permanently occupied for the life of the process."""
+    global _tqdm_positions_issued
+    with _tqdm_position_lock:
+        if _tqdm_free_positions:
+            return heapq.heappop(_tqdm_free_positions)
+        position = _tqdm_positions_issued
+        _tqdm_positions_issued += 1
+        return position
+
+
+def close_tqdm_bar(bar) -> None:
+    """Closes a bar created with position=next_tqdm_position() and returns
+    its terminal row to the pool for the next bar. tqdm stores an
+    explicitly-passed position negated in .pos (its marker for "fixed
+    position"), so abs() recovers what next_tqdm_position() issued.
+    Safe to call more than once: close() sets .disable, which gates the
+    release here so the same row can't be pushed to the free pool twice
+    (a double release would hand one terminal row to two live bars)."""
+    if bar.disable:
+        return
+    position = abs(bar.pos)
+    bar.close()
+    with _tqdm_position_lock:
+        heapq.heappush(_tqdm_free_positions, position)
+
 
 import jax
 import jax.numpy as jnp
@@ -74,36 +118,59 @@ def expand_dims(x, axis: int):
     return jax.tree.map(lambda i: np.expand_dims(i, axis=axis), x)
 
 
+def _bucket_level(length: int, lo: int) -> int:
+    """Number of lo-doublings needed to reach at least `length` (>= 0),
+    uncapped by any hi — see geometric_bucket. Exposed separately so
+    callers with multiple correlated length signals (e.g. _stack_and_pad_
+    batch's player_transitions/history/packed_history, which all describe
+    the same underlying game length) can take one shared max level instead
+    of each independently picking its own — see geometric_bucket's
+    docstring for why that matters."""
+    if length <= lo:
+        return 0
+    return math.ceil(math.log2(length / lo))
+
+
+def _bucket_value(level: int, lo: int, hi: int) -> int:
+    return min(hi, lo * 2**level)
+
+
 def geometric_bucket(length: int, lo: int, hi: int) -> int:
     """Rounds length up to the next lo * 2^k, capped at hi.
 
     Geometric buckets bound the number of distinct clipped shapes (and thus
-    JIT recompilations) to log2(hi / lo) + 1, at the cost of at most 2x
-    padding waste per sample.
+    JIT recompilations) to log2(hi / lo) + 1 for a SINGLE length signal —
+    if a jitted function's batch depends on multiple independently-bucketed
+    fields, the actual number of distinct shape combinations XLA sees is
+    the PRODUCT across fields, not the sum. When those fields are
+    correlated (e.g. all describing the same trajectory's game length),
+    prefer computing one shared level via _bucket_level per field, taking
+    their max, and applying it uniformly via _bucket_value — see
+    rl/online/learner.py's batch assembly (now fixed-shape _stack_batch).
     """
-    if length <= lo:
-        return lo
-    return min(hi, lo * 2 ** math.ceil(math.log2(length / lo)))
+    return _bucket_value(_bucket_level(length, lo), lo, hi)
 
 
-def clip_history(
-    history: PlayerHistoryOutput, min_length: int = 64
-) -> PlayerHistoryOutput:
+def _history_level(history: PlayerHistoryOutput, min_length: int) -> int:
     history_length = np.max(
         history.field[..., FieldFeature.FIELD_FEATURE__VALID].sum(0),
         axis=0,
     ).item()
+    return _bucket_level(history_length, min_length)
 
-    rounded_length = geometric_bucket(
-        history_length, min_length, history.field.shape[0]
-    )
 
+def clip_history(
+    history: PlayerHistoryOutput, min_length: int = 64, level: int | None = None
+) -> PlayerHistoryOutput:
+    if level is None:
+        level = _history_level(history, min_length)
+    rounded_length = _bucket_value(level, min_length, history.field.shape[0])
     return jax.tree.map(lambda x: x[:rounded_length], history)
 
 
-def clip_packed_history(
-    packed_history: PlayerPackedHistoryOutput, min_length: int = 64
-) -> PlayerPackedHistoryOutput:
+def _packed_history_level(
+    packed_history: PlayerPackedHistoryOutput, min_length: int
+) -> int:
     history_length = np.max(
         (
             packed_history.revealed_cache[
@@ -113,12 +180,109 @@ def clip_packed_history(
         ).sum(0),
         axis=0,
     ).item()
+    return _bucket_level(history_length, min_length)
 
-    rounded_length = geometric_bucket(
-        history_length, min_length, packed_history.revealed_cache.shape[0]
+
+def clip_packed_history(
+    packed_history: PlayerPackedHistoryOutput,
+    min_length: int = 64,
+    level: int | None = None,
+) -> PlayerPackedHistoryOutput:
+    if level is None:
+        level = _packed_history_level(packed_history, min_length)
+    rounded_length = _bucket_value(
+        level, min_length, packed_history.revealed_cache.shape[0]
     )
-
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
+
+
+# All eight RELEVANT_ENTITY_IDX columns (the model's _RELEVANT_ENTITY_
+# FEATURES reads the first four; the service writes up to eight).
+_ALL_RELEVANT_IDX_COLUMNS = np.array(
+    [
+        FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{k}")
+        for k in range(8)
+    ]
+)
+
+
+def clip_history_windows_tail(
+    history: PlayerHistoryOutput,
+    packed_history: PlayerPackedHistoryOutput,
+    history_length: int,
+) -> tuple[PlayerHistoryOutput, PlayerPackedHistoryOutput]:
+    """Host-side fixed-length trailing windows: the last ``history_length``
+    field steps and the ``2 * history_length`` packed-cache rows they
+    reference, zero-padded to exactly those shapes. One fixed shape means
+    the learner never recompiles (chunked unrolls, 2026-08-16), unlike the
+    geometric clip_* functions above which round variable lengths UP.
+
+    The two axes CANNOT be cut independently: each field step names its
+    packed rows by absolute row index (RELEVANT_ENTITY_IDX*), so this
+    mirrors the service's own windowing (state.ts getHistory) exactly —
+    shrink the field window until its oldest step's first packed row
+    (IDX0; rows are appended per step, so per-step row blocks are
+    contiguous and ascending) fits the packed budget, slice the caches
+    from that row, and rebase the index columns to the new start."""
+    field = np.asarray(history.field)
+    valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
+    packed_valid = int(
+        np.asarray(
+            packed_history.revealed_cache[
+                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+            ]
+            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
+        ).sum()
+    )
+    max_packed_rows = 2 * history_length
+
+    keep_steps = min(valid_steps, history_length)
+    start_row = 0
+    while keep_steps > 0:
+        oldest_step = valid_steps - keep_steps
+        oldest_row = int(
+            field[oldest_step, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0]
+        )
+        if packed_valid - oldest_row <= max_packed_rows:
+            start_row = oldest_row
+            break
+        keep_steps -= 1
+
+    if keep_steps == 0 and valid_steps > 0:
+        # Degenerate guard, mirroring the service's max(1, ...): a single
+        # step referencing more than the whole packed budget cannot occur
+        # for real games, but never ship an empty window for a non-empty
+        # history.
+        keep_steps = 1
+        start_row = int(
+            field[valid_steps - 1, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0]
+        )
+
+    start_step = valid_steps - keep_steps
+    new_field = np.zeros((history_length, field.shape[1]), dtype=field.dtype)
+    new_field[:keep_steps] = field[start_step:valid_steps]
+    if start_row > 0 and keep_steps > 0:
+        # Rebase every index column of the kept rows; entries past a row's
+        # NUM_RELEVANT are padding the consumers mask out — clip keeps them
+        # in gather range regardless.
+        rebase_at = np.ix_(np.arange(keep_steps), _ALL_RELEVANT_IDX_COLUMNS)
+        new_field[rebase_at] = np.clip(
+            new_field[rebase_at] - start_row, 0, max_packed_rows - 1
+        )
+
+    packed_end = min(packed_valid, start_row + max_packed_rows)
+    keep_rows = max(0, packed_end - start_row)
+
+    def cut_packed(x) -> np.ndarray:
+        x = np.asarray(x)
+        out = np.zeros((max_packed_rows, *x.shape[1:]), dtype=x.dtype)
+        out[:keep_rows] = x[start_row:packed_end]
+        return out
+
+    return (
+        history.replace(field=new_field),
+        jax.tree.map(cut_packed, packed_history),
+    )
 
 
 def get_action_mask(state: EnvironmentState):
@@ -192,6 +356,17 @@ def process_state(
         .reshape(6, NUM_ENTITY_PRIVATE_FEATURES)
         .astype(np.int32)
     )
+    # Absent on deploy-time states, pre-feature exports (ex.bin, replay
+    # shards) and states built before the opponent's first request landed —
+    # all-unspecified rows, which the entity embedder masks out.
+    if state.opp_private_team:
+        opp_private_team = (
+            np.frombuffer(state.opp_private_team, dtype=np.int16)
+            .reshape(6, NUM_ENTITY_PRIVATE_FEATURES)
+            .astype(np.int32)
+        )
+    else:
+        opp_private_team = np.zeros((6, NUM_ENTITY_PRIVATE_FEATURES), dtype=np.int32)
     revealed_team = (
         np.frombuffer(state.revealed_team, dtype=np.int16)
         .reshape(6 * 2, NUM_ENTITY_REVEALED_FEATURES)
@@ -226,6 +401,7 @@ def process_state(
         done=is_done,
         win_reward=win_reward.astype(np.float32),
         private_team=private_team,
+        opp_private_team=opp_private_team,
         public_team=public_team,
         revealed_team=revealed_team,
         field=field,

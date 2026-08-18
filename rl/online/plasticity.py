@@ -83,11 +83,21 @@ class PlasticityController:
         overdue_trigger: int,
         recovery_winrate: float,
         cooldown_frames: int,
+        defer_to_exploiter: bool = False,
     ):
         self.enabled = enabled
         self.overdue_trigger = overdue_trigger
         self.recovery_winrate = recovery_winrate
         self.cooldown_frames = cooldown_frames
+        # docs/exploiter-phase-plan.md piece 7: when set, the overdue
+        # trigger firing suppresses auto shrink-and-perturb instead of
+        # firing one — the intended response is to spend a bounded
+        # exploiter-phase budget first (a separate, manually launched
+        # process; see rl/online/promote_exploiter.py). Purely a
+        # suppression switch: it does not launch, track, or auto-clear
+        # itself once a phase concludes — flip plasticity_defer_to_exploiter
+        # back to False so a real stall still perturbs eventually.
+        self.defer_to_exploiter = defer_to_exploiter
 
         self.consecutive_overdue = 0
         self.perturbation_count = 0
@@ -102,10 +112,22 @@ class PlasticityController:
         elif reason == "overdue" and not self.recovering:
             self.consecutive_overdue += 1
 
+    @property
+    def exploiter_phase_recommended(self) -> bool:
+        """True once the stagnation trigger has fired but perturbation is
+        being deliberately withheld pending a manual exploiter phase."""
+        return (
+            self.defer_to_exploiter
+            and not self.recovering
+            and self.consecutive_overdue >= self.overdue_trigger
+        )
+
     def should_perturb(self, current_frames: int) -> bool:
         if not self.enabled or self.recovering:
             return False
         if self.consecutive_overdue < self.overdue_trigger:
+            return False
+        if self.defer_to_exploiter:
             return False
         if (
             self.last_perturb_frame is not None
@@ -120,6 +142,18 @@ class PlasticityController:
         self.recovering = True
         self.recovery_ref_step = recovery_ref_step
         self.last_perturb_frame = current_frames
+
+    def acknowledge_exploiter_episode(self):
+        """Resets the overdue-stagnation clock after an automatic
+        exploiter-phase episode concludes (promoted, or the single attempt
+        failed to clear the promotion bar). Without this, main would
+        immediately re-request another phase on its very next
+        league-management tick — nothing else about consecutive_overdue
+        changes just because an episode happened. Deliberately
+        unconditional, even on a failed episode: a fresh window before the
+        next automatic attempt, mirroring how a real shrink-and-perturb
+        also resets this counter (on_perturbation)."""
+        self.consecutive_overdue = 0
 
     def check_recovery(self, winrate_vs_ref: float, current_frames: int):
         self.last_recovery_winrate = winrate_vs_ref
@@ -161,4 +195,7 @@ class PlasticityController:
             "plasticity_perturbation_count": self.perturbation_count,
             "plasticity_recovering": int(self.recovering),
             "plasticity_recovery_winrate": self.last_recovery_winrate,
+            "plasticity_exploiter_phase_recommended": int(
+                self.exploiter_phase_recommended
+            ),
         }

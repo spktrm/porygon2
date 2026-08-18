@@ -10,6 +10,13 @@ PolicyObjectiveT = Literal["spo", "ppo"]
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig(BaseTrainingConfig):
     num_steps = 5_000_000
+    # One pool size for every population (docs/three-population-league.md,
+    # block-sequential scheduling): all three populations spawn pools of
+    # this size, but the per-population run_gate (Learner._set_active)
+    # means only the block owner's actors actually play — so this is
+    # simply "the machine's actor budget", handed whole to whoever is
+    # training. Idle pools' threads stay alive but wait at the gate
+    # between games (no create/destroy churn, no inference contention).
     num_player_actors: int = 12
     num_builder_actors: int = 4
     # One eval thread per entry; each plays the service baseline at that
@@ -30,7 +37,38 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Half-life, in games, of the bias-corrected smoothed winrate/margin
     # series logged alongside the raw per-game values.
     eval_smoothing_halflife: int = 200
-    unroll_length: int = 128
+    # Loose per-game safety bound on the actor's env loop (rng keys are
+    # pre-split to this count), NOT a target length: the service's
+    # MAX_REQUEST_COUNT force-tie at 96 requests was removed alongside the
+    # chunked-unroll change (2026-08-16) — games now run to their natural
+    # outcome (Showdown's turn-limit/endless-battle clauses and the
+    # service's 40-turn HP-stall detector are the backstops), and chunking
+    # handles any length with fixed shapes. A game that somehow exceeds
+    # this bound ends with no done row; its trailing partial chunk is
+    # dropped (PlayerActor.unroll).
+    unroll_length: int = 1024
+    # Fixed-length chunked unrolls (2026-08-16): every stored trajectory is
+    # exactly player_chunk_length transitions; games longer than one chunk
+    # are split with a one-row overlap (each chunk's final row is
+    # bootstrap-only — trained as row 0 of the next chunk), so train_step
+    # sees ONE shape forever instead of a geometric bucket family (each
+    # bucket was a separate compiled variant with its own workspace; the
+    # first top-bucket batch ~20min into a session is what OOM'd
+    # 1786537634, the Aug-15 03:26 run, and the Aug-15 23:33 run alike).
+    # Targets bootstrap at the cut from the critic — with player_lambda
+    # 0.8 the direct reward horizon is ~5 steps, so a 64-step window
+    # changes targets only within a few steps of the boundary.
+    player_chunk_length: int = 64
+    # Fixed trailing history window stored per chunk (field-history rows;
+    # the packed caches store 2x this, matching process_state's
+    # max_packed_history = 2 * max_history ratio). Tokens before the
+    # chunk's own first request are burn-in context for the recurrent
+    # history scan — the scan starts from h0 over a trailing window, which
+    # is exactly the actor's own per-step computation, so training matches
+    # acting with no stored-carry staleness. Sized ~2.5x the typical
+    # tokens-per-request times chunk length; the
+    # player_chunk_history_underrun telemetry says when it is too small.
+    player_history_length: int = 256
 
     # Batch iteration params
     batch_size: int = 4
@@ -88,7 +126,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     save_interval_steps: int = 20_000
     cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
-    main_player_update_steps: int = 10
+    # How often (own steps) each population publishes fresh live params for
+    # its actors (update_live). Every interval mints a NEW params version,
+    # and versions stay referenced until their in-flight games end, so this
+    # directly sets the inference server's params-cache working set: at 10
+    # (~6s of main training), main alone kept 5-10 versions live at once;
+    # 50 (~30s) collapses that to ~2, letting inference_params_cache_size
+    # =12 cover the whole working set without LRU thrash. Staleness cost:
+    # actors act on params up to ~30s old — measured actor-KL is 0.005-
+    # 0.006 vs the 0.045 replay target, ~5x headroom, and the replay-KL
+    # controller cuts reuse if that ever stops being true.
+    main_player_update_steps: int = 50
     add_player_min_frames: int = int(2e5)
     # Backstop ("overdue") add interval, ~35k learner steps at the current
     # batch shape. The healthy path — "dominant" adds when main beats every
@@ -112,11 +160,172 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     league_cache_size: int = 16
     league_ucb_c: float = 1.0
 
+    # Three-population league (docs/three-population-league.md, updated
+    # 2026-08-13 to block-sequential scheduling): MainPlayer,
+    # MainExploiter, and LeagueExploiter are live populations sharing one
+    # process/GPU — never torn down/refounded. Scheduling is
+    # block-sequential, not fraction-interleaved: main trains until a
+    # routine league addition closes its window, then ONE exploiter
+    # population (alternating MainExploiter/LeagueExploiter) owns the GPU
+    # for a full attempt — to its own promotion or frame-budget timeout,
+    # AlphaStar's ready_to_checkpoint shape — before main's next window.
+    # There are deliberately no frame-split fractions: each population
+    # trains to its own terminal condition against a (mostly) frozen
+    # target, sequentialising AlphaStar's concurrent league on one GPU
+    # rather than simulating concurrency by interleaving (main does still
+    # train as filler on ticks where the active exploiter's smaller actor
+    # pool has no batch ready — see Learner._select_population).
+    # MainExploiter targets main's own lineage (and live main directly,
+    # once reliable — AlphaStar's actual rule); LeagueExploiter targets
+    # the whole historical population via linear_capped PFSP,
+    # unrestricted. False means only main exists, exactly as before.
+    auto_exploiter_enabled: bool = True
+
+    # Centralized batched actor inference (rl/online/inference.py): all
+    # training PlayerActors submit per-step forwards to one server thread
+    # that runs a single vmapped apply over whatever is queued — zero-wait
+    # adaptive batching (no min-batch, no max-wait timer; see the module
+    # docstring for why those knobs are deliberately absent). False
+    # restores the per-actor batch-1 Agent.step_player path exactly.
+    inference_server_enabled: bool = True
+    # Compile-shape/latency cap on one batched forward. Padded to powers
+    # of two, so traced batch sizes are log2(cap)+1 distinct values.
+    inference_max_batch: int = 16
+    # Device-resident params LRU in the server, keyed by params version —
+    # each entry is one device copy of the actor player params (~81MB at
+    # 20.3M f32), so this is a VRAM knob. It REPLACES the old per-actor
+    # copies (every actor device_put its own copy per game — up to ~2x num
+    # actors live at once), and it must cover the WORKING SET of versions
+    # simultaneously referenced by in-flight games: ~2 per live population
+    # (paced by main_player_update_steps above) + ~5-7 concurrent
+    # historical PFSP opponents. 12 covers that with a slot or two spare;
+    # sizing BELOW the working set causes LRU thrash — a serial ~81MB
+    # host->device transfer per miss in the server thread, plus alloc/free
+    # churn in XLA's pool (fragmentation, the OOM class that killed
+    # session 1786537634).
+    inference_params_cache_size: int = 12
+
+    # Promotion bar, shared by both exploiter types: win-rate vs. EVERY
+    # opponent currently pinned must clear this, not just the average — a
+    # strategy that crushes one pinned target and loses to another hasn't
+    # generalized. Matches the existing "dominant" league-addition bar
+    # (win-rate > 0.7) exactly — raised from an initial 0.55 (deliberately
+    # looser on the theory that a specialist beating a narrow target set
+    # didn't need "beats everything" stringency). 0.55 turned out to be a
+    # weak statistical bar at the exploiter_promote_min_games floor:
+    # standard error at n=20 games, p~0.5 is ~0.11, so 0.55 is under half
+    # a standard error above a coin flip — barely distinguishable from
+    # noise right at the reliability floor. 0.7 (~1.8 SE above a coin flip
+    # at n=20) is a real signal.
+    exploiter_promote_winrate: float = 0.7
+    # Same reliability floor as exploit_ctrl_min_games_per_opponent /
+    # bandit_min_games_per_opponent, applied here for the identical reason:
+    # a handful of lucky games isn't a real win-rate.
+    exploiter_promote_min_games: float = 20.0
+    # Minimum dwell before a population's promotion bar is even consulted.
+    # AlphaStar's MainExploiter.ready_to_checkpoint has an explicit
+    # minimum-dwell floor (min 2e9 steps) before either a promotion or a
+    # timeout can fire; the pre-redesign code had none at all (a promotion
+    # could fire on the very first check after creation). Shared by both
+    # exploiter types.
+    exploiter_min_dwell_frames: int = int(1e6)
+
+    # Per-population frame budget before a non-promoted attempt times out
+    # and resets (main_exploiter_reset_to_main / exploiter_hard_reset_prob
+    # below). Sized the same as add_player_max_frames: roughly one main
+    # "overdue window" worth of dedicated search.
+    main_exploiter_frame_budget: int = int(9e6)
+    league_exploiter_frame_budget: int = int(9e6)
+
+    # No pinned-opponent-set width knob: neither exploiter population pins
+    # to a fixed target set at all — AlphaStar's own exploiters PFSP-sample
+    # fresh from their candidate pool every single match (whole population
+    # for LeagueExploiter, origin=="main" lineage for MainExploiter's
+    # fallback branch below), never freezing a subset for the population's
+    # whole lifetime. A fixed k (the pre-redesign single-exploiter role's
+    # mechanism) would just be re-inventing that narrower, less faithful
+    # design under a new name — see rl/online/player_actor.py's
+    # get_match().
+
+    # MainExploiter's live-target branch (AlphaStar's actual MainExploiter
+    # rule, not a simplification of it): if main_exploiter's own win-rate
+    # against LIVE main exceeds this floor, play live main directly instead
+    # of falling back to the lineage-restricted historical draw above.
+    # Reliability-gated by main_exploiter_live_target_min_games — same
+    # pattern as exploit_ctrl_min_games_per_opponent/bandit_min_games_per_
+    # opponent: until enough games are recorded, the signal is
+    # untrustworthy, so the fallback (never the optimistic) branch is
+    # taken. main_exploiter's every game (either branch) records into
+    # League's shared payoff table, so this signal keeps updating with no
+    # new statistics code.
+    main_exploiter_live_target_winrate_floor: float = 0.1
+    main_exploiter_live_target_min_games: float = 20.0
+
+    # How often (learner steps) a running exploiter checks its own
+    # promotion bar. A fraction of save_interval_steps so a clear win
+    # doesn't sit undetected for long; the check itself is cheap (a
+    # handful of dict lookups over a tiny league).
+    auto_exploiter_check_interval: int = 5_000
+
+    # On a terminal outcome (promoted or timed out): main_exploiter ALWAYS
+    # resets to a fresh fork of main's then-current live params — this is
+    # AlphaStar's actual rule for this role, not a tunable roll, hence a
+    # bool rather than a probability.
+    main_exploiter_reset_to_main: bool = True
+    # league_exploiter instead rolls this on a terminal outcome: per-attempt
+    # probability of shrink-and-perturbing toward random init instead of
+    # continuing to train its current (already-trained) weights un-reset.
+    # Adapted from AlphaStar's LeagueExploiter.checkpoint(), which has a
+    # flat 25% chance of resetting to its ORIGINAL init — this project
+    # deliberately reuses shrink_and_perturb_player_state (the same
+    # mechanism plasticity resets use) rather than a literal fresh random
+    # init: the shrink keeps the perturbed policy anchored to
+    # pre-perturbation behaviour via target_params/KL, instead of
+    # discarding everything learned so far the way a literal reinit of an
+    # already-trained network would.
+    exploiter_hard_reset_prob: float = 0.25
+
     # Plasticity (shrink-and-perturb) params. Triggered when the main player
     # keeps failing to dominate its own league history: after
     # `plasticity_overdue_trigger` consecutive overdue-only league additions,
-    # player params are interpolated toward a fresh init draw.
+    # player params are interpolated toward a fresh init draw. Unrelated to
+    # the three-population redesign above: this is main's own weight
+    # perturbation mechanism, orthogonal to whether exploiter populations
+    # exist.
     plasticity_enabled: bool = True
+    # Historically paired with the old phase-based exploiter mechanism
+    # (suppress main's own perturbation while a main-pausing exploiter
+    # phase ran); kept for the manual, non-automated workflow
+    # (rl/online/promote_exploiter.py) where that still applies. Under the
+    # three-population redesign, exploiter populations never pause main, so
+    # this has no effect when auto_exploiter_enabled is set.
+    plasticity_defer_to_exploiter: bool = False
+
+    # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
+    # through main's periodic wandb logs: process RSS + OS-vs-python thread
+    # census + exact replay-buffer/league-cache byte counts. Added after
+    # session 1786537634's RSS climbed 5.9->17GB (threads 478->775) with
+    # no way to attribute it from wandb alone. 0 disables. Cost per tick
+    # is one /proc read + a walk over stored trajectories' array headers —
+    # negligible at this interval.
+    memory_diag_interval: int = 5_000
+
+    # OOM guard (learner.py: Learner._check_oom_guard). A self-monitoring
+    # safety valve, not a leak fix — added after 1361 crashed, though that
+    # specific crash turned out to be an unrelated websocket failure to the
+    # game server, not RAM exhaustion. Checks available system RAM every
+    # oom_guard_check_interval steps; if it drops below
+    # oom_guard_min_available_fraction, saves a checkpoint and stops the
+    # whole process (main.py's orchestration loop treats this like a Ctrl-C
+    # interrupt) rather than letting the kernel's OOM killer SIGKILL this
+    # process at an arbitrary, possibly mid-write, moment. Deliberately
+    # does not try to continue in the same process after triggering —
+    # freeing Python objects doesn't guarantee the OS reclaims that memory,
+    # so only a fresh process actually gets back to a clean memory state.
+    oom_guard_enabled: bool = True
+    oom_guard_min_available_fraction: float = 0.15
+    oom_guard_check_interval: int = 1_000
+
     # Consecutive overdue-only adds before a perturbation. At 1 (the old
     # value) a single stalled add window (~6k steps of not dominating the
     # league) fired a 50% reset: the Aug 2026 run perturbed during a
@@ -157,11 +366,19 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # grid's accidental sharpness cap, and at 0.01 the magnet lost the
     # arm-wrestle — chocolate-silence-1307 collapsed to normalised entropy
     # 0.27 (modality 0.17) by 190k while magnet KL climbed to 1.44, and
-    # eval strength regressed from its 56k peak. Judge by normalised
-    # entropy holding in the ~0.5-0.65 band through 100k; if a static coef
-    # can't hold it, the proper fix is a PI controller on the coef with a
-    # target-entropy schedule (same pattern as the replay-KL controller).
-    player_magnet_kl_coef: float = 0.05
+    # eval strength regressed from its 56k peak. 0.1 (up from 0.05,
+    # 2026-08-17): the entropy-regularisation timeline showed the longest
+    # stable lineages (Oct-Nov 2025, 400-580k steps, 2.0-2.9 nats whole
+    # lifetime) ran ~2.8-5.4x today's effective entropy pressure (mostly a
+    # 4x per-head structural factor), while the current 0.7-0.9 nat
+    # operating point is the lowest outside the collapse regimes and the
+    # switch-collapse pattern reads as under-regularisation. Judge by
+    # normalised entropy holding in the ~0.5-0.65 band through 100k
+    # (magnet KL level flat, not climbing); revert to 0.05 on overshoot.
+    # If a static coef can't hold the band, the proper fix is a PI
+    # controller on the coef with a target-entropy schedule (same pattern
+    # as the replay-KL controller).
+    player_magnet_kl_coef: float = 0.1
 
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
@@ -198,83 +415,51 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_adv_std_floor: float = 0.05
     builder_ema_update_rate: float = 1e-3
 
-    # Advantage estimation params
+    # Advantage estimation params — AlphaStar's v-trace + UPGO recipe
+    # (2026-08-14, replacing the LambdaGapController; see targets.py):
+    # the value head trains on TD(lambda)-style v-trace targets at
+    # player_lambda, the policy gradient takes v-trace advantages with NO
+    # lambda of its own (AlphaStar's vtrace_advantages is
+    # unparameterised — clipped IS weights only, i.e. lambda=1), and a
+    # separate UPGO term (below) carries the per-step outcome-conditional
+    # credit the old runtime-tuned advantage lambda was trying to
+    # approximate globally.
     player_gamma: float = 1.0
     player_alpha: float = 1.0
-    # Value-target (td) lambda — pinned; the critic's objective and the
-    # MC-anchor calibration signal never drift.
-    player_lambda: float = 0.99
-    # Advantage (gae) lambda — the actor's bias/variance knob; the
-    # lambda controller (rl/online/controllers.py) drives it at runtime
-    # when enabled, this is the starting/static value otherwise.
-    player_adv_lambda: float = 0.99
+    # Value-target lambda. AlphaStar's own choice: TD(lambda=0.8), a
+    # short (~5-step) bootstrap horizon — they could afford heavy
+    # bootstrapping because supervised init gave them a sane critic from
+    # step one. This project starts from scratch AND the 1328 five-arm
+    # sweep pointed the same direction (monotone lower-lambda-better,
+    # confounded but directional), so 0.8 is adopted as-is. The aux
+    # spectrum's lambda=1.0 MC-anchor row (player_aux_lambdas) keeps the
+    # bootstrap-bias readout (player_bootstrap_gap) alive regardless.
+    player_lambda: float = 0.8
 
-    # Lambda PI controller: holds the measured bootstrap bias
-    # (player_bootstrap_gap: main head vs lambda=1.0 MC-anchor value gap)
-    # at lambda_ctrl_gap_target by adjusting the advantage lambda in
-    # log(1-lambda) space. Gap under target -> lambda anneals down;
-    # over -> backs off toward outcomes. During plasticity recovery
-    # lambda is forced to lambda_ctrl_max (bootstrap untrustworthy) and
-    # re-anneals afterwards. gap_target is on the +-1 value scale —
-    # calibrate from the first run's player_bootstrap_gap telemetry.
-    lambda_ctrl_enabled: bool = True
-    lambda_ctrl_gap_target: float = 0.05
-    # Gains sized from the 1329 trace: a sustained full-scale error moves
-    # log(1-lambda) ~0.05/tick -> the 0.99 -> 0.95 traverse (~+2.0 in
-    # log space) takes ~30-40k steps. The original ki=0.01 needed
-    # 100-200k — most of a run spent mid-anneal.
-    lambda_ctrl_kp: float = 0.2
-    lambda_ctrl_ki: float = 0.05
-    lambda_ctrl_interval: int = 500
-    lambda_ctrl_min: float = 0.5
-    lambda_ctrl_max: float = 1.0
-    lambda_ctrl_sensor_ema: float = 0.01
+    # UPGO (AlphaStar rl.py upgo_returns): policy-gradient-only return
+    # that follows the actual trajectory while the continuation performs
+    # at least as well as the critic expected (lambda_t = 1 where
+    # Q_hat >= V, else cut to the critic's value) — full Monte Carlo
+    # credit along successful lines, truncation at the first
+    # worse-than-expected step. Coefficient mirrors AlphaStar's equal
+    # weighting of the v-trace and UPGO PG terms. Passed to train_step
+    # as a RUNTIME scalar, zeroed while plasticity recovery is active
+    # (an optimistically-wrong post-perturbation critic would cut in the
+    # wrong places — the same regime the old lambda controller handled
+    # by forcing lambda to its ceiling).
+    player_upgo_coef: float = 1.0
 
-    # Master switch for the adaptivity controller (the magnet KL coef
-    # loop; name kept for checkpoint/config continuity).
-    entropy_ctrl_enabled: bool = True
-    # Adaptivity controller (rl/online/controllers.py) is floor-only now.
-    # It used to also hold player_commit_cov's EMA at adapt_ctrl_
-    # commit_target via a PI loop — removed after repeated bugs (an
-    # unreachable target pinning pressure at the ceiling for ~50k steps
-    # in 1338/1339, then a divide-by-near-zero once the target was
-    # recalibrated toward 0.0 in 1341, then a second bug in how
-    # exploit_ctrl scaled that same target). None of those bugs ever
-    # touched the floors below, which is why they're what's left. See
-    # AdaptivityController's class docstring for the full removal
-    # history. Pressure now only ever rises (bump() below, or a floor
-    # breach) — there is no automatic decay back toward baseline.
-    adapt_ctrl_floor_gain: float = 2.0
-    # Event bumps, added to log(coef) directly (0.7 ~ a 2x step,
-    # 1.4 ~ 4x) — the only source of a deliberate pressure increase now
-    # that the PI action is gone.
-    adapt_ctrl_event_bump: float = 0.7
-    adapt_ctrl_perturb_bump: float = 1.4
-    # Hard floors — backstops, not the mechanism: the commitment
-    # covariance is blind to actions the policy never takes, so a
-    # modality going extinct (1330: switching to 0.002) must trip
-    # something the loop cannot miss. This is now the only way pressure
-    # rises besides bump() — there is no PI action left for a breach to
-    # override.
-    entropy_ctrl_floor: float = 0.40
-    # Hard floor for the MACRO MODALITY entropy axis, which sits
-    # structurally lower than total action entropy. 1328 gained strength
-    # through a stretch at 0.18-0.26, so holding 0.40 there (as the
-    # shared floor did in 1331) mandates more switching than the game
-    # rewards; 0.20 still trips hard on a real collapse (1330 died at
-    # 0.08). The learner rescales this axis into action-entropy units.
-    entropy_ctrl_modality_floor: float = 0.20
-    # Range the controller may drive the magnet coef over, as multiples
-    # of the player_magnet_kl_coef baseline. Nothing currently pushes the
-    # coefficient below baseline (bump()/floor breaches only ever add) —
-    # min_scale is a defensive lower clamp, not an exercised anneal path,
-    # now that the PI action that used to decay pressure below baseline
-    # is gone. Kept well above zero regardless: c -> 0 against a fixed
-    # magnet loses the stable fixed point.
-    entropy_ctrl_max_scale: float = 10.0
-    entropy_ctrl_min_scale: float = 0.2
+    # No adaptivity/entropy controller fields anymore: the magnet KL
+    # coefficient is exactly player_magnet_kl_coef, always. The
+    # AdaptivityController was removed entirely 2026-08-13 (hard to tune,
+    # harder to predict — see rl/online/controllers.py's module docstring
+    # for the bug history). Its entropy sensors are still logged from
+    # train_step (player_action_normalized_entropy,
+    # player_normalized_modality_entropy); modality collapse (1330 died
+    # at 0.08 on that axis) is now watched on the dashboard, not
+    # auto-corrected.
 
-    # BT-rating telemetry (rl/online/bandit.py): every bandit_window_steps
+    # BT-rating telemetry (rl/online/ratings.py): every bandit_window_steps
     # the learner fits a Bradley-Terry rating for main against the frozen
     # league snapshots from the payoff table the league already keeps,
     # and logs it plus the exploitability auditors (worst-matchup drift,
@@ -285,48 +470,37 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # rating exists and rating_logs reports bandit_rating_valid=0.
     # These fields used to also configure LambdaBandit, a discounted-UCB
     # bandit that retuned the advantage lambda from this same rating —
-    # retired in favour of the lambda gap-controller and the
-    # exploitability controller (both react every manage_league_interval
-    # call; the rating itself needs hundreds of games per point, so it
-    # stays an auditor, never a control signal — see bandit.py).
+    # retired in favour of the lambda gap-controller (itself since
+    # removed, 2026-08-14, for UPGO + fixed player_lambda) and the
+    # exploitability controller (the rating itself needs hundreds of
+    # games per point, so it stays an auditor, never a control signal —
+    # see ratings.py). The bandit_ field and metric prefixes are kept for
+    # wandb continuity across lineages.
     bandit_window_steps: int = 20_000
     bandit_min_games_per_opponent: float = 20.0
     bandit_min_rated_opponents: int = 2
 
-    # Exploitability controller (rl/online/controllers.py): PI on
-    # 1 - (main's win-rate vs its worst historical league snapshot),
-    # measured every manage_league_interval call from the same win-rate
-    # table _should_add_new_player already reads (not the slower
-    # BT-rating auditors above) — no bandit-style exploration tax, so it
-    # reacts as fast as the underlying win-rate signal allows. Output is
-    # a caution-scale multiplier (baseline 1.0) applied to the lambda and
-    # replay controllers' targets — lambda_ctrl_gap_target and the replay
-    # KL target both shrink as exploitability rises, pushing toward more
-    # caution; it does not drive a runtime scalar of its own. Used to
-    # also grow the adaptivity controller's commit_target, but that
-    # target no longer exists (AdaptivityController is floor-only now —
-    # see its class docstring). exploit_ctrl_target=0.3 mirrors the
-    # existing "dominant" league-addition threshold (win-rate > 0.7).
-    exploit_ctrl_enabled: bool = True
+    # No ExploitabilityController anymore (removed 2026-08-14, the last
+    # adaptive hyperparameter loop — see rl/online/controllers.py's
+    # module docstring). The replay KL target is fixed at
+    # player_replay_kl_target; the worst-matchup win-rate it sensed still
+    # exists as _should_add_new_player's "dominant" gate and the
+    # league_main_winrate_min auditor, it just doesn't actuate anything.
+    #
+    # Both fields below now serve main's VERIFICATION branch
+    # (player_actor._concerning_opponents) exclusively; names kept from
+    # the removed controller, which shared them.
+    #
+    # A historical opponent counts as a real, current weak spot when
+    # main's win-rate against it is below this. 0.3 mirrors the
+    # "dominant" league-addition threshold (win-rate > 0.7).
     exploit_ctrl_target: float = 0.3
-    exploit_ctrl_kp: float = 0.2
-    exploit_ctrl_ki: float = 0.05
-    exploit_ctrl_interval: int = 1
-    exploit_ctrl_sensor_ema: float = 0.3
-    exploit_ctrl_min_scale: float = 0.5
-    exploit_ctrl_max_scale: float = 2.0
-    # Historical snapshots required before trusting the win-rate-min
-    # reading — a lone freshly-added snapshot's win-rate is still
-    # Bayesian-prior-dominated (League._win_rate_by_steps).
-    exploit_ctrl_min_historical: int = 2
-    # A snapshot must ALSO have this many effective games against main
-    # before counting toward win_rates.min() — same reliability bar as
-    # bandit_min_games_per_opponent, applied here for a different reason:
-    # a freshly-added (or lightly-played) snapshot reads near 0.5 by
-    # construction (main vs. a near-identical recent self), which looks
-    # exactly like a real exploitability hole to this controller (1338:
-    # two snapshots 5.5k/26.9k steps old, win-rate never left 0.48-0.54,
-    # pinned the caution scale at its ceiling from a false positive).
+    # ...AND it has this many effective games against main, so the
+    # reading is trustworthy — a freshly-added (or lightly-played)
+    # snapshot reads near 0.5 by construction (main vs. a near-identical
+    # recent self), which looks exactly like a real hole (1338: two
+    # snapshots 5.5k/26.9k steps old, win-rate never left 0.48-0.54 — a
+    # false positive from exactly this).
     exploit_ctrl_min_games_per_opponent: float = 20.0
 
     builder_gamma: float = 1.0
@@ -360,13 +534,114 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # anchor, low lambda leans on the critic. A gamma spectrum would
     # degenerate here (terminal-only reward: gamma^45 kills the signal).
     # Spectrum chosen ~geometric in effective horizon 1/(1-lambda):
-    # 1.25, 2, 5, 10, 20, inf turns against a ~45-turn mean game (the
-    # 20->inf gap is covered by the main head's lambda=0.99 ~ 100).
-    # Fixed, independent of the advantage lambda, which the lambda
-    # controller (or a bandit, historically) varies at runtime. Length
-    # must match the model config's aux_v_head.num_heads.
-    player_aux_lambdas: tuple = (0.2, 0.5, 0.8, 0.9, 0.95, 1.0)
+    # 2, 10, 20, inf turns against a ~45-turn mean game, bracketing the
+    # main head's own lambda=0.8 ~ 5-turn horizon. Two rows dropped as
+    # redundant-with-another-head, same logic both times:
+    # - lambda=0.2 (2026-08-14): near-pure next-step self-distillation
+    #   with terminal-only reward; its R2 series correlated 0.984 with
+    #   lambda=0.5's over 223k steps (run 1786583261-main).
+    # - lambda=0.8 (2026-08-14, after player_lambda moved 0.99->0.8):
+    #   the main head's target became exactly lambda=0.8 v-trace at the
+    #   same gamma — a copy, not a horizon.
+    # The lambda=1.0 row is the MC anchor player_bootstrap_gap reads —
+    # the safety instrument for the bootstrap-heavy lambda=0.8 value
+    # target — and must stay. Length must match the model config's
+    # aux_v_head.num_heads.
+    player_aux_lambdas: tuple = (0.5, 0.9, 0.95, 1.0)
     player_aux_value_coef: float = 0.5
+
+    # Counterfactual value ladder (2026-08-16): shared coefficient for the
+    # own-info (no opponent sheet) and public-info (history-only) value
+    # heads' CE losses. Critic-only representation/diagnostic heads like
+    # the aux spectrum — the policy reads the main (privileged) head's
+    # advantages exclusively.
+    player_value_ladder_coef: float = 0.25
+
+    # Observer all-action Q critic (stage 1, docs/q-critic-plan.md):
+    # Retrace(lambda)-trained categorical Q over the flat action grid,
+    # read off the same action embeddings as the policy heads. ZERO policy
+    # influence at this stage — it exists for diagnostics (player_q_r2,
+    # player_q_ev_gap, player_q_switch_move_gap: the direct "what is
+    # switching worth" readout) and representation shaping. Enabling adds
+    # q_head params to the tree, so a strict checkpoint-mode resume across
+    # the flip fails — resume with LOAD_STATE_MODE=params (merge) or start
+    # fresh. Singles only (asserted in get_player_model_config).
+    player_q_enabled: bool = True
+    # CE weight — same modest scale as the aux value spectrum, and for the
+    # same reason (heavy aux gradient globally clips everything).
+    player_q_coef: float = 0.5
+    # Retrace trace parameter; matches player_lambda's 0.8 default.
+    player_q_lambda: float = 0.8
+    # Stage 2 (docs/q-critic-plan.md §5): forward KL from the Boltzmann
+    # distribution over the EMA target's deployable-rung action values
+    # to the learner policy — the anti-ratchet policy-improvement channel
+    # (its pull toward an action p_q rates well does not scale with pi's
+    # current mass there, unlike the reverse-KL magnet, whose restoring
+    # force vanishes exactly as a modality starves). Enabled 2026-08-18 as
+    # a deliberate early unlock of backlog item 8: the voluntary-switch
+    # crossover re-formed on the 1786951032 lineage (realised post-switch
+    # returns positive while the critic gap stayed negative), and at
+    # tau=0.1 the Boltzmann target assigns the collapsed switch modality
+    # ~10x the policy's mass even under today's switch-averse critic, so
+    # the term's first-order push is pro-switch data generation. MAIN
+    # POPULATION ONLY (host-gated in Learner._train_step): the exploiter
+    # blocks stay clean as a within-run contrast. Abort signature per the
+    # plan: entropy or winrate cliff within ~2k steps of enabling — zero
+    # the coef, keep the observer. Judge by player_q_improve_* logs plus
+    # switch_ratio / player_q_switch_move_gap / modality entropy.
+    player_q_improve_enabled: bool = True
+    # Final coefficient (~0.01 x pg scale per the plan) reached after a
+    # host-side linear ramp from the step the term first activates;
+    # RUNTIME scalar into train_step, so ramping never recompiles.
+    player_q_improve_coef: float = 0.01
+    player_q_improve_ramp_steps: int = 2000
+    # Boltzmann temperature over the +/-1 categorical value support.
+    # 0.1 = sharp but not argmax; tuned against p_q entropy / switch-mass
+    # diagnostics on the live checkpoint before launch.
+    player_q_improve_tau: float = 0.1
+    # Agent57/Ape-X-style exploration ladder (replaces stage 4's
+    # cross-population intake, removed 2026-08-15: it conflated another
+    # agent's policy evidence with main's own action values, and its
+    # frozen-between-blocks stock went stale — foreign-row Q R² 0.27 vs
+    # 0.84 own). Every player actor independently makes each game it
+    # plays with its own live params an explore game with this
+    # probability, drawing a fresh temperature log-uniform from
+    # explore_temp_range (the continuous analogue of R2D2's
+    # geometrically-spaced epsilon ladder, assigned per game like
+    # Agent57's per-episode picks rather than per dedicated actor slot;
+    # base games sample at 1.0). Per-game draws make the explore share
+    # of trajectories equal this probability BY CONSTRUCTION — the prior
+    # dedicated-slot design's 2/12 actors bypassed the InferenceServer
+    # full-time (it has no per-request head_params, so tempered games
+    # take the direct batch-1 path) and out-produced the server-queued
+    # base pairs ~4x, inflating the intended ~17% row share to ~44% and
+    # halving the PG/value effective batch. Sides draw INDEPENDENTLY:
+    # tempered play is graded against the true temp-1 policy it will
+    # actually face, and the untempered side of a mixed game pushes
+    # ordinary PG/value rows played under opponent-switch pressure —
+    # coverage the old explorer-vs-explorer pairing kept locked inside
+    # Q-only rows. Frozen-opponent sides (nothing trainable, and league
+    # payoff reads would be polluted) and eval actors never temper;
+    # tempered PFSP games are also skipped from payoff updates. Because
+    # the temp is applied to the logits BEFORE the policy metrics are
+    # computed, the recorded behaviour policy IS the tempered
+    # distribution, so v-trace/Retrace ISRs are automatically correct.
+    # Explore trajectories are tagged at the actor: own-masked out of
+    # every PG/value/builder loss at the existing choke points, consumed
+    # ONLY by the observer Q critic. 0 disables. No parameter change, so
+    # the flip is checkpoint-safe.
+    # Range log-symmetric around 1 (median temp = 1.0). Not wider: 0.5
+    # already matches eval's sharpened temp, and both ends stay within
+    # 2x of the base policy so Retrace's ISR truncation keeps most of
+    # every trace.
+    explore_game_prob: float = 1.0 / 6.0
+    explore_temp_range: tuple[float, float] = (0.5, 2.0)
+    # Exploiter blocks run for hours while main's step (the checkpoint
+    # pacing basis) barely moves; the active exploiter's own periodic save
+    # paces on ITS step counter at this tighter interval so a mid-block
+    # kill (the 2026-08-15 09:38 machine shutdown lost a block segment)
+    # costs minutes, not the whole block since its boundary save.
+    exploiter_save_interval_steps: int = 5000
 
     ## Builder
     builder_value_loss_coef: float = 0.5
