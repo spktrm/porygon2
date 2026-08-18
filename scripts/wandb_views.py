@@ -267,6 +267,57 @@ def rl_sections():
             ],
         ),
         ws.Section(
+            # Stage 2 (docs/q-critic-plan.md, enabled 2026-08-18 on the
+            # 1786951032 lineage — main population only, exploiters stay
+            # observer-only as the within-run contrast).
+            name="1.6 · Q improvement term (stage 2)",
+            is_open=True,
+            panels=[
+                lp(
+                    # THE worth-it readout: p_q's switch mass vs pi's own,
+                    # on states offering both a switch and a non-switch
+                    # action. Converging = the term is winning its
+                    # argument with the policy; pi staying flat while pq
+                    # sits high = the pull isn't reaching the policy yet
+                    # (check the coef ramp below).
+                    "p_q vs pi switch mass (both-modality states)",
+                    [
+                        "player_q_improve_pq_switch_mass",
+                        "player_q_improve_pi_switch_mass",
+                    ],
+                ),
+                lp(
+                    # Host-ramped runtime scalar (0 -> player_q_improve_coef
+                    # over player_q_improve_ramp_steps from activation).
+                    # Zero for exploiter populations by construction.
+                    "Improvement-term coefficient (ramp)",
+                    ["player_q_improve_coef"],
+                    smooth=0,
+                ),
+                lp(
+                    # Collapsing toward 0 = p_q sharpening onto one action
+                    # (a noise-amplification risk at tau=0.1 — the abort
+                    # signature to watch alongside entropy/winrate below).
+                    "p_q entropy",
+                    ["player_q_improve_pq_entropy"],
+                ),
+                lp(
+                    "Q-improvement loss",
+                    ["player_loss_q_improve"],
+                ),
+                lp(
+                    # Abort criteria (docs/q-critic-plan.md): a cliff in
+                    # either within ~2k steps of enabling means aux-head
+                    # leak — zero player_q_improve_coef, keep the observer.
+                    "Abort watch: entropy & modality entropy",
+                    [
+                        "player_action_normalized_entropy",
+                        "player_normalized_modality_entropy",
+                    ],
+                ),
+            ],
+        ),
+        ws.Section(
             name="2 · Optimiser guardrails",
             is_open=True,
             panels=[
