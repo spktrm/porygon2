@@ -572,6 +572,33 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_q_coef: float = 0.5
     # Retrace trace parameter; matches player_lambda's 0.8 default.
     player_q_lambda: float = 0.8
+    # Stage 2 (docs/q-critic-plan.md §5): forward KL from the Boltzmann
+    # distribution over the EMA target's deployable-rung action values
+    # to the learner policy — the anti-ratchet policy-improvement channel
+    # (its pull toward an action p_q rates well does not scale with pi's
+    # current mass there, unlike the reverse-KL magnet, whose restoring
+    # force vanishes exactly as a modality starves). Enabled 2026-08-18 as
+    # a deliberate early unlock of backlog item 8: the voluntary-switch
+    # crossover re-formed on the 1786951032 lineage (realised post-switch
+    # returns positive while the critic gap stayed negative), and at
+    # tau=0.1 the Boltzmann target assigns the collapsed switch modality
+    # ~10x the policy's mass even under today's switch-averse critic, so
+    # the term's first-order push is pro-switch data generation. MAIN
+    # POPULATION ONLY (host-gated in Learner._train_step): the exploiter
+    # blocks stay clean as a within-run contrast. Abort signature per the
+    # plan: entropy or winrate cliff within ~2k steps of enabling — zero
+    # the coef, keep the observer. Judge by player_q_improve_* logs plus
+    # switch_ratio / player_q_switch_move_gap / modality entropy.
+    player_q_improve_enabled: bool = True
+    # Final coefficient (~0.01 x pg scale per the plan) reached after a
+    # host-side linear ramp from the step the term first activates;
+    # RUNTIME scalar into train_step, so ramping never recompiles.
+    player_q_improve_coef: float = 0.01
+    player_q_improve_ramp_steps: int = 2000
+    # Boltzmann temperature over the +/-1 categorical value support.
+    # 0.1 = sharp but not argmax; tuned against p_q entropy / switch-mass
+    # diagnostics on the live checkpoint before launch.
+    player_q_improve_tau: float = 0.1
     # Agent57/Ape-X-style exploration ladder (replaces stage 4's
     # cross-population intake, removed 2026-08-15: it conflated another
     # agent's policy evidence with main's own action values, and its

@@ -95,6 +95,13 @@ def test_train_step_player_q_smoke():
         # The per-module grad-norm loop picks the new head up by itself;
         # nonzero norm proves the CE loss actually reaches q_head params.
         "player_q_head_gradient_norm",
+        # Stage 2 improvement term (enabled by default since the
+        # 2026-08-18 unlock): the forward-KL loss plus its worth-it
+        # readouts — p_q vs pi switch mass on real-choice states.
+        "player_loss_q_improve",
+        "player_q_improve_pq_switch_mass",
+        "player_q_improve_pi_switch_mass",
+        "player_q_improve_pq_entropy",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
@@ -138,3 +145,4 @@ def test_train_step_player_q_smoke():
     assert "player_loss_q" not in logs_off
     assert "player_loss_q_private" not in logs_off
     assert "player_q_switch_move_gap" not in logs_off
+    assert "player_loss_q_improve" not in logs_off

@@ -155,15 +155,18 @@ def train_step(
     config: Porygon2LearnerConfig,
     upgo_coef: jax.Array | None = None,
     magnet_coef: jax.Array | None = None,
+    q_improve_coef: jax.Array | None = None,
 ):
     """Train for a single step.
 
-    ``upgo_coef`` and ``magnet_coef`` are RUNTIME scalars (traced, not
-    static — runtime values never recompile; static-config scalars
-    retained ~5GB of executables per distinct value and OOM-killed run
-    1326). upgo_coef is config.player_upgo_coef, zeroed by the caller
-    during plasticity recovery (a freshly-perturbed critic cuts UPGO
-    returns in the wrong places).
+    ``upgo_coef``, ``magnet_coef`` and ``q_improve_coef`` are RUNTIME
+    scalars (traced, not static — runtime values never recompile;
+    static-config scalars retained ~5GB of executables per distinct value
+    and OOM-killed run 1326). upgo_coef is config.player_upgo_coef,
+    zeroed by the caller during plasticity recovery (a freshly-perturbed
+    critic cuts UPGO returns in the wrong places). q_improve_coef carries
+    the host-side ramp of player_q_improve_coef and is zero for the
+    exploiter populations.
     """
 
     player_transitions = batch.player_transitions
@@ -613,8 +616,10 @@ def train_step(
         # Config-static branch — the jit variant without the head never
         # traces this.
         q_logs = {}
+        q_improve_logs = {}
         loss_q = 0.0
         loss_q_private = 0.0
+        loss_q_improve = 0.0
         if config.player_q_enabled:
 
             def q_taken(q_logits):
@@ -640,6 +645,64 @@ def train_step(
                 ),
                 q_mask,
             )
+
+            # Stage 2 improvement term (docs/q-critic-plan.md §5): forward
+            # KL from p_q ∝ exp(E[Q̄]/τ) over legal actions to the learner
+            # policy, as a CE (H(p_q) carries no gradient wrt θ). Q̄ from
+            # the EMA target's PRIVATE rung — no gradient path into the Q
+            # head, and the target distribution lives in the policy's own
+            # information set, so it is realisable rather than asking π to
+            # guess the opponent's team. Weighted by the q_improve_coef
+            # runtime scalar (zero for exploiters); the switch-mass logs
+            # below are the "was it worth it" readout: p_q's switch mass
+            # vs π's in states where both a switch and a non-switch action
+            # are legal — the slice the ratchet starves.
+            if config.player_q_improve_enabled:
+                q_bar = jax.nn.softmax(
+                    player_target_pred.private_q_logits.astype(jnp.float32),
+                    axis=-1,
+                ) @ cat_vf_support.astype(jnp.float32)
+                pq_logits = jnp.where(
+                    flat_action_mask,
+                    q_bar / config.player_q_improve_tau,
+                    -1e9,
+                )
+                pq = jax.nn.softmax(pq_logits, axis=-1)
+                pq_log = jax.nn.log_softmax(pq_logits, axis=-1)
+                loss_q_improve = average(
+                    jnp.where(
+                        flat_action_mask,
+                        pq * (pq_log - learner_log_policy),
+                        0.0,
+                    ).sum(axis=-1),
+                    policy_mask,
+                )
+
+                switch_actions = jnp.asarray(
+                    FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+                )
+                has_switch = (flat_action_mask & switch_actions).any(axis=-1)
+                has_other = (
+                    flat_action_mask & jnp.logical_not(switch_actions)
+                ).any(axis=-1)
+                switch_choice_mask = policy_mask & has_switch & has_other
+                pq_switch_mass = (pq * switch_actions).sum(axis=-1)
+                pi_switch_mass = (
+                    jnp.exp(learner_log_policy) * flat_action_mask * switch_actions
+                ).sum(axis=-1)
+                q_improve_logs = dict(
+                    player_loss_q_improve=loss_q_improve,
+                    player_q_improve_pq_switch_mass=average(
+                        pq_switch_mass, switch_choice_mask
+                    ),
+                    player_q_improve_pi_switch_mass=average(
+                        pi_switch_mass, switch_choice_mask
+                    ),
+                    player_q_improve_pq_entropy=average(
+                        -jnp.where(flat_action_mask, pq * pq_log, 0.0).sum(axis=-1),
+                        policy_mask,
+                    ),
+                )
             q_taken_pred = jax.nn.softmax(
                 learner_q_logits_taken, axis=-1
             ) @ cat_vf_support.astype(jnp.float32)
@@ -704,10 +767,14 @@ def train_step(
             # One coefficient for both rungs — same estimator family on
             # the same labels, mirroring the value-ladder coef above.
             + config.player_q_coef * (loss_q + loss_q_private)
+            # Stage 2 improvement term; coef is a host-ramped runtime
+            # scalar, zero for exploiter populations.
+            + (0.0 if q_improve_coef is None else q_improve_coef) * loss_q_improve
         )
 
         return loss, dict(
             **q_logs,
+            **q_improve_logs,
             **value_ladder_logs,
             # Loss values
             player_loss_pg=loss_pg,
@@ -1377,6 +1444,11 @@ class Learner:
             self._plasticity_probe_jit = self._make_plasticity_probe(player_network)
 
         self._train_step_jit = train_step if debug else _TRAIN_STEP_JIT
+        # Stage-2 improvement-term ramp anchor: the main-pop step at which
+        # the term first activates in THIS process. Restart-relative on
+        # purpose — a resume re-ramps over player_q_improve_ramp_steps,
+        # which is harmless and keeps the anchor out of the checkpoint.
+        self._q_improve_ramp_start: int | None = None
 
         # Block-sequential scheduler state (see _select_population): whose
         # block it is right now, and which exploiter population is next in
@@ -2377,6 +2449,24 @@ class Learner:
         # the removed lambda controller handled by forcing lambda to its
         # ceiling). Runtime scalar — flipping it never recompiles.
         upgo_coef = 0.0 if pop.plasticity.recovering else self.config.player_upgo_coef
+        # Stage-2 improvement term: main only (the exploiter blocks stay
+        # clean as a within-run contrast), linearly ramped host-side from
+        # first activation — runtime scalar, so the ramp never recompiles.
+        q_improve_coef = 0.0
+        if (
+            self.config.player_q_enabled
+            and self.config.player_q_improve_enabled
+            and pop.name == "main"
+        ):
+            step = int(pop.player_state.step_count)
+            if self._q_improve_ramp_start is None:
+                self._q_improve_ramp_start = step
+            ramp = min(
+                1.0,
+                (step - self._q_improve_ramp_start)
+                / max(1, self.config.player_q_improve_ramp_steps),
+            )
+            q_improve_coef = self.config.player_q_improve_coef * ramp
         pop.player_state, pop.builder_state, logs = self._train_step_jit(
             pop.player_state,
             pop.builder_state,
@@ -2384,7 +2474,10 @@ class Learner:
             self._jit_config,
             np.float32(upgo_coef),
             np.float32(self.config.player_magnet_kl_coef),
+            np.float32(q_improve_coef),
         )
+        if logs is not None and pop.name == "main":
+            logs["player_q_improve_coef"] = q_improve_coef
         return logs
 
     def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):
