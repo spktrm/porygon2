@@ -92,6 +92,15 @@ def test_train_step_player_q_smoke():
         "player_q_voluntary_switch_target_frac",
         "player_q_target_voluntary_switch",
         "player_q_target_move",
+        # Pivotal-state decision panel: tail statistics conditioned on the
+        # critic-flagged switch-worthy states, not the taken action (the
+        # explore-row return split needs own_rows, absent in this minimal
+        # batch — same reason player_q_explore_frac isn't listed).
+        "player_q_pivotal_frac",
+        "player_q_pivotal_pi_switch_mass",
+        "player_q_pivotal_taken_switch_frac",
+        "player_q_pivotal_ret_switch",
+        "player_q_pivotal_ret_stay",
         # The per-module grad-norm loop picks the new head up by itself;
         # nonzero norm proves the CE loss actually reaches q_head params.
         "player_q_head_gradient_norm",
@@ -112,6 +121,7 @@ def test_train_step_player_q_smoke():
         "player_q_boost_adv_corr",
         "player_q_boost_adv_sign_agree",
         "player_q_action_var",
+        "player_q_action_var_p90",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key

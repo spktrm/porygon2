@@ -363,8 +363,11 @@ def rl_sections():
                     # means the policy is already ~deterministic wherever
                     # Q is evaluated, so boosting has no headroom to help
                     # regardless of critic quality.
+                    # p90 alongside the mean: action-value spread
+                    # concentrates in few high-leverage states, so the
+                    # mean undersells headroom by construction.
                     "Thm 3.1 headroom: Var_a~pi[Q]",
-                    ["player_q_action_var"],
+                    ["player_q_action_var", "player_q_action_var_p90"],
                 ),
                 lp(
                     # The 3b gate the plan wanted BEFORE going live (this
@@ -389,6 +392,56 @@ def rl_sections():
                     [
                         "switch_ratio",
                         "player_normalized_modality_entropy",
+                    ],
+                ),
+            ],
+        ),
+        ws.Section(
+            # 2026-08-19 reframing: a negative MEAN switch/move gap is the
+            # expected sign under correct play (switching spends a turn),
+            # so collapse detection lives in the tail — states where the
+            # critic actually prefers the switch. Conditioned on the STATE
+            # (critic flag), not the taken action, dodging the
+            # chosen-switch selection bias of the Aug-15 crossover read.
+            name="1.8 · Pivotal-state switch decisions",
+            is_open=True,
+            panels=[
+                lp(
+                    # Collapse signature #1: the critic stops flagging ANY
+                    # state as switch-worthy. Healthy is a modest nonzero
+                    # fraction (~0.2 early on the q-boost lineage).
+                    "Pivotal fraction (critic prefers switch | both legal)",
+                    ["player_q_pivotal_frac"],
+                ),
+                lp(
+                    # Collapse signature #2: policy ignores the flags —
+                    # switch mass / taken-switch rate cratering on pivotal
+                    # states while pivotal_frac holds.
+                    "Compliance on pivotal states",
+                    [
+                        "player_q_pivotal_pi_switch_mass",
+                        "player_q_pivotal_taken_switch_frac",
+                    ],
+                ),
+                lp(
+                    # Same state class, different action — the closest
+                    # available reading of "are switches better where they
+                    # matter". Empty slices log 0; read alongside the
+                    # compliance panel.
+                    "Pivotal return split: switched vs stayed",
+                    [
+                        "player_q_pivotal_ret_switch",
+                        "player_q_pivotal_ret_stay",
+                    ],
+                ),
+                lp(
+                    # Explore-ladder rows play at flattened temperature —
+                    # the least selection-biased empirical answer to "do
+                    # voluntary switches lead to better outcomes".
+                    "Explore-row return split: vol switch vs move",
+                    [
+                        "player_q_explore_ret_vol_switch",
+                        "player_q_explore_ret_move",
                     ],
                 ),
             ],

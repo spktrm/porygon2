@@ -382,6 +382,59 @@ def train_step(
             q_retrace_g, q_move_mask & has_both
         )
 
+        # Pivotal-state decision panel (2026-08-19). A negative MEAN gap is
+        # the expected sign under correct play — switching spends a turn, so
+        # most both-modality states correctly favour the move, and the
+        # state-averaged statistics above are nearly blind to the collapse
+        # failure mode. The signal lives in the tail: the states where the
+        # critic actually prefers the switch. Conditioning on the STATE
+        # (critic flag) rather than the taken action also dodges the
+        # chosen-switch selection bias that muddied the Aug-15 crossover
+        # reading (a 2% switch mass keeps only the policy's most confident
+        # pivots, so "chosen switches outperform moves" proves little).
+        # Collapse signature: pivotal_frac bleeding to ~0 (critic stops
+        # flagging any state as switch-worthy) or pi_switch_mass /
+        # taken_switch_frac cratering on pivotal states while pivotal_frac
+        # holds (policy ignoring the critic's flags).
+        pivotal_mask = q_mask & has_both & (best_switch > best_move)
+        training_logs["player_q_pivotal_frac"] = average(
+            (best_switch > best_move).astype(jnp.float32), q_mask & has_both
+        )
+        pi_target = (
+            jnp.exp(player_target_pred.action_head.log_policy.astype(jnp.float32))
+            * flat_action_mask
+        )
+        pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
+        training_logs["player_q_pivotal_pi_switch_mass"] = average(
+            (pi_target * valid_switch).sum(axis=-1), pivotal_mask
+        )
+        training_logs["player_q_pivotal_taken_switch_frac"] = average(
+            taken_switch.astype(jnp.float32), pivotal_mask
+        )
+        # Within-class return split: same critic-flagged state class,
+        # different action — the closest available reading of "are switches
+        # better where they matter". Empty slices log 0 (average clips the
+        # denominator), so read alongside pivotal_frac/taken_switch_frac.
+        training_logs["player_q_pivotal_ret_switch"] = average(
+            q_retrace_g, pivotal_mask & taken_switch
+        )
+        training_logs["player_q_pivotal_ret_stay"] = average(
+            q_retrace_g, pivotal_mask & jnp.logical_not(taken_switch)
+        )
+        if own_rows is not None:
+            # Explore-ladder rows play at flattened temperature, so switches
+            # taken there are far closer to randomised interventions than
+            # exploit-row switches — the least selection-biased empirical
+            # answer to "do voluntary switches lead to better outcomes"
+            # available without new machinery.
+            explore_cols = jnp.logical_not(own_rows)[None, :]
+            training_logs["player_q_explore_ret_vol_switch"] = average(
+                q_retrace_g, q_voluntary_switch_mask & explore_cols
+            )
+            training_logs["player_q_explore_ret_move"] = average(
+                q_retrace_g, q_move_mask & has_both & explore_cols
+            )
+
         # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md): the
         # Retrace return minus the target policy's Q expectation — the
         # Fan & Farina estimator (arXiv 2605.19235), algebraically
@@ -423,20 +476,16 @@ def train_step(
                 ),
                 policy_mask,
             )
-            pi_target = (
-                jnp.exp(
-                    player_target_pred.action_head.log_policy.astype(jnp.float32)
-                )
-                * flat_action_mask
-            )
-            pi_target = pi_target / jnp.maximum(
-                pi_target.sum(axis=-1, keepdims=True), 1e-8
-            )
-            training_logs["player_q_action_var"] = average(
-                (pi_target * jnp.square(q_all_target - q_v_exp[..., None])).sum(
-                    axis=-1
-                ),
-                q_mask,
+            # pi_target computed above (pivotal-state panel). The MEAN
+            # undersells Thm 3.1 headroom by construction when action-value
+            # spread concentrates in few high-leverage states (which is how
+            # this game works) — the p90 is the honest readout.
+            qvar_state = (
+                pi_target * jnp.square(q_all_target - q_v_exp[..., None])
+            ).sum(axis=-1)
+            training_logs["player_q_action_var"] = average(qvar_state, q_mask)
+            training_logs["player_q_action_var_p90"] = jnp.nanquantile(
+                jnp.where(q_mask, qvar_state, jnp.nan), 0.9
             )
             if not isinstance(batch.reuse_count, tuple):
                 fresh_cols = batch.reuse_count[0] == 0
