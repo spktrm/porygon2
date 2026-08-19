@@ -164,7 +164,7 @@ def train_step(
     """
     upgo_coef = scalars.upgo_coef
     magnet_coef = scalars.magnet_coef
-    q_improve_coef = scalars.q_improve_coef
+    coma_coef = scalars.coma_coef
     q_boost_mix = scalars.q_boost_mix
 
     player_transitions = batch.player_transitions
@@ -778,9 +778,10 @@ def train_step(
         # traces this.
         q_logs = {}
         q_improve_logs = {}
+        coma_logs = {}
         loss_q = 0.0
         loss_q_private = 0.0
-        loss_q_improve = 0.0
+        loss_coma = 0.0
         if config.player_q_enabled:
 
             def q_taken(q_logits):
@@ -807,61 +808,97 @@ def train_step(
                 q_mask,
             )
 
-            # Stage 2 improvement term (docs/q-critic-plan.md §5): forward
-            # KL from p_q ∝ exp(E[Q̄]/τ) over legal actions to the learner
-            # policy, as a CE (H(p_q) carries no gradient wrt θ). Q̄ from
-            # the EMA target's PRIVATE rung — no gradient path into the Q
-            # head, and the target distribution lives in the policy's own
-            # information set, so it is realisable rather than asking π to
-            # guess the opponent's team. Weighted by the q_improve_coef
-            # runtime scalar (zero for exploiters); the switch-mass logs
-            # below are the "was it worth it" readout: p_q's switch mass
-            # vs π's in states where both a switch and a non-switch action
-            # are legal — the slice the ratchet starves.
-            if config.player_q_improve_enabled:
-                q_bar = jax.nn.softmax(
-                    player_target_pred.private_q_logits.astype(jnp.float32),
-                    axis=-1,
-                ) @ cat_vf_support.astype(jnp.float32)
-                pq_logits = jnp.where(
-                    flat_action_mask,
-                    q_bar / config.player_q_improve_tau,
-                    -1e9,
-                )
-                pq = jax.nn.softmax(pq_logits, axis=-1)
-                pq_log = jax.nn.log_softmax(pq_logits, axis=-1)
-                loss_q_improve = average(
-                    jnp.where(
-                        flat_action_mask,
-                        pq * (pq_log - learner_log_policy),
-                        0.0,
-                    ).sum(axis=-1),
-                    policy_mask,
-                )
+            # p_q OBSERVER (kept when the stage-2 forward KL was removed,
+            # 2026-08-19): Boltzmann distribution over the EMA target's
+            # deployable-rung action values — the "what does the critic
+            # want" leading indicator (pq vs pi switch mass on states
+            # where both a switch and a non-switch are legal, the slice
+            # the ratchet starves). Loss-free; no term reads pq.
+            q_bar = jax.nn.softmax(
+                player_target_pred.private_q_logits.astype(jnp.float32),
+                axis=-1,
+            ) @ cat_vf_support.astype(jnp.float32)
+            pq_logits = jnp.where(
+                flat_action_mask,
+                q_bar / config.player_q_observer_tau,
+                -1e9,
+            )
+            pq = jax.nn.softmax(pq_logits, axis=-1)
+            pq_log = jax.nn.log_softmax(pq_logits, axis=-1)
 
-                switch_actions = jnp.asarray(
-                    FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+            switch_actions = jnp.asarray(
+                FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+            )
+            has_switch = (flat_action_mask & switch_actions).any(axis=-1)
+            has_other = (
+                flat_action_mask & jnp.logical_not(switch_actions)
+            ).any(axis=-1)
+            switch_choice_mask = policy_mask & has_switch & has_other
+            pq_switch_mass = (pq * switch_actions).sum(axis=-1)
+            pi_switch_mass = (
+                jnp.exp(learner_log_policy.astype(jnp.float32))
+                * flat_action_mask
+                * switch_actions
+            ).sum(axis=-1)
+            q_improve_logs = dict(
+                player_q_improve_pq_switch_mass=average(
+                    pq_switch_mass, switch_choice_mask
+                ),
+                player_q_improve_pi_switch_mass=average(
+                    pi_switch_mass, switch_choice_mask
+                ),
+                player_q_improve_pq_entropy=average(
+                    -jnp.where(flat_action_mask, pq * pq_log, 0.0).sum(axis=-1),
+                    policy_mask,
+                ),
+            )
+
+            # COMA-style all-action counterfactual policy loss (replaced
+            # the stage-2 forward KL, 2026-08-19 — see the config comment
+            # and docs/entropy-gradient-pressure.md). Per legal cell,
+            # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')]: the COMA
+            # counterfactual baseline under the CURRENT policy. The loss
+            # −Σ_a π(a)·sg(adv(a)) has per-cell gradient π(a)·adv(a) —
+            # the exact all-action policy gradient: zero sampling
+            # variance, counterfactual pressure on every real-choice row
+            # including untaken actions (the sampled boost advantage
+            # structurally carries none for those). Q̄_all is the
+            # PRIVILEGED rung (COMA's centralised critic); it enters as
+            # stop-gradient scalars only, exactly like the privileged
+            # v_head advantages, so the policy stays bitwise invariant
+            # to opp_private_team. Weighted by the coma_coef runtime
+            # scalar (host-ramped, zero for exploiter populations).
+            if config.player_coma_enabled:
+                pi_learner = (
+                    jnp.exp(learner_log_policy.astype(jnp.float32))
+                    * flat_action_mask
                 )
-                has_switch = (flat_action_mask & switch_actions).any(axis=-1)
-                has_other = (
-                    flat_action_mask & jnp.logical_not(switch_actions)
-                ).any(axis=-1)
-                switch_choice_mask = policy_mask & has_switch & has_other
-                pq_switch_mass = (pq * switch_actions).sum(axis=-1)
-                pi_switch_mass = (
-                    jnp.exp(learner_log_policy) * flat_action_mask * switch_actions
-                ).sum(axis=-1)
-                q_improve_logs = dict(
-                    player_loss_q_improve=loss_q_improve,
-                    player_q_improve_pq_switch_mass=average(
-                        pq_switch_mass, switch_choice_mask
+                pi_learner = pi_learner / jnp.maximum(
+                    pi_learner.sum(axis=-1, keepdims=True), 1e-8
+                )
+                v_cf = jax.lax.stop_gradient(
+                    (pi_learner * q_all_target).sum(axis=-1)
+                )
+                coma_adv = jax.lax.stop_gradient(
+                    jnp.where(
+                        flat_action_mask, q_all_target - v_cf[..., None], 0.0
+                    )
+                )
+                loss_coma = -average(
+                    (pi_learner * coma_adv).sum(axis=-1), policy_mask
+                )
+                coma_logs = dict(
+                    player_loss_coma=loss_coma,
+                    # Net signed gradient mass toward the switch modality
+                    # per real-choice row: positive = COMA is currently
+                    # pushing switch mass UP (the critic prefers more
+                    # switching than the policy carries).
+                    player_coma_switch_push=average(
+                        (pi_learner * coma_adv * switch_actions).sum(axis=-1),
+                        switch_choice_mask,
                     ),
-                    player_q_improve_pi_switch_mass=average(
-                        pi_switch_mass, switch_choice_mask
-                    ),
-                    player_q_improve_pq_entropy=average(
-                        -jnp.where(flat_action_mask, pq * pq_log, 0.0).sum(axis=-1),
-                        policy_mask,
+                    player_coma_adv_std=coma_adv.std(
+                        where=flat_action_mask & policy_mask[..., None]
                     ),
                 )
             q_taken_pred = jax.nn.softmax(
@@ -930,12 +967,13 @@ def train_step(
             + config.player_q_coef * (loss_q + loss_q_private)
             # Stage 2 improvement term; coef is a host-ramped runtime
             # scalar, zero for exploiter populations.
-            + (0.0 if q_improve_coef is None else q_improve_coef) * loss_q_improve
+            + (0.0 if coma_coef is None else coma_coef) * loss_coma
         )
 
         return loss, dict(
             **q_logs,
             **q_improve_logs,
+            **coma_logs,
             **value_ladder_logs,
             # Loss values
             player_loss_pg=loss_pg,
@@ -1607,11 +1645,11 @@ class Learner:
             self._plasticity_probe_jit = self._make_plasticity_probe(player_network)
 
         self._train_step_jit = train_step if debug else _TRAIN_STEP_JIT
-        # Stage-2 improvement-term ramp anchor: the main-pop step at which
-        # the term first activates in THIS process. Restart-relative on
-        # purpose — a resume re-ramps over player_q_improve_ramp_steps,
-        # which is harmless and keeps the anchor out of the checkpoint.
-        self._q_improve_ramp_start: int | None = None
+        # COMA-loss ramp anchor: the main-pop step at which the term first
+        # activates in THIS process. Restart-relative on purpose — a
+        # resume re-ramps over player_coma_ramp_steps, which is harmless
+        # and keeps the anchor out of the checkpoint.
+        self._coma_ramp_start: int | None = None
         # Stage-3 Q-boosting cross-fade anchor, same treatment (a resume
         # re-fades the advantage blend over player_q_boost_ramp_steps).
         self._q_boost_ramp_start: int | None = None
@@ -2621,24 +2659,24 @@ class Learner:
         # the removed lambda controller handled by forcing lambda to its
         # ceiling). Runtime scalar — flipping it never recompiles.
         upgo_coef = 0.0 if pop.plasticity.recovering else self.config.player_upgo_coef
-        # Stage-2 improvement term: main only (the exploiter blocks stay
+        # COMA all-action loss: main only (the exploiter blocks stay
         # clean as a within-run contrast), linearly ramped host-side from
         # first activation — runtime scalar, so the ramp never recompiles.
-        q_improve_coef = 0.0
+        coma_coef = 0.0
         if (
             self.config.player_q_enabled
-            and self.config.player_q_improve_enabled
+            and self.config.player_coma_enabled
             and pop.name == "main"
         ):
             step = int(pop.player_state.step_count)
-            if self._q_improve_ramp_start is None:
-                self._q_improve_ramp_start = step
+            if self._coma_ramp_start is None:
+                self._coma_ramp_start = step
             ramp = min(
                 1.0,
-                (step - self._q_improve_ramp_start)
-                / max(1, self.config.player_q_improve_ramp_steps),
+                (step - self._coma_ramp_start)
+                / max(1, self.config.player_coma_ramp_steps),
             )
-            q_improve_coef = self.config.player_q_improve_coef * ramp
+            coma_coef = self.config.player_coma_coef * ramp
         # Stage-3 Q-boosting cross-fade: main only, linear 0->1 from first
         # activation (docs/q-boosting-plan.md §3) — runtime scalar, the
         # exploiter populations pass 0 through the same compiled fn.
@@ -2664,12 +2702,12 @@ class Learner:
             RuntimeScalars(
                 upgo_coef=np.float32(upgo_coef),
                 magnet_coef=np.float32(self.config.player_magnet_kl_coef),
-                q_improve_coef=np.float32(q_improve_coef),
+                coma_coef=np.float32(coma_coef),
                 q_boost_mix=np.float32(q_boost_mix),
             ),
         )
         if logs is not None and pop.name == "main":
-            logs["player_q_improve_coef"] = q_improve_coef
+            logs["player_coma_coef"] = coma_coef
             logs["player_q_boost_mix"] = q_boost_mix
         return logs
 

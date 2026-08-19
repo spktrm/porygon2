@@ -387,7 +387,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # If a static coef can't hold the band, the proper fix is a PI
     # controller on the coef with a target-entropy schedule (same pattern
     # as the replay-KL controller).
-    player_magnet_kl_coef: float = 0.1
+    # 0.2 (up from 0.1, 2026-08-19, user's call for the COMA relaunch):
+    # the q-boost lineage collapsed at ~3x the baseline speed (mod-entropy
+    # 0.87→0.27 by 18k, switch_ratio 0.45→0.02) with 0.1 holding nothing.
+    # Known limit (docs/entropy-gradient-pressure.md §3): reverse-KL force
+    # is π-weighted and cannot hold a floor once a modality is starved —
+    # 0.2 buys pressure in the healthy-mass formative window only; the
+    # per-state restoring channel is the COMA loss below.
+    player_magnet_kl_coef: float = 0.2
 
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
@@ -581,34 +588,38 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_q_coef: float = 0.5
     # Retrace trace parameter; matches player_lambda's 0.8 default.
     player_q_lambda: float = 0.8
-    # Stage 2 (docs/q-critic-plan.md §5): forward KL from the Boltzmann
-    # distribution over the EMA target's deployable-rung action values
-    # to the learner policy — the anti-ratchet policy-improvement channel
-    # (its pull toward an action p_q rates well does not scale with pi's
-    # current mass there, unlike the reverse-KL magnet, whose restoring
-    # force vanishes exactly as a modality starves). Enabled 2026-08-18 as
-    # a deliberate early unlock of backlog item 8: the voluntary-switch
-    # crossover re-formed on the 1786951032 lineage (realised post-switch
-    # returns positive while the critic gap stayed negative), and at
-    # tau=0.1 the Boltzmann target assigns the collapsed switch modality
-    # ~10x the policy's mass even under today's switch-averse critic, so
-    # the term's first-order push is pro-switch data generation. MAIN
-    # POPULATION ONLY (host-gated in Learner._train_step): the exploiter
-    # blocks stay clean as a within-run contrast.
-    player_q_improve_enabled: bool = True
-    # COEF ZEROED 2026-08-19 (fresh no-checkpoint lineage): the stage-2 KL
-    # is superseded by the stage-3 Q-boosting advantage below — enabled=True
-    # with coef 0 is the plan's own observer posture, keeping the p_q
-    # diagnostics (player_q_improve_pq_* vs pi switch mass) live as the
-    # within-run "what would the KL have pushed" readout with zero loss
-    # influence. RUNTIME scalar into train_step, so flipping it back
-    # never recompiles.
-    player_q_improve_coef: float = 0.0
-    player_q_improve_ramp_steps: int = 2000
-    # Boltzmann temperature over the +/-1 categorical value support.
-    # 0.1 = sharp but not argmax; tuned against p_q entropy / switch-mass
-    # diagnostics on the live checkpoint before launch.
-    player_q_improve_tau: float = 0.1
+    # COMA-style all-action counterfactual policy loss (2026-08-19,
+    # REPLACES the stage-2 forward KL; derivation in
+    # docs/entropy-gradient-pressure.md). Per legal cell:
+    # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')] — the COMA
+    # counterfactual baseline (swap own action, hold the world fixed,
+    # marginalise under the CURRENT policy) — and the loss is
+    # −Σ_a π(a)·sg(adv(a)), whose per-cell gradient π(a)·adv(a) is the
+    # exact all-action policy gradient: zero sampling variance, and
+    # counterfactual pressure lands on EVERY real-choice row, untaken
+    # actions included (the sampled boost advantage structurally carries
+    # none — on a move row, retrace−v_exp says nothing about the switch
+    # not taken). Still π-weighted, so it converts rare-kick recovery
+    # into steady exponential re-mixing toward the critic's per-state
+    # preferences rather than a mass-independent barrier — deliberate:
+    # it transmits only what the critic believes per state, never a
+    # fixed prior. Q̄_all is the PRIVILEGED rung (COMA's centralised
+    # critic): advantages enter as stop-gradient scalars exactly like
+    # the privileged v_head advantages, so the policy stays bitwise
+    # invariant to opp_private_team (value-ladder tests still bind).
+    # MAIN POPULATION ONLY (host-gated in Learner._train_step).
+    player_coma_enabled: bool = True
+    # Raw counterfactual advantages are in win units (~0.1-0.2 typical
+    # spread), so 0.05 ≈ 1% relative pressure vs the coef-1.0 normalised
+    # PG — steady and compounding rather than assertive. Host-ramped
+    # RUNTIME scalar: retuning or aborting never recompiles.
+    player_coma_coef: float = 0.05
+    player_coma_ramp_steps: int = 2000
+    # Boltzmann temperature for the p_q OBSERVER kept from stage 2
+    # (softmax(E[Q̄_private]/tau) diagnostics — the "what does the critic
+    # want" leading indicator; no loss reads it since the stage-2 KL's
+    # removal). 0.1 = sharp but not argmax.
+    player_q_observer_tau: float = 0.1
     # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md; Fan & Farina,
     # arXiv 2605.19235): cross-fade the PG advantage from the v-trace
     # channel to retrace_g − v_exp — unbiased at lambda=1 for ANY critic
@@ -634,7 +645,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # variants recompiles.
     player_q_boost_variant: QBoostVariantT = "multistep"
     # Linear cross-fade 0→1 over this many main-pop steps from first
-    # activation, mirroring player_q_improve_ramp_steps' host pattern.
+    # activation, mirroring player_coma_ramp_steps' host pattern.
     player_q_boost_ramp_steps: int = 2000
     # Agent57/Ape-X-style exploration ladder (replaces stage 4's
     # cross-population intake, removed 2026-08-15: it conflated another
@@ -713,9 +724,9 @@ class RuntimeScalars:
     # config.player_magnet_kl_coef (the entropy watchdog escalates it
     # host-side).
     magnet_coef: chex.Array | None = None
-    # Host-side ramp of player_q_improve_coef; zero for the exploiter
+    # Host-side ramp of player_coma_coef; zero for the exploiter
     # populations.
-    q_improve_coef: chex.Array | None = None
+    coma_coef: chex.Array | None = None
     # Stage-3 Q-boosting cross-fade weight (docs/q-boosting-plan.md);
     # zero for exploiters and while player_q_boost_enabled is off.
     q_boost_mix: chex.Array | None = None

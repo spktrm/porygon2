@@ -104,13 +104,16 @@ def test_train_step_player_q_smoke():
         # The per-module grad-norm loop picks the new head up by itself;
         # nonzero norm proves the CE loss actually reaches q_head params.
         "player_q_head_gradient_norm",
-        # Stage 2 improvement term (observer since 2026-08-19: coef
-        # zeroed, diagnostics stay): the forward-KL loss plus its
-        # readouts — p_q vs pi switch mass on real-choice states.
-        "player_loss_q_improve",
+        # p_q observer (kept when the stage-2 KL was removed 2026-08-19):
+        # loss-free readouts — p_q vs pi switch mass on real-choice states.
         "player_q_improve_pq_switch_mass",
         "player_q_improve_pi_switch_mass",
         "player_q_improve_pq_entropy",
+        # COMA all-action counterfactual policy loss (replaced stage 2):
+        # loss value plus the signed switch-modality push readout.
+        "player_loss_coma",
+        "player_coma_switch_push",
+        "player_coma_adv_std",
         # Stage 3 Q-boosting (docs/q-boosting-plan.md): loss-free 3a
         # diagnostics — blend candidate's scale/agreement vs the v-trace
         # channel, plus Thm 3.1's Var_a~pi[Q] precondition readout.
@@ -136,7 +139,9 @@ def test_train_step_player_q_smoke():
             builder_state,
             batch,
             config,
-            scalars=RuntimeScalars(q_boost_mix=np.float32(1.0)),
+            scalars=RuntimeScalars(
+                q_boost_mix=np.float32(1.0), coma_coef=np.float32(1.0)
+            ),
         )
     assert np.isfinite(np.asarray(logs_boost["player_loss_pg"], dtype=np.float32))
     assert np.isfinite(
@@ -181,5 +186,5 @@ def test_train_step_player_q_smoke():
     assert "player_loss_q" not in logs_off
     assert "player_loss_q_private" not in logs_off
     assert "player_q_switch_move_gap" not in logs_off
-    assert "player_loss_q_improve" not in logs_off
+    assert "player_loss_coma" not in logs_off
     assert "player_q_boost_adv_mean" not in logs_off

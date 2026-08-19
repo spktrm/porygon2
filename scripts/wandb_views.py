@@ -267,21 +267,48 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # Stage 2 (docs/q-critic-plan.md, enabled 2026-08-18 on the
-            # 1786951032 lineage; OBSERVER since 2026-08-19 — coef zeroed
-            # in favour of stage-3 Q-boosting, section 1.7. The p_q
-            # diagnostics stay live as the "what would the KL have
-            # pushed" readout).
-            name="1.6 · Q improvement term (stage 2, observer)",
+            # COMA all-action counterfactual policy loss (2026-08-19,
+            # replaced the stage-2 forward KL; derivation in
+            # docs/entropy-gradient-pressure.md): per-cell gradient
+            # pi(a)·(E[Q̄_all(a)] − Σ pi·E[Q̄_all]) on every real-choice
+            # row — zero sampling variance, counterfactual pressure on
+            # untaken actions. The p_q observer panels stay as the
+            # "what does the critic want" leading indicator.
+            name="1.6 · COMA all-action loss + p_q observer",
             is_open=True,
             panels=[
                 lp(
-                    # THE worth-it readout: p_q's switch mass vs pi's own,
-                    # on states offering both a switch and a non-switch
-                    # action. Converging = the term is winning its
-                    # argument with the policy; pi staying flat while pq
-                    # sits high = the pull isn't reaching the policy yet
-                    # (check the coef ramp below).
+                    # THE worth-it readout: signed gradient mass toward
+                    # the switch modality on both-modality states.
+                    # Positive = the critic wants more switching than the
+                    # policy carries and COMA is pushing it up; pinned
+                    # negative = COMA is transmitting critic aversion.
+                    "COMA switch push (signed, both-modality states)",
+                    ["player_coma_switch_push"],
+                ),
+                lp(
+                    # Host-ramped runtime scalar (0 -> player_coma_coef
+                    # over player_coma_ramp_steps from activation). Zero
+                    # for exploiter populations by construction.
+                    "COMA coefficient (ramp)",
+                    ["player_coma_coef"],
+                    smooth=0,
+                ),
+                lp(
+                    # Loss value ≈ 0 at the stopgrad point by
+                    # construction (baseline is the current policy's own
+                    # expectation) — scale lives in adv_std; the loss
+                    # trending negative means pi is drifting toward the
+                    # critic's preferences between updates.
+                    "COMA loss & counterfactual advantage spread",
+                    ["player_loss_coma", "player_coma_adv_std"],
+                ),
+                lp(
+                    # p_q observer (loss-free since the stage-2 KL's
+                    # removal): the critic's Boltzmann preferences vs the
+                    # policy's own switch mass — a persistent gap here
+                    # with a flat switch_push above means the pi-weighting
+                    # is the bottleneck, not the critic.
                     "p_q vs pi switch mass (both-modality states)",
                     [
                         "player_q_improve_pq_switch_mass",
@@ -289,28 +316,14 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Host-ramped runtime scalar (0 -> player_q_improve_coef
-                    # over player_q_improve_ramp_steps from activation).
-                    # Zero for exploiter populations by construction.
-                    "Improvement-term coefficient (ramp)",
-                    ["player_q_improve_coef"],
-                    smooth=0,
-                ),
-                lp(
-                    # Collapsing toward 0 = p_q sharpening onto one action
-                    # (a noise-amplification risk at tau=0.1 — the abort
-                    # signature to watch alongside entropy/winrate below).
                     "p_q entropy",
                     ["player_q_improve_pq_entropy"],
                 ),
                 lp(
-                    "Q-improvement loss",
-                    ["player_loss_q_improve"],
-                ),
-                lp(
-                    # Abort criteria (docs/q-critic-plan.md): a cliff in
-                    # either within ~2k steps of enabling means aux-head
-                    # leak — zero player_q_improve_coef, keep the observer.
+                    # A cliff in either within ~2k steps of the ramp =
+                    # the policy chasing critic noise — zero
+                    # player_coma_enabled (mix to 0 next step, no
+                    # recompile), keep the observer.
                     "Abort watch: entropy & modality entropy",
                     [
                         "player_action_normalized_entropy",
