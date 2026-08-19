@@ -36,11 +36,7 @@ def real_model_and_trajectory():
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model
 
-    # q_head_enabled matches the learner default (player_q_enabled=True)
-    # so the shared fixture exercises the two-rung Q outputs too.
-    network = get_player_model(
-        get_player_model_config(generation=9, train=True, q_head_enabled=True)
-    )
+    network = get_player_model(get_player_model_config(generation=9, train=True))
     actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     params = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
     return network, params, actor_input, actor_output

@@ -98,13 +98,8 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
 
     manifest = read_manifest(ckpt_dir) or {}
     generation = int(manifest.get("generation", 9))
-    q_head_enabled = bool(manifest.get("q_head"))
 
-    network = get_player_model(
-        get_player_model_config(
-            generation=generation, train=True, q_head_enabled=q_head_enabled
-        )
-    )
+    network = get_player_model(get_player_model_config(generation=generation, train=True))
     actor_input, _ = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     # Probe vmaps over axis 1 (batch); re-add a batch axis of 1 to the
     # unbatched example (same reshape test_plasticity.py uses).

@@ -33,9 +33,9 @@ def test_train_step_player_q_smoke():
     from rl.online.learner import train_step
 
     with jax.default_device(jax.devices("cpu")[0]):
-        config = Porygon2LearnerConfig(player_q_enabled=True)
+        config = Porygon2LearnerConfig()
         player_net = get_player_model(
-            get_player_model_config(config.generation, train=True, q_head_enabled=True)
+            get_player_model_config(config.generation, train=True)
         )
         builder_net = get_builder_model(
             get_builder_model_config(config.generation, train=True)
@@ -101,9 +101,10 @@ def test_train_step_player_q_smoke():
         "player_q_pivotal_taken_switch_frac",
         "player_q_pivotal_ret_switch",
         "player_q_pivotal_ret_stay",
-        # The per-module grad-norm loop picks the new head up by itself;
-        # nonzero norm proves the CE loss actually reaches q_head params.
-        "player_q_head_gradient_norm",
+        # The per-module grad-norm loop picks the new modules up by
+        # itself; nonzero norm proves the CE loss actually reaches the
+        # Q family's MacroMicroHead params.
+        "player_q_macro_micro_gradient_norm",
         # p_q observer (kept when the stage-2 KL was removed 2026-08-19):
         # loss-free readouts — p_q vs pi switch mass on real-choice states.
         "player_q_improve_pq_switch_mass",
@@ -128,7 +129,7 @@ def test_train_step_player_q_smoke():
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
-    assert float(logs["player_q_head_gradient_norm"]) > 0.0
+    assert float(logs["player_q_macro_micro_gradient_norm"]) > 0.0
 
     # Stage-3 blend path at full mix: the boosted advantage swaps in
     # wholesale (runtime scalar, same compiled fn) and everything stays
@@ -167,24 +168,4 @@ def test_train_step_player_q_smoke():
     assert "player_q_r2_explore" in logs_explore
     assert "player_learner_actor_forward_kl_own" in logs_explore
     assert np.isfinite(np.asarray(logs_explore["player_loss_q"], dtype=np.float32))
-    assert float(logs_explore["player_q_head_gradient_norm"]) > 0.0
-
-    # Observer contract: with player_q_enabled=False nothing q-flavoured
-    # may appear (and the loss must not reference undefined q terms).
-    # Explicit False — the default flipped to enabled in 817132a.
-    config_off = Porygon2LearnerConfig(player_q_enabled=False)
-    player_net_off = get_player_model(
-        get_player_model_config(config_off.generation, train=True)
-    )
-    with jax.default_device(jax.devices("cpu")[0]):
-        player_state_off, builder_state_off = create_train_state(
-            player_net_off, builder_net, jax.random.key(0), config_off
-        )
-        _, _, logs_off = train_step(
-            player_state_off, builder_state_off, batch, config_off
-        )
-    assert "player_loss_q" not in logs_off
-    assert "player_loss_q_private" not in logs_off
-    assert "player_q_switch_move_gap" not in logs_off
-    assert "player_loss_coma" not in logs_off
-    assert "player_q_boost_adv_mean" not in logs_off
+    assert float(logs_explore["player_q_macro_micro_gradient_norm"]) > 0.0

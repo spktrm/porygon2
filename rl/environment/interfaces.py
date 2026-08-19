@@ -95,7 +95,7 @@ class PlayerActorOutput:
     # K auxiliary discounts (multi-gamma value aux). Actors leave this
     # empty so replay transitions stay small.
     aux_value_logits: ArrayLike = ()
-    # Learner-only (cfg.train and q_head.enabled): (T, A, n_bins)
+    # Learner-only (cfg.train; the Q critic is structural): (T, A, n_bins)
     # categorical logits of the all-action Q critic over the flat src x tgt
     # action grid (docs/q-critic-plan.md). q_logits is the privileged rung
     # (conditioned on value_all — drives the Retrace recursion);

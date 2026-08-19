@@ -573,16 +573,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # advantages exclusively.
     player_value_ladder_coef: float = 0.25
 
-    # Observer all-action Q critic (stage 1, docs/q-critic-plan.md):
-    # Retrace(lambda)-trained categorical Q over the flat action grid,
-    # read off the same action embeddings as the policy heads. ZERO policy
-    # influence at this stage — it exists for diagnostics (player_q_r2,
-    # player_q_ev_gap, player_q_switch_move_gap: the direct "what is
-    # switching worth" readout) and representation shaping. Enabling adds
-    # q_head params to the tree, so a strict checkpoint-mode resume across
-    # the flip fails — resume with LOAD_STATE_MODE=params (merge) or start
-    # fresh. Singles only (asserted in get_player_model_config).
-    player_q_enabled: bool = True
+    # All-action Q critic (docs/q-critic-plan.md) — STRUCTURAL since
+    # 2026-08-20 (no enable flag): the two-rung hierarchical Q head is
+    # part of the model, its CE always trains, and every consumer (boost,
+    # COMA, diagnostics) assumes it exists. Singles only (asserted in
+    # get_player_model_config).
     # CE weight — same modest scale as the aux value spectrum, and for the
     # same reason (heavy aux gradient globally clips everything).
     player_q_coef: float = 0.5

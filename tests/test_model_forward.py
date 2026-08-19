@@ -52,27 +52,17 @@ def test_forward_outputs_finite_and_shaped(model_and_inputs):
     assert np.isfinite(pi_lp).all()
 
 
-def test_q_head_forward_shapes_and_gating(model_and_inputs):
-    """q_head_enabled adds the two-rung (T, A, n_bins) Q readouts
-    (docs/q-critic-plan.md) — and adds params, so the default config must
-    keep producing q-free trees (checkpoint compatibility)."""
+def test_q_head_forward_shapes(model_and_inputs):
+    """The structural two-rung hierarchical Q readout (docs/
+    q-critic-plan.md): owned adapter + shared MacroMicroHead params in the
+    tree, (T, A, n_bins) logits per rung, rung conditioning alive."""
 
-    from rl.environment.utils import get_ex_player_step
-    from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
-    from rl.model.player_model import get_player_model
 
-    _, params_off, _, _ = model_and_inputs
-    assert "q_head" not in params_off["params"]
-
-    network = get_player_model(
-        get_player_model_config(generation=9, train=True, q_head_enabled=True)
-    )
-    actor_input, actor_output = jax.device_put(
-        jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    )
-    params = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
-    assert "q_head" in params["params"]
+    network, params, actor_input, actor_output = model_and_inputs
+    for subtree in ("q_adapter", "q_macro_micro", "q_cond_proj", "q_cond_norm"):
+        assert subtree in params["params"]
+    assert "macro_micro_head" in params["params"]
 
     out = network.apply(params, actor_input, actor_output, HeadParams())
     T = actor_input.env.done.shape[0]

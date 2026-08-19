@@ -262,7 +262,7 @@ def rl_sections():
                 ),
                 lp(
                     "Q loss & head gradient",
-                    ["player_loss_q", "player_q_head_gradient_norm"],
+                    ["player_loss_q", "player_q_macro_micro_gradient_norm"],
                 ),
             ],
         ),
@@ -755,7 +755,7 @@ def rl_sections():
                         "player_pi_head_gradient_norm",
                         "player_v_head_gradient_norm",
                         "player_aux_v_head_gradient_norm",
-                        "player_q_head_gradient_norm",
+                        "player_q_macro_micro_gradient_norm",
                     ],
                     log_y=True,
                 ),

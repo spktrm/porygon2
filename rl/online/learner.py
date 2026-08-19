@@ -300,262 +300,261 @@ def train_step(
     # conditioning) and reference policy; the Q_private rung trains by CE
     # against the same labels. Zero policy influence — the heads train,
     # the diagnostics log, nothing reaches the actor loss.
-    if config.player_q_enabled:
-        q_target_probs, q_retrace_g, q_all_target, q_v_exp, q_taken_target = (
-            compute_q_targets(
-                batch,
-                q_logits=player_target_pred.q_logits,
-                target_log_policy=player_target_pred.action_head.log_policy,
-                isr=target_actor_ratio,
-                config=config,
-            )
+    q_target_probs, q_retrace_g, q_all_target, q_v_exp, q_taken_target = (
+        compute_q_targets(
+            batch,
+            q_logits=player_target_pred.q_logits,
+            target_log_policy=player_target_pred.action_head.log_policy,
+            isr=target_actor_ratio,
+            config=config,
         )
-        # Q(s, a) exists wherever an action was actually taken — including
-        # forced single-option steps (policy_mask excludes those; the Q
-        # regression must not) — but not on terminal rows.
-        q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
-        if own_rows is not None:
-            training_logs["player_q_explore_frac"] = average(
-                jnp.logical_not(own_rows)[None, :].astype(jnp.float32)
-                * jnp.ones_like(q_mask, dtype=jnp.float32),
-                q_mask,
-            )
-
-        # Both readouts estimate the same state value from the same target
-        # params AND the same (privileged) information set, so their
-        # absolute gap is pure calibration debt of the Q head to the V
-        # head (q-critic-plan.md stage-1 acceptance metric) — no
-        # information-deficit component since the value_all conditioning.
-        training_logs["player_q_ev_gap"] = average(
-            jnp.abs(
-                q_v_exp - player_target_pred.value_head.expectation.astype(jnp.float32)
-            ),
+    )
+    # Q(s, a) exists wherever an action was actually taken — including
+    # forced single-option steps (policy_mask excludes those; the Q
+    # regression must not) — but not on terminal rows.
+    q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
+    if own_rows is not None:
+        training_logs["player_q_explore_frac"] = average(
+            jnp.logical_not(own_rows)[None, :].astype(jnp.float32)
+            * jnp.ones_like(q_mask, dtype=jnp.float32),
             q_mask,
         )
-        # The direct "what does the critic think switching is worth"
-        # readout, graded on the POLICY'S information set (Q_private — the
-        # question is what a deployable critic believes, so the privileged
-        # rung would answer the wrong one): best legal switch's E[Q] minus
-        # best legal move's, over states offering both. The number the
-        # switch-collapse investigation (Aug 2026) had no way to measure.
-        q_private_all_target = jax.nn.softmax(
-            player_target_pred.private_q_logits.astype(jnp.float32), axis=-1
-        ) @ cat_vf_support.astype(jnp.float32)
-        switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
-        move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
-        valid_switch = flat_action_mask & switch_cells
-        valid_move = flat_action_mask & move_cells
-        best_switch = jnp.max(
-            jnp.where(valid_switch, q_private_all_target, -jnp.inf), axis=-1
+
+    # Both readouts estimate the same state value from the same target
+    # params AND the same (privileged) information set, so their
+    # absolute gap is pure calibration debt of the Q head to the V
+    # head (q-critic-plan.md stage-1 acceptance metric) — no
+    # information-deficit component since the value_all conditioning.
+    training_logs["player_q_ev_gap"] = average(
+        jnp.abs(
+            q_v_exp - player_target_pred.value_head.expectation.astype(jnp.float32)
+        ),
+        q_mask,
+    )
+    # The direct "what does the critic think switching is worth"
+    # readout, graded on the POLICY'S information set (Q_private — the
+    # question is what a deployable critic believes, so the privileged
+    # rung would answer the wrong one): best legal switch's E[Q] minus
+    # best legal move's, over states offering both. The number the
+    # switch-collapse investigation (Aug 2026) had no way to measure.
+    q_private_all_target = jax.nn.softmax(
+        player_target_pred.private_q_logits.astype(jnp.float32), axis=-1
+    ) @ cat_vf_support.astype(jnp.float32)
+    switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+    move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
+    valid_switch = flat_action_mask & switch_cells
+    valid_move = flat_action_mask & move_cells
+    best_switch = jnp.max(
+        jnp.where(valid_switch, q_private_all_target, -jnp.inf), axis=-1
+    )
+    best_move = jnp.max(
+        jnp.where(valid_move, q_private_all_target, -jnp.inf), axis=-1
+    )
+    has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
+    training_logs["player_q_switch_move_gap"] = average(
+        jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
+    )
+
+    # Discriminators for a negative gap: starved switch cells vs a
+    # genuine judgement. The CE only trains the taken action's cell,
+    # so a collapsing switch_ratio starves voluntary-switch cells of
+    # gradient while forced replacements (post-faint, no legal move)
+    # keep flowing regardless of policy. Coverage says how bad the
+    # starvation is; the conditional Retrace means are the
+    # head-independent answer to "do voluntary switches actually lead
+    # to worse outcomes than moves from the same kind of state?".
+    taken_switch = jnp.take(switch_cells, player_actor_action_head.action_index)
+    has_move = valid_move.any(axis=-1)
+    q_voluntary_switch_mask = q_mask & taken_switch & has_move
+    q_forced_switch_mask = q_mask & taken_switch & jnp.logical_not(has_move)
+    q_move_mask = q_mask & jnp.logical_not(taken_switch)
+    training_logs["player_q_switch_target_frac"] = average(
+        taken_switch.astype(jnp.float32), q_mask
+    )
+    training_logs["player_q_voluntary_switch_target_frac"] = average(
+        (taken_switch & has_move).astype(jnp.float32), q_mask
+    )
+    training_logs["player_q_target_voluntary_switch"] = average(
+        q_retrace_g, q_voluntary_switch_mask
+    )
+    training_logs["player_q_target_move"] = average(
+        q_retrace_g, q_move_mask & has_both
+    )
+
+    # Pivotal-state decision panel (2026-08-19). A negative MEAN gap is
+    # the expected sign under correct play — switching spends a turn, so
+    # most both-modality states correctly favour the move, and the
+    # state-averaged statistics above are nearly blind to the collapse
+    # failure mode. The signal lives in the tail: the states where the
+    # critic actually prefers the switch. Conditioning on the STATE
+    # (critic flag) rather than the taken action also dodges the
+    # chosen-switch selection bias that muddied the Aug-15 crossover
+    # reading (a 2% switch mass keeps only the policy's most confident
+    # pivots, so "chosen switches outperform moves" proves little).
+    # Collapse signature: pivotal_frac bleeding to ~0 (critic stops
+    # flagging any state as switch-worthy) or pi_switch_mass /
+    # taken_switch_frac cratering on pivotal states while pivotal_frac
+    # holds (policy ignoring the critic's flags).
+    pivotal_mask = q_mask & has_both & (best_switch > best_move)
+    training_logs["player_q_pivotal_frac"] = average(
+        (best_switch > best_move).astype(jnp.float32), q_mask & has_both
+    )
+    pi_target = (
+        jnp.exp(player_target_pred.action_head.log_policy.astype(jnp.float32))
+        * flat_action_mask
+    )
+    pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
+    training_logs["player_q_pivotal_pi_switch_mass"] = average(
+        (pi_target * valid_switch).sum(axis=-1), pivotal_mask
+    )
+    training_logs["player_q_pivotal_taken_switch_frac"] = average(
+        taken_switch.astype(jnp.float32), pivotal_mask
+    )
+    # Within-class return split: same critic-flagged state class,
+    # different action — the closest available reading of "are switches
+    # better where they matter". Empty slices log 0 (average clips the
+    # denominator), so read alongside pivotal_frac/taken_switch_frac.
+    training_logs["player_q_pivotal_ret_switch"] = average(
+        q_retrace_g, pivotal_mask & taken_switch
+    )
+    training_logs["player_q_pivotal_ret_stay"] = average(
+        q_retrace_g, pivotal_mask & jnp.logical_not(taken_switch)
+    )
+    if own_rows is not None:
+        # Explore-ladder rows play at flattened temperature, so switches
+        # taken there are far closer to randomised interventions than
+        # exploit-row switches — the least selection-biased empirical
+        # answer to "do voluntary switches lead to better outcomes"
+        # available without new machinery.
+        explore_cols = jnp.logical_not(own_rows)[None, :]
+        training_logs["player_q_explore_ret_vol_switch"] = average(
+            q_retrace_g, q_voluntary_switch_mask & explore_cols
         )
-        best_move = jnp.max(
-            jnp.where(valid_move, q_private_all_target, -jnp.inf), axis=-1
-        )
-        has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
-        training_logs["player_q_switch_move_gap"] = average(
-            jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
+        training_logs["player_q_explore_ret_move"] = average(
+            q_retrace_g, q_move_mask & has_both & explore_cols
         )
 
-        # Discriminators for a negative gap: starved switch cells vs a
-        # genuine judgement. The CE only trains the taken action's cell,
-        # so a collapsing switch_ratio starves voluntary-switch cells of
-        # gradient while forced replacements (post-faint, no legal move)
-        # keep flowing regardless of policy. Coverage says how bad the
-        # starvation is; the conditional Retrace means are the
-        # head-independent answer to "do voluntary switches actually lead
-        # to worse outcomes than moves from the same kind of state?".
-        taken_switch = jnp.take(switch_cells, player_actor_action_head.action_index)
-        has_move = valid_move.any(axis=-1)
-        q_voluntary_switch_mask = q_mask & taken_switch & has_move
-        q_forced_switch_mask = q_mask & taken_switch & jnp.logical_not(has_move)
-        q_move_mask = q_mask & jnp.logical_not(taken_switch)
-        training_logs["player_q_switch_target_frac"] = average(
-            taken_switch.astype(jnp.float32), q_mask
-        )
-        training_logs["player_q_voluntary_switch_target_frac"] = average(
-            (taken_switch & has_move).astype(jnp.float32), q_mask
-        )
-        training_logs["player_q_target_voluntary_switch"] = average(
-            q_retrace_g, q_voluntary_switch_mask
-        )
-        training_logs["player_q_target_move"] = average(
-            q_retrace_g, q_move_mask & has_both
-        )
+    # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md): the
+    # Retrace return minus the target policy's Q expectation — the
+    # Fan & Farina estimator (arXiv 2605.19235), algebraically
+    # retrace_g − v_exp; unbiased at lambda=1 for any critic accuracy
+    # (their Thm 3.1), lower-MSE than the GAE family exactly where
+    # the policy must keep randomising. Masked to acted rows
+    # (retrace_g is already masked; v_exp is not).
+    q_boost_raw = (
+        q_retrace_g
+        if config.player_q_boost_variant == "multistep"
+        else q_taken_target
+    )
+    q_boost_advantages = (q_boost_raw - q_v_exp) * q_mask.astype(jnp.float32)
 
-        # Pivotal-state decision panel (2026-08-19). A negative MEAN gap is
-        # the expected sign under correct play — switching spends a turn, so
-        # most both-modality states correctly favour the move, and the
-        # state-averaged statistics above are nearly blind to the collapse
-        # failure mode. The signal lives in the tail: the states where the
-        # critic actually prefers the switch. Conditioning on the STATE
-        # (critic flag) rather than the taken action also dodges the
-        # chosen-switch selection bias that muddied the Aug-15 crossover
-        # reading (a 2% switch mass keeps only the policy's most confident
-        # pivots, so "chosen switches outperform moves" proves little).
-        # Collapse signature: pivotal_frac bleeding to ~0 (critic stops
-        # flagging any state as switch-worthy) or pi_switch_mass /
-        # taken_switch_frac cratering on pivotal states while pivotal_frac
-        # holds (policy ignoring the critic's flags).
-        pivotal_mask = q_mask & has_both & (best_switch > best_move)
-        training_logs["player_q_pivotal_frac"] = average(
-            (best_switch > best_move).astype(jnp.float32), q_mask & has_both
+    if config.player_q_boost_diagnostic_enabled:
+        # Stage 3a diagnostics (loss-free, on permanently): scale and
+        # agreement vs the v-trace advantage channel, Thm 3.1's
+        # Var_a~pi[Q] > 0 precondition, and fresh/replay calibration
+        # of the taken-action Q readout against its own realised
+        # Retrace targets (the plan's 3b gate, alongside
+        # player_value_r2_fresh as the same-subset V comparator).
+        win_adv = player_targets.advantages.astype(jnp.float32)
+        qb_mean = q_boost_advantages.mean(where=policy_mask)
+        training_logs["player_q_boost_adv_mean"] = qb_mean
+        training_logs["player_q_boost_adv_std"] = q_boost_advantages.std(
+            where=policy_mask
         )
-        pi_target = (
-            jnp.exp(player_target_pred.action_head.log_policy.astype(jnp.float32))
-            * flat_action_mask
+        training_logs["player_q_boost_adv_corr"] = (
+            (q_boost_advantages - qb_mean)
+            * (win_adv - win_adv.mean(where=policy_mask))
+        ).mean(where=policy_mask) / (
+            q_boost_advantages.std(where=policy_mask)
+            * win_adv.std(where=policy_mask)
+            + 1e-8
         )
-        pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
-        training_logs["player_q_pivotal_pi_switch_mass"] = average(
-            (pi_target * valid_switch).sum(axis=-1), pivotal_mask
+        training_logs["player_q_boost_adv_sign_agree"] = average(
+            (jnp.sign(q_boost_advantages) == jnp.sign(win_adv)).astype(
+                jnp.float32
+            ),
+            policy_mask,
         )
-        training_logs["player_q_pivotal_taken_switch_frac"] = average(
-            taken_switch.astype(jnp.float32), pivotal_mask
+        # pi_target computed above (pivotal-state panel). The MEAN
+        # undersells Thm 3.1 headroom by construction when action-value
+        # spread concentrates in few high-leverage states (which is how
+        # this game works) — the p90 is the honest readout.
+        qvar_state = (
+            pi_target * jnp.square(q_all_target - q_v_exp[..., None])
+        ).sum(axis=-1)
+        training_logs["player_q_action_var"] = average(qvar_state, q_mask)
+        training_logs["player_q_action_var_p90"] = jnp.nanquantile(
+            jnp.where(q_mask, qvar_state, jnp.nan), 0.9
         )
-        # Within-class return split: same critic-flagged state class,
-        # different action — the closest available reading of "are switches
-        # better where they matter". Empty slices log 0 (average clips the
-        # denominator), so read alongside pivotal_frac/taken_switch_frac.
-        training_logs["player_q_pivotal_ret_switch"] = average(
-            q_retrace_g, pivotal_mask & taken_switch
+        # π-free counterpart: uniform-over-legal variance of the same
+        # Q̄_all means. The π-weighted qvar above is squashed by a
+        # collapsed policy regardless of what the critic believes (94%
+        # move mass hides any spread on the move↔switch axis), so it
+        # can't distinguish "critic is action-flat" from "critic is
+        # confidently anti-switch" — opposite remedies (head capacity /
+        # supervision vs nothing). Read the pair together: uniform ≫
+        # π-weighted means the spread lives on actions the policy has
+        # abandoned; both ≈ 0 means the critic genuinely can't tell
+        # actions apart.
+        n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
+        q_mean_uniform = (
+            jnp.where(flat_action_mask, q_all_target, 0.0).sum(axis=-1) / n_legal
         )
-        training_logs["player_q_pivotal_ret_stay"] = average(
-            q_retrace_g, pivotal_mask & jnp.logical_not(taken_switch)
-        )
-        if own_rows is not None:
-            # Explore-ladder rows play at flattened temperature, so switches
-            # taken there are far closer to randomised interventions than
-            # exploit-row switches — the least selection-biased empirical
-            # answer to "do voluntary switches lead to better outcomes"
-            # available without new machinery.
-            explore_cols = jnp.logical_not(own_rows)[None, :]
-            training_logs["player_q_explore_ret_vol_switch"] = average(
-                q_retrace_g, q_voluntary_switch_mask & explore_cols
-            )
-            training_logs["player_q_explore_ret_move"] = average(
-                q_retrace_g, q_move_mask & has_both & explore_cols
-            )
-
-        # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md): the
-        # Retrace return minus the target policy's Q expectation — the
-        # Fan & Farina estimator (arXiv 2605.19235), algebraically
-        # retrace_g − v_exp; unbiased at lambda=1 for any critic accuracy
-        # (their Thm 3.1), lower-MSE than the GAE family exactly where
-        # the policy must keep randomising. Masked to acted rows
-        # (retrace_g is already masked; v_exp is not).
-        q_boost_raw = (
-            q_retrace_g
-            if config.player_q_boost_variant == "multistep"
-            else q_taken_target
-        )
-        q_boost_advantages = (q_boost_raw - q_v_exp) * q_mask.astype(jnp.float32)
-
-        if config.player_q_boost_diagnostic_enabled:
-            # Stage 3a diagnostics (loss-free, on permanently): scale and
-            # agreement vs the v-trace advantage channel, Thm 3.1's
-            # Var_a~pi[Q] > 0 precondition, and fresh/replay calibration
-            # of the taken-action Q readout against its own realised
-            # Retrace targets (the plan's 3b gate, alongside
-            # player_value_r2_fresh as the same-subset V comparator).
-            win_adv = player_targets.advantages.astype(jnp.float32)
-            qb_mean = q_boost_advantages.mean(where=policy_mask)
-            training_logs["player_q_boost_adv_mean"] = qb_mean
-            training_logs["player_q_boost_adv_std"] = q_boost_advantages.std(
-                where=policy_mask
-            )
-            training_logs["player_q_boost_adv_corr"] = (
-                (q_boost_advantages - qb_mean)
-                * (win_adv - win_adv.mean(where=policy_mask))
-            ).mean(where=policy_mask) / (
-                q_boost_advantages.std(where=policy_mask)
-                * win_adv.std(where=policy_mask)
-                + 1e-8
-            )
-            training_logs["player_q_boost_adv_sign_agree"] = average(
-                (jnp.sign(q_boost_advantages) == jnp.sign(win_adv)).astype(
-                    jnp.float32
-                ),
-                policy_mask,
-            )
-            # pi_target computed above (pivotal-state panel). The MEAN
-            # undersells Thm 3.1 headroom by construction when action-value
-            # spread concentrates in few high-leverage states (which is how
-            # this game works) — the p90 is the honest readout.
-            qvar_state = (
-                pi_target * jnp.square(q_all_target - q_v_exp[..., None])
+        qvar_uniform = (
+            jnp.where(
+                flat_action_mask,
+                jnp.square(q_all_target - q_mean_uniform[..., None]),
+                0.0,
             ).sum(axis=-1)
-            training_logs["player_q_action_var"] = average(qvar_state, q_mask)
-            training_logs["player_q_action_var_p90"] = jnp.nanquantile(
-                jnp.where(q_mask, qvar_state, jnp.nan), 0.9
-            )
-            # π-free counterpart: uniform-over-legal variance of the same
-            # Q̄_all means. The π-weighted qvar above is squashed by a
-            # collapsed policy regardless of what the critic believes (94%
-            # move mass hides any spread on the move↔switch axis), so it
-            # can't distinguish "critic is action-flat" from "critic is
-            # confidently anti-switch" — opposite remedies (head capacity /
-            # supervision vs nothing). Read the pair together: uniform ≫
-            # π-weighted means the spread lives on actions the policy has
-            # abandoned; both ≈ 0 means the critic genuinely can't tell
-            # actions apart.
-            n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
-            q_mean_uniform = (
-                jnp.where(flat_action_mask, q_all_target, 0.0).sum(axis=-1) / n_legal
-            )
-            qvar_uniform = (
-                jnp.where(
-                    flat_action_mask,
-                    jnp.square(q_all_target - q_mean_uniform[..., None]),
-                    0.0,
-                ).sum(axis=-1)
-                / n_legal
-            )
-            training_logs["player_q_action_var_uniform"] = average(
-                qvar_uniform, q_mask
-            )
-            training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
-                jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
-            )
-            if not isinstance(batch.reuse_count, tuple):
-                fresh_cols = batch.reuse_count[0] == 0
-                replay_cols = ~fresh_cols
-                if own_rows is not None:
-                    # Same standard-temperature filter as the plasticity
-                    # gap: tempered rows would contaminate calibration.
-                    fresh_cols = fresh_cols & own_rows
-                    replay_cols = replay_cols & own_rows
+            / n_legal
+        )
+        training_logs["player_q_action_var_uniform"] = average(
+            qvar_uniform, q_mask
+        )
+        training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
+            jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
+        )
+        if not isinstance(batch.reuse_count, tuple):
+            fresh_cols = batch.reuse_count[0] == 0
+            replay_cols = ~fresh_cols
+            if own_rows is not None:
+                # Same standard-temperature filter as the plasticity
+                # gap: tempered rows would contaminate calibration.
+                fresh_cols = fresh_cols & own_rows
+                replay_cols = replay_cols & own_rows
 
-                def q_calibration_r2(cols):
-                    m = q_mask & cols[None, :]
-                    return jnp.where(
-                        m.any(),
-                        calculate_r2(
-                            value_prediction=q_taken_target,
-                            value_target=q_retrace_g,
-                            mask=m,
-                        ),
-                        0.0,
-                    )
-
-                training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(
-                    fresh_cols
-                )
-                training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(
-                    replay_cols
-                )
-                vm_fresh = value_mask & fresh_cols[None, :]
-                training_logs["player_value_r2_fresh"] = jnp.where(
-                    vm_fresh.any(),
+            def q_calibration_r2(cols):
+                m = q_mask & cols[None, :]
+                return jnp.where(
+                    m.any(),
                     calculate_r2(
-                        value_prediction=player_target_pred.value_head.expectation.astype(
-                            jnp.float32
-                        ),
-                        value_target=(
-                            player_targets.win_returns @ cat_vf_support
-                        ).astype(jnp.float32),
-                        mask=vm_fresh,
+                        value_prediction=q_taken_target,
+                        value_target=q_retrace_g,
+                        mask=m,
                     ),
                     0.0,
                 )
+
+            training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(
+                fresh_cols
+            )
+            training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(
+                replay_cols
+            )
+            vm_fresh = value_mask & fresh_cols[None, :]
+            training_logs["player_value_r2_fresh"] = jnp.where(
+                vm_fresh.any(),
+                calculate_r2(
+                    value_prediction=player_target_pred.value_head.expectation.astype(
+                        jnp.float32
+                    ),
+                    value_target=(
+                        player_targets.win_returns @ cat_vf_support
+                    ).astype(jnp.float32),
+                    mask=vm_fresh,
+                ),
+                0.0,
+            )
 
     # Advantage channel. Stage 3 Q-boosting cross-fades the Q-anchored
     # advantage into the v-trace one PRE-normalisation, so the existing
@@ -565,7 +564,7 @@ def train_step(
     # populations and while player_q_boost_enabled is off, so one
     # compiled fn serves every population.
     raw_advantages = player_targets.advantages
-    if config.player_q_enabled and q_boost_mix is not None:
+    if q_boost_mix is not None:
         raw_advantages = (
             (1.0 - q_boost_mix) * raw_advantages.astype(jnp.float32)
             + q_boost_mix * q_boost_advantages
@@ -810,176 +809,175 @@ def train_step(
         loss_q = 0.0
         loss_q_private = 0.0
         loss_coma = 0.0
-        if config.player_q_enabled:
 
-            def q_taken(q_logits):
-                return jnp.take_along_axis(
-                    q_logits.astype(jnp.float32),
-                    player_actor_action_head.action_index[..., None, None],
-                    axis=-2,
-                ).squeeze(-2)
+        def q_taken(q_logits):
+            return jnp.take_along_axis(
+                q_logits.astype(jnp.float32),
+                player_actor_action_head.action_index[..., None, None],
+                axis=-2,
+            ).squeeze(-2)
 
-            learner_q_logits_taken = q_taken(learner_player_pred.q_logits)
-            learner_q_private_logits_taken = q_taken(
-                learner_player_pred.private_q_logits
-            )
-            loss_q = average(
-                optax.softmax_cross_entropy(
-                    logits=learner_q_logits_taken, labels=q_target_probs
-                ),
-                q_mask,
-            )
-            loss_q_private = average(
-                optax.softmax_cross_entropy(
-                    logits=learner_q_private_logits_taken, labels=q_target_probs
-                ),
-                q_mask,
-            )
+        learner_q_logits_taken = q_taken(learner_player_pred.q_logits)
+        learner_q_private_logits_taken = q_taken(
+            learner_player_pred.private_q_logits
+        )
+        loss_q = average(
+            optax.softmax_cross_entropy(
+                logits=learner_q_logits_taken, labels=q_target_probs
+            ),
+            q_mask,
+        )
+        loss_q_private = average(
+            optax.softmax_cross_entropy(
+                logits=learner_q_private_logits_taken, labels=q_target_probs
+            ),
+            q_mask,
+        )
 
-            # p_q OBSERVER (kept when the stage-2 forward KL was removed,
-            # 2026-08-19): Boltzmann distribution over the EMA target's
-            # deployable-rung action values — the "what does the critic
-            # want" leading indicator (pq vs pi switch mass on states
-            # where both a switch and a non-switch are legal, the slice
-            # the ratchet starves). Loss-free; no term reads pq.
-            q_bar = jax.nn.softmax(
-                player_target_pred.private_q_logits.astype(jnp.float32),
-                axis=-1,
-            ) @ cat_vf_support.astype(jnp.float32)
-            pq_logits = jnp.where(
-                flat_action_mask,
-                q_bar / config.player_q_observer_tau,
-                -1e9,
-            )
-            pq = jax.nn.softmax(pq_logits, axis=-1)
-            pq_log = jax.nn.log_softmax(pq_logits, axis=-1)
+        # p_q OBSERVER (kept when the stage-2 forward KL was removed,
+        # 2026-08-19): Boltzmann distribution over the EMA target's
+        # deployable-rung action values — the "what does the critic
+        # want" leading indicator (pq vs pi switch mass on states
+        # where both a switch and a non-switch are legal, the slice
+        # the ratchet starves). Loss-free; no term reads pq.
+        q_bar = jax.nn.softmax(
+            player_target_pred.private_q_logits.astype(jnp.float32),
+            axis=-1,
+        ) @ cat_vf_support.astype(jnp.float32)
+        pq_logits = jnp.where(
+            flat_action_mask,
+            q_bar / config.player_q_observer_tau,
+            -1e9,
+        )
+        pq = jax.nn.softmax(pq_logits, axis=-1)
+        pq_log = jax.nn.log_softmax(pq_logits, axis=-1)
 
-            switch_actions = jnp.asarray(
-                FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
-            )
-            has_switch = (flat_action_mask & switch_actions).any(axis=-1)
-            has_other = (
-                flat_action_mask & jnp.logical_not(switch_actions)
-            ).any(axis=-1)
-            switch_choice_mask = policy_mask & has_switch & has_other
-            pq_switch_mass = (pq * switch_actions).sum(axis=-1)
-            pi_switch_mass = (
+        switch_actions = jnp.asarray(
+            FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+        )
+        has_switch = (flat_action_mask & switch_actions).any(axis=-1)
+        has_other = (
+            flat_action_mask & jnp.logical_not(switch_actions)
+        ).any(axis=-1)
+        switch_choice_mask = policy_mask & has_switch & has_other
+        pq_switch_mass = (pq * switch_actions).sum(axis=-1)
+        pi_switch_mass = (
+            jnp.exp(learner_log_policy.astype(jnp.float32))
+            * flat_action_mask
+            * switch_actions
+        ).sum(axis=-1)
+        q_improve_logs = dict(
+            player_q_improve_pq_switch_mass=average(
+                pq_switch_mass, switch_choice_mask
+            ),
+            player_q_improve_pi_switch_mass=average(
+                pi_switch_mass, switch_choice_mask
+            ),
+            player_q_improve_pq_entropy=average(
+                -jnp.where(flat_action_mask, pq * pq_log, 0.0).sum(axis=-1),
+                policy_mask,
+            ),
+        )
+
+        # COMA-style all-action counterfactual policy loss (replaced
+        # the stage-2 forward KL, 2026-08-19 — see the config comment
+        # and docs/entropy-gradient-pressure.md). Per legal cell,
+        # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')]: the COMA
+        # counterfactual baseline under the CURRENT policy. The loss
+        # −Σ_a π(a)·sg(adv(a)) has per-cell gradient π(a)·adv(a) —
+        # the exact all-action policy gradient: zero sampling
+        # variance, counterfactual pressure on every real-choice row
+        # including untaken actions (the sampled boost advantage
+        # structurally carries none for those). Q̄_all is the
+        # PRIVILEGED rung (COMA's centralised critic); it enters as
+        # stop-gradient scalars only, exactly like the privileged
+        # v_head advantages, so the policy stays bitwise invariant
+        # to opp_private_team. Weighted by the coma_coef runtime
+        # scalar (host-ramped, zero for exploiter populations).
+        if config.player_coma_enabled:
+            pi_learner = (
                 jnp.exp(learner_log_policy.astype(jnp.float32))
                 * flat_action_mask
-                * switch_actions
-            ).sum(axis=-1)
-            q_improve_logs = dict(
-                player_q_improve_pq_switch_mass=average(
-                    pq_switch_mass, switch_choice_mask
+            )
+            pi_learner = pi_learner / jnp.maximum(
+                pi_learner.sum(axis=-1, keepdims=True), 1e-8
+            )
+            v_cf = jax.lax.stop_gradient(
+                (pi_learner * q_all_target).sum(axis=-1)
+            )
+            coma_adv = jax.lax.stop_gradient(
+                jnp.where(
+                    flat_action_mask, q_all_target - v_cf[..., None], 0.0
+                )
+            )
+            loss_coma = -average(
+                (pi_learner * coma_adv).sum(axis=-1), policy_mask
+            )
+            coma_logs = dict(
+                player_loss_coma=loss_coma,
+                # Net signed gradient mass toward the switch modality
+                # per real-choice row: positive = COMA is currently
+                # pushing switch mass UP (the critic prefers more
+                # switching than the policy carries).
+                player_coma_switch_push=average(
+                    (pi_learner * coma_adv * switch_actions).sum(axis=-1),
+                    switch_choice_mask,
                 ),
-                player_q_improve_pi_switch_mass=average(
-                    pi_switch_mass, switch_choice_mask
-                ),
-                player_q_improve_pq_entropy=average(
-                    -jnp.where(flat_action_mask, pq * pq_log, 0.0).sum(axis=-1),
-                    policy_mask,
+                player_coma_adv_std=coma_adv.std(
+                    where=flat_action_mask & policy_mask[..., None]
                 ),
             )
+        q_taken_pred = jax.nn.softmax(
+            learner_q_logits_taken, axis=-1
+        ) @ cat_vf_support.astype(jnp.float32)
+        q_private_taken_pred = jax.nn.softmax(
+            learner_q_private_logits_taken, axis=-1
+        ) @ cat_vf_support.astype(jnp.float32)
 
-            # COMA-style all-action counterfactual policy loss (replaced
-            # the stage-2 forward KL, 2026-08-19 — see the config comment
-            # and docs/entropy-gradient-pressure.md). Per legal cell,
-            # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')]: the COMA
-            # counterfactual baseline under the CURRENT policy. The loss
-            # −Σ_a π(a)·sg(adv(a)) has per-cell gradient π(a)·adv(a) —
-            # the exact all-action policy gradient: zero sampling
-            # variance, counterfactual pressure on every real-choice row
-            # including untaken actions (the sampled boost advantage
-            # structurally carries none for those). Q̄_all is the
-            # PRIVILEGED rung (COMA's centralised critic); it enters as
-            # stop-gradient scalars only, exactly like the privileged
-            # v_head advantages, so the policy stays bitwise invariant
-            # to opp_private_team. Weighted by the coma_coef runtime
-            # scalar (host-ramped, zero for exploiter populations).
-            if config.player_coma_enabled:
-                pi_learner = (
-                    jnp.exp(learner_log_policy.astype(jnp.float32))
-                    * flat_action_mask
-                )
-                pi_learner = pi_learner / jnp.maximum(
-                    pi_learner.sum(axis=-1, keepdims=True), 1e-8
-                )
-                v_cf = jax.lax.stop_gradient(
-                    (pi_learner * q_all_target).sum(axis=-1)
-                )
-                coma_adv = jax.lax.stop_gradient(
-                    jnp.where(
-                        flat_action_mask, q_all_target - v_cf[..., None], 0.0
-                    )
-                )
-                loss_coma = -average(
-                    (pi_learner * coma_adv).sum(axis=-1), policy_mask
-                )
-                coma_logs = dict(
-                    player_loss_coma=loss_coma,
-                    # Net signed gradient mass toward the switch modality
-                    # per real-choice row: positive = COMA is currently
-                    # pushing switch mass UP (the critic prefers more
-                    # switching than the policy carries).
-                    player_coma_switch_push=average(
-                        (pi_learner * coma_adv * switch_actions).sum(axis=-1),
-                        switch_choice_mask,
-                    ),
-                    player_coma_adv_std=coma_adv.std(
-                        where=flat_action_mask & policy_mask[..., None]
-                    ),
-                )
-            q_taken_pred = jax.nn.softmax(
-                learner_q_logits_taken, axis=-1
-            ) @ cat_vf_support.astype(jnp.float32)
-            q_private_taken_pred = jax.nn.softmax(
-                learner_q_private_logits_taken, axis=-1
-            ) @ cat_vf_support.astype(jnp.float32)
-
-            # Calibration by context, graded on Q_private (the contexts
-            # exist to interpret the Q_private switch/move gap, so they
-            # must grade the same rung). Forced switches stay data-rich
-            # through a switch collapse; voluntary ones starve. Calibrated
-            # forced + degraded voluntary = starvation artefact; both
-            # calibrated with the gap still negative = the critic means it
-            # (0.0 sentinel when a batch has no steps in a context).
-            def q_context_r2(context_mask):
-                return jnp.where(
-                    context_mask.any(),
-                    calculate_r2(
-                        value_prediction=q_private_taken_pred,
-                        value_target=q_retrace_g,
-                        mask=context_mask,
-                    ),
-                    0.0,
-                )
-
-            q_logs = dict(
-                player_loss_q=loss_q,
-                player_loss_q_private=loss_q_private,
-                player_q_r2=calculate_r2(
-                    value_prediction=q_taken_pred,
-                    value_target=q_retrace_g,
-                    mask=q_mask,
-                ),
-                player_q_private_r2=calculate_r2(
+        # Calibration by context, graded on Q_private (the contexts
+        # exist to interpret the Q_private switch/move gap, so they
+        # must grade the same rung). Forced switches stay data-rich
+        # through a switch collapse; voluntary ones starve. Calibrated
+        # forced + degraded voluntary = starvation artefact; both
+        # calibrated with the gap still negative = the critic means it
+        # (0.0 sentinel when a batch has no steps in a context).
+        def q_context_r2(context_mask):
+            return jnp.where(
+                context_mask.any(),
+                calculate_r2(
                     value_prediction=q_private_taken_pred,
                     value_target=q_retrace_g,
-                    mask=q_mask,
+                    mask=context_mask,
                 ),
-                player_q_r2_move=q_context_r2(q_move_mask),
-                player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
-                player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
+                0.0,
             )
-            if own_rows is not None:
-                # Does the Q head actually fit the explore-actor-generated
-                # returns it is digesting? Persistent gap vs the full-mask
-                # r2 = the tempered rows are too off-policy to learn from
-                # (Retrace cutting every trace) rather than free
-                # counterfactuals.
-                q_logs["player_q_r2_explore"] = q_context_r2(
-                    q_mask & jnp.logical_not(own_rows)[None, :]
-                )
+
+        q_logs = dict(
+            player_loss_q=loss_q,
+            player_loss_q_private=loss_q_private,
+            player_q_r2=calculate_r2(
+                value_prediction=q_taken_pred,
+                value_target=q_retrace_g,
+                mask=q_mask,
+            ),
+            player_q_private_r2=calculate_r2(
+                value_prediction=q_private_taken_pred,
+                value_target=q_retrace_g,
+                mask=q_mask,
+            ),
+            player_q_r2_move=q_context_r2(q_move_mask),
+            player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
+            player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
+        )
+        if own_rows is not None:
+            # Does the Q head actually fit the explore-actor-generated
+            # returns it is digesting? Persistent gap vs the full-mask
+            # r2 = the tempered rows are too off-policy to learn from
+            # (Retrace cutting every trace) rather than free
+            # counterfactuals.
+            q_logs["player_q_r2_explore"] = q_context_r2(
+                q_mask & jnp.logical_not(own_rows)[None, :]
+            )
 
         loss = (
             config.player_policy_loss_coef * loss_pg
@@ -1681,12 +1679,6 @@ class Learner:
         # Stage-3 Q-boosting cross-fade anchor, same treatment (a resume
         # re-fades the advantage blend over player_q_boost_ramp_steps).
         self._q_boost_ramp_start: int | None = None
-        if config.player_q_boost_enabled and not config.player_q_enabled:
-            raise ValueError(
-                "player_q_boost_enabled requires player_q_enabled: the "
-                "boosted advantage is retrace_g - v_exp from the Q critic "
-                "(docs/q-boosting-plan.md)."
-            )
 
         # Block-sequential scheduler state (see _select_population): whose
         # block it is right now, and which exploiter population is next in
@@ -2691,11 +2683,7 @@ class Learner:
         # clean as a within-run contrast), linearly ramped host-side from
         # first activation — runtime scalar, so the ramp never recompiles.
         coma_coef = 0.0
-        if (
-            self.config.player_q_enabled
-            and self.config.player_coma_enabled
-            and pop.name == "main"
-        ):
+        if self.config.player_coma_enabled and pop.name == "main":
             step = int(pop.player_state.step_count)
             if self._coma_ramp_start is None:
                 self._coma_ramp_start = step
@@ -2709,11 +2697,7 @@ class Learner:
         # activation (docs/q-boosting-plan.md §3) — runtime scalar, the
         # exploiter populations pass 0 through the same compiled fn.
         q_boost_mix = 0.0
-        if (
-            self.config.player_q_enabled
-            and self.config.player_q_boost_enabled
-            and pop.name == "main"
-        ):
+        if self.config.player_q_boost_enabled and pop.name == "main":
             step = int(pop.player_state.step_count)
             if self._q_boost_ramp_start is None:
                 self._q_boost_ramp_start = step

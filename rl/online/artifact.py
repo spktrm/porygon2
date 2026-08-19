@@ -59,16 +59,15 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         entity_size=int(model_cfg.entity_size),
         num_decision_slots=int(model_cfg.num_decision_slots),
         pi_head="typed_streams_dot",
-        # Q head (docs/q-critic-plan.md): enabling adds params to the
-        # tree, so checkpoint-mode resumes across the flip must fail with
-        # a sentence. Absent from pre-q manifests -> skipped there. The
-        # variant string marks the privileged two-rung conditioning
-        # (2026-08-17) — the q_head subtree reshaped, so resumes from
-        # observer-Q checkpoints go through load-mode "params" (which
-        # fresh-inits q_head and carries everything else).
-        q_head=(
-            "privileged_two_rung" if learner_config.player_q_enabled else False
-        ),
+        # Q head (docs/q-critic-plan.md): structural since 2026-08-20 —
+        # always present, so the manifest records the ARCHITECTURE
+        # variant, and a checkpoint whose variant string differs must go
+        # through load-mode "params" (fresh-inits the q modules, carries
+        # everything else). "hierarchical_two_rung" = owned ActionAdapter
+        # + shared MacroMicroHead, macro added onto the legality-centred
+        # micro; predecessor "privileged_two_rung" was the flat cond-MLP
+        # bilinear grid (2026-08-17).
+        q_head="hierarchical_two_rung",
     )
 
 

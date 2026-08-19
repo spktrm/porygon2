@@ -22,9 +22,7 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(
-    generation: int = 3, train: bool = False, q_head_enabled: bool = False
-) -> ConfigDict:
+def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 64
@@ -151,13 +149,30 @@ def get_player_model_config(
     # Dedicated modality-level head: per-modality attention pooling over
     # src-slot embeddings, shared MLP, zero-init output layer (keeps the
     # init policy anchored to calculate_hierarchical_prior).
-    cfg.macro_head = ConfigDict()
-    cfg.macro_head.qk_logits = ConfigDict()
-    cfg.macro_head.qk_logits.num_heads = 1
-    cfg.macro_head.qk_logits.use_bias = True
-    cfg.macro_head.qk_logits.qk_layer_norm = True
-    cfg.macro_head.mlp = ConfigDict()
-    cfg.macro_head.mlp.layer_sizes = entity_size
+    # Policy instantiation of the shared MacroMicroHead (2026-08-20; the
+    # Q critic instantiates the same module under cfg.q_head): 'dot'
+    # micro = the parameter-free scaled grid over the typed trunk
+    # streams; num_logits 1 = scalar logits per cell/modality for the
+    # policy's log-space hierarchy.
+    cfg.macro_micro = ConfigDict()
+    cfg.macro_micro.micro_kind = "dot"
+    cfg.macro_micro.num_logits = 1
+    cfg.macro_micro.macro = ConfigDict()
+    cfg.macro_micro.macro.qk_logits = ConfigDict()
+    cfg.macro_micro.macro.qk_logits.num_heads = 1
+    cfg.macro_micro.macro.qk_logits.use_bias = True
+    cfg.macro_micro.macro.qk_logits.qk_layer_norm = True
+    cfg.macro_micro.macro.mlp = ConfigDict()
+    cfg.macro_micro.macro.mlp.layer_sizes = entity_size
+
+    # Policy-owned residual adapter between the trunk's action embeddings
+    # and its MacroMicroHead (2026-08-20): zero-init out layer = exact
+    # identity at init and at a params-mode fresh reload, so adding it is
+    # policy-preserving; it exists so the Q head's CE gradient stops
+    # reshaping the parameter-free micro dot grid's geometry directly.
+    cfg.policy_adapter = ConfigDict()
+    cfg.policy_adapter.mlp = ConfigDict()
+    cfg.policy_adapter.mlp.layer_sizes = entity_size
 
     # Deep value readout (Aug 2026): the previous single linear layer made
     # the value head the thinnest module in the model while the action
@@ -192,30 +207,38 @@ def get_player_model_config(
     # heads and conditioned on a pooled value embedding — the one module
     # is called twice, with the privileged value_all embedding (Q_all,
     # drives Retrace) and the private value embedding (Q_private, the
-    # policy's information set), sharing every param across rungs. One
-    # residual block per role — the readout leans on the trunk depth that
-    # already exists. layer_sizes pins each role MLP's output back to
-    # entity_size: the conditioning concat doubles the input width, and
-    # the MLP default (output = input width) would break the residual.
-    # Params exist in the tree only when enabled (module never called
-    # otherwise), so flipping this on is an architecture change for
-    # checkpoint purposes.
+    # policy's information set), sharing every param across rungs.
+    # STRUCTURAL since 2026-08-20 (no enable flag) and the policy's exact
+    # module stack: an owned ActionAdapter with the cond concatenated in
+    # (the rung's information set reaches every cell) into the shared
+    # MacroMicroHead at num_logits = the categorical bin count, composed
+    # additively via compose_action_grid — the modality-centred micro grid
+    # plus a per-modality per-bin macro readout, the explicit
+    # low-dimensional parameter path for "is switching better here" that
+    # the flat grid made the head express cell-by-cell.
     cfg.q_head = ConfigDict()
-    cfg.q_head.enabled = q_head_enabled
-    cfg.q_head.num_blocks = 1
-    cfg.q_head.src_mlp = ConfigDict()
-    cfg.q_head.src_mlp.layer_sizes = entity_size
-    cfg.q_head.tgt_mlp = ConfigDict()
-    cfg.q_head.tgt_mlp.layer_sizes = entity_size
-    cfg.q_head.qk_logits = ConfigDict()
-    cfg.q_head.qk_logits.num_heads = len(CAT_VF_SUPPORT)
-    cfg.q_head.qk_logits.use_bias = True
-    cfg.q_head.qk_logits.qk_layer_norm = True
+    cfg.q_head.adapter = ConfigDict()
+    cfg.q_head.adapter.mlp = ConfigDict()
+    cfg.q_head.adapter.mlp.layer_sizes = entity_size
+    cfg.q_head.macro_micro = ConfigDict()
+    cfg.q_head.macro_micro.micro_kind = "pointer"
+    cfg.q_head.macro_micro.num_logits = len(CAT_VF_SUPPORT)
+    cfg.q_head.macro_micro.micro_qk = ConfigDict()
+    cfg.q_head.macro_micro.micro_qk.use_bias = True
+    cfg.q_head.macro_micro.micro_qk.qk_layer_norm = True
+    cfg.q_head.macro_micro.macro = ConfigDict()
+    cfg.q_head.macro_micro.macro.qk_logits = ConfigDict()
+    cfg.q_head.macro_micro.macro.qk_logits.num_heads = 1
+    cfg.q_head.macro_micro.macro.qk_logits.use_bias = True
+    cfg.q_head.macro_micro.macro.qk_logits.qk_layer_norm = True
+    cfg.q_head.macro_micro.macro.mlp = ConfigDict()
+    cfg.q_head.macro_micro.macro.mlp.layer_sizes = entity_size
 
-    if q_head_enabled and cfg.num_decision_slots != 1:
-        # Stage 1 is singles-only: the doubles path stacks per-stage
-        # log_policy/action_index, which the Retrace target code does not
-        # yet consume. Fail loudly rather than train a silently-wrong Q.
+    if cfg.num_decision_slots != 1:
+        # The Q critic is structural and singles-only: the doubles path
+        # stacks per-stage log_policy/action_index, which the Retrace
+        # target code does not yet consume. Fail loudly rather than train
+        # a silently-wrong Q.
         raise ValueError("q_head requires num_decision_slots == 1 (singles)")
 
     return cfg
