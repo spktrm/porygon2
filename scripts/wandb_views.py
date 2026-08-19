@@ -379,8 +379,17 @@ def rl_sections():
                     # p90 alongside the mean: action-value spread
                     # concentrates in few high-leverage states, so the
                     # mean undersells headroom by construction.
-                    "Thm 3.1 headroom: Var_a~pi[Q]",
-                    ["player_q_action_var", "player_q_action_var_p90"],
+                    # The uniform (π-free) pair is the flat-vs-anti-switch
+                    # discriminator: uniform ≫ π-weighted = spread lives on
+                    # abandoned actions (critic discriminates, policy
+                    # collapsed); both ≈ 0 = critic genuinely action-flat.
+                    "Thm 3.1 headroom: Var_a~pi[Q] + uniform",
+                    [
+                        "player_q_action_var",
+                        "player_q_action_var_p90",
+                        "player_q_action_var_uniform",
+                        "player_q_action_var_uniform_p90",
+                    ],
                 ),
                 lp(
                     # The 3b gate the plan wanted BEFORE going live (this

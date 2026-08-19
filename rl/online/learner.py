@@ -487,6 +487,34 @@ def train_step(
             training_logs["player_q_action_var_p90"] = jnp.nanquantile(
                 jnp.where(q_mask, qvar_state, jnp.nan), 0.9
             )
+            # π-free counterpart: uniform-over-legal variance of the same
+            # Q̄_all means. The π-weighted qvar above is squashed by a
+            # collapsed policy regardless of what the critic believes (94%
+            # move mass hides any spread on the move↔switch axis), so it
+            # can't distinguish "critic is action-flat" from "critic is
+            # confidently anti-switch" — opposite remedies (head capacity /
+            # supervision vs nothing). Read the pair together: uniform ≫
+            # π-weighted means the spread lives on actions the policy has
+            # abandoned; both ≈ 0 means the critic genuinely can't tell
+            # actions apart.
+            n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
+            q_mean_uniform = (
+                jnp.where(flat_action_mask, q_all_target, 0.0).sum(axis=-1) / n_legal
+            )
+            qvar_uniform = (
+                jnp.where(
+                    flat_action_mask,
+                    jnp.square(q_all_target - q_mean_uniform[..., None]),
+                    0.0,
+                ).sum(axis=-1)
+                / n_legal
+            )
+            training_logs["player_q_action_var_uniform"] = average(
+                qvar_uniform, q_mask
+            )
+            training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
+                jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
+            )
             if not isinstance(batch.reuse_count, tuple):
                 fresh_cols = batch.reuse_count[0] == 0
                 replay_cols = ~fresh_cols
