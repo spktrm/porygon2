@@ -180,7 +180,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # once reliable — AlphaStar's actual rule); LeagueExploiter targets
     # the whole historical population via linear_capped PFSP,
     # unrestricted. False means only main exists, exactly as before.
-    auto_exploiter_enabled: bool = True
+    # OFF for the 2026-08-19 q-boosting lineage: single-population run so
+    # the boost A/B against the recorded 0→65k switch-collapse baseline is
+    # clean (exploiter blocks change the data distribution mid-lineage and
+    # cost the fork-time memory headroom). Trade-off accepted knowingly:
+    # this also gives up the exploiter mix=0 within-run contrast AND the
+    # opponent-pressure channel the collapse diagnosis called necessary-
+    # but-not-sufficient — re-enable once the formative window (~50k, when
+    # the first fork would have happened anyway) has delivered its verdict.
+    auto_exploiter_enabled: bool = False
 
     # Centralized batched actor inference (rl/online/inference.py): all
     # training PlayerActors submit per-step forwards to one server thread
