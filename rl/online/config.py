@@ -629,15 +629,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_coma_enabled: bool = True
     # Raw counterfactual advantages are in win units (~0.1-0.2 typical
     # spread), so 0.05 ≈ 1% relative pressure vs the coef-1.0 normalised
-    # PG — steady and compounding rather than assertive. Host-ramped
-    # RUNTIME scalar: retuning or aborting never recompiles.
+    # PG — steady and compounding rather than assertive.
     # 2026-08-21 retune for the NeuRD prefactor: dropping pi (~0.1 on
     # ~10 legal cells) makes the raw per-cell gradient ~10x COMA's, so
     # 0.05 was no longer "1% pressure". At 0.1 a starved switch cell
     # (pi 0.02, adv +0.15) gets ~0.015/logit -- on par with the
     # magnet's pull at that mass, and the clip below bounds the band.
+    # Applied at full strength from the first main-pop step (no ramp
+    # since 2026-08-21). Runtime scalar: retuning never recompiles.
     player_coma_coef: float = 0.1
-    player_coma_ramp_steps: int = 2000
     # Which prefactor multiplies the counterfactual advantage per cell:
     # "pi" is COMA proper (-pi(b).adv(b) per logit; NeuRD eq. 6 -- the
     # restoring force on a starved cell shrinks with its own mass, and
@@ -685,9 +685,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # onestep = q_taken − v_exp fallback arm. Config-static: switching
     # variants recompiles.
     player_q_boost_variant: QBoostVariantT = "multistep"
-    # Linear cross-fade 0→1 over this many main-pop steps from first
-    # activation, mirroring player_coma_ramp_steps' host pattern.
-    player_q_boost_ramp_steps: int = 2000
     # Agent57/Ape-X-style exploration ladder (replaces stage 4's
     # cross-population intake, removed 2026-08-15: it conflated another
     # agent's policy evidence with main's own action values, and its

@@ -1946,14 +1946,6 @@ class Learner:
             self._plasticity_probe_jit = self._make_plasticity_probe(player_network)
 
         self._train_step_jit = train_step if debug else _TRAIN_STEP_JIT
-        # COMA-loss ramp anchor: the main-pop step at which the term first
-        # activates in THIS process. Restart-relative on purpose — a
-        # resume re-ramps over player_coma_ramp_steps, which is harmless
-        # and keeps the anchor out of the checkpoint.
-        self._coma_ramp_start: int | None = None
-        # Stage-3 Q-boosting cross-fade anchor, same treatment (a resume
-        # re-fades the advantage blend over player_q_boost_ramp_steps).
-        self._q_boost_ramp_start: int | None = None
         # Shape-lattice fail-fast: every combo compiles at the FIRST batch
         # (_precompile_lattice) so no variant can arrive as a surprise
         # compile mid-run. Process-local by design.
@@ -3056,33 +3048,23 @@ class Learner:
         # the removed lambda controller handled by forcing lambda to its
         # ceiling). Runtime scalar — flipping it never recompiles.
         upgo_coef = 0.0 if pop.plasticity.recovering else self.config.player_upgo_coef
-        # COMA all-action loss: main only (the exploiter blocks stay
-        # clean as a within-run contrast), linearly ramped host-side from
-        # first activation — runtime scalar, so the ramp never recompiles.
-        coma_coef = 0.0
-        if self.config.player_coma_enabled and pop.name == "main":
-            step = int(pop.player_state.step_count)
-            if self._coma_ramp_start is None:
-                self._coma_ramp_start = step
-            ramp = min(
-                1.0,
-                (step - self._coma_ramp_start)
-                / max(1, self.config.player_coma_ramp_steps),
-            )
-            coma_coef = self.config.player_coma_coef * ramp
-        # Stage-3 Q-boosting cross-fade: main only, linear 0->1 from first
-        # activation (docs/q-boosting-plan.md §3) — runtime scalar, the
-        # exploiter populations pass 0 through the same compiled fn.
-        q_boost_mix = 0.0
-        if self.config.player_q_boost_enabled and pop.name == "main":
-            step = int(pop.player_state.step_count)
-            if self._q_boost_ramp_start is None:
-                self._q_boost_ramp_start = step
-            q_boost_mix = min(
-                1.0,
-                (step - self._q_boost_ramp_start)
-                / max(1, self.config.player_q_boost_ramp_steps),
-            )
+        # NeuRD/COMA all-action loss and the Stage-3 Q-boost advantage:
+        # main only (the exploiter blocks stay clean as a within-run
+        # contrast), at full strength from the first step — the 2k-step
+        # host ramps were removed 2026-08-21 (every restart re-ramped
+        # from zero, so a resume spent its first 2k steps training a
+        # different objective than the one it was checkpointed under).
+        # Still runtime scalars: the exploiter populations pass 0
+        # through the same compiled fn.
+        is_main = pop.name == "main"
+        coma_coef = (
+            self.config.player_coma_coef
+            if self.config.player_coma_enabled and is_main
+            else 0.0
+        )
+        q_boost_mix = (
+            1.0 if self.config.player_q_boost_enabled and is_main else 0.0
+        )
         pop.player_state, pop.builder_state, logs = self._train_step_jit(
             pop.player_state,
             pop.builder_state,

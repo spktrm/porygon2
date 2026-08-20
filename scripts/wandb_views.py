@@ -344,10 +344,10 @@ def rl_sections():
                     ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
                 ),
                 lp(
-                    # Host-ramped runtime scalar (0 -> player_coma_coef
-                    # over player_coma_ramp_steps from activation). Zero
+                    # Runtime scalar: player_coma_coef on main (no ramp
+                    # since 2026-08-21, full strength from step 1). Zero
                     # for exploiter populations by construction.
-                    "COMA coefficient (ramp)",
+                    "NeuRD/COMA coefficient",
                     ["player_coma_coef"],
                     smooth=0,
                 ),
@@ -398,11 +398,11 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    # Host-ramped cross-fade weight (0 -> 1 over
-                    # player_q_boost_ramp_steps). 1.0 = advantage fully
+                    # Runtime scalar, 1.0 on main from step 1 (the 2k
+                    # cross-fade was removed 2026-08-21); advantage fully
                     # Q-anchored; drops to 0 instantly on abort
                     # (player_q_boost_enabled=False, no recompile).
-                    "Blend mix (ramp)",
+                    "Blend mix",
                     ["player_q_boost_mix"],
                     smooth=0,
                 ),
