@@ -94,6 +94,29 @@ _SWITCH_SLOTS = np.asarray(SWITCH_SLOT_INDICES)
 _TARGET_STATIC_SLOTS = np.asarray(TARGET_SLOT_INDICES)
 
 
+def _forward_vmap():
+    """vmap of `Encoder._batched_forward` over the leading (time) axis.
+
+    Normally a plain `jax.vmap` over the bound method. Under
+    COLLECT_INTERMEDIATES the attention modules `sow` into the
+    "intermediates" collection, and a sow inside a RAW jax.vmap escapes
+    the transform's functional boundary (UnexpectedTracerError on a
+    BatchTracer) — so in that mode only, use `nn.vmap`, which lifts the
+    collection properly (params broadcast, intermediates mapped), exactly
+    as the round trunk's nn.scan already does. Training never takes this
+    branch, so its HLO is unchanged.
+    """
+    if not COLLECT_INTERMEDIATES:
+        return lambda self, *a: jax.vmap(self._batched_forward)(*a)
+    return nn.vmap(
+        Encoder._batched_forward,
+        variable_axes={"params": None, "intermediates": 0},
+        split_rngs={"params": False},
+        in_axes=0,
+        out_axes=0,
+    )
+
+
 def _lifted_entity_vmap(method):
     """Lifted (flax.linen) replacement for the previous plain
     `jax.vmap(self._embed_*)` call-site pattern: `nn.vmap` maps the data
@@ -202,6 +225,121 @@ class EntityAttentionPool(nn.Module):
             kv_mask=token_mask,
         )
         return jnp.squeeze(pooled, axis=0)
+
+
+class CrossEntityAttentionPool(nn.Module):
+    """Pool attribute tokens into entity vectors, mixing ACROSS entities.
+
+    Structurally identical to EntityAttentionPool -- one attention layer over
+    the attribute tokens, then a single learned query per entity -- except
+    the attention runs over EVERY current-state entity's tokens at once
+    instead of one entity's. It REPLACES the intra-entity layer on this path
+    rather than sitting on top of it: own-entity token pairs are a subset of
+    the global mask, so nothing the entity-local layer can express is lost,
+    and the cost stays flat in the terms that dominate (same token count,
+    same layer count, same FFW width -- only the attention probability
+    matrix grows).
+
+    The motivation is matchup reasoning. "Their revealed Flamethrower
+    threatens my Scizor" is a comparison between one entity's move token and
+    another entity's species token; with entity-local pooling there is no
+    layer in the model where those two tokens coexist, so downstream has to
+    reconstruct it from two lossy 256-d pooled summaries. It matters most
+    for switching: in singles no action-grid cell endpoint carries an
+    opponent token at all (a move cell's tgt is the learned TARGET_AUTO
+    constant, a switch cell is my-active x my-bench), and MacroHead's
+    switch-vs-move decision pools only the ALLY_i_SWITCH src slots -- so the
+    whole "should I switch out of this matchup" signal has to already be
+    inside my active's pooled vector.
+
+    The pooling READ stays entity-local: query e reaches only entity e's own
+    token span. Cross-entity content arrives in what the tokens carry, not
+    in what the query can see, so the output contract -- one vector per
+    entity, the state stream's row count -- is untouched.
+
+    Entities arrive as a tuple of (num_entities, num_tokens, dim) groups
+    (public and private have different token counts) and are flattened into
+    one sequence for the mix. Each group keeps its own token-type ids; a
+    per-entity bias distinguishes rows that would otherwise be identical
+    once flattened -- the public rows are side-partitioned and actives-first
+    by construction (the service's getPublicTeamOrder), so the row index is
+    a meaningful identity, not an arbitrary one.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self,
+        groups: tuple[jax.Array, ...],
+        masks: tuple[jax.Array, ...],
+        types: tuple[np.ndarray, ...],
+    ) -> tuple[jax.Array, ...]:
+        embedding_init = nn.initializers.variance_scaling(
+            1.0, "fan_in", "normal", out_axis=0
+        )
+        dtype = groups[0].dtype
+        model_size = groups[0].shape[-1]
+        group_shapes = [group.shape[:2] for group in groups]
+        num_entities = sum(num for num, _ in group_shapes)
+
+        token_bias = self.param(
+            "token_bias",
+            nn.initializers.zeros_init(),
+            (_NUM_TOKEN_TYPES, model_size),
+        )
+        entity_bias = self.param(
+            "entity_bias", nn.initializers.zeros_init(), (num_entities, model_size)
+        )
+        pool_query = self.param("pool_query", embedding_init, (1, model_size))
+
+        flat_tokens = []
+        flat_masks = []
+        offset = 0
+        for group, mask, token_types in zip(groups, masks, types):
+            num, num_tokens = group.shape[:2]
+            entity_ids = np.arange(offset, offset + num)
+            group = (
+                group
+                + token_bias[token_types].astype(dtype)[None]
+                + entity_bias[entity_ids].astype(dtype)[:, None]
+            )
+            flat_tokens.append(group.reshape(num * num_tokens, model_size))
+            flat_masks.append(mask.reshape(num * num_tokens))
+            offset += num
+
+        tokens = jnp.concatenate(flat_tokens, axis=0)
+        token_mask = jnp.concatenate(flat_masks, axis=0)
+
+        tokens = TransformerEncoder(
+            name="attention", **self.cfg.cross_entity_encoder.to_dict()
+        )(qkv=tokens, qkv_mask=token_mask)
+
+        # Block-diagonal read mask: entity e's pool query sees exactly its own
+        # token span, so this readout is mathematically the per-entity pool
+        # it replaces. Invalid entities are all-masked in token_mask and so
+        # pool from an empty key set, as before.
+        pool_allowed = np.zeros((num_entities, tokens.shape[0]), dtype=bool)
+        column = 0
+        row = 0
+        for num, num_tokens in group_shapes:
+            for index in range(num):
+                span = slice(column + index * num_tokens, column + (index + 1) * num_tokens)
+                pool_allowed[row + index, span] = True
+            column += num * num_tokens
+            row += num
+
+        pooled = TransformerDecoder(
+            name="pool", **self.cfg.cross_entity_pool.to_dict()
+        )(
+            q=jnp.repeat(pool_query.astype(dtype), num_entities, axis=0),
+            kv=tokens,
+            kv_mask=token_mask,
+            attn_mask=jnp.asarray(pool_allowed)[None],
+        )
+
+        splits = np.cumsum([num for num, _ in group_shapes])[:-1]
+        return tuple(jnp.split(pooled, splits, axis=0))
 
 
 class RoundBlock(nn.Module):
@@ -313,6 +451,20 @@ class RoundBlock(nn.Module):
             ("switch", switch_valid.shape[0]),
             ("target", target_valid.shape[0]),
         )
+        if COLLECT_INTERMEDIATES:
+            # Self-describing capture: the probe needs the concat layout to
+            # attribute attention mass to substreams.
+            self.sow(
+                "intermediates",
+                "state_part_sizes",
+                jnp.asarray([n for _, n in state_parts], dtype=jnp.int32),
+            )
+            self.sow(
+                "intermediates",
+                "action_part_sizes",
+                jnp.asarray([n for _, n in action_parts], dtype=jnp.int32),
+            )
+
         state_valid = jnp.concatenate(
             (
                 private_valid,
@@ -594,6 +746,20 @@ class Encoder(nn.Module):
             EntityAttentionPool,
             policy=jax.checkpoint_policies.nothing_saveable,
         )(self.cfg, name="entity_attention_pool")
+        # Same module shape, global attention: pools the CURRENT-state
+        # entities (both sides' public rows + my private sheet) with their
+        # attribute tokens mixed across entities rather than within one, so
+        # a matchup is a token-to-token comparison instead of something the
+        # trunk has to reconstruct from two pooled summaries. Replaces --
+        # does not stack on -- the entity-local layer for those rows, which
+        # is what keeps the cost flat; the pool above still serves the
+        # history cache and the opponent's privileged sheet. Rematted for
+        # the same reason as its neighbour, though the token set here is
+        # ~168 rows rather than the cache's thousands.
+        self.cross_entity_pool = nn.checkpoint(
+            CrossEntityAttentionPool,
+            policy=jax.checkpoint_policies.nothing_saveable,
+        )(self.cfg, name="cross_entity_pool")
         self.public_persistent_linear = nn.Dense(
             name="public_persistent_linear", use_bias=False, **dense_kwargs
         )
@@ -744,7 +910,12 @@ class Encoder(nn.Module):
         _ohe_encoder = ONEHOT_ENCODERS[self.cfg.generation]["moves"]
         return mask * self.moves_linear(_ohe_encoder(token))
 
-    def _embed_public_entity(self, public: jax.Array, revealed: jax.Array):
+    def _public_entity_tokens(self, public: jax.Array, revealed: jax.Array):
+        """The attribute-token half of a public entity: the tokens, their
+        validity mask, the entity mask and the (pos + side) bias that the
+        pooled vector carries. Split out from `_embed_public_entity` so the
+        current-state path can pool the tokens ACROSS entities while the
+        history cache keeps pooling them entity-locally."""
         # Encode volatile and type-change indices using the binary encoder.
         encode_hex = jax.vmap(
             functools.partial(
@@ -970,15 +1141,24 @@ class Encoder(nn.Module):
             axis=0,
         )
 
-        revealed_embedding = (
-            self.entity_attention_pool(tokens, token_mask, _PUBLIC_TOKEN_TYPES)
-            + pos_bias
-            + side_bias
-        )
+        return tokens, token_mask, mask, pos_bias + side_bias
 
+    def _embed_public_entity(self, public: jax.Array, revealed: jax.Array):
+        """Entity-LOCAL pooling: one entity's attribute tokens in, one entity
+        vector out. Kept bitwise as-is for the packed history cache (2 *
+        NUM_HISTORY rows, where a global mix would be neither affordable nor
+        meaningful -- those rows are different turns, not a shared board)."""
+        tokens, token_mask, mask, bias = self._public_entity_tokens(public, revealed)
+        revealed_embedding = (
+            self.entity_attention_pool(tokens, token_mask, _PUBLIC_TOKEN_TYPES) + bias
+        )
         return revealed_embedding, mask
 
-    def _embed_private_entity(self, private: jax.Array, num_stat_bands: int = 8):
+    def _private_entity_tokens(self, private: jax.Array, num_stat_bands: int = 8):
+        """The attribute-token half of a private entity -- see
+        `_public_entity_tokens`. NOTE the index constants below are the
+        REVEALED enum applied to a PRIVATE row: legal only because
+        SPECIES/ITEM/ABILITY/MOVEID0-3 are 1..7 in both enums."""
         move_indices = np.array(
             [
                 EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0,
@@ -1074,10 +1254,16 @@ class Encoder(nn.Module):
             axis=0,
         )
 
+        return tokens, token_mask, mask
+
+    def _embed_private_entity(self, private: jax.Array, num_stat_bands: int = 8):
+        """Entity-LOCAL pooling -- see `_embed_public_entity`. Still the path
+        for the opponent's privileged sheet, which must stay out of any
+        policy-facing token set."""
+        tokens, token_mask, mask = self._private_entity_tokens(private, num_stat_bands)
         private_embedding = self.entity_attention_pool(
             tokens, token_mask, _PRIVATE_TOKEN_TYPES
         )
-
         return private_embedding, mask
 
     def _embed_edge(self, edge: jax.Array):
@@ -1317,15 +1503,38 @@ class Encoder(nn.Module):
         )
         return field_embeddings, mask, request_count, turn_order_value
 
-    def _embed_public_entities(
-        self, env_step: PlayerEnvOutput
-    ) -> tuple[jax.Array, jax.Array]:
-        revealed_entity_embedding, mask = _lifted_entity_vmap(
-            Encoder._embed_public_entity
-        )(self, env_step.public_team, env_step.revealed_team)
-        field_embeddings, *_ = self._embed_field(env_step.field)
+    def _embed_current_entities(self, env_step: PlayerEnvOutput):
+        """Embed every entity of the CURRENT board -- both sides' public rows
+        and my own private sheet -- in one shot, with their attribute tokens
+        mixed across entities before each is pooled back to a vector.
 
-        return (revealed_entity_embedding, field_embeddings, mask)
+        The mixed set is exactly the player's own legal information set (my
+        sheet + both sides' PUBLIC rows), i.e. the same content the state
+        stream already concatenates and the action stream already reads, so
+        no privileged information enters here. `opp_private_team` is
+        deliberately absent and keeps the entity-local path.
+        """
+        public_tokens, public_token_mask, public_mask, public_bias = (
+            _lifted_entity_vmap(Encoder._public_entity_tokens)(
+                self, env_step.public_team, env_step.revealed_team
+            )
+        )
+        private_tokens, private_token_mask, private_mask = _lifted_entity_vmap(
+            Encoder._private_entity_tokens
+        )(self, env_step.private_team)
+
+        public_embeddings, private_embeddings = self.cross_entity_pool(
+            (public_tokens, private_tokens),
+            (public_token_mask, private_token_mask),
+            (_PUBLIC_TOKEN_TYPES, _PRIVATE_TOKEN_TYPES),
+        )
+
+        return (
+            public_embeddings + public_bias,
+            public_mask,
+            private_embeddings,
+            private_mask,
+        )
 
     def _embed_private_entities(self, private_team: jax.Array):
         return _lifted_entity_vmap(Encoder._embed_private_entity)(self, private_team)
@@ -1376,20 +1585,23 @@ class Encoder(nn.Module):
         history_field_state: jax.Array,
         history_latents: jax.Array,
     ):
+        # Both sides' public rows and my private sheet are pooled together so
+        # their attribute tokens (species / ability / item / moves) mix across
+        # entities first -- this is where "their revealed move threatens this
+        # mon of mine" becomes representable, and it lands directly on the
+        # vectors that warm-start the switch action slots below.
         (
             revealed_entity_embeddings,
-            field_embeddings,
             revealed_entity_mask,
-        ) = self._embed_public_entities(env_step)
+            private_entity_embeddings,
+            private_entity_mask,
+        ) = self._embed_current_entities(env_step)
+        field_embeddings, *_ = self._embed_field(env_step.field)
 
         # My moveset embeddings carry per-move battle state (pp, disabled,
         # wildcard availability); they warm-start the move action stream
         # below and reach the value ladder via the action->state readbacks.
         my_move_embeddings, _ = self._embed_moves(env_step.my_moveset)
-
-        private_entity_embeddings, private_entity_mask = self._embed_private_entities(
-            env_step.private_team
-        )
 
         # Opponent's privileged match-start team sheet (training self-play
         # only; all-unspecified rows at deploy, masked out here). Embedded
@@ -1782,8 +1994,8 @@ class Encoder(nn.Module):
             value_embeddings,
             private_value_embeddings,
             public_value_embeddings,
-        ) = jax.vmap(self._batched_forward)(
-            env_step, row_states, order_valid, field_state, history_latents
+        ) = _forward_vmap()(
+            self, env_step, row_states, order_valid, field_state, history_latents
         )
 
         return (

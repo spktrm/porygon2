@@ -1,4 +1,5 @@
 import math
+import os
 from typing import Literal
 
 import flax.linen as nn
@@ -11,7 +12,11 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
-COLLECT_INTERMEDIATES = False
+# Off in training (the sow would retain attn probs for every block). Set
+# COLLECT_INTERMEDIATES=1 to have MultiHeadAttention sow its weights and
+# entropy for scripts/attn_probe.py — runtime-controlled so the probe never
+# needs a source edit.
+COLLECT_INTERMEDIATES = os.environ.get("COLLECT_INTERMEDIATES", "0") == "1"
 DO_CHECKPOINT = False
 
 

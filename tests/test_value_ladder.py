@@ -6,6 +6,7 @@ exist at deploy time."""
 
 import jax
 import numpy as np
+from conftest import open_zero_init_paths
 import pytest
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
@@ -34,6 +35,13 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
 
     network, params, actor_input, actor_output = real_model_and_trajectory
     params = _open_all_gates(params)
+    # Gates are not the only zero-init path: e00a388's flat-at-init
+    # contract zero-inits the Q head's OUTPUT paths too, so on init params
+    # BOTH Q rungs emit all-zero logits. That makes the Q_private
+    # sheet-invariance assertion vacuous and the Q_all difference
+    # assertion impossible. Open them for the same reason the gates are
+    # opened above.
+    params = open_zero_init_paths(params, ("q_adapter", "q_macro_micro"))
 
     # ex.bin predates the field, so the baseline input carries all-zero
     # opp_private_team; the populated variant borrows the player's own

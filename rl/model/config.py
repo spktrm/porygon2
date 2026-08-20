@@ -110,6 +110,41 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.intra_entity_pool.num_layers = 1
     cfg.encoder.intra_entity_pool.init_residual_scale = 1.0
 
+    # Cross-entity attribute attention: the SAME shape as the intra-entity
+    # block above -- one attention layer over attribute tokens, then a single
+    # learned query per entity -- but the attention is GLOBAL over every
+    # current-state entity's tokens instead of being confined to one entity,
+    # and it REPLACES the intra-entity layer on that path (own-entity pairs
+    # are a subset of the global mask, so nothing is lost). Matchup reasoning
+    # is a species-token x move-token comparison ACROSS two mons; with
+    # entity-local pooling there is no layer in the model where those two
+    # tokens coexist, so it has to be reconstructed downstream from two lossy
+    # pooled summaries. Cost is flat in the terms that dominate -- same token
+    # count, same layer count, same FFW width -- and only the attention
+    # probability matrix grows (168^2 vs 12*10^2 + 6*8^2 per timestep).
+    # History and the opponent's privileged sheet keep the intra_entity_*
+    # path unchanged: history because its packed cache is ~2 orders of
+    # magnitude more rows, the opp sheet because it must stay out of any
+    # policy-facing token set (see RoundBlock's leak contract).
+    cfg.encoder.cross_entity_encoder = ConfigDict()
+    cfg.encoder.cross_entity_pool = ConfigDict()
+    set_attributes(cfg.encoder.cross_entity_encoder, **transformer_encoder_kwargs)
+    set_attributes(cfg.encoder.cross_entity_pool, **transformer_decoder_kwargs)
+    cfg.encoder.cross_entity_encoder.need_pos = False
+    cfg.encoder.cross_entity_encoder.num_layers = 1
+    # Head count is the memory dial here and the only one that bites: the
+    # attention probability matrix is the whole cost of widening the mask,
+    # and it scales linearly with heads while nothing else about the layer
+    # does. Measured on the player model fwd+bwd at T=64 (compiled temp
+    # size, 2026-08-20): entity-local baseline 182.5MB, 2 heads 202.8MB
+    # (+11%), 4 heads 240.9MB (+32%). Two heads keeps the full 168-token
+    # set -- no entity or attribute is dropped from the mix -- and buys the
+    # capability at a third of the cost of matching the trunk's 4.
+    cfg.encoder.cross_entity_encoder.num_heads = 2
+    cfg.encoder.cross_entity_pool.need_pos = False
+    cfg.encoder.cross_entity_pool.num_layers = 1
+    cfg.encoder.cross_entity_pool.init_residual_scale = 1.0
+
     # Round trunk over the unified [state | action | value] sequence: each
     # round is masked self-attention, a gated cross-read of the world-model
     # history states, then one wide FFW (attention sublayers are

@@ -100,7 +100,26 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
     generation = int(manifest.get("generation", 9))
 
     network = get_player_model(get_player_model_config(generation=generation, train=True))
-    actor_input, _ = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+    actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+
+    # This probe reads a checkpoint through TODAY's model code, so it is only
+    # meaningful while the two agree on the architecture. A checkpoint that
+    # predates an added module would be probed with that module randomly
+    # initialised — a contaminated reading dressed up as a collapse verdict —
+    # and a strict apply would just raise ScopeCollectionNotFound. merge_params
+    # is the same audit the learner's params-mode restart uses, so the skip
+    # reason names exactly what a resume would carry over fresh.
+    from rl.model.heads import HeadParams
+    from rl.online.artifact import merge_params
+
+    fresh = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
+    _, kept_fresh = merge_params(fresh, ckpt_target_params)
+    if kept_fresh:
+        pytest.skip(
+            f"checkpoint predates the current architecture "
+            f"({len(kept_fresh)} param path(s) would init fresh, e.g. "
+            f"{', '.join(kept_fresh[:3])}) — reprobe after a run on this code"
+        )
     # Probe vmaps over axis 1 (batch); re-add a batch axis of 1 to the
     # unbatched example (same reshape test_plasticity.py uses).
     batched = jax.tree.map(lambda x: np.asarray(x)[:, None], actor_input)

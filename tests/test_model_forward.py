@@ -7,6 +7,7 @@ Marked slow (~1 min): deselect with `-m "not slow"` for the quick suite.
 
 import jax
 import numpy as np
+from conftest import open_zero_init_paths
 import pytest
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
@@ -73,9 +74,17 @@ def test_q_head_forward_shapes(model_and_inputs):
     private_q_logits = np.asarray(out.private_q_logits, dtype=np.float32)
     assert private_q_logits.shape == (T, A, 3)
     assert np.isfinite(private_q_logits).all()
-    # The rungs share every head param but not their conditioning input —
-    # identical outputs would mean the conditioning is dead.
-    assert not np.array_equal(q_logits, private_q_logits)
+    # The rungs share every head param but not their conditioning input.
+    # At init both are identically ZERO (e00a388's flat-at-init contract
+    # zero-inits every Q output path), so comparing them here would be
+    # vacuous — open the zero paths first, then a difference proves the
+    # conditioning is actually WIRED rather than merely untrained.
+    opened = open_zero_init_paths(params, ("q_adapter", "q_macro_micro"))
+    out_open = network.apply(opened, actor_input, actor_output, HeadParams())
+    assert not np.array_equal(
+        np.asarray(out_open.q_logits, dtype=np.float32),
+        np.asarray(out_open.private_q_logits, dtype=np.float32),
+    )
     # Full-support log_policy is present in train mode — the Retrace
     # target's expectation bootstrap depends on it.
     assert np.asarray(out.action_head.log_policy).shape[-1] == A
