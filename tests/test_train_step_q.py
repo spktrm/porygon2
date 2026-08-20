@@ -90,6 +90,15 @@ def test_train_step_player_q_smoke():
         "player_q_r2_switch_voluntary",
         "player_q_switch_target_frac",
         "player_q_voluntary_switch_target_frac",
+        # Modality-resolved staleness: de-averaged actor KL and the
+        # off-policy attenuation audit (isr = pi_target/mu_actor).
+        "player_learner_actor_forward_kl_switch",
+        "player_learner_actor_forward_kl_move",
+        "player_isr_switch_voluntary",
+        "player_isr_switch_forced",
+        "player_isr_move",
+        "player_isr_below1_switch_voluntary",
+        "player_isr_below1_move",
         "player_q_target_voluntary_switch",
         "player_q_target_move",
         # Pivotal-state decision panel: tail statistics conditioned on the
@@ -115,6 +124,18 @@ def test_train_step_player_q_smoke():
         "player_loss_coma",
         "player_coma_switch_push",
         "player_coma_adv_std",
+        # pi-prefactor decomposition: |d loss_coma / d logit| on
+        # switch vs non-switch legal cells of real-choice rows, split
+        # into its pi and |adv| factors (grad ~ prob x absadv).
+        "player_coma_grad_switch",
+        "player_coma_grad_move",
+        "player_coma_grad_ratio",
+        "player_coma_prob_switch",
+        "player_coma_prob_move",
+        "player_coma_prob_ratio",
+        "player_coma_absadv_switch",
+        "player_coma_absadv_move",
+        "player_coma_absadv_ratio",
         # Stage 3 Q-boosting (docs/q-boosting-plan.md): loss-free 3a
         # diagnostics — blend candidate's scale/agreement vs the v-trace
         # channel, plus Thm 3.1's Var_a~pi[Q] precondition readout.

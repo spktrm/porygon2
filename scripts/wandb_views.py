@@ -287,6 +287,53 @@ def rl_sections():
                     ["player_coma_switch_push"],
                 ),
                 lp(
+                    # THE decision panel for NeuRD (research note:
+                    # docs/rare-action-rl-literature.md). COMA's exact
+                    # per-logit gradient is −pi(b)·adv(b), so the
+                    # per-cell magnitude factorises as pi × |adv| and
+                    # grad_ratio ≈ prob_ratio × absadv_ratio. Read the
+                    # three ratios together on both-modality states:
+                    #   grad tracks prob, absadv ≈ 1 → the pi prefactor
+                    #     IS the throttle; NeuRD (advantage on the
+                    #     logits, no pi) is the indicated fix.
+                    #   absadv ≈ 0 → the critic has no switch belief to
+                    #     amplify; check player_q_switch_target_frac
+                    #     first (loss_q only supervises the TAKEN cell,
+                    #     so untaken switch cells may simply be
+                    #     untrained) — NeuRD would amplify noise.
+                    "pi-prefactor decomposition (ratios, switch/move)",
+                    [
+                        "player_coma_grad_ratio",
+                        "player_coma_prob_ratio",
+                        "player_coma_absadv_ratio",
+                    ],
+                    log_y=True,
+                ),
+                lp(
+                    # The magnitudes behind the ratios: mean per-cell
+                    # |d loss_coma / d logit| on legal switch vs legal
+                    # non-switch cells of the same rows.
+                    "COMA per-cell gradient magnitude (pi·|adv|)",
+                    [
+                        "player_coma_grad_switch",
+                        "player_coma_grad_move",
+                    ],
+                    log_y=True,
+                ),
+                lp(
+                    # The two factors separately. prob_* is the
+                    # per-cell mass (not the modality mass — that is
+                    # player_q_improve_pi_switch_mass above).
+                    "COMA gradient factors: per-cell pi and |adv|",
+                    [
+                        "player_coma_prob_switch",
+                        "player_coma_prob_move",
+                        "player_coma_absadv_switch",
+                        "player_coma_absadv_move",
+                    ],
+                    log_y=True,
+                ),
+                lp(
                     # Host-ramped runtime scalar (0 -> player_coma_coef
                     # over player_coma_ramp_steps from activation). Zero
                     # for exploiter populations by construction.
@@ -465,6 +512,63 @@ def rl_sections():
                         "player_q_explore_ret_vol_switch",
                         "player_q_explore_ret_move",
                     ],
+                ),
+            ],
+        ),
+        ws.Section(
+            # Does the switch modality's signal actually reach the
+            # learner? Both readouts exist because the global staleness
+            # instruments are structurally blind to a rare modality:
+            # the actor-KL feeding the replay reuse controller is an
+            # expectation over the policy, and the plasticity probe
+            # grades VALUE error, not action-distribution fidelity.
+            name="1.9 · Modality-resolved staleness & attenuation",
+            is_open=True,
+            panels=[
+                lp(
+                    # The de-averaged k3 actor KL. The _own variant is
+                    # the controller's set-point (target 0.045); if the
+                    # switch split runs far above it while the global
+                    # mean stays ~0.002, the controller is being held
+                    # quiet by dilution, not by health.
+                    "Actor KL by taken modality vs controller set-point",
+                    [
+                        "player_learner_actor_forward_kl_switch",
+                        "player_learner_actor_forward_kl_move",
+                        "player_learner_actor_forward_kl_own",
+                    ],
+                    log_y=True,
+                ),
+                lp(
+                    # isr = pi_target/mu_actor, the factor v-trace and
+                    # Retrace multiply TD errors by. Explore rows record
+                    # the TEMPERED log_prob, so mu carries more switch
+                    # mass than pi — switch-taken rows sit below 1 and
+                    # get heard more faintly as the collapse deepens.
+                    # Correct weighting, but a self-reinforcing loop.
+                    "Importance ratio by taken modality",
+                    [
+                        "player_isr_switch_voluntary",
+                        "player_isr_switch_forced",
+                        "player_isr_move",
+                    ],
+                ),
+                lp(
+                    # Cleaner than the mean — isr is heavy-tailed on the
+                    # upside. A widening gap = switch evidence being
+                    # progressively down-weighted relative to moves.
+                    "Fraction of rows with isr < 1 (attenuated)",
+                    [
+                        "player_isr_below1_switch_voluntary",
+                        "player_isr_below1_move",
+                    ],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    # Context: the reuse cap the controller is holding,
+                    # and the global upside-clip fraction.
+                    "Replay reuse cap & rho clip fraction",
+                    ["player_replay_max_reuses", "player_rho_clip_frac"],
                 ),
             ],
         ),

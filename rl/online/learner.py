@@ -382,6 +382,37 @@ def train_step(
     training_logs["player_q_target_voluntary_switch"] = average(
         q_retrace_g, q_voluntary_switch_mask
     )
+
+    # Off-policy attenuation audit, split by the TAKEN modality. isr =
+    # pi_target/mu_actor is what v-trace and Retrace multiply their TD
+    # errors by (targets.py: rho_t = c_t = (1-alpha)*isr +
+    # alpha*min(1, isr)). The explore ladder records its TEMPERED
+    # log_prob, so mu carries MORE switch mass than pi on explore rows
+    # — exactly the rows whose evidence would contradict a switch
+    # collapse. As pi(switch) decays, isr on switch-taken rows falls
+    # below 1 and those rows contribute proportionally less.
+    #
+    # NOTE this is the CORRECT importance correction, not a bug: the
+    # readout is effective sample size on switch rows, not bias. A
+    # widening gap between the two means the learner is hearing the
+    # switch evidence ever more faintly as the collapse deepens, which
+    # is a self-reinforcing loop even though every individual update is
+    # properly weighted. below1_frac is the cleaner signal than the
+    # mean (isr is heavy-tailed on the upside).
+    isr_f32 = target_actor_ratio.astype(jnp.float32)
+    training_logs["player_isr_switch_voluntary"] = average(
+        isr_f32, q_voluntary_switch_mask
+    )
+    training_logs["player_isr_switch_forced"] = average(
+        isr_f32, q_forced_switch_mask
+    )
+    training_logs["player_isr_move"] = average(isr_f32, q_move_mask)
+    training_logs["player_isr_below1_switch_voluntary"] = average(
+        (isr_f32 < 1.0).astype(jnp.float32), q_voluntary_switch_mask
+    )
+    training_logs["player_isr_below1_move"] = average(
+        (isr_f32 < 1.0).astype(jnp.float32), q_move_mask
+    )
     training_logs["player_q_target_move"] = average(
         q_retrace_g, q_move_mask & has_both
     )
@@ -918,8 +949,73 @@ def train_step(
             loss_coma = -average(
                 (pi_learner * coma_adv).sum(axis=-1), policy_mask
             )
+            # Gradient decomposition for the pi-prefactor question
+            # (docs/rare-action-rl-literature.md). The COMA loss
+            # -sum_a pi(a).sg(adv(a)) has exact per-logit gradient
+            # -pi(b).adv(b) -- the sum_a pi.adv correction term
+            # vanishes because the COMA baseline makes it identically
+            # zero -- which is NeuRD eq. (6): the counterfactual
+            # regret SCALED BY THE ACTION'S OWN PROBABILITY. A starved
+            # switch cell therefore gets a restoring force
+            # proportional to how starved it already is, so COMA
+            # cannot be the restorer on its own.
+            #
+            # These three pairs decompose the per-cell gradient
+            # magnitude pi.|adv| into its two factors, over legal
+            # cells of real-choice rows (both a switch and a non-
+            # switch legal), so that
+            #     grad_ratio ~ prob_ratio x absadv_ratio.
+            # prob_ratio << 1 with absadv_ratio ~ 1: the whole
+            # suppression is the pi prefactor, and dropping it (NeuRD
+            # -- advantage on the LOGITS, no pi) is the fix.
+            # absadv_ratio ~ 0: the critic carries no switch belief to
+            # amplify, and NeuRD would amplify noise instead. NOTE
+            # loss_q supervises only the TAKEN cell, so untaken switch
+            # cells are extrapolation from the zero-init head rather
+            # than belief -- read absadv_ratio against
+            # player_q_switch_target_frac (the supervision coverage)
+            # before concluding the critic "means it".
+            coma_row = switch_choice_mask[..., None]
+            coma_switch_cells = flat_action_mask & switch_actions & coma_row
+            coma_move_cells = (
+                flat_action_mask & jnp.logical_not(switch_actions) & coma_row
+            )
+            coma_abs_adv = jnp.abs(coma_adv)
+            coma_grad_mag = pi_learner * coma_abs_adv
+            coma_grad_switch = average(coma_grad_mag, coma_switch_cells)
+            coma_grad_move = average(coma_grad_mag, coma_move_cells)
+            coma_prob_switch = average(pi_learner, coma_switch_cells)
+            coma_prob_move = average(pi_learner, coma_move_cells)
+            coma_absadv_switch = average(coma_abs_adv, coma_switch_cells)
+            coma_absadv_move = average(coma_abs_adv, coma_move_cells)
+
+            def coma_ratio(numerator, denominator):
+                return numerator / jnp.maximum(denominator, 1e-8)
+
             coma_logs = dict(
                 player_loss_coma=loss_coma,
+                # Per-cell |d loss_coma / d logit| on legal switch
+                # cells vs legal non-switch cells of the same
+                # real-choice rows, and the two factors it is the
+                # product of. The ratios are the readout: if
+                # grad_ratio tracks prob_ratio while absadv_ratio
+                # stays near 1, the restoring force is being throttled
+                # by the pi prefactor alone.
+                player_coma_grad_switch=coma_grad_switch,
+                player_coma_grad_move=coma_grad_move,
+                player_coma_grad_ratio=coma_ratio(
+                    coma_grad_switch, coma_grad_move
+                ),
+                player_coma_prob_switch=coma_prob_switch,
+                player_coma_prob_move=coma_prob_move,
+                player_coma_prob_ratio=coma_ratio(
+                    coma_prob_switch, coma_prob_move
+                ),
+                player_coma_absadv_switch=coma_absadv_switch,
+                player_coma_absadv_move=coma_absadv_move,
+                player_coma_absadv_ratio=coma_ratio(
+                    coma_absadv_switch, coma_absadv_move
+                ),
                 # Net signed gradient mass toward the switch modality
                 # per real-choice row: positive = COMA is currently
                 # pushing switch mass UP (the critic prefers more
@@ -1028,6 +1124,29 @@ def train_step(
             # Own-rows-only variant: the replay reuse-cap controller's
             # set-point must not drift with the tempered explore rows now
             # inside policy_mask (see _update_replay_controller).
+            # Modality-resolved split of the SAME k3 estimator. The
+            # global mean is an expectation over the policy, so drift
+            # confined to a modality carrying ~0.2 mass is diluted to
+            # near nothing — which is why the replay reuse controller
+            # (whose set-point is the _own variant) cannot fire on a
+            # collapsing switch modality even in principle. These two
+            # de-average it by the taken modality.
+            #
+            # LIMITATION: this is still a mu-SAMPLED estimator over
+            # taken actions, not a full-support KL, because actors do
+            # not persist their full log_policy (player_model.py gates
+            # log_policy on cfg.train). An exact full-support modality
+            # KL against the actor would need that field stored.
+            player_learner_actor_forward_kl_switch=forward_kl_loss(
+                policy_ratio=learner_actor_ratio,
+                log_policy_ratio=learner_actor_log_ratio,
+                valid=policy_mask & taken_switch,
+            ),
+            player_learner_actor_forward_kl_move=forward_kl_loss(
+                policy_ratio=learner_actor_ratio,
+                log_policy_ratio=learner_actor_log_ratio,
+                valid=policy_mask & jnp.logical_not(taken_switch),
+            ),
             player_learner_actor_forward_kl_own=(
                 loss_actor_forward_kl
                 if own_rows is None
