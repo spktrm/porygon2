@@ -166,3 +166,55 @@ def test_masked_entities_are_inert():
     np.testing.assert_array_equal(
         np.asarray(public)[live], np.asarray(base_public)[live]
     )
+
+
+def _biases(groups, seed=2):
+    rng = np.random.default_rng(seed)
+    return tuple(
+        jnp.asarray(rng.normal(size=(group.shape[0], group.shape[-1])), dtype=group.dtype)
+        for group in groups
+    )
+
+
+def test_identity_biases_enter_before_the_mix():
+    """Ownership/position identity must be visible to the ATTENTION, not
+    only stamped on the pooled output: changing the opponent active's
+    per-entity bias has to move MY sheet vectors once the mix is open. With
+    the mix closed the same change is confined to the row it belongs to,
+    which is what attributes the cross-entity effect to the mix."""
+    module, _, groups, masks, types = _build()
+    biases = _biases(groups)
+    params = module.init(jax.random.key(0), groups, masks, types, biases)
+    opened = _open_mix(params)
+
+    shifted = (
+        biases[0].at[OPPONENT_ACTIVE].add(jnp.ones_like(biases[0][OPPONENT_ACTIVE])),
+        biases[1],
+    )
+    _, base_private = module.apply(opened, groups, masks, types, biases)
+    _, private = module.apply(opened, groups, masks, types, shifted)
+    assert not np.allclose(np.asarray(private), np.asarray(base_private)), (
+        "per-entity identity bias does not reach other entities through the mix"
+    )
+
+    closed_public, closed_private = module.apply(params, groups, masks, types, biases)
+    moved_public, moved_private = module.apply(params, groups, masks, types, shifted)
+    np.testing.assert_array_equal(np.asarray(moved_private), np.asarray(closed_private))
+    untouched = np.array([i for i in range(NUM_PUBLIC) if i != OPPONENT_ACTIVE])
+    np.testing.assert_array_equal(
+        np.asarray(moved_public[untouched]), np.asarray(closed_public[untouched])
+    )
+    assert not np.allclose(
+        np.asarray(moved_public[OPPONENT_ACTIVE]),
+        np.asarray(closed_public[OPPONENT_ACTIVE]),
+    )
+
+
+def test_groups_are_distinguishable_at_init():
+    """A sheet row and a public row with identical token content must not
+    pool identically even with the mix closed — the per-group bias has a
+    non-zero init so the two rows of the same mon are told apart from step 0."""
+    module, params, groups, masks, types = _build()
+    flat = dict(flatten_dict(params))
+    (key,) = [k for k in flat if k[-1] == "group_bias"]
+    assert np.asarray(flat[key]).any(), "group_bias is zero-init — groups degenerate"

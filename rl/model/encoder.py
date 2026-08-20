@@ -259,11 +259,21 @@ class CrossEntityAttentionPool(nn.Module):
 
     Entities arrive as a tuple of (num_entities, num_tokens, dim) groups
     (public and private have different token counts) and are flattened into
-    one sequence for the mix. Each group keeps its own token-type ids; a
-    per-entity bias distinguishes rows that would otherwise be identical
-    once flattened -- the public rows are side-partitioned and actives-first
-    by construction (the service's getPublicTeamOrder), so the row index is
-    a meaningful identity, not an arbitrary one.
+    one sequence for the mix. Each group keeps its own token-type ids.
+
+    Identity enters BEFORE the mix, not after. A matchup is an (entity, side)
+    pairing -- "THEIR revealed move vs MY mon" -- and the attention can only
+    form it if the tokens already say whose they are and which entity they
+    belong to. Three biases do that, all added to every token of an entity
+    ahead of the attention layer: the caller's per-entity `biases` (the
+    public embedder's pos + side embeddings, the shared "mine" side bias for
+    the private sheet -- the same identities the pooled vectors carry
+    downstream, so no new notion is introduced), a per-GROUP bias with a
+    non-zero init so a sheet row and a public row of the same mon are
+    distinguishable from step 0, and a zero-init per-ROW bias for what the
+    others leave degenerate -- the public rows are side-partitioned and
+    actives-first by construction (the service's getPublicTeamOrder), so a
+    row index is a rank identity worth learning.
     """
 
     cfg: ConfigDict
@@ -274,6 +284,7 @@ class CrossEntityAttentionPool(nn.Module):
         groups: tuple[jax.Array, ...],
         masks: tuple[jax.Array, ...],
         types: tuple[np.ndarray, ...],
+        biases: tuple[jax.Array | None, ...] | None = None,
     ) -> tuple[jax.Array, ...]:
         embedding_init = nn.initializers.variance_scaling(
             1.0, "fan_in", "normal", out_axis=0
@@ -291,19 +302,29 @@ class CrossEntityAttentionPool(nn.Module):
         entity_bias = self.param(
             "entity_bias", nn.initializers.zeros_init(), (num_entities, model_size)
         )
+        group_bias = self.param(
+            "group_bias", embedding_init, (len(groups), model_size)
+        )
         pool_query = self.param("pool_query", embedding_init, (1, model_size))
+        if biases is None:
+            biases = (None,) * len(groups)
 
         flat_tokens = []
         flat_masks = []
         offset = 0
-        for group, mask, token_types in zip(groups, masks, types):
+        for group_index, (group, mask, token_types, bias) in enumerate(
+            zip(groups, masks, types, biases)
+        ):
             num, num_tokens = group.shape[:2]
             entity_ids = np.arange(offset, offset + num)
             group = (
                 group
                 + token_bias[token_types].astype(dtype)[None]
                 + entity_bias[entity_ids].astype(dtype)[:, None]
+                + group_bias[group_index].astype(dtype)
             )
+            if bias is not None:
+                group = group + bias.astype(dtype)[:, None]
             flat_tokens.append(group.reshape(num * num_tokens, model_size))
             flat_masks.append(mask.reshape(num * num_tokens))
             offset += num
@@ -1523,10 +1544,22 @@ class Encoder(nn.Module):
             Encoder._private_entity_tokens
         )(self, env_step.private_team)
 
+        # Identity ahead of the mix: public rows carry their own pos + side
+        # embeddings, the sheet rows the shared "mine" side bias (the SAME
+        # embedding _batched_forward adds to their pooled vectors), so the
+        # attention can pair "their move" with "my mon" rather than having
+        # to infer ownership from content.
+        private_bias = jnp.broadcast_to(
+            self.side_bias(jnp.zeros((), dtype=jnp.int32)).astype(
+                private_tokens.dtype
+            ),
+            private_tokens.shape[:1] + private_tokens.shape[-1:],
+        )
         public_embeddings, private_embeddings = self.cross_entity_pool(
             (public_tokens, private_tokens),
             (public_token_mask, private_token_mask),
             (_PUBLIC_TOKEN_TYPES, _PRIVATE_TOKEN_TYPES),
+            (public_bias, private_bias),
         )
 
         return (
