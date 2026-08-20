@@ -274,7 +274,7 @@ def rl_sections():
             # row — zero sampling variance, counterfactual pressure on
             # untaken actions. The p_q observer panels stay as the
             # "what does the critic want" leading indicator.
-            name="1.6 · COMA all-action loss + p_q observer",
+            name="1.6 · NeuRD/COMA all-action loss + p_q observer",
             is_open=True,
             panels=[
                 lp(
@@ -332,6 +332,16 @@ def rl_sections():
                         "player_coma_absadv_move",
                     ],
                     log_y=True,
+                ),
+                lp(
+                    # NeuRD logit-gap clip occupancy: share of legal
+                    # switch / move cells on real-choice rows whose
+                    # outward push is blocked (|gap| > beta). Reads 0
+                    # under the COMA prefactor. Switch climbing toward
+                    # 1 = the clip, not the critic, now bounds switch
+                    # mass -> raise player_neurd_logit_clip.
+                    "NeuRD clipped fraction (switch vs move)",
+                    ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
                 ),
                 lp(
                     # Host-ramped runtime scalar (0 -> player_coma_coef

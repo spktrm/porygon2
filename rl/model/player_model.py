@@ -230,6 +230,7 @@ class Porygon2PlayerModel(nn.Module):
             # Full support only in the learner: the magnet KL needs both
             # distributions; actors skip it so replay transitions stay small.
             log_policy=policy_metrics.log_policy if self.cfg.train else (),
+            logits=pi_logits if self.cfg.train else (),
             src_index=src_index,
             tgt_index=tgt_index,
             entropy=policy_metrics.entropy,

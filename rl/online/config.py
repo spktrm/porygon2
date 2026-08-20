@@ -631,8 +631,31 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # spread), so 0.05 ≈ 1% relative pressure vs the coef-1.0 normalised
     # PG — steady and compounding rather than assertive. Host-ramped
     # RUNTIME scalar: retuning or aborting never recompiles.
-    player_coma_coef: float = 0.05
+    # 2026-08-21 retune for the NeuRD prefactor: dropping pi (~0.1 on
+    # ~10 legal cells) makes the raw per-cell gradient ~10x COMA's, so
+    # 0.05 was no longer "1% pressure". At 0.1 a starved switch cell
+    # (pi 0.02, adv +0.15) gets ~0.015/logit -- on par with the
+    # magnet's pull at that mass, and the clip below bounds the band.
+    player_coma_coef: float = 0.1
     player_coma_ramp_steps: int = 2000
+    # Which prefactor multiplies the counterfactual advantage per cell:
+    # "pi" is COMA proper (-pi(b).adv(b) per logit; NeuRD eq. 6 -- the
+    # restoring force on a starved cell shrinks with its own mass, and
+    # the 157k-step lineage of 2026-08-20 measured absadv_ratio ~4 with
+    # prob_ratio ~0.075: the critic preferred switch cells MORE than
+    # move cells and pi alone throttled the update). "neurd" puts the
+    # advantage on the logits directly (-adv(b) per logit, Hennes et
+    # al. 2020 eq. 10; docs/rare-action-rl-literature.md 1.3) -- all-
+    # action form over Q_all, so no 1/pi importance weight and none of
+    # the sampled-NeuRD variance. The decomposition panels keep their
+    # meaning: grad = prefactor x |adv| with prefactor = 1{clip open}.
+    player_coma_prefactor: str = "neurd"
+    # NeuRD logit-gap clip beta: no outward push on a legal cell whose
+    # log-policy sits more than beta from the row's legal-mean. Bounds
+    # the logit spread NeuRD can build (advantages are not zero-mean
+    # per row, so unclipped logits diverge); other losses still move
+    # cells outside the band. 2.0 = OpenSpiel's NeuRD default.
+    player_neurd_logit_clip: float = 2.0
     # Boltzmann temperature for the p_q OBSERVER kept from stage 2
     # (softmax(E[Q̄_private]/tau) diagnostics — the "what does the critic
     # want" leading indicator; no loss reads it since the stage-2 KL's

@@ -77,6 +77,11 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
     normalized_modality_entropy: ArrayLike = ()
+    # Raw composed action-grid logits (masked cells at the fill value);
+    # learner only, like log_policy. The NeuRD loss needs the LOGITS --
+    # written against log_policy the logit-gap clip reintroduces a
+    # pi(b).sum_a w(a) cross-term once clipped cells break zero-sum.
+    logits: ArrayLike = ()
 
 
 @dataclass

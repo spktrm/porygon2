@@ -946,9 +946,52 @@ def train_step(
                     flat_action_mask, q_all_target - v_cf[..., None], 0.0
                 )
             )
-            loss_coma = -average(
-                (pi_learner * coma_adv).sum(axis=-1), policy_mask
-            )
+            # NeuRD prefactor (2026-08-21): the advantage lands on the
+            # LOGITS with no pi factor, CENTRED over legal cells so the
+            # softmax-invariant mean direction carries no push on its
+            # own. Logit-gap clip (NeuRD eq. 10): a cell already
+            # beyond +-beta of the row's legal-mean logit gets no
+            # further push in the outward direction -- the sum of
+            # advantages is not zero-mean in general, so unclipped
+            # logits diverge; harmless at the policy level since beta
+            # still permits probabilities arbitrarily close to 0/1
+            # through the OTHER losses (PG, magnet), NeuRD simply
+            # stops contributing outside the band.
+            if config.player_coma_prefactor == "neurd":
+                legal_count = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
+                adv_centred = coma_adv - (
+                    coma_adv.sum(axis=-1) / legal_count
+                )[..., None]
+                raw_logits = jnp.where(
+                    flat_action_mask,
+                    learner_action_head.logits.astype(jnp.float32),
+                    0.0,
+                )
+                logit_gap = jax.lax.stop_gradient(
+                    raw_logits
+                    - (raw_logits.sum(axis=-1) / legal_count)[..., None]
+                )
+                beta = config.player_neurd_logit_clip
+                neurd_open = flat_action_mask & jnp.logical_not(
+                    ((logit_gap > beta) & (adv_centred > 0))
+                    | ((logit_gap < -beta) & (adv_centred < 0))
+                )
+                neurd_weight = jax.lax.stop_gradient(
+                    jnp.where(neurd_open, adv_centred, 0.0)
+                )
+                # Against the RAW logits: d/dy_b = -w(b) exactly, open
+                # or clipped, with no softmax cross-term (the log_policy
+                # form only matches while the weights are zero-sum,
+                # which the clip breaks).
+                loss_coma = -average(
+                    (neurd_weight * raw_logits).sum(axis=-1), policy_mask
+                )
+                coma_grad_prefactor = neurd_open.astype(jnp.float32)
+            else:
+                loss_coma = -average(
+                    (pi_learner * coma_adv).sum(axis=-1), policy_mask
+                )
+                coma_grad_prefactor = pi_learner
             # Gradient decomposition for the pi-prefactor question
             # (docs/rare-action-rl-literature.md). The COMA loss
             # -sum_a pi(a).sg(adv(a)) has exact per-logit gradient
@@ -981,7 +1024,9 @@ def train_step(
                 flat_action_mask & jnp.logical_not(switch_actions) & coma_row
             )
             coma_abs_adv = jnp.abs(coma_adv)
-            coma_grad_mag = pi_learner * coma_abs_adv
+            # Per-cell |d loss / d logit|: pi.|adv| under COMA,
+            # 1{clip open}.|adv| under NeuRD.
+            coma_grad_mag = coma_grad_prefactor * coma_abs_adv
             coma_grad_switch = average(coma_grad_mag, coma_switch_cells)
             coma_grad_move = average(coma_grad_mag, coma_move_cells)
             coma_prob_switch = average(pi_learner, coma_switch_cells)
@@ -1017,15 +1062,32 @@ def train_step(
                     coma_absadv_switch, coma_absadv_move
                 ),
                 # Net signed gradient mass toward the switch modality
-                # per real-choice row: positive = COMA is currently
-                # pushing switch mass UP (the critic prefers more
+                # per real-choice row (prefactor x adv summed over the
+                # row's switch cells): positive = the loss is currently
+                # pushing switch logits UP (the critic prefers more
                 # switching than the policy carries).
                 player_coma_switch_push=average(
-                    (pi_learner * coma_adv * switch_actions).sum(axis=-1),
+                    (coma_grad_prefactor * coma_adv * switch_actions).sum(
+                        axis=-1
+                    ),
                     switch_choice_mask,
                 ),
                 player_coma_adv_std=coma_adv.std(
                     where=flat_action_mask & policy_mask[..., None]
+                ),
+                # NeuRD clip occupancy: fraction of legal switch / move
+                # cells on real-choice rows whose outward push is
+                # currently blocked by the logit-gap clip. Under the
+                # COMA prefactor nothing is clipped (reads 0).
+                player_neurd_clipped_switch=1.0
+                - average(
+                    (coma_grad_prefactor > 0).astype(jnp.float32),
+                    coma_switch_cells,
+                ),
+                player_neurd_clipped_move=1.0
+                - average(
+                    (coma_grad_prefactor > 0).astype(jnp.float32),
+                    coma_move_cells,
                 ),
             )
         q_taken_pred = jax.nn.softmax(
