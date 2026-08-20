@@ -299,3 +299,55 @@ def test_final_row_is_bootstrap_only_unless_terminal():
     # loss there; its training signal belongs to the next chunk's row 0.
     np.testing.assert_array_equal(value_mask[:, 1], [1, 1, 1, 1, 0])
     np.testing.assert_array_equal(policy_mask[:, 1], [1, 1, 1, 1, 0])
+
+
+def test_shape_lattice_trim_is_lossless():
+    """The static shape lattice (2026-08-20): _chunk_required_shape reads
+    each chunk's real content and _trim_to_lattice slices to the first
+    fitting combo — never dropping a valid history step, and preserving
+    the [-1] outcome reads (padding rows are terminal-step copies)."""
+    from rl.online.learner import _chunk_required_shape, _trim_to_lattice
+
+    lattice = ((48, 128), (64, 192), (64, 256))
+    history, packed = _windows_fixture(valid_steps=50, rows_per_step=2, capacity=256)
+    T = 64
+    done = np.zeros(T, dtype=bool)
+    done[20] = True
+    # Terminal-copy padding convention: rows past the done row repeat it.
+    win = np.zeros(T, dtype=np.float32)
+    win[20:] = 1.0
+    traj = Trajectory(
+        player_transitions=PlayerTransition(
+            env_output=PlayerEnvOutput(done=done, win_reward=win)
+        ),
+        player_packed_history=packed,
+        player_history=history,
+    )
+    # done at row 20 -> 21 rows; 50 valid steps / 100 packed rows -> 50.
+    assert _chunk_required_shape(traj) == (21, 50)
+
+    trimmed = _trim_to_lattice([traj], lattice)[0]
+    assert trimmed.player_transitions.env_output.done.shape[0] == 48
+    assert trimmed.player_history.field.shape[0] == 128
+    assert trimmed.player_packed_history.revealed_cache.shape[0] == 256
+    assert trimmed.player_transitions.env_output.win_reward[-1] == win[-1]
+    assert (
+        trimmed.player_history.field[:, FieldFeature.FIELD_FEATURE__VALID].sum() == 50
+    )
+
+    # A mid-game chunk (no done row) pins the batch to full chunk length;
+    # the chain still trims the history axis.
+    full = Trajectory(
+        player_transitions=PlayerTransition(
+            env_output=PlayerEnvOutput(done=np.zeros(T, dtype=bool), win_reward=win)
+        ),
+        player_packed_history=packed,
+        player_history=history,
+    )
+    assert _chunk_required_shape(full)[0] == 64
+    out = _trim_to_lattice([traj, full], lattice)
+    assert out[0].player_transitions.env_output.done.shape[0] == 64
+    assert out[0].player_history.field.shape[0] == 192
+
+    # Full-shape batches and single-entry lattices pass through untouched.
+    assert _trim_to_lattice([traj], ((64, 256),))[0] is traj

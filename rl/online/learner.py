@@ -36,6 +36,11 @@ from rl.environment.interfaces import (
     PlayerActorInput,
     Trajectory,
 )
+from rl.environment.protos.enums_pb2 import SpeciesEnum
+from rl.environment.protos.features_pb2 import (
+    EntityRevealedNodeFeature,
+    FieldFeature,
+)
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import (
     close_tqdm_bar,
@@ -1129,6 +1134,13 @@ def train_step(
             ),
             player_policy_mask_sum=policy_mask.sum(),
             player_value_mask_sum=value_mask.sum(),
+            # Which lattice combo this variant was compiled for (static
+            # per executable) — the retuning readout for
+            # config.player_shape_lattice.
+            player_shape_T=float(
+                batch.player_transitions.env_output.done.shape[0]
+            ),
+            player_shape_H=float(batch.player_history.field.shape[0]),
             player_policy_value_mask_ratio=policy_mask.sum()
             / (value_mask.sum() + 1e-8),
             player_state_adv_mean=player_state.ema_adv_mean,
@@ -1403,7 +1415,81 @@ _TRAIN_STEP_JIT = jax.jit(
 )
 
 
-def _stack_batch(batch: list[Trajectory], rng_key: jax.Array = None) -> Batch:
+def _chunk_required_shape(traj: Trajectory) -> tuple[int, int]:
+    """Smallest (chunk_rows, history_rows) this chunk fits LOSSLESSLY.
+
+    T: rows up to and including the done row. Trailing padding rows are
+    copies of the terminal step with done zeroed (PlayerActor.make_chunk),
+    so trimming them changes nothing any cumsum-done mask or [-1] outcome
+    read sees — the row surviving at [-1] carries the same terminal-step
+    content. A mid-game chunk has no done row and requires full length.
+
+    H: the stored window is already tail-clipped and REBASED to packed
+    row 0 (clip_history_windows_tail at the actor), so keeping every
+    valid field step needs only history_rows >= valid steps and
+    2 * history_rows >= valid packed rows — under which a re-clip
+    degenerates to slicing zero padding (no rebase, nothing dropped).
+    """
+    done = np.asarray(traj.player_transitions.env_output.done)
+    done_rows = done.reshape(done.shape[0], -1).any(axis=-1)
+    t_req = int(done_rows.argmax()) + 1 if done_rows.any() else done.shape[0]
+    field = np.asarray(traj.player_history.field)
+    valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
+    packed_valid = int(
+        (
+            np.asarray(traj.player_packed_history.revealed_cache)[
+                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+            ]
+            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
+        ).sum()
+    )
+    h_req = max(valid_steps, -(-packed_valid // 2), 1)
+    return t_req, h_req
+
+
+def _trim_to_lattice(
+    batch: list[Trajectory], lattice: tuple[tuple[int, int], ...]
+) -> list[Trajectory]:
+    """Slices every chunk's T/H-leading axes down to the first lattice
+    combo that fits the batch's content losslessly (see
+    _chunk_required_shape). The lattice is a CHAIN ascending in both dims
+    whose last entry is the full stored shape, so a fitting combo always
+    exists and selecting it is a max + linear scan. Slicing only — no
+    padding, no rebase, no data-derived shapes: the set of shapes XLA can
+    ever see is exactly the enumerated lattice."""
+    if len(lattice) <= 1:
+        return batch
+    t_req = h_req = 1
+    for traj in batch:
+        t_c, h_c = _chunk_required_shape(traj)
+        t_req = max(t_req, t_c)
+        h_req = max(h_req, h_c)
+    t_out, h_out = lattice[-1]
+    for t_c, h_c in lattice:
+        if t_c >= t_req and h_c >= h_req:
+            t_out, h_out = t_c, h_c
+            break
+    if (t_out, h_out) == lattice[-1]:
+        return batch
+    return [
+        traj.replace(
+            player_transitions=jax.tree.map(
+                lambda x: x[:t_out], traj.player_transitions
+            ),
+            player_history=jax.tree.map(lambda x: x[:h_out], traj.player_history),
+            player_packed_history=jax.tree.map(
+                lambda x: x[: 2 * h_out], traj.player_packed_history
+            ),
+        )
+        for traj in batch
+    ]
+
+
+def _stack_batch(
+    batch: list[Trajectory],
+    rng_key: jax.Array = None,
+    lattice: tuple[tuple[int, int], ...] = (),
+) -> Batch:
     """Stacks a list of fixed-shape trajectory chunks into a Batch.
 
     Chunked unrolls (2026-08-16) made every stored trajectory exactly
@@ -1414,7 +1500,15 @@ def _stack_batch(batch: list[Trajectory], rng_key: jax.Array = None) -> Batch:
     _TRAIN_STEP_JIT shape variants it generated (each a separately
     compiled executable with its own workspace: the first top-bucket
     batch of a session, arriving once games ran long enough, is what
-    OOM'd sessions 1786537634 and 1786712180)."""
+    OOM'd sessions 1786537634 and 1786712180).
+
+    The static shape LATTICE (2026-08-20, config.player_shape_lattice) is
+    the bounded successor: batches are trimmed to the first of a fixed,
+    enumerated chain of combos that fits their content losslessly, and
+    every combo is precompiled at startup (Learner._precompile_lattice) —
+    the failure mode above was the surprise LATE compile of a data-derived
+    shape, not the existence of a second executable."""
+    batch = _trim_to_lattice(batch, tuple(lattice))
     stacked_trajectory: Trajectory = jax.tree.map(
         lambda *xs: np.stack(xs, axis=1), *batch
     )
@@ -1679,6 +1773,10 @@ class Learner:
         # Stage-3 Q-boosting cross-fade anchor, same treatment (a resume
         # re-fades the advantage blend over player_q_boost_ramp_steps).
         self._q_boost_ramp_start: int | None = None
+        # Shape-lattice fail-fast: every combo compiles at the FIRST batch
+        # (_precompile_lattice) so no variant can arrive as a surprise
+        # compile mid-run. Process-local by design.
+        self._shape_lattice_compiled: bool = False
 
         # Block-sequential scheduler state (see _select_population): whose
         # block it is right now, and which exploiter population is next in
@@ -2123,7 +2221,11 @@ class Learner:
                 pop.consumer_progress.update(minibatch_size)
 
                 init_key, batch_key = jax.random.split(init_key)
-                stacked = _stack_batch(batch, rng_key=batch_key)
+                stacked = _stack_batch(
+                    batch,
+                    rng_key=batch_key,
+                    lattice=self.config.player_shape_lattice,
+                )
                 while not pop.done:
                     try:
                         pop.device_q.put(stacked, timeout=1.0)
@@ -2670,10 +2772,104 @@ class Learner:
         logs["diag_league_cache_entries"] = entries
         logs["diag_league_cache_mb"] = cache_bytes / 2**20
 
+    def _precompile_lattice(self, pop: PopulationState, batch: Batch) -> None:
+        """Fail-fast compilation of EVERY lattice combo at the first
+        batch, so a shape variant can never arrive as a surprise compile
+        mid-run (the exact mechanism that OOM'd the geometric-bucket
+        sessions ~20min in: the first top-bucket batch). Each combo is
+        exercised through the real jit with a resized copy of the first
+        real batch and a COPY of the train states (the jit donates its
+        state args; outputs are discarded), so the dispatch cache is
+        warm and any compile-time OOM happens at launch, before hours of
+        training are at stake. Runs under the caller's gpu_lock.
+
+        Resizing pads the T axis by repeating each chunk's final row —
+        the actor's own padding convention, so no all-invalid mask rows
+        are fabricated — and pads/slices the H axes with zeros (zero
+        history rows are ordinary invalid steps)."""
+        lattice = tuple(self.config.player_shape_lattice)
+        full = (self.config.player_chunk_length, self.config.player_history_length)
+        assert lattice[-1] == full, (lattice, full)
+        assert all(
+            a[0] <= b[0] and a[1] <= b[1] for a, b in zip(lattice, lattice[1:])
+        ), f"player_shape_lattice must be an ascending chain: {lattice}"
+        assert len(lattice) <= 4, f"lattice too large (memory risk): {lattice}"
+        if len(lattice) <= 1:
+            return
+
+        def resize_time(x, target):
+            if x.shape[0] == target:
+                return x
+            if x.shape[0] > target:
+                return x[:target]
+            pad = jnp.repeat(x[-1:], target - x.shape[0], axis=0)
+            return jnp.concatenate([x, pad], axis=0)
+
+        def resize_zeros(x, target):
+            if x.shape[0] == target:
+                return x
+            if x.shape[0] > target:
+                return x[:target]
+            widths = [(0, target - x.shape[0])] + [(0, 0)] * (x.ndim - 1)
+            return jnp.pad(x, widths)
+
+        dummy_scalars = RuntimeScalars(
+            upgo_coef=np.float32(0.0),
+            magnet_coef=np.float32(0.0),
+            coma_coef=np.float32(0.0),
+            q_boost_mix=np.float32(0.0),
+        )
+        current = (
+            batch.player_transitions.env_output.done.shape[0],
+            batch.player_history.field.shape[0],
+        )
+        for t_c, h_c in lattice:
+            if (t_c, h_c) == current:
+                continue  # the real call right after this compiles it
+            resized = batch.replace(
+                player_transitions=jax.tree.map(
+                    lambda x: resize_time(x, t_c), batch.player_transitions
+                ),
+                player_history=jax.tree.map(
+                    lambda x: resize_zeros(x, h_c), batch.player_history
+                ),
+                player_packed_history=jax.tree.map(
+                    lambda x: resize_zeros(x, 2 * h_c), batch.player_packed_history
+                ),
+            )
+            logger.info("Precompiling train_step shape combo (%d, %d)…", t_c, h_c)
+            start = time.time()
+
+            # True buffer copies with identical avals: the jit donates its
+            # state args, so passing the live states would free them, and
+            # a leaf-type-changing copy (e.g. jnp.copy on a weak-typed
+            # python scalar) would trace as yet another variant.
+            def copy_state(tree):
+                return jax.tree.map(
+                    lambda x: (
+                        jnp.array(x, copy=True) if isinstance(x, jax.Array) else x
+                    ),
+                    tree,
+                )
+
+            self._train_step_jit(
+                copy_state(pop.player_state),
+                copy_state(pop.builder_state),
+                resized,
+                self._jit_config,
+                dummy_scalars,
+            )
+            logger.info(
+                "Compiled (%d, %d) in %.1fs.", t_c, h_c, time.time() - start
+            )
+
     def _train_step(self, pop: PopulationState, batch: Batch) -> dict | None:
         """Runs the JAX update for pop via the shared compiled train_step,
         rebinding the result onto pop (not self — every population takes
         turns through the same compiled closure)."""
+        if not self._shape_lattice_compiled:
+            self._precompile_lattice(pop, batch)
+            self._shape_lattice_compiled = True
         # upgo_coef zeroed during plasticity recovery: a freshly-perturbed
         # critic cuts UPGO returns in the wrong places (the same regime
         # the removed lambda controller handled by forcing lambda to its

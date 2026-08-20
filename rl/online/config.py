@@ -70,6 +70,29 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # tokens-per-request times chunk length; the
     # player_chunk_history_underrun telemetry says when it is too small.
     player_history_length: int = 256
+    # Static shape lattice for the learner batch (2026-08-20): a CHAIN of
+    # (chunk_rows, history_rows) combos, ascending in both dims, last
+    # entry ALWAYS (player_chunk_length, player_history_length). Each
+    # batch is trimmed host-side to the first combo that fits its actual
+    # content LOSSLESSLY (T: trailing padding rows only — padding is
+    # copies of the terminal step, so [-1] outcome reads survive; H: only
+    # when every chunk's valid field steps and packed rows fit, so no
+    # real history is ever dropped). This is NOT the geometric bucket
+    # family that OOM'd three runs: that compiled a data-derived variant
+    # per shape, with the first top-bucket batch arriving as a SURPRISE
+    # compile ~20min in. Here the variants are a fixed, enumerated set —
+    # len(lattice) executables, no more — and every one is precompiled at
+    # startup (fail-fast: an OOM happens at launch, not mid-run).
+    # ((player_chunk_length, player_history_length),) alone restores the
+    # single-shape behaviour exactly. Combos chosen from the Aug-20
+    # measurement (batch_size 4): batch-max chunk fill mean ~42 of 64,
+    # history fill mean ~85 of 256 — retune from the player_shape_T/H
+    # logs.
+    player_shape_lattice: tuple[tuple[int, int], ...] = (
+        (48, 128),
+        (64, 192),
+        (64, 256),
+    )
 
     # Batch iteration params
     batch_size: int = 4
