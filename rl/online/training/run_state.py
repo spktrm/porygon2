@@ -15,7 +15,7 @@ from rl.online.artifact import (
     Porygon2PlayerTrainState,
 )
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
-from rl.online.controllers import PILogController
+from rl.online.training.controllers import PILogController
 
 logger = logging.getLogger(__name__)
 

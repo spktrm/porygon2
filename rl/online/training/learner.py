@@ -32,7 +32,7 @@ from rl.online.artifact import (
 )
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.controllers import PILogController
+from rl.online.training.controllers import PILogController
 from rl.online.league import (
     MAIN_KEY,
     League,

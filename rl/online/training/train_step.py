@@ -30,18 +30,22 @@ from rl.online.artifact import (
     Porygon2PlayerTrainState,
 )
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.loss import (
+from rl.online.training.loss import (
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
 )
-from rl.online.targets import (
+from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     compute_q_targets,
 )
-from rl.online.utils import calculate_r2, collect_batch_telemetry_data, promote_map
+from rl.online.training.telemetry import (
+    calculate_r2,
+    collect_batch_telemetry_data,
+    promote_map,
+)
 from rl.utils import average
 
 logger = logging.getLogger(__name__)

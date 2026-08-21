@@ -16,7 +16,7 @@ from rl.environment.interfaces import PlayerPackedHistoryOutput
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.player_actor import chunk_spans
-from rl.online.targets import compute_player_targets
+from rl.online.training.targets import compute_player_targets
 
 
 @pytest.mark.parametrize("chunk_length", [3, 4, 64])

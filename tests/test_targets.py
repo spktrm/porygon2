@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from rl.online.targets import (
+from rl.online.training.targets import (
     compute_player_targets,
     compute_q_targets,
     two_hot,

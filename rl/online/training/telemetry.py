@@ -1,3 +1,7 @@
+"""Learner-side telemetry helpers: R2, batch composition counts, and
+the dtype promotion the loss path uses.
+"""
+
 from typing import Any, TypeVar
 
 import chex
