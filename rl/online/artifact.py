@@ -170,11 +170,6 @@ def create_train_state(
             weight_decay=config.adam.weight_decay,
         ),
     )
-    if config.gradient_accumulation_steps > 1:
-        player_optimizer = optax.MultiSteps(
-            player_optimizer, config.gradient_accumulation_steps
-        )
-
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
         init_fn=player_params_init_fn,
@@ -202,10 +197,6 @@ def create_train_state(
             weight_decay=config.adam.weight_decay,
         ),
     )
-    if config.gradient_accumulation_steps > 1:
-        builder_optimizer = optax.MultiSteps(
-            builder_optimizer, config.gradient_accumulation_steps
-        )
     inital_builder_params = builder_params_init_fn(rng)
     builder_train_state = Porygon2BuilderTrainState.create(
         apply_fn=jax.vmap(
@@ -228,33 +219,6 @@ def _ckpt_root(learner_config: Porygon2LearnerConfig) -> str:
     means one resumable checkpoint tree, with no namespacing needed to keep
     two from colliding."""
     return f"./ckpts/gen{learner_config.generation}/"
-
-
-def save_train_state(
-    wandb_run: wandb.wandb_run.Run,
-    learner_config: Porygon2LearnerConfig,
-    player_state: Porygon2PlayerTrainState,
-    builder_state: Porygon2BuilderTrainState,
-    league: League,
-    controller_bytes: bytes | None = None,
-):
-    save_path = save_train_state_locally(
-        learner_config,
-        player_state,
-        builder_state,
-        league,
-        controller_bytes,
-    )
-    if (
-        learner_config.log_artifacts_online
-        and player_state.step_count.item() % learner_config.cloud_save_interval_steps
-        == 0
-    ):
-        wandb_run.log_artifact(
-            artifact_or_path=save_path,
-            name=f"latest-gen{learner_config.generation}",
-            type="model",
-        )
 
 
 def save_train_state_locally(

@@ -370,11 +370,3 @@ class League:
     def get_main_player(self) -> ParamsContainer:
         """Thin MAIN_KEY-only alias — see update_main_player."""
         return self.get_live(MAIN_KEY)
-
-
-def main():
-    print(pfsp(np.array([0.1, 0.5, 0.9, 0.9]), weighting="inverse_squared"))
-
-
-if __name__ == "__main__":
-    main()

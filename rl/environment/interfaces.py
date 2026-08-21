@@ -85,12 +85,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
 
 
 @dataclass
-class PlayerAlphasOutput(PolicyHeadOutput):
-    log_alpha: ArrayLike = ()
-    modality_log_alpha: ArrayLike = ()
-
-
-@dataclass
 class PlayerActorOutput:
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
@@ -255,7 +249,3 @@ class Trajectory:
 class Batch(Trajectory):
     rng_key: ArrayLike = ()
 
-
-@dataclass
-class SamplingConfig:
-    temp: float = 1.0

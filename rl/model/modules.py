@@ -83,14 +83,6 @@ def apply_rope(
     return out.astype(inputs.dtype)
 
 
-def escort_transform(x: jax.Array, m: jax.Array = None, p: int = 2, axis: int = -1):
-    if m is None:
-        m = jnp.ones_like(x, dtype=bool)
-    abs_x_p = jnp.where(m, jnp.abs(x) ** p, 0)
-    denom = abs_x_p.sum(axis=axis, keepdims=True)
-    return abs_x_p / (denom + (denom == 0))
-
-
 class MultiHeadAttention(nn.Module):
     """Multi-headed attention (MHA) module.
 
@@ -257,23 +249,6 @@ def create_attention_mask(
         mask2 = mask1
 
     return mask1[..., None, :, None] & mask2[..., None, None, :]
-
-
-def norm_ratio(x: jax.Array, y: jax.Array, axis: int = -1) -> jax.Array:
-    """
-    Compute the ratio of the norms of two arrays.
-
-    Args:
-        x (jax.Array): First array.
-        y (jax.Array): Second array.
-        axis (int, optional): Axis along which to compute the norms. Defaults to -1.
-
-    Returns:
-        jax.Array: Ratio of the norms of the two arrays.
-    """
-    x_norm = jnp.linalg.norm(x, axis=axis)
-    y_norm = jnp.linalg.norm(y, axis=axis)
-    return jnp.where(x_norm == 0, 0, x_norm / y_norm)
 
 
 class EncoderBlock(nn.Module):

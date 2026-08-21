@@ -9,13 +9,12 @@ PolicyObjectiveT = Literal["spo"]
 
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig(BaseTrainingConfig):
-    num_steps = 5_000_000
-    # One pool size for every population (docs/three-population-league.md,
-    # block-sequential scheduling): all three populations spawn pools of
-    # this size, but the per-population run_gate (Learner._set_active)
-    # means only the block owner's actors actually play — so this is
-    # simply "the machine's actor budget", handed whole to whoever is
-    # training. Idle pools' threads stay alive but wait at the gate
+    # ANNOTATED, so it is a real dataclass field: without the annotation
+    # this was a plain class attribute — absent from .replace() and from
+    # the config serialised into every checkpoint.
+    num_steps: int = 5_000_000
+    # Actor pool size: the machine's actor budget. Idle threads stay alive
+    # and wait at the gate
     # between games (no create/destroy churn, no inference contention).
     num_player_actors: int = 12
     num_builder_actors: int = 4
@@ -147,7 +146,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Self-play evaluation params
     save_interval_steps: int = 20_000
-    cloud_save_interval_steps: int = 100_000
     league_winrate_log_steps: int = 1_000
     # How often (own steps) each population publishes fresh live params for
     # its actors (update_live). Every interval mints a NEW params version,
@@ -278,7 +276,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 10.0
     builder_clip_gradient: float = 10.0
-    gradient_accumulation_steps: int = 1
     # Fast EMA target (IMPACT-style): supplies the clipped-target ratio in
     # the surrogate, the v-trace reference policy, and the value bootstraps,
     # so it must track the learner closely for stability under replay reuse.
@@ -362,8 +359,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # false positive from exactly this).
     exploit_ctrl_min_games_per_opponent: float = 20.0
 
-    builder_gamma: float = 1.0
-    builder_alpha: float = 1.0
     builder_lambda: float = 0.99
 
     # Builder policy objective: ratio-based surrogate with a trust region.
@@ -531,7 +526,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
-    builder_entropy_loss_coef: float = 0.01
     builder_conditional_entropy_loss_coef: float = 1.0
     builder_entropy_coef: float = 0.01
     builder_entropy_prediction_normalising_constant: float = 100

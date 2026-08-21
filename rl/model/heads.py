@@ -490,13 +490,6 @@ def compose_action_grid(
 NUM_MARGIN_BINS = 13
 
 
-def margin_win_mass(logits: jax.Array) -> jax.Array:
-    """P(win) − P(loss) from 13-bin margin logits (last axis)."""
-    probs = jax.nn.softmax(logits.astype(jnp.float32), axis=-1)
-    half = NUM_MARGIN_BINS // 2
-    return probs[..., half + 1 :].sum(-1) - probs[..., :half].sum(-1)
-
-
 class CategoricalValueLogitHead(nn.Module):
     cfg: ConfigDict
 

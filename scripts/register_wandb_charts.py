@@ -16,10 +16,9 @@ _DISPLAY_NAME = "League payoff heatmap"
 
 
 def _winrate_hex(winrate: float) -> str:
-    """Red/gold/green hex for a win rate. Kept in sync by hand with
-    Learner._winrate_hex in rl/online/learner.py — dead code there now
-    (see below), duplicated here only because this script has no jax/model
-    deps and shouldn't import learner.py just for this."""
+    """Red/gold/green hex for a win rate. Self-contained: the learner-side
+    twin this used to mirror no longer exists, and this script has no
+    jax/model deps by design."""
     red, gold, green = (211, 0, 0), (255, 205, 50), (50, 205, 50)
     if winrate <= 0.25:
         r, g, b = red

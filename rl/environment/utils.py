@@ -98,14 +98,6 @@ def split_rng(key: jax.Array, num_splits: int = 2) -> tuple[jax.Array, jax.Array
     return jax.random.split(key, num_splits)
 
 
-def stack_steps(steps: Sequence[T], axis: int = 0) -> T:
-    return jax.tree.map(lambda *xs: np.stack(xs, axis=axis), *steps)
-
-
-def concatenate_steps(steps: Sequence[T], axis: int = 0) -> T:
-    return jax.tree.map(lambda *xs: np.concatenate(xs, axis=axis), *steps)
-
-
 def padnstack(arr: np.ndarray, padding: int = NUM_HISTORY) -> np.ndarray:
     output_shape = (padding, *arr.shape[1:])
     result = np.zeros(output_shape, dtype=arr.dtype)
@@ -423,40 +415,6 @@ def process_state(
     return PlayerActorInput(
         env=env_step, packed_history=packed_history_step, history=history_step
     )
-
-
-def get_ex_batch(min_length: int = 64) -> PlayerActorInput:
-    processed_states = []
-    for i, unprocessed_states in enumerate(EX_BATCH.trajectories):
-        states = []
-        for state in unprocessed_states.states:
-            processed_state = process_state(state)
-            states.append(processed_state.env)
-
-        done_state = processed_state.env.replace(
-            done=np.ones_like(processed_state.env.done)
-        )
-        states += [done_state] * (EX_BATCH.max_trajectory_length - len(states))
-
-        processed_states.append(
-            PlayerActorInput(
-                env=jax.tree.map(lambda *xs: np.stack(xs), *states),
-                packed_history=processed_state.packed_history,
-                history=processed_state.history,
-            )
-        )
-
-    ex_batch: PlayerActorInput = jax.tree.map(
-        lambda *xs: np.stack(xs, axis=1), *processed_states
-    )
-    ex_batch = ex_batch.replace(
-        packed_history=clip_packed_history(
-            ex_batch.packed_history, min_length=min_length
-        ),
-        history=clip_history(ex_batch.history, min_length=min_length),
-    )
-
-    return ex_batch
 
 
 def get_ex_trajectory() -> PlayerActorInput:

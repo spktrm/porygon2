@@ -53,15 +53,6 @@ def encode_one_hot(
     return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
 
 
-def encode_capped_one_hot(
-    entity: jax.Array, feature_idx: int, max_values: dict[int, int]
-) -> tuple[int, int]:
-    chex.assert_rank(entity, 1)
-    chex.assert_type(entity, jnp.int32)
-    max_value = max_values[feature_idx]
-    return jnp.minimum(entity[feature_idx], max_value), max_value + 1
-
-
 def encode_sqrt_one_hot(
     entity: jax.Array,
     feature_idx: int,
@@ -155,16 +146,3 @@ def encode_spe_boosts(boosts: jax.Array):
     """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
     return (2 / math.log(3)) * jnp.log(encode_boosts(boosts, 3))
 
-
-def mean_pool(x: jax.Array, m: jax.Array) -> jax.Array:
-    """Mean pool over axis=0 with mask m (same shape as x)."""
-    denom = m.sum(axis=0, keepdims=True).clip(min=1)
-    return jnp.where(m, x, 0).sum(axis=0, keepdims=True) / denom
-
-
-def max_pool(x: jax.Array, m: jax.Array) -> jax.Array:
-    """Masked max pool over axis=0; returns minimum dtype value where mask is False."""
-    dtype_finfo = jnp.finfo(x.dtype)
-    return m.any(axis=0, keepdims=True) * jnp.where(m, x, dtype_finfo.min).max(
-        axis=0, keepdims=True
-    )

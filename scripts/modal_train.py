@@ -6,7 +6,7 @@ Two entrypoints on one app (shared image and volumes):
   `porygon2-replays` volume (upload them first, below); artifacts land in
   ckpts/offline/ on the `porygon2-ckpts` volume in the exact layout the RL
   learner consumes (offline_critic_ckpt_path).
-- train_rl — rl/main.py plus the node game service in the same container
+- train_rl — rl/online/main.py plus the node game service in the same container
   (compiled at image-build time, launched on ws://localhost:8080 before the
   learner starts). Checkpoints go to ckpts/gen{N}/ on the same volume, so a
   relaunch resumes from the newest checkpoint automatically — relevant
@@ -25,9 +25,8 @@ Train the offline critic (args after --cli go verbatim to rl.offline.train):
     modal run --detach scripts/modal_train.py::train_offline \
         --cli "--ensemble --num-steps 10000"
 
-Train the RL agent (the offline critic ensemble must already exist on the
-ckpts volume — the learner config's offline_critic_ckpt_path points at
-ckpts/offline/gen9randombattle-ens{k}/ckpt_best):
+Train the RL agent (self-contained — the RL learner has consumed nothing
+from the offline critic since PBRS shaping was retired, Aug 2026):
     modal run --detach scripts/modal_train.py::train_rl
 
 Fetch artifacts back:
@@ -322,17 +321,6 @@ def train_rl(debug: bool = False, load_state_mode: str = "checkpoint"):
     )
     _require_embeddings(generation)
 
-    critic_members = glob.glob("ckpts/offline/*/ckpt_best")
-    if not critic_members:
-        # Non-fatal: offline_critic_ckpt_path may be None in config, and
-        # the learner's own load error is authoritative — but this is the
-        # common footgun, so say it plainly up front.
-        print(
-            "WARNING: no ckpts/offline/*/ckpt_best on the porygon2-ckpts "
-            "volume — if the learner config sets offline_critic_ckpt_path, "
-            "train the critic first (train_offline)."
-        )
-
     service = subprocess.Popen(
         ["node", "dist/server/index.js"],
         cwd=f"{REPO_REMOTE}/service",
@@ -357,7 +345,9 @@ def train_rl(debug: bool = False, load_state_mode: str = "checkpoint"):
 
         _start_commit_loop()
         train_env = dict(os.environ, LOAD_STATE_MODE=load_state_mode)
-        cmd = [sys.executable, "rl/main.py"] + (["--debug"] if debug else [])
+        cmd = [sys.executable, "-m", "rl.online.main"] + (
+            ["--debug"] if debug else []
+        )
         subprocess.run(cmd, cwd=REPO_REMOTE, env=train_env, check=True)
     finally:
         service.terminate()

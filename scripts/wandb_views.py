@@ -799,9 +799,10 @@ def rl_sections():
                     [
                         "player_encoder_gradient_norm",
                         "player_history_encoder_gradient_norm",
-                        "player_macro_head_gradient_norm",
-                        "player_pi_head_gradient_norm",
+                        "player_macro_micro_head_gradient_norm",
+                        "player_policy_adapter_gradient_norm",
                         "player_v_head_gradient_norm",
+                        "player_public_v_head_gradient_norm",
                         "player_aux_v_head_gradient_norm",
                         "player_q_macro_micro_gradient_norm",
                     ],

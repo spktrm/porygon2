@@ -1,10 +1,11 @@
 # Offline critic training
 
 Trains the player model's `encoder` + `v_head` to predict final game outcome
-from Pokemon Showdown replays (Monte-Carlo, public view), producing artifacts
-the RL learner consumes directly. The intended use is a head start for early
-self-play: the frozen critic supplies a potential-based shaping signal
-while the RL model itself trains fully from scratch.
+from Pokemon Showdown replays (Monte-Carlo, public view). The intended use
+was a head start for early self-play — a frozen critic supplying a
+potential-based shaping signal while the RL model itself trained from
+scratch. That consumption path is retired (see Stage 4); what remains here
+is a standalone research program.
 
 ## Pipeline
 
@@ -12,18 +13,18 @@ while the RL model itself trains fully from scratch.
 1. Download replays          python replays/main.py gen9randombattle -l 20000 --min-rating 1500
 2. Export tensor shards      cd service && npm run offline -- gen9randombattle [--min-rating R] [--workers N]
 3. Train the critic          python -m rl.offline.train [--num-steps 50000] [--debug]
-4. Consume in RL             set offline_critic_ckpt_path + potential coef schedule
+4. (no RL consumption path — PBRS shaping retired Aug 2026)
 ```
 
-To eyeball what a trained Φ says about one game,
-`python -m rl.offline.visualize <replay json | replay id | replay URL>`
-writes a standalone HTML page: the rendered battle (official Showdown
-replay player) next to per-turn Φ — ensemble members, mean ± std, the
-uncertainty-gated potential, a mirror-antisymmetry check, and the 13-bin
-margin distribution — with click-to-seek sync between chart and replay.
-It encodes the log through the same exporter as the shards
-(service/src/scripts/exportReplay.ts), so the states scored are exactly
-the training-time states.
+> **2026-08-21:** the five analysis/inspection scripts that lived here —
+> `visualise.py` (per-game Φ HTML), `announced_leak.py` (Φ_ann invariance
+> probe), `causality.py` (future-information leak check), `diagnose.py`
+> (overfit-one-batch + martingale audit) and `baseline.py` (hand-rule
+> lower bound) — were deleted in the feature-bloat pass. None was
+> imported by anything; each was a standalone `__main__`. The verdict
+> rules they encoded are preserved in `LESSONS.md` 12, and the code is
+> one command away: `git checkout pre-cleanup-2026-08-21 -- rl/offline/`.
+> The trainer, model, dataset, config and artifact boundary are untouched.
 
 ## Stage 2 — exporter (service/src/scripts/offline.ts)
 
@@ -123,42 +124,33 @@ capability marker, since the param tree can't be). Trained
 Φ_ann = E[outcome | history, announced actions], which buys:
 
 1. **Replay analysis:** per turn, decision = Φ_ann(t+1) − Φ(t) and
-   dice = Φ(t+1) − Φ_ann(t+1) (damage rolls included) — the visualiser's
-   momentum lane and key moments show the split, with the 🎲 log-event
-   tags as labels on the quantified dice term.
+   dice = Φ(t+1) − Φ_ann(t+1) (damage rolls included).
 2. **Dice-excised PBRS (later, learner-side):** shaped term
    γ·Φ_ann(t+1) − Φ(t) — same conditional expectation as standard PBRS
    (unbiased by the tower property), strictly lower variance: the shaping
    channel stops paying the agent for crits. Not yet wired into the
    learner — gated on a validated announced-state critic run.
 
-Verify with `python -m rl.offline.announced_leak <replay>`: perturbs one
-turn's outcome features (crit bits, damage/heal ratios, post-event hp
-snapshots) and asserts Φ_ann for that turn is bit-invariant while the
-realised Φ moves.
+The invariance check this needs (perturb one turn's outcome features —
+crit bits, damage/heal ratios, post-event hp snapshots — and assert Φ_ann
+is bit-invariant for that turn while the realised Φ moves) lived in
+`announced_leak.py`, deleted 2026-08-21. Note it was always **one-sided**:
+a Φ_ann that never reads the turn at all passes it perfectly.
 
 ## Stage 4 — consumption by the RL pipeline
 
-The offline critic is a **standalone model** — it shares Encoder code with
-the RL model, but its trained params never enter the RL network, and the
-RL model trains fully from scratch (no frozen or warm-started subtrees).
-The single consumption mode is the **learned potential**: set
-`Porygon2LearnerConfig.offline_critic_ckpt_path` — a single path, or a
-tuple of ensemble-member paths for uncertainty gating
-(Φ = mean · exp(−`potential_uncertainty_scale` · std): shaping speaks
-where members agree and goes quiet off the human data distribution). The
-learner loads the critic(s) once at startup, keeps params outside the
-train state (frozen by construction — never donated, never in the
-optimizer, stop-gradient at use), and evaluates Φ(s) ∈ [-1, 1] **once per
-trajectory** as it enters the replay buffer (`Learner.enqueue_traj`),
-storing the gated scalar per step on the trajectory — the frozen critic
-makes Φ immutable data, so recomputing it inside the train step would
-redo identical work replay_ratio × ensemble-size times, and caching
-decouples learner step time from ensemble size entirely. Because the critic operates
-on the history pathway only, no input projection is needed and none
-exists. Φ feeds the potential advantage channel in
-`compute_player_targets`, gated by `player_potential_target_adv_share_fn`
-(a target-share schedule; the coefficient is solved per batch). The hand-crafted
-`statePotential.ts` heuristic has been removed;
-`INFO_FEATURE__STATE_POTENTIAL` stays zero for proto layout
-compatibility.
+**There is none, as of Aug 2026.** PBRS/potential shaping is retired
+(`rl/online/targets.py`), `offline_critic_ckpt_path` no longer exists in
+`Porygon2LearnerConfig`, and nothing in `rl/online/` imports this package.
+The offline critic remains a standalone research program with its own
+entrypoint and its own wandb project.
+
+For the record, the consumption mode that existed: the trained params
+never entered the RL network (the RL model trains fully from scratch, no
+frozen or warm-started subtrees). Φ was loaded once at startup, kept
+outside the train state, and evaluated **once per trajectory** as it
+entered the replay buffer — the frozen critic makes Φ immutable data, so
+recomputing it inside the train step would redo identical work
+replay_ratio × ensemble-size times. An ensemble gated the signal by
+member agreement (Φ = mean · exp(−scale · std)), so shaping spoke where
+members agreed and went quiet off the human data distribution.

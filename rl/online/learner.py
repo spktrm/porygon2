@@ -1830,8 +1830,7 @@ class Learner:
         """Background thread to batch data and push to this population's
         own GPU queue."""
         max_burst = 8
-        minibatch_size = self.config.batch_size
-        batch_size = minibatch_size * self.config.gradient_accumulation_steps
+        batch_size = self.config.batch_size
 
         sample_cond = pop.player_replay._sample_cv
         with sample_cond:
@@ -1856,7 +1855,7 @@ class Learner:
                     )
                     if pop.done:
                         break
-                    batch = pop.player_replay.sample(minibatch_size)
+                    batch = pop.player_replay.sample(batch_size)
 
                 # Normalise the exploration-ladder tag every trajectory
                 # carries (explore actors mark theirs explore=True at
@@ -1880,7 +1879,7 @@ class Learner:
                 with add_cond:
                     add_cond.notify_all()
 
-                pop.consumer_progress.update(minibatch_size)
+                pop.consumer_progress.update(batch_size)
 
                 init_key, batch_key = jax.random.split(init_key)
                 stacked = _stack_batch(
@@ -1917,10 +1916,9 @@ class Learner:
                 logger.exception("wandb logging failed for population %s", pop.name)
 
     def _checkpoint_writer_worker(self, pop: PopulationState):
-        """Background thread: does the actual checkpoint disk I/O for
-        this population (and, every cloud_save_interval_steps, the wandb
-        artifact upload for main only) so the training loop never blocks
-        on it. Payloads are already fully host-side and pre-serialized by
+        """Background thread: does the actual checkpoint disk I/O so the
+        training loop never blocks on it. Payloads are already fully
+        host-side and pre-serialized by
         the time they're queued (see _handle_periodic_tasks) — this thread
         never touches a live device buffer or mutates self.league
         directly, only writes what it was handed."""
@@ -1929,7 +1927,7 @@ class Learner:
             if payload is None:
                 break
             try:
-                save_path = write_checkpoint_components(
+                write_checkpoint_components(
                     payload["save_path"],
                     payload["learner_config"],
                     payload["player_components"],
@@ -1938,15 +1936,7 @@ class Learner:
                     payload["controller_bytes"],
                     step_count=payload["step_count"],
                     frame_count=payload["frame_count"],
-                    scheduler=payload.get("scheduler"),
-                    populations=payload.get("populations"),
                 )
-                if payload["upload_to_cloud"]:
-                    pop.wandb_run.log_artifact(
-                        artifact_or_path=save_path,
-                        name=f"latest-gen{payload['learner_config'].generation}",
-                        type="model",
-                    )
             except Exception:
                 logger.exception(
                     "Background checkpoint write failed for population %s @ "

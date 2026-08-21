@@ -115,39 +115,6 @@ def major_arg_step_mask(history_field: jax.Array, edge_cache: jax.Array) -> jax.
     return (edge_mask & is_real).any(axis=-1)
 
 
-def critic_step_roles(
-    history_field: jax.Array, edge_cache: jax.Array, step_valid: jax.Array
-) -> tuple[jax.Array, jax.Array]:
-    """(H,) bool pair: (is_state_step, is_afterstate_step).
-
-    STATE steps carry a battle major arg — the readout there scores the
-    position as that action's fused resolution lands. AFTERSTATE steps are
-    the last valid step before the next major — the settled state (residual
-    minors resolved) the following decision is actually made from, i.e. the
-    evaluation point root search queries. A major step immediately followed
-    by another major is BOTH (no residual phase between them), so the roles
-    are independent flags, not a partition.
-    """
-    is_state = major_arg_step_mask(history_field, edge_cache) & step_valid
-
-    def _scan(carry, xs):
-        major, valid = xs
-        # Emitted value: the major-flag of the nearest VALID step strictly
-        # after this one; then fold this step into the carry.
-        out = carry
-        carry = jnp.where(valid, major, carry)
-        return carry, out
-
-    _, next_valid_is_major = jax.lax.scan(
-        _scan,
-        jnp.zeros((), dtype=jnp.bool_),
-        (is_state, step_valid),
-        reverse=True,
-    )
-    is_afterstate = step_valid & next_valid_is_major
-    return is_state, is_afterstate
-
-
 @chex.dataclass
 class PerSlotHistoryOutput:
     # Per-history-step snapshots: (H, 12, D) / (H, D).

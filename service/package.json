@@ -8,7 +8,6 @@
         "compile-proto": "./scripts/compile_proto.sh",
         "kill": "killall python && killall node ",
         "start": "npm run compile-base && node dist/server/index.js | pino-pretty",
-        "start-ppo": "npm run compile-base && node dist/start-ppo.js",
         "start-training-server": "node dist/server/index.js --type training",
         "start-evaluation-server": "node dist/server/index.js --type evaluation",
         "start-evaluation1-server": "node dist/server/index.js --type evaluation1",
@@ -16,9 +15,7 @@
         "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
         "test": "vitest run",
         "test-soak": "npm run compile-base && node dist/tests/main.js",
-        "offline": "npm run compile-base && node dist/scripts/offline.js",
-        "matchup": "npm run compile-base && node dist/tests/matchup.js",
-        "preprocess-replays": "ts-node src/replays/main.ts"
+        "offline": "npm run compile-base && node dist/scripts/offline.js"
     },
     "dependencies": {
         "@pkmn/client": "^0.7.2",

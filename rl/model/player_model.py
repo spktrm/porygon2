@@ -505,7 +505,7 @@ def get_player_model(config: ConfigDict = None) -> nn.Module:
 def main(generation: int = 9):
     """Init the learner network on an example step and print param counts.
 
-    Attention-map dumps and cost analysis live in rl.model.viz.
+    Attention-map dumps live in scripts/attn_probe.py.
     """
     learner_network = get_player_model(get_player_model_config(generation, train=True))
 

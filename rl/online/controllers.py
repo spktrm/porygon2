@@ -6,24 +6,21 @@ anti-windup via clamping the actuator itself) and those that drive
 train_step actuate RUNTIME scalars — never static config, which
 recompiles (and whose retained executables OOM-killed run 1326). That
 shared shape lives in ``PILogController`` (the actuator: step, bump,
-clamp) and ``EmaSensor`` (the sensor: EMA + tick-gating) below; each
-hyperparameter controller is then just its error function, bounds, and
-whatever hard overrides it needs — the replay reuse-cap loop in
+clamp) below; a hyperparameter controller is then just its error
+function, bounds, and whatever hard overrides it needs — the replay
+reuse-cap loop in
 learner.py builds on ``PILogController`` the same way but keeps its own
 windowed-mean sensor, since averaging the actor-KL over a fixed window
 rather than decaying it is a deliberate, different smoothing choice.
 
-What survives (2026-08-14): exactly ONE continuous controller — the
-replay reuse-cap loop in learner.py (actor-KL -> reuse cap), which
-actuates a data-pipeline resource, never learning dynamics — plus the
-event-driven PlasticityController (learner.py), a discrete state
-machine over countable events (N overdue league additions -> one
-shrink-and-perturb -> tracked recovery -> cooldown), which is the only
-mechanism that ever touches main's weights. This module now holds just
-the two shared primitives (PILogController, EmaSensor).
+What survives (2026-08-21): exactly ONE controller — the replay
+reuse-cap loop in learner.py (actor-KL -> reuse cap), which actuates a
+data-pipeline resource, never learning dynamics. This module holds the
+one shared primitive it uses (PILogController).
 
-Three controllers were deliberately removed, for the same reason — their
-effects proved hard to tune and predict:
+Every other controller this project built has been removed, all for the
+same reason — their effects proved harder to tune and predict than the
+thing they controlled:
 
 - AdaptivityController (magnet KL coef; removed 2026-08-13): the
   commitment-covariance PI caused three separate bugs (unreachable
@@ -37,12 +34,15 @@ effects proved hard to tune and predict:
 - LambdaGapController (advantage lambda; removed 2026-08-14): replaced
   by AlphaStar's actual recipe — fixed TD(lambda=0.8) value targets,
   unparameterised v-trace policy advantages, and a UPGO term whose
-  per-step outcome-conditional cut supplies locally what the
-  controller's single global lambda approximated (see targets.py). Its
-  one genuinely-useful behaviour, forcing pure Monte Carlo while a
-  freshly-perturbed critic is untrustworthy, survives as "upgo_coef=0
-  during plasticity recovery" — itself removed 2026-08-21 with the
-  PlasticityController (LESSONS.md 10).
+  per-step outcome-conditional cut supplied locally what the
+  controller's single global lambda approximated. Its one
+  genuinely-useful behaviour, forcing pure Monte Carlo while a
+  freshly-perturbed critic is untrustworthy, survived as "upgo_coef=0
+  during plasticity recovery" — and both of those went in the
+  2026-08-21 pass (LESSONS.md 3 and 10).
+- PlasticityController (shrink-and-perturb on league stagnation; removed
+  2026-08-21): rarely-fired machinery with a large blast radius. See
+  LESSONS.md 10 — the evidence pulls both ways and is recorded there.
 - ExploitabilityController (caution scale; removed 2026-08-14): built to
   scale three other controllers' targets, it outlived all three — by the
   end its only action was a bounded nudge on the replay KL target,
@@ -95,33 +95,3 @@ class PILogController:
         Re-clips, since bounds may not match whoever produced ``value``."""
         self.log = float(np.clip(value, self.log_min, self.log_max))
 
-
-class EmaSensor:
-    """EMA-smoothed sensor with tick-gating: ``observe`` feeds one raw
-    reading (ignoring None/non-finite ones), ``ready`` reports whether
-    ``interval`` readings have accumulated since the last ``consume``.
-    """
-
-    def __init__(self, alpha: float, interval: int):
-        self.alpha = alpha
-        self.interval = interval
-        self.ema: float | None = None
-        self.ticks = 0
-
-    def observe(self, reading: float | None) -> None:
-        if reading is not None and np.isfinite(reading):
-            self.ema = (
-                reading
-                if self.ema is None
-                else (1 - self.alpha) * self.ema + self.alpha * reading
-            )
-            self.ticks += 1
-
-    def ready(self) -> bool:
-        return self.ticks >= self.interval and self.ema is not None
-
-    def consume(self) -> None:
-        self.ticks = 0
-
-    def reset(self) -> None:
-        self.ticks = 0
