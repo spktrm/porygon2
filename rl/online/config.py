@@ -417,7 +417,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # is π-weighted and cannot hold a floor once a modality is starved —
     # 0.2 buys pressure in the healthy-mass formative window only; the
     # per-state restoring channel is the COMA loss below.
-    player_magnet_kl_coef: float = 0.2
+    # 0.05 (2026-08-21, user's call with the epsilon explore ladder):
+    # this term is entropy regularisation (uniform prior => KL = log|A|
+    # - H) and its climb 0.05 -> 0.1 -> 0.2 was entirely compensation
+    # for a SUPPLY problem -- rare-action coverage shrinking with the
+    # collapse -- that the behaviour-side epsilon floor now owns without
+    # touching pi. Back to regularisation-only: convergence of the
+    # zero-sum dynamics and keeping genuinely mixed spots mixed, not
+    # holding switch mass up against the critic. Watchdog escalation
+    # retired with it.
+    player_magnet_kl_coef: float = 0.05
 
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
