@@ -256,7 +256,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # zero-sum dynamics and keeping genuinely mixed spots mixed, not
     # holding switch mass up against the critic. Watchdog escalation
     # retired with it.
-    player_magnet_kl_coef: float = 0.05
+    # 0.1 (2026-08-22, from 0.05): the neurd 0.2 launch collapsed
+    # switching by 12.6k and a 0.1 resume from that ckpt stalled there for
+    # 10k steps (switch_ratio ~0.1, clipped_switch 0.5-0.9, magnet KL flat
+    # 0.45) -- nothing restores a dead modality once it's gone, so the
+    # magnet is the only thing that can stop it going. Fresh lineage with
+    # neurd 0.1 + magnet 0.1 together; revert to 0.05 on overshoot.
+    player_magnet_kl_coef: float = 0.1
 
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
