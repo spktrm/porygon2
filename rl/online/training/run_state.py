@@ -4,6 +4,7 @@ import dataclasses
 import logging
 import queue
 import threading
+from typing import Literal
 
 import wandb.wandb_run
 
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 # Why a snapshot was added to the league. "dominant" is the healthy path
 # (the agent beat its own history); "overdue" means only the frame budget
+# expired, which is the plateau signature.
+AddReason = Literal["initial", "dominant", "overdue"]
+
 
 @dataclasses.dataclass
 class RunState:

@@ -8,8 +8,8 @@ comes through here.
 """
 
 from rl.online.training.batching import stack_batch
-from rl.online.training.learner import AddReason, Learner, OOMGuardTriggered
-from rl.online.training.run_state import RunState
+from rl.online.training.learner import Learner, OOMGuardTriggered
+from rl.online.training.run_state import AddReason, RunState
 from rl.online.training.train_step import train_step
 
 __all__ = [

@@ -1,19 +1,18 @@
-"""_log_memory_diagnostics: process-wide RAM attribution logged every
-memory_diag_interval steps (learner.py). Runs the real unbound method
-against a stub learner, same posture as test_learner_gate.py — no devices,
-actors, or service required.
+"""log_memory_diagnostics: process-wide RAM attribution logged every
+memory_diag_interval steps. A free function over (run_state, league, logs)
+since 2026-08-21, so these run against plain stubs — no Learner, no
+devices, actors, or service required.
 """
 
 import json
 import time
 from types import SimpleNamespace
 
-from rl.online.training import Learner
+from rl.online.training.diagnostics import log_memory_diagnostics
 
 
 def make_stub(run_state=None, cache_entries=0, cache_bytes=0):
     return SimpleNamespace(
-        _THREAD_NAME_BUCKETS=Learner._THREAD_NAME_BUCKETS,
         run_state=run_state or make_run_state(),
         league=SimpleNamespace(cache_stats=lambda: (cache_entries, cache_bytes)),
     )
@@ -28,7 +27,7 @@ def make_run_state(player_bytes=0, builder_bytes=0):
 
 def diag(stub, logs=None):
     logs = {} if logs is None else logs
-    Learner._log_memory_diagnostics(stub, logs)
+    log_memory_diagnostics(stub.run_state, stub.league, logs)
     return logs
 
 
@@ -116,7 +115,7 @@ def test_malformed_node_stats_file_does_not_raise(tmp_path, monkeypatch):
 def test_heap_census_runs_and_logs_without_raising(caplog):
     import logging
 
-    with caplog.at_level(logging.INFO, logger="rl.online.training.learner"):
+    with caplog.at_level(logging.INFO, logger="rl.online.training.diagnostics"):
         diag(make_stub())
     assert any("Heap census" in r.message for r in caplog.records)
 

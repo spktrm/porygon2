@@ -11,7 +11,8 @@ import numpy as np
 
 from rl.model.utils import ParamsContainer
 from rl.online.league import MAIN_KEY, League, PlayerRef
-from rl.online.training import Learner
+from rl.online.training.league_ops import should_add_new_player
+from rl.online.training.learner import Learner
 
 # A ref written by an older revision: a foreign origin tag in a disjoint
 # (far higher) step_count range, which is exactly what the origin filter
@@ -61,7 +62,7 @@ def make_learner(main_frames: int, players: list[PlayerRef], main_steps: int = 1
 
 
 def gate(stub, run_state):
-    return Learner._should_add_new_player(stub, run_state)
+    return should_add_new_player(run_state, stub.league, stub.config)
 
 
 def test_empty_league_waits_for_minimum_steps():
@@ -167,7 +168,6 @@ def test_build_run_state_seeds_host_step_from_restored_state():
         config=Porygon2LearnerConfig(),
         league=league,
         _restore_controller_state=lambda run_state, blob: None,
-        _create_params_container=lambda run_state: None,
     )
     stub.league.update_live = lambda key, container: None
 
@@ -175,9 +175,14 @@ def test_build_run_state_seeds_host_step_from_restored_state():
         return Learner._build_run_state(
             stub,
             player_state=SimpleNamespace(
-                step_count=np.array(steps), frame_count=np.array(0)
+                step_count=np.array(steps),
+                frame_count=np.array(0),
+                params={},
+                target_params={},
             ),
-            builder_state=SimpleNamespace(frame_count=np.array(0)),
+            builder_state=SimpleNamespace(
+                frame_count=np.array(0), params={}, target_params={}
+            ),
             wandb_run=None,
         )
 
