@@ -45,6 +45,7 @@ git revert <removing sha>                                      # undo one commit
 | Multi-lambda aux value heads | `aux_v_head` + `MultiLambdaValueLogitHead`, `compute_aux_value_targets`, `loss_v_aux`, `player_aux_lambdas`/`player_aux_value_coef`, the per-lambda R2 panels, and `player_bootstrap_gap` (it read the λ=1.0 MC-anchor row) | `98f0873` | representation shaping the critic stack no longer needs; **note it takes the bootstrap-bias instrument with it** — nothing now measures the main head against a Monte Carlo anchor |
 | BT-rating telemetry | `rl/online/ratings.py`, `bandit_window_steps`/`bandit_min_games_per_opponent`/`bandit_min_rated_opponents`, the BT-fit auditor panels | `98f0873` | a rating needs hundreds of games per point, so it was never fast enough to act on — an auditor that outlived the controllers it audited |
 | Always-true feature flags | `player_neurd_enabled`, `player_q_diagnostic_enabled` | `98f0873` | neither had a meaningful "off": one gated the sole policy gradient, the other gated loss-free logging |
+| `RuntimeScalars` pytree | the class, the `scalars` arg on `train_step`, both construction sites | `1fd210c` | it carried `magnet_coef`/`neurd_coef` as traced leaves so a host controller could vary them without recompiling; nothing varied them any more. **Reintroduce it — do not widen static config — the moment a coefficient changes during a run** (LESSONS.md 1) |
 
 ---
 
@@ -74,10 +75,21 @@ live. The retired mechanism was the *learner batch* family, now
 multiple independently-bucketed fields, the number of distinct shape
 combinations XLA sees is the product across fields, not the sum. *(live)*
 
-**Runtime scalars must never become static config.** `config` is a jit
-`static_argname`; static scalars retained ~5GB of executables per distinct value
-and OOM-killed run 1326. Anything a controller actuates goes through
-`RuntimeScalars`. *(live)*
+**A scalar that VARIES during a run must never live in static config.**
+`config` is a jit `static_argname`, so each distinct value is a separate
+compiled executable; retaining them cost ~5GB and OOM-killed run 1326. This is
+why a `RuntimeScalars` pytree carried the host-varied coefficients as traced
+leaves.
+
+That class was deleted 2026-08-21 — every mechanism that varied a coefficient
+(the coef ramps, the exploiter zeroing, and every controller) had itself been
+removed, so it was boxing two constants read straight off config every step.
+**The rule did not go with it**: the price of the move is that retuning
+`player_magnet_kl_coef` or `player_neurd_coef` now costs one `train_step`
+recompile at the next launch, and the moment anything varies a coefficient
+*during* a run — the magnet PI controller is the documented candidate — it needs
+a traced pytree argument again. Widening the static config instead is the run-1326
+failure.
 
 **Remat policy.** The encoder is rematted with `nothing_saveable`, not the house
 `checkpoint_dots` — the latter saves the very matmul outputs that blow up, and
