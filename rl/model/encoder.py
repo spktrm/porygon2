@@ -173,7 +173,16 @@ _TOKEN_LEARNSET = 4
 _TOKEN_PUBLIC_STATE = 5
 _TOKEN_ACTIVE_STATE = 6
 _TOKEN_PRIVATE_STATE = 7
-_NUM_TOKEN_TYPES = 8
+# Non-entity tokens of the flat input set the latent read consumes
+# (2026-08-21): field / side conditions, the two prev-action slots, the
+# per-slot recurrent history states and the field history state, and the
+# public latents themselves when the privileged read re-reads them.
+_TOKEN_FIELD = 8
+_TOKEN_PREV_ACTION = 9
+_TOKEN_HISTORY_SLOT = 10
+_TOKEN_HISTORY_FIELD = 11
+_TOKEN_LATENT = 12
+_NUM_TOKEN_TYPES = 13
 
 _PUBLIC_TOKEN_TYPES = np.array(
     [_TOKEN_SPECIES, _TOKEN_ABILITY, _TOKEN_ITEM]
@@ -184,6 +193,11 @@ _PRIVATE_TOKEN_TYPES = np.array(
     [_TOKEN_SPECIES, _TOKEN_ABILITY, _TOKEN_ITEM]
     + 4 * [_TOKEN_MOVE]
     + [_TOKEN_PRIVATE_STATE]
+)
+_FIELD_TOKEN_TYPES = np.array(3 * [_TOKEN_FIELD])
+_PREV_ACTION_TOKEN_TYPES = np.array(2 * [_TOKEN_PREV_ACTION])
+_HISTORY_TOKEN_TYPES = np.array(
+    NUM_PUBLIC_SLOTS * [_TOKEN_HISTORY_SLOT] + [_TOKEN_HISTORY_FIELD]
 )
 
 
@@ -227,56 +241,40 @@ class EntityAttentionPool(nn.Module):
         return jnp.squeeze(pooled, axis=0)
 
 
-class CrossEntityAttentionPool(nn.Module):
-    """Pool attribute tokens into entity vectors, mixing ACROSS entities.
+class LatentInputRead(nn.Module):
+    """Perceiver-style input read (2026-08-21): a learned latent array
+    cross-attends ONE flat set of input tokens and becomes the trunk's state
+    rows. Replaces the per-entity pooling + per-substream input MLPs: the
+    current board used to collapse to one vector per entity (then one
+    projection per substream) before the trunk ever saw it, so a matchup was
+    something the trunk reconstructed from pooled summaries; here every
+    attribute token (species / ability / item / moves / state), the field,
+    the prev-action slots and the raw recurrent history states are keys of
+    the same read, and the latents decide what to keep.
 
-    Structurally identical to EntityAttentionPool -- one attention layer over
-    the attribute tokens, then a single learned query per entity -- except
-    the attention runs over EVERY current-state entity's tokens at once
-    instead of one entity's. It REPLACES the intra-entity layer on this path
-    rather than sitting on top of it: own-entity token pairs are a subset of
-    the global mask, so nothing the entity-local layer can express is lost,
-    and the cost stays flat in the terms that dominate (same token count,
-    same layer count, same FFW width -- only the attention probability
-    matrix grows).
+    Identity is purely additive -- there is no substream slicing left to
+    carry it. Every token gets, before the read: the caller's per-entity
+    bias (the public embedder's pos + side, the "mine"/"theirs" side bias for
+    the sheets), a per-token-TYPE bias, a zero-init per-ROW bias (public rows
+    are side-partitioned actives-first, so a row index is a rank identity
+    worth learning) and a non-zero-init per-GROUP bias so e.g. a sheet row
+    and a public row of the same mon are told apart from step 0.
 
-    The motivation is matchup reasoning. "Their revealed Flamethrower
-    threatens my Scizor" is a comparison between one entity's move token and
-    another entity's species token; with entity-local pooling there is no
-    layer in the model where those two tokens coexist, so downstream has to
-    reconstruct it from two lossy 256-d pooled summaries. It matters most
-    for switching: in singles no action-grid cell endpoint carries an
-    opponent token at all (a move cell's tgt is the learned TARGET_AUTO
-    constant, a switch cell is my-active x my-bench), and MacroHead's
-    switch-vs-move decision pools only the ALLY_i_SWITCH src slots -- so the
-    whole "should I switch out of this matchup" signal has to already be
-    inside my active's pooled vector.
-
-    The pooling READ stays entity-local: query e reaches only entity e's own
-    token span. Cross-entity content arrives in what the tokens carry, not
-    in what the query can see, so the output contract -- one vector per
-    entity, the state stream's row count -- is untouched.
-
-    Entities arrive as a tuple of (num_entities, num_tokens, dim) groups
-    (public and private have different token counts) and are flattened into
-    one sequence for the mix. Each group keeps its own token-type ids.
-
-    Identity enters BEFORE the mix, not after. A matchup is an (entity, side)
-    pairing -- "THEIR revealed move vs MY mon" -- and the attention can only
-    form it if the tokens already say whose they are and which entity they
-    belong to. Three biases do that, all added to every token of an entity
-    ahead of the attention layer: the caller's per-entity `biases` (the
-    public embedder's pos + side embeddings, the shared "mine" side bias for
-    the private sheet -- the same identities the pooled vectors carry
-    downstream, so no new notion is introduced), a per-GROUP bias with a
-    non-zero init so a sheet row and a public row of the same mon are
-    distinguishable from step 0, and a zero-init per-ROW bias for what the
-    others leave degenerate -- the public rows are side-partitioned and
-    actives-first by construction (the service's getPublicTeamOrder), so a
-    row index is a rank identity worth learning.
+    Groups arrive as (num_entities, num_tokens, dim) blocks with their own
+    token-type ids; non-entity inputs are passed as ONE entity with N tokens
+    (field: 1 x 3, prev-action: 1 x 2, history: 1 x 13). Masked tokens are
+    absent keys, so a masked entity is inert. The read's residual starts at
+    1.0 (cfg.latent_read.init_residual_scale): token content can only reach
+    the latents through it, so it must not start as a no-op -- which also
+    means the value-ladder leak tests exercise this path without gate
+    opening. Privileged routing is STRUCTURAL: the caller builds two
+    instances -- the public read over the player's own information set, and
+    a small privileged read over [sheet tokens | public latents] whose output
+    only the value-`all` rung ever reads.
     """
 
     cfg: ConfigDict
+    num_latents: int
 
     @nn.compact
     def __call__(
@@ -285,14 +283,13 @@ class CrossEntityAttentionPool(nn.Module):
         masks: tuple[jax.Array, ...],
         types: tuple[np.ndarray, ...],
         biases: tuple[jax.Array | None, ...] | None = None,
-    ) -> tuple[jax.Array, ...]:
+    ) -> jax.Array:
         embedding_init = nn.initializers.variance_scaling(
             1.0, "fan_in", "normal", out_axis=0
         )
         dtype = groups[0].dtype
         model_size = groups[0].shape[-1]
-        group_shapes = [group.shape[:2] for group in groups]
-        num_entities = sum(num for num, _ in group_shapes)
+        num_entities = sum(group.shape[0] for group in groups)
 
         token_bias = self.param(
             "token_bias",
@@ -305,7 +302,9 @@ class CrossEntityAttentionPool(nn.Module):
         group_bias = self.param(
             "group_bias", embedding_init, (len(groups), model_size)
         )
-        pool_query = self.param("pool_query", embedding_init, (1, model_size))
+        latents = self.param(
+            "latents", embedding_init, (self.num_latents, model_size)
+        )
         if biases is None:
             biases = (None,) * len(groups)
 
@@ -313,13 +312,14 @@ class CrossEntityAttentionPool(nn.Module):
         flat_masks = []
         offset = 0
         for group_index, (group, mask, token_types, bias) in enumerate(
-            zip(groups, masks, types, biases)
+            zip(groups, masks, types, biases, strict=True)
         ):
             num, num_tokens = group.shape[:2]
+            assert len(token_types) == num_tokens, (group_index, num_tokens)
             entity_ids = np.arange(offset, offset + num)
             group = (
-                group
-                + token_bias[token_types].astype(dtype)[None]
+                group.astype(dtype)
+                + token_bias[np.asarray(token_types)].astype(dtype)[None]
                 + entity_bias[entity_ids].astype(dtype)[:, None]
                 + group_bias[group_index].astype(dtype)
             )
@@ -332,58 +332,31 @@ class CrossEntityAttentionPool(nn.Module):
         tokens = jnp.concatenate(flat_tokens, axis=0)
         token_mask = jnp.concatenate(flat_masks, axis=0)
 
-        tokens = TransformerEncoder(
-            name="attention", **self.cfg.cross_entity_encoder.to_dict()
-        )(qkv=tokens, qkv_mask=token_mask)
-
-        # Block-diagonal read mask: entity e's pool query sees exactly its own
-        # token span, so this readout is mathematically the per-entity pool
-        # it replaces. Invalid entities are all-masked in token_mask and so
-        # pool from an empty key set, as before.
-        pool_allowed = np.zeros((num_entities, tokens.shape[0]), dtype=bool)
-        column = 0
-        row = 0
-        for num, num_tokens in group_shapes:
-            for index in range(num):
-                span = slice(column + index * num_tokens, column + (index + 1) * num_tokens)
-                pool_allowed[row + index, span] = True
-            column += num * num_tokens
-            row += num
-
-        pooled = TransformerDecoder(
-            name="pool", **self.cfg.cross_entity_pool.to_dict()
-        )(
-            q=jnp.repeat(pool_query.astype(dtype), num_entities, axis=0),
-            kv=tokens,
-            kv_mask=token_mask,
-            attn_mask=jnp.asarray(pool_allowed)[None],
+        return TransformerDecoder(name="read", **self.cfg.latent_read.to_dict())(
+            q=latents.astype(dtype), kv=tokens, kv_mask=token_mask
         )
-
-        splits = np.cumsum([num for num, _ in group_shapes])[:-1]
-        return tuple(jnp.split(pooled, splits, axis=0))
 
 
 class RoundBlock(nn.Module):
-    """One trunk round over two CONCATENATED group streams plus opp and
-    the value ladder (redesign 2026-08-17): the STATE stream is the
-    concat [private | public | field | prev_action | history] (history =
-    the recurrent history embeddings — rows + field state + pooled
-    latents — a full state-group member, not external read-only KV), the
-    ACTION stream is [move | switch | target]. The concats are built
-    ONCE by the encoder and carried through the scan as-is; substream
+    """One trunk round over the public LATENTS (the state stream: K rows
+    produced by LatentInputRead over the flat input token set, 2026-08-21
+    -- before that, the concat [private | public | field | prev_action |
+    history] of pooled per-entity vectors with per-substream gates), the
+    privileged latents (opp), the concatenated ACTION stream
+    [move | switch | target] and the value ladder. Action substream
     identity survives via per-substream input norms, static slice
-    boundaries (derived from the substream valid masks) and PER-SUBSTREAM
-    GATE VECTORS — each write to a group stream is scaled by its
-    substream's own zero-init scalar, broadcast over that substream's
-    rows. Per round:
+    boundaries (derived from the typed valid masks) and PER-SUBSTREAM GATE
+    VECTORS — each write to the action stream is scaled by its type's own
+    zero-init scalar, broadcast over that type's rows; the state stream is
+    one group with one gate per write. Per round:
 
         1. state self-attention: one module over the state concat,
            per-substream gate vector. Within-type pairs are a subset of
            this all-pairs attention, so there are no intra self-attn
            modules
-        2. opp cross-read: opp reads [state | opp] (one module) so the
-           opponent sheet is CONTEXTUALISED against the live game each
-           round. Nothing that feeds the policy ever reads opp (the one
+        2. opp cross-read: the privileged latents read [state | opp]
+           (one module) so the opponent sheet is CONTEXTUALISED against
+           the live game each round. Nothing that feeds the policy ever reads opp (the one
            leak-critical rule — opp is consumed only by the value-`all`
            read in step 4)
         3. action self-attention: one module over the action concat,
@@ -429,11 +402,7 @@ class RoundBlock(nn.Module):
             jax.Array,
             jax.Array,
         ],
-        private_valid: jax.Array,
-        public_valid: jax.Array,
-        field_valid: jax.Array,
-        prev_action_valid: jax.Array,
-        history_valid: jax.Array,
+        state_valid: jax.Array,
         opp_valid: jax.Array,
         move_valid: jax.Array,
         switch_valid: jax.Array,
@@ -459,14 +428,9 @@ class RoundBlock(nn.Module):
         value_valid = jnp.ones(n_value, dtype=jnp.bool_)
 
         # Substream boundaries come from the (static) valid-mask shapes;
-        # the concat order is fixed by the encoder.
-        state_parts = (
-            ("private", private_valid.shape[0]),
-            ("public", public_valid.shape[0]),
-            ("field", field_valid.shape[0]),
-            ("prev_action", prev_action_valid.shape[0]),
-            ("history", history_valid.shape[0]),
-        )
+        # the concat order is fixed by the encoder. The state stream is
+        # one group (the latents).
+        state_parts = (("state", state_valid.shape[0]),)
         action_parts = (
             ("move", move_valid.shape[0]),
             ("switch", switch_valid.shape[0]),
@@ -486,16 +450,6 @@ class RoundBlock(nn.Module):
                 jnp.asarray([n for _, n in action_parts], dtype=jnp.int32),
             )
 
-        state_valid = jnp.concatenate(
-            (
-                private_valid,
-                public_valid,
-                field_valid,
-                prev_action_valid,
-                history_valid,
-            ),
-            axis=0,
-        )
         action_valid = jnp.concatenate(
             (move_valid, switch_valid, target_valid), axis=0
         )
@@ -767,20 +721,31 @@ class Encoder(nn.Module):
             EntityAttentionPool,
             policy=jax.checkpoint_policies.nothing_saveable,
         )(self.cfg, name="entity_attention_pool")
-        # Same module shape, global attention: pools the CURRENT-state
-        # entities (both sides' public rows + my private sheet) with their
-        # attribute tokens mixed across entities rather than within one, so
-        # a matchup is a token-to-token comparison instead of something the
-        # trunk has to reconstruct from two pooled summaries. Replaces --
-        # does not stack on -- the entity-local layer for those rows, which
-        # is what keeps the cost flat; the pool above still serves the
-        # history cache and the opponent's privileged sheet. Rematted for
-        # the same reason as its neighbour, though the token set here is
-        # ~168 rows rather than the cache's thousands.
-        self.cross_entity_pool = nn.checkpoint(
-            CrossEntityAttentionPool,
-            policy=jax.checkpoint_policies.nothing_saveable,
-        )(self.cfg, name="cross_entity_pool")
+        # Perceiver-style input reads (2026-08-21). The PUBLIC read: K
+        # learned latents cross-attend the flat set of every token in the
+        # player's own information set -- both sides' public attribute
+        # tokens, my private sheet's, the field, the prev-action slots and
+        # the raw recurrent history states -- and become the trunk's state
+        # rows; no per-entity pooling and no per-substream input MLPs on
+        # this path any more. The PRIVILEGED read: a few latents over
+        # [opp sheet tokens | public latents], consumed ONLY by the
+        # value-`all` rung (RoundBlock's opp stream) -- the sheet never
+        # enters the public read, so the policy's invariance to it is
+        # structural. The entity-local pool above survives for the
+        # history cache (~2 orders of magnitude more rows) and for the
+        # per-entity vectors that warm-start the typed action slots.
+        # Rematted like its neighbours; the read's probability matrix is
+        # K x ~186 at the trunk's head count -- a sixth of the 168^2
+        # cross-entity mix it replaces.
+        latent_read = nn.checkpoint(
+            LatentInputRead, policy=jax.checkpoint_policies.nothing_saveable
+        )
+        self.latent_input_read = latent_read(
+            self.cfg, self.cfg.num_latents, name="latent_input_read"
+        )
+        self.priv_latent_read = latent_read(
+            self.cfg, self.cfg.num_priv_latents, name="priv_latent_read"
+        )
         self.public_persistent_linear = nn.Dense(
             name="public_persistent_linear", use_bias=False, **dense_kwargs
         )
@@ -816,29 +781,12 @@ class Encoder(nn.Module):
             name="history_field_step_linear", use_bias=False, **dense_kwargs
         )
 
-        # Per-substream input projections, one GroupNorm per trunk group
-        # so state and action inputs are prepared identically. The
-        # prev-action tokens especially need theirs — they are borrowed
-        # mixed-provenance action-slot embeddings with only an additive
-        # bias; history gets one too now that it is a state substream
-        # rather than external read-only KV.
-        # No separate moveset state tokens (removed 2026-08-17): the
-        # opponent's revealed-move pp already lives in the public entity
-        # embeddings, and my per-move battle state (pp, disabled, wildcard
-        # availability) reaches the trunk through the move action stream's
-        # warm start and its action->state readbacks.
+        # Per-type input projections for the action stream (the state
+        # stream is the latent read's output and needs none). The
+        # prev-action tokens used to need theirs too -- they are borrowed
+        # mixed-provenance action-slot embeddings -- and now get identity
+        # from the read's token-type/group biases instead.
         input_mlp_shape = (4 * self.entity_size, self.entity_size)
-        self.state_input_norm = GroupNorm(
-            substream_names=(
-                "private",
-                "public",
-                "field",
-                "prev_action",
-                "history",
-            ),
-            layer_sizes=input_mlp_shape,
-            name="state_input_norm",
-        )
         self.action_input_norm = GroupNorm(
             substream_names=tuple(
                 group_name for group_name, _ in ACTION_DECODER_SLOT_GROUPS
@@ -847,9 +795,9 @@ class Encoder(nn.Module):
             name="action_input_norm",
         )
 
-        # Round trunk: one RoundBlock over the concatenated state stream
-        # [private | public | field | prev_action | history], opp, the
-        # concatenated action stream [move | switch | target], and the
+        # Round trunk: one RoundBlock over the public latents (state), the
+        # privileged latents (opp), the concatenated action stream
+        # [move | switch | target], and the
         # value ladder, scanned num_rounds times with stacked params, so
         # every round has its own weights and rounds can specialize
         # instead of iterating one shared refinement operator.
@@ -1524,17 +1472,20 @@ class Encoder(nn.Module):
         )
         return field_embeddings, mask, request_count, turn_order_value
 
-    def _embed_current_entities(self, env_step: PlayerEnvOutput):
-        """Embed every entity of the CURRENT board -- both sides' public rows
-        and my own private sheet -- in one shot, with their attribute tokens
-        mixed across entities before each is pooled back to a vector.
+    def _pool_public_tokens(self, tokens: jax.Array, token_mask: jax.Array):
+        return self.entity_attention_pool(tokens, token_mask, _PUBLIC_TOKEN_TYPES)
 
-        The mixed set is exactly the player's own legal information set (my
-        sheet + both sides' PUBLIC rows), i.e. the same content the state
-        stream already concatenates and the action stream already reads, so
-        no privileged information enters here. `opp_private_team` is
-        deliberately absent and keeps the entity-local path.
-        """
+    def _pool_private_tokens(self, tokens: jax.Array, token_mask: jax.Array):
+        return self.entity_attention_pool(tokens, token_mask, _PRIVATE_TOKEN_TYPES)
+
+    def _current_entity_tokens(self, env_step: PlayerEnvOutput):
+        """Attribute tokens of every entity of the CURRENT board -- both
+        sides' public rows and my own private sheet -- plus the per-entity
+        identity biases they carry into the latent read, plus the cheap
+        entity-local pooled vectors that warm-start the typed action slots
+        (a switch option must still be "this mon" as a query; the latents
+        are not per-entity). The token set is exactly the player's own
+        legal information set; `opp_private_team` is deliberately absent."""
         public_tokens, public_token_mask, public_mask, public_bias = (
             _lifted_entity_vmap(Encoder._public_entity_tokens)(
                 self, env_step.public_team, env_step.revealed_team
@@ -1543,30 +1494,29 @@ class Encoder(nn.Module):
         private_tokens, private_token_mask, private_mask = _lifted_entity_vmap(
             Encoder._private_entity_tokens
         )(self, env_step.private_team)
-
-        # Identity ahead of the mix: public rows carry their own pos + side
-        # embeddings, the sheet rows the shared "mine" side bias (the SAME
-        # embedding _batched_forward adds to their pooled vectors), so the
-        # attention can pair "their move" with "my mon" rather than having
-        # to infer ownership from content.
         private_bias = jnp.broadcast_to(
             self.side_bias(jnp.zeros((), dtype=jnp.int32)).astype(
                 private_tokens.dtype
             ),
             private_tokens.shape[:1] + private_tokens.shape[-1:],
         )
-        public_embeddings, private_embeddings = self.cross_entity_pool(
-            (public_tokens, private_tokens),
-            (public_token_mask, private_token_mask),
-            (_PUBLIC_TOKEN_TYPES, _PRIVATE_TOKEN_TYPES),
-            (public_bias, private_bias),
+        public_vectors = (
+            _lifted_entity_vmap(Encoder._pool_public_tokens)(
+                self, public_tokens, public_token_mask
+            )
+            + public_bias
         )
-
+        private_vectors = (
+            _lifted_entity_vmap(Encoder._pool_private_tokens)(
+                self, private_tokens, private_token_mask
+            )
+            + private_bias
+        )
         return (
-            public_embeddings + public_bias,
-            public_mask,
-            private_embeddings,
-            private_mask,
+            (public_tokens, public_token_mask, public_mask, public_bias),
+            (private_tokens, private_token_mask, private_mask, private_bias),
+            public_vectors,
+            private_vectors,
         )
 
     def _embed_private_entities(self, private_team: jax.Array):
@@ -1618,17 +1568,15 @@ class Encoder(nn.Module):
         history_field_state: jax.Array,
         history_latents: jax.Array,
     ):
-        # Both sides' public rows and my private sheet are pooled together so
-        # their attribute tokens (species / ability / item / moves) mix across
-        # entities first -- this is where "their revealed move threatens this
-        # mon of mine" becomes representable, and it lands directly on the
-        # vectors that warm-start the switch action slots below.
+        # Attribute tokens of the current board (the latent read's keys)
+        # and the entity-local pooled vectors that warm-start the typed
+        # action slots.
         (
+            (public_tokens, public_token_mask, revealed_entity_mask, public_bias),
+            (private_tokens, private_token_mask, private_entity_mask, private_bias),
             revealed_entity_embeddings,
-            revealed_entity_mask,
             private_entity_embeddings,
-            private_entity_mask,
-        ) = self._embed_current_entities(env_step)
+        ) = self._current_entity_tokens(env_step)
         field_embeddings, *_ = self._embed_field(env_step.field)
 
         # My moveset embeddings carry per-move battle state (pp, disabled,
@@ -1637,24 +1585,18 @@ class Encoder(nn.Module):
         my_move_embeddings, _ = self._embed_moves(env_step.my_moveset)
 
         # Opponent's privileged match-start team sheet (training self-play
-        # only; all-unspecified rows at deploy, masked out here). Embedded
-        # with the SAME private-entity embedder — same feature layout, same
-        # semantic space — and consumed exclusively by the value-`all`
-        # stream's read in RoundBlock; it never joins the state sequence.
-        opp_private_embeddings, opp_private_mask = self._embed_private_entities(
-            env_step.opp_private_team
+        # only; all-unspecified rows at deploy, masked out here) as
+        # attribute TOKENS with the "theirs" side bias -- keys of the
+        # privileged latent read only; they never join the public read.
+        opp_private_tokens, opp_private_token_mask, _ = _lifted_entity_vmap(
+            Encoder._private_entity_tokens
+        )(self, env_step.opp_private_team)
+        opp_private_bias = jnp.broadcast_to(
+            self.side_bias(jnp.ones((), dtype=jnp.int32)).astype(
+                opp_private_tokens.dtype
+            ),
+            opp_private_tokens.shape[:1] + opp_private_tokens.shape[-1:],
         )
-        # Ownership signal, reusing the SAME side_bias the public embedder
-        # applies from the (relative) SIDE feature: without it the two
-        # sheets are content-identical through the shared embedder, and the
-        # value-`all` read over [state | opp] keys has no way to tell whose
-        # mon a row describes. Zero new params.
-        private_entity_embeddings = private_entity_embeddings + self.side_bias(
-            jnp.zeros((), dtype=jnp.int32)
-        ).astype(private_entity_embeddings.dtype)
-        opp_private_embeddings = opp_private_embeddings + self.side_bias(
-            jnp.ones((), dtype=jnp.int32)
-        ).astype(opp_private_embeddings.dtype)
 
         output_state_sequence = jnp.zeros(
             (NUM_ACTION_FEATURES, self.entity_size), dtype=self.cfg.dtype
@@ -1723,52 +1665,76 @@ class Encoder(nn.Module):
         output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
 
         # Per-entity recurrent history (12 rows, PUBLIC_ORDER-aligned with
-        # the public team, masked to mapped rows), the field history state,
-        # and the attention-pooled latent summaries (shared with — and
-        # warm-startable from — the offline outcome critic). Since
-        # 2026-08-17 the concat is a full state-group SUBSTREAM through
-        # the trunk; the raw copy is also passed for value_public's read
-        # (public-information-set purity — see RoundBlock).
+        # the public team, masked to mapped rows) and the field history
+        # state: RAW keys of the latent read, and the SAME raw rows the
+        # public value rung reads (public-information-set purity -- see
+        # RoundBlock). The attention-pooled history latents are no longer
+        # an RL input (they summarised exactly these 13 tokens; the read
+        # sees them directly) -- pool_history survives for the offline
+        # critic, which warm-starts from it by name.
+        del history_latents
         history_tokens = jnp.concatenate(
-            (history_row_states, history_field_state[None], history_latents),
-            axis=0,
-        )
+            (history_row_states, history_field_state[None]), axis=0
+        ).astype(self.cfg.dtype)
         history_valid = jnp.concatenate(
-            (
-                history_row_valid,
-                jnp.ones(1 + history_latents.shape[0], dtype=jnp.bool_),
-            ),
-            axis=0,
+            (history_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
         )
 
         typed_action_valids = tuple(
             output_state_mask[slot_indices]
             for _, slot_indices in ACTION_DECODER_SLOT_GROUPS
         )
-        # Shared query init for the all/private rungs — see setup's comment.
         value_all_tokens = self.all_value_embeddings.astype(self.cfg.dtype)
         value_private_tokens = self.private_value_embeddings.astype(self.cfg.dtype)
         value_public_tokens = self.public_value_embeddings.astype(self.cfg.dtype)
 
-        # Both group streams are built the SAME way: per-substream
-        # norm+MLP projections concatenated once by a GroupNorm,
-        # then carried through the scan as-is (RoundBlock exchanges
-        # between them and gates writes per substream) — state =
-        # [private | public | field | prev_action | history], action =
-        # [move | switch | target] (typed slices gathered from the
-        # warm-started slot-aligned sequence) — plus opp (privileged
-        # sheet, contextualised in-trunk, value-`all`-only) and the value
-        # ladder. Bulk of computation: scanned num_rounds times with
-        # per-round (stacked) weights.
-        state_tokens = self.state_input_norm(
+        # The public read: K latents over the flat token set of my own
+        # information set -- 168 entity attribute tokens + field 3 +
+        # prev-action 2 + history 13 -- become the trunk's state rows.
+        public_latents = self.latent_input_read(
             (
-                private_entity_embeddings,
-                revealed_entity_embeddings,
-                field_embeddings,
-                prev_action_tokens,
-                history_tokens,
-            )
+                public_tokens,
+                private_tokens,
+                field_embeddings[None],
+                prev_action_tokens[None],
+                history_tokens[None],
+            ),
+            (
+                public_token_mask,
+                private_token_mask,
+                field_valid[None],
+                prev_action_doubles_mask[None],
+                history_valid[None],
+            ),
+            (
+                _PUBLIC_TOKEN_TYPES,
+                _PRIVATE_TOKEN_TYPES,
+                _FIELD_TOKEN_TYPES,
+                _PREV_ACTION_TOKEN_TYPES,
+                _HISTORY_TOKEN_TYPES,
+            ),
+            (public_bias, private_bias, None, None, None),
         )
+        # The privileged read: a few latents over [sheet tokens | public
+        # latents]; the trunk's opp stream, read by value-`all` only.
+        priv_latents = self.priv_latent_read(
+            (opp_private_tokens, public_latents[None]),
+            (
+                opp_private_token_mask,
+                jnp.ones(public_latents.shape[:1], dtype=jnp.bool_)[None],
+            ),
+            (
+                _PRIVATE_TOKEN_TYPES,
+                np.full(public_latents.shape[0], _TOKEN_LATENT),
+            ),
+            (opp_private_bias, None),
+        )
+        state_valid = jnp.ones(public_latents.shape[0], dtype=jnp.bool_)
+        opp_valid = jnp.ones(priv_latents.shape[0], dtype=jnp.bool_)
+
+        # The action stream is built as before: per-type norm+MLP
+        # projections over the typed slices gathered from the warm-started
+        # slot-aligned sequence, carried through the scan as-is.
         action_tokens = self.action_input_norm(
             tuple(
                 jnp.split(
@@ -1790,19 +1756,15 @@ class Encoder(nn.Module):
             _,
         ) = self.round_trunk(
             (
-                state_tokens,
-                opp_private_embeddings,
+                public_latents,
+                priv_latents,
                 action_tokens,
                 value_all_tokens,
                 value_private_tokens,
                 value_public_tokens,
             ),
-            private_entity_mask,
-            revealed_entity_mask,
-            field_valid,
-            prev_action_doubles_mask,
-            history_valid,
-            opp_private_mask,
+            state_valid,
+            opp_valid,
             *typed_action_valids,
             history_tokens,
             history_valid,
