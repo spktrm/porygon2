@@ -41,6 +41,10 @@ git revert <removing sha>                                      # undo one commit
 | PriorityLock | `rl/concurrency/` | `65a4774` | referenced only inside its own file since 2025-09 |
 | Offline critic analysis tools | `rl/offline/{announced_leak,baseline,causality,diagnose,visualise}.py` | `65a4774` | unimported `__main__` scripts; the offline trainer they analysed stays |
 | Dead helpers + config fields | 16 never-called symbols, `artifact.save_train_state` + the cloud-upload path, `gradient_accumulation_steps`, 4 unread config fields — full list in the commit body | `65a4774` | no callers / no readers |
+| p_q observer | `player_q_observer_tau`, the Boltzmann-over-Q̄_private readout and its `player_q_improve_*` metrics | `98f0873` | it was a *leading* indicator from the stage-2 era, when the Q head did not drive the policy. NeuRD now reads Q_all directly, so "what does the critic want vs what does π do" is the loss itself, not an early warning about it |
+| Multi-lambda aux value heads | `aux_v_head` + `MultiLambdaValueLogitHead`, `compute_aux_value_targets`, `loss_v_aux`, `player_aux_lambdas`/`player_aux_value_coef`, the per-lambda R2 panels, and `player_bootstrap_gap` (it read the λ=1.0 MC-anchor row) | `98f0873` | representation shaping the critic stack no longer needs; **note it takes the bootstrap-bias instrument with it** — nothing now measures the main head against a Monte Carlo anchor |
+| BT-rating telemetry | `rl/online/ratings.py`, `bandit_window_steps`/`bandit_min_games_per_opponent`/`bandit_min_rated_opponents`, the BT-fit auditor panels | `98f0873` | a rating needs hundreds of games per point, so it was never fast enough to act on — an auditor that outlived the controllers it audited |
+| Always-true feature flags | `player_neurd_enabled`, `player_q_diagnostic_enabled` | `98f0873` | neither had a meaningful "off": one gated the sole policy gradient, the other gated loss-free logging |
 
 ---
 
@@ -149,9 +153,22 @@ the weights are no longer zero-sum and the softmax pulls in a `π(b)·Σ_a w(a)`
 cross-term. Against raw logits, `d/dy_b = -w(b)` exactly, open or clipped.
 
 **Clip and coefficient.** Advantages are not zero-mean per row, so unclipped
-logits diverge; β = 2.0 is OpenSpiel's NeuRD default. Coefficient went 0.05→0.1
-on 2026-08-21 because dropping π (~0.1 over ~10 legal cells) makes the raw
-per-cell gradient ~10x COMA's.
+logits diverge; β = 2.0 is OpenSpiel's NeuRD default. The coefficient went
+0.05 → 0.1 → 1.0 across 2026-08-21: 0.05 was sized as ~1% relative pressure
+beside a coef-1.0 PG term; 0.1 followed from dropping π (~0.1 over ~10 legal
+cells makes the raw per-cell gradient ~10x COMA's); 1.0 is what it inherits on
+becoming the policy learning rate outright. Watch the scale honestly — the PG
+advantages it replaced were EMA-normalised to ~unit std, while these are raw
+win units (~0.1-0.2 spread), so at 1.0 a starved switch cell at adv +0.15 gets
+~0.15/logit, about an order above the magnet's pull. The magnet is now the only
+opposing force, so an entropy cliff or `player_neurd_clipped_switch` pinned at 1
+is the signal to back off.
+
+**Naming (2026-08-21).** Everything `player_coma_*` was renamed
+`player_neurd_*` once the π-prefactor branch went — COMA proper no longer
+exists in the code, only in this history. That breaks wandb metric continuity
+with earlier lineages by design: the objective changed, so a chart that spans
+the rename would be comparing two different losses.
 
 **Why single-action PG was removed (2026-08-21).** Two independent reasons.
 First, by then `q_boost_mix` was a hard 1.0, so `loss_pg`'s advantage was
