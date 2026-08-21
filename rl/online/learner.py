@@ -54,7 +54,7 @@ from rl.online.artifact import (
     write_checkpoint_components,
 )
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
-from rl.online.config import Porygon2LearnerConfig, RuntimeScalars
+from rl.online.config import Porygon2LearnerConfig
 from rl.online.controllers import PILogController
 from rl.online.league import (
     LIVE_KEYS,
@@ -110,19 +110,21 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
-    scalars: RuntimeScalars,
 ):
     """Train for a single step.
 
-    ``scalars`` bundles the RUNTIME scalars (traced pytree, not static —
-    runtime values never recompile; static-config scalars retained ~5GB
-    of executables per distinct value and OOM-killed run 1326). Required
-    and fully populated: every caller states the objective it is training,
-    so no default can silently drop a term.
+    Every loss coefficient is a static config field. There used to be a
+    RuntimeScalars pytree carrying magnet_coef/neurd_coef as TRACED leaves
+    so a host-side controller could vary them without recompiling — the
+    hazard being that config is a jit static_argname, and static scalars
+    retained ~5GB of executables per distinct value and OOM-killed run
+    1326. Nothing varies them any more (the ramps, the exploiter zeroing
+    and every controller that actuated them are gone), so they moved back
+    into config. Reintroducing ANY host-varied coefficient — the magnet PI
+    controller is the documented candidate — means reintroducing a traced
+    pytree for it; never widen the static config with a value that changes
+    during a run.
     """
-    magnet_coef = scalars.magnet_coef
-    neurd_coef = scalars.neurd_coef
-
     player_transitions = batch.player_transitions
     player_history = batch.player_history
     player_packed_history = batch.player_packed_history
@@ -899,7 +901,7 @@ def train_step(
         loss = (
             # pg: all-action NeuRD is the ONLY term that moves the action
             # logits toward return — the two below only regularise.
-            neurd_coef * loss_neurd
+            config.player_neurd_coef * loss_neurd
             # v + q: the critic stack. One coefficient for both Q rungs —
             # same estimator family on the same labels, mirroring the
             # value-ladder coef.
@@ -913,7 +915,7 @@ def train_step(
             # ent: the magnet KL is per-state entropy regularisation
             # (uniform-over-legal hierarchical prior), and the only force
             # opposing pg.
-            + magnet_coef * loss_magnet_kl
+            + config.player_magnet_kl_coef * loss_magnet_kl
         )
 
         return loss, dict(
@@ -1571,9 +1573,10 @@ class Learner:
         # of the process, so nothing ever varies the jit cache key. Kept as
         # a separate attribute name (not literally self.config) only so a
         # future per-population config override, if one is ever needed, has
-        # an obvious place to plug in. Static scalars that DO vary must go
-        # through RuntimeScalars instead: retained executables per distinct
-        # static value OOM-killed run 1326 (LESSONS.md §1).
+        # an obvious place to plug in. A scalar that VARIES during a run
+        # must not live here at all — it needs its own traced pytree arg:
+        # retained executables per distinct static value OOM-killed run
+        # 1326 (LESSONS.md 1).
         self._jit_config = config
 
         self._capacity_probe_jit = None
@@ -2301,10 +2304,6 @@ class Learner:
             widths = [(0, target - x.shape[0])] + [(0, 0)] * (x.ndim - 1)
             return jnp.pad(x, widths)
 
-        dummy_scalars = RuntimeScalars(
-            magnet_coef=np.float32(0.0),
-            neurd_coef=np.float32(0.0),
-        )
         current = (
             batch.player_transitions.env_output.done.shape[0],
             batch.player_history.field.shape[0],
@@ -2343,7 +2342,6 @@ class Learner:
                 copy_state(pop.builder_state),
                 resized,
                 self._jit_config,
-                dummy_scalars,
             )
             logger.info(
                 "Compiled (%d, %d) in %.1fs.", t_c, h_c, time.time() - start
@@ -2356,26 +2354,16 @@ class Learner:
         if not self._shape_lattice_compiled:
             self._precompile_lattice(pop, batch)
             self._shape_lattice_compiled = True
-        # The all-action NeuRD coefficient — THE policy gradient since
-        # 2026-08-21 — at full strength from the first step (the 2k-step
-        # host ramp was removed: every restart re-ramped from zero, so a
-        # resume spent its first 2k steps training a different objective
-        # than the one it was checkpointed under). Runtime scalar, never
-        # static config: retained executables per distinct static value
-        # OOM-killed run 1326 (LESSONS.md 1).
-        neurd_coef = self.config.player_neurd_coef
         pop.player_state, pop.builder_state, logs = self._train_step_jit(
             pop.player_state,
             pop.builder_state,
             batch,
             self._jit_config,
-            RuntimeScalars(
-                magnet_coef=np.float32(self.config.player_magnet_kl_coef),
-                neurd_coef=np.float32(neurd_coef),
-            ),
         )
         if logs is not None:
-            logs["player_neurd_coef"] = neurd_coef
+            # Static now, but still logged: the dashboard panel is how you
+            # confirm which coefficient a lineage actually trained under.
+            logs["player_neurd_coef"] = self.config.player_neurd_coef
         return logs
 
     def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):

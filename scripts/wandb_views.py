@@ -327,7 +327,7 @@ def rl_sections():
                     ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
                 ),
                 lp(
-                    # Runtime scalar: player_neurd_coef. THE policy
+                    # config.player_neurd_coef. THE policy
                     # learning rate since the single-action PG terms were
                     # removed — no ramp, full strength from step 1.
                     "NeuRD coefficient",
@@ -345,8 +345,8 @@ def rl_sections():
                 ),
                 lp(
                     # A cliff in either = the policy chasing critic
-                    # noise — back player_neurd_coef off (runtime
-                    # scalar, no recompile), keep the observer.
+                    # noise — back player_neurd_coef off (edit config,
+                    # relaunch), keep the observer.
                     "Abort watch: entropy & modality entropy",
                     [
                         "player_action_normalized_entropy",
@@ -395,7 +395,7 @@ def rl_sections():
                 lp(
                     # switch_ratio is the number this whole saga is about;
                     # an entropy cliff is the abort signal (back
-                    # player_neurd_coef off — runtime scalar, no recompile).
+                    # player_neurd_coef off).
                     "Outcome watch: switch ratio & modality entropy",
                     [
                         "switch_ratio",

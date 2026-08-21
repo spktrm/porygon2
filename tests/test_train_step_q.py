@@ -15,24 +15,6 @@ import pytest
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-def live_scalars(config, neurd_coef=None):
-    """The RuntimeScalars the live Learner would pass. Both fields are
-    required, so a test that wants a term off has to say so explicitly —
-    the old None defaults silently zeroed the policy gradient.
-
-    Imports inside, like every other import here: this module is
-    collected by the quick suite too, and model/jax imports are the
-    expensive part."""
-    from rl.online.config import RuntimeScalars
-
-    return RuntimeScalars(
-        magnet_coef=np.float32(config.player_magnet_kl_coef),
-        neurd_coef=np.float32(
-            config.player_neurd_coef if neurd_coef is None else neurd_coef
-        ),
-    )
-
-
 def test_train_step_player_q_smoke():
     from rl.environment.interfaces import (
         Batch,
@@ -90,7 +72,7 @@ def test_train_step_player_q_smoke():
         )
 
         new_player_state, _, logs = train_step(
-            player_state, builder_state, batch, config, live_scalars(config)
+            player_state, builder_state, batch, config
         )
 
     assert int(new_player_state.step_count) == 1
@@ -159,27 +141,21 @@ def test_train_step_player_q_smoke():
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_q_macro_micro_gradient_norm"]) > 0.0
 
-    # NeuRD at full coefficient (runtime scalar, same compiled fn): the
-    # policy's only gradient path stays finite, and zeroing it is a
-    # runtime scalar change through the SAME compiled fn.
-    with jax.default_device(jax.devices("cpu")[0]):
-        _, _, logs_neurd = train_step(
-            player_state,
-            builder_state,
-            batch,
-            config,
-            scalars=live_scalars(config, neurd_coef=1.0),
+    # The policy's only gradient path stays finite at both ends of the
+    # coefficient. Varying it means a DIFFERENT static config now that
+    # RuntimeScalars is gone (2026-08-21) — in the jitted path that is a
+    # recompile, which is the whole tradeoff of the move.
+    for coef in (1.0, 0.0):
+        with jax.default_device(jax.devices("cpu")[0]):
+            _, _, logs_neurd = train_step(
+                player_state,
+                builder_state,
+                batch,
+                config.replace(player_neurd_coef=coef),
+            )
+        assert np.isfinite(
+            np.asarray(logs_neurd["player_loss_neurd"], dtype=np.float32)
         )
-    assert np.isfinite(np.asarray(logs_neurd["player_loss_neurd"], dtype=np.float32))
-    with jax.default_device(jax.devices("cpu")[0]):
-        _, _, logs_off = train_step(
-            player_state,
-            builder_state,
-            batch,
-            config,
-            scalars=live_scalars(config, neurd_coef=0.0),
-        )
-    assert np.isfinite(np.asarray(logs_off["player_loss_neurd"], dtype=np.float32))
 
     # Explore-row contract (2026-08-17), tested at its extreme: an
     # all-explore batch trains EVERY player loss — the tempered rows carry
@@ -188,7 +164,7 @@ def test_train_step_player_q_smoke():
     batch_explore = batch.replace(explore=np.ones((1, B), dtype=bool))
     with jax.default_device(jax.devices("cpu")[0]):
         _, _, logs_explore = train_step(
-            player_state, builder_state, batch_explore, config, live_scalars(config)
+            player_state, builder_state, batch_explore, config
         )
     assert float(logs_explore["player_policy_mask_sum"]) > 0.0
     assert float(logs_explore["player_value_mask_sum"]) > 0.0

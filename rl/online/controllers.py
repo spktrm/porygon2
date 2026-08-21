@@ -4,7 +4,9 @@ All of them follow the replay-ratio controller's design language
 (velocity-form PI on a log-scale actuator, EMA-smoothed sensors,
 anti-windup via clamping the actuator itself) and those that drive
 train_step actuate RUNTIME scalars — never static config, which
-recompiles (and whose retained executables OOM-killed run 1326). That
+recompiles (and whose retained executables OOM-killed run 1326) — the
+RuntimeScalars pytree that carried them was removed 2026-08-21 once
+nothing varied them, so a NEW controller has to bring its own back. That
 shared shape lives in ``PILogController`` (the actuator: step, bump,
 clamp) below; a hyperparameter controller is then just its error
 function, bounds, and whatever hard overrides it needs — the replay

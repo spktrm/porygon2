@@ -402,8 +402,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # opposing force left), but it is also the thing to watch: if
     # normalised modality entropy cliffs or player_neurd_clipped_switch
     # pins at 1, the clip rather than the critic is bounding switch mass
-    # — back this off or raise the magnet. Runtime scalar, so retuning
-    # never recompiles.
+    # — back this off or raise the magnet. Static config since
+    # 2026-08-21, so retuning it costs one train_step recompile at the
+    # next launch (nothing varies it during a run any more).
     player_neurd_coef: float = 1.0
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
@@ -470,28 +471,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Human
     builder_human_loss_coef: float = 1e-2
-
-
-@chex.dataclass(frozen=True)
-class RuntimeScalars:
-    """The TRACED complement of Porygon2LearnerConfig: per-step scalars the
-    host computes each call and passes into the jitted train_step as ONE
-    pytree argument.
-    These must never move into the static config above — config is a jit
-    static_argname, and static scalars retained ~5GB of executables per
-    distinct value and OOM-killed run 1326; as traced leaves they change
-    freely with zero recompiles.
-
-    Both fields are REQUIRED. They used to default to None with per-field
-    fallbacks at the use site — magnet to its static coef, neurd to 0.0 —
-    which meant a partially-constructed RuntimeScalars silently trained
-    with no policy gradient at all. A scalar that changes the objective
-    must be stated by its caller, not defaulted."""
-
-    # config.player_magnet_kl_coef.
-    magnet_coef: chex.Array
-    # config.player_neurd_coef — the policy gradient's coefficient.
-    neurd_coef: chex.Array
 
 
 def get_learner_config():
