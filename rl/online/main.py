@@ -623,7 +623,7 @@ def main(args: argparse.Namespace):
                         population=population,
                         inference_client=inference_server,
                         explore_game_prob=learner_config.explore_game_prob,
-                        explore_temp_range=learner_config.explore_temp_range,
+                        explore_eps_range=learner_config.explore_eps_range,
                     )
                 )
             new_threads.append(

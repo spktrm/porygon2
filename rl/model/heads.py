@@ -23,6 +23,17 @@ from rl.model.utils import legal_log_policy, legal_policy
 
 class HeadParams(NamedTuple):
     temp: float = 1.0
+    # Behaviour-policy mix with the hierarchical prior (2026-08-21):
+    # mu = (1 - mix) * pi + mix * prior. Sampling and the recorded
+    # log_prob come from mu; log_policy / entropy / magnet stay pi's, so
+    # the learner's importance ratio pi/mu corrects every loss exactly
+    # and pi itself is never pulled toward the prior. Unlike tempering,
+    # the floor mu puts on a rare action is independent of how far pi
+    # has collapsed -- that is the point (switch-cell supervision
+    # coverage tracked the collapse down under the temperature ladder).
+    # 0 = off, bitwise (the mix is a traced per-call value, selected by
+    # jnp.where, so the learner's default HeadParams() path is exact).
+    mix: float = 0.0
 
 
 class PolicyMetrics(NamedTuple):
@@ -98,6 +109,24 @@ def compute_policy_metrics(
 
 def sample_categorical(logits: jax.Array, rng_key: jax.Array):
     return jax.random.categorical(rng_key, logits, axis=-1)
+
+
+def behaviour_log_policy(
+    log_policy: jax.Array, prior: jax.Array, valid_mask: jax.Array, mix
+) -> jax.Array:
+    """log mu for mu = (1 - mix) * pi + mix * prior over legal cells.
+
+    Returns log_policy itself (bitwise) when mix == 0, so the learner's
+    default path is untouched; invalid cells carry the dtype's min so the
+    result can be fed straight to sample_categorical. Computed in f32 --
+    the rare-cell floor is exactly the quantity bf16 would round away."""
+    mix = jnp.asarray(mix, dtype=jnp.float32)
+    pi = jnp.exp(log_policy.astype(jnp.float32))
+    mixed = (1.0 - mix) * pi + mix * prior.astype(jnp.float32)
+    log_mixed = jnp.log(jnp.maximum(mixed, 1e-30))
+    log_mu = jnp.where(mix > 0, log_mixed, log_policy.astype(jnp.float32))
+    log_mu = log_mu.astype(log_policy.dtype)
+    return jnp.where(valid_mask, log_mu, jnp.finfo(log_mu.dtype).min)
 
 
 class MicroHead(nn.Module):

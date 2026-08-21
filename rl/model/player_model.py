@@ -22,6 +22,7 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
+    behaviour_log_policy,
     ActionAdapter,
     CategoricalValueLogitHead,
     HeadParams,
@@ -203,18 +204,23 @@ class Porygon2PlayerModel(nn.Module):
             -1e9,
         )
 
+        prior = calculate_hierarchical_prior(flat_valid_mask)
         policy_metrics = compute_policy_metrics(
-            logits=pi_logits,
-            valid_mask=flat_valid_mask,
-            prior=calculate_hierarchical_prior(flat_valid_mask),
+            logits=pi_logits, valid_mask=flat_valid_mask, prior=prior
+        )
+        # Behaviour policy mu (== pi unless head_params.mix > 0, explore
+        # games only): what gets SAMPLED and what log_prob RECORDS, so the
+        # learner's pi/mu ratio is exact. log_policy stays pi's.
+        log_mu = behaviour_log_policy(
+            policy_metrics.log_policy, prior, flat_valid_mask, head_params.mix
         )
 
         if train:
             action_index = head.action_index
         else:
-            action_index = sample_categorical(pi_logits, self.make_rng("sampling"))
+            action_index = sample_categorical(log_mu, self.make_rng("sampling"))
 
-        log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
+        log_prob = jnp.take(log_mu, action_index, axis=-1)
 
         mask_width = valid_mask.shape[-1]
         src_index = action_index // mask_width
@@ -245,6 +251,7 @@ class Porygon2PlayerModel(nn.Module):
         valid_mask: jax.Array,
         given_index: jax.Array | None,
         temp: float,
+        mix,
     ):
         """One decision stage of the doubles path: score the grid with the
         per-modality heads (params shared across stages), compose with the
@@ -272,16 +279,18 @@ class Porygon2PlayerModel(nn.Module):
             ),
             -1e9,
         )
+        prior = calculate_hierarchical_prior(flat_valid_mask)
         policy_metrics = compute_policy_metrics(
-            logits=pi_logits,
-            valid_mask=flat_valid_mask,
-            prior=calculate_hierarchical_prior(flat_valid_mask),
+            logits=pi_logits, valid_mask=flat_valid_mask, prior=prior
+        )
+        log_mu = behaviour_log_policy(
+            policy_metrics.log_policy, prior, flat_valid_mask, mix
         )
         if given_index is not None:
             action_index = given_index
         else:
-            action_index = sample_categorical(pi_logits, self.make_rng("sampling"))
-        log_prob = jnp.take(policy_metrics.log_policy, action_index, axis=-1)
+            action_index = sample_categorical(log_mu, self.make_rng("sampling"))
+        log_prob = jnp.take(log_mu, action_index, axis=-1)
         return flat_valid_mask, policy_metrics, action_index, log_prob
 
     def _apply_choice_collision(self, valid_mask: jax.Array, action_index: jax.Array):
@@ -418,6 +427,7 @@ class Porygon2PlayerModel(nn.Module):
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
+            mix=head_params.mix,
         )
 
         return PlayerActorOutput(

@@ -691,10 +691,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # frozen-between-blocks stock went stale — foreign-row Q R² 0.27 vs
     # 0.84 own). Every player actor independently makes each game it
     # plays with its own live params an explore game with this
-    # probability, drawing a fresh temperature log-uniform from
-    # explore_temp_range (the continuous analogue of R2D2's
-    # geometrically-spaced epsilon ladder, assigned per game like
-    # Agent57's per-episode picks rather than per dedicated actor slot;
+    # probability, drawing a fresh epsilon log-uniform from
+    # explore_eps_range (R2D2's geometrically-spaced epsilon ladder,
+    # assigned per game like Agent57's per-episode picks rather than
+    # per dedicated actor slot;
     # base games sample at 1.0). Per-game draws make the explore share
     # of trajectories equal this probability BY CONSTRUCTION — the prior
     # dedicated-slot design's 2/12 actors bypassed the InferenceServer
@@ -716,12 +716,23 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # every PG/value/builder loss at the existing choke points, consumed
     # ONLY by the observer Q critic. 0 disables. No parameter change, so
     # the flip is checkpoint-safe.
-    # Range log-symmetric around 1 (median temp = 1.0). Not wider: 0.5
-    # already matches eval's sharpened temp, and both ends stay within
-    # 2x of the base policy so Retrace's ISR truncation keeps most of
-    # every trace.
-    explore_game_prob: float = 1.0 / 6.0
-    explore_temp_range: tuple[float, float] = (0.5, 2.0)
+    # 2026-08-21: epsilon-mix with the hierarchical prior REPLACES the
+    # temperature draw (mu = (1-eps).pi + eps.prior per explore game;
+    # HeadParams.mix). Supply arithmetic: the prior puts ~1/2 of a
+    # real-choice row on switch cells, so forced-switch rows ~
+    # explore_game_prob x E[eps] x 1/2 ~ 1/3 x 0.28 x 1/2 ~ 4.7% on top
+    # of the ~3% the collapsed policy supplies itself -- the pre-collapse
+    # ~8-10% the critic needs to keep a switch belief. Why a ladder on a
+    # MINORITY of games rather than a small eps everywhere: v-trace's
+    # rho-bar truncation bites where pi/mu > 1, bounded by 1/(1-eps), so
+    # large eps belongs in games whose rows are few; and both sides of
+    # an explore game play mu, so every explore game is against a noisier
+    # opponent. ISR ESS (player_isr_ess) is the guard: below ~0.9, lower
+    # the top of the range. The magnet KL no longer has to double as the
+    # exploration crutch -- it can return to its regularisation-only
+    # value once coverage is confirmed.
+    explore_game_prob: float = 1.0 / 3.0
+    explore_eps_range: tuple[float, float] = (0.1, 0.6)
     # Exploiter blocks run for hours while main's step (the checkpoint
     # pacing basis) barely moves; the active exploiter's own periodic save
     # paces on ITS step counter at this tighter interval so a mid-block

@@ -94,7 +94,7 @@ class PlayerActor:
         population: Population = "main",
         inference_client: InferenceServer | None = None,
         explore_game_prob: float = 0.0,
-        explore_temp_range: tuple[float, float] | None = None,
+        explore_eps_range: tuple[float, float] | None = None,
     ):
         self._agent = agent
         self._env = env
@@ -123,12 +123,15 @@ class PlayerActor:
         self.population = population
         self._live_key = _LIVE_KEY_BY_POPULATION[population]
         # Exploration ladder (config.explore_game_prob /
-        # explore_temp_range): each GAME this actor plays with its own
+        # explore_eps_range): each GAME this actor plays with its own
         # live params is independently an explore game with this
-        # probability, sampling a fresh temperature log-uniform over the
-        # range — the continuous analogue of R2D2's geometrically-spaced
-        # epsilon ladder, assigned per game rather than per dedicated
-        # actor slot. Per-game draws make the explore share of produced
+        # probability, sampling a fresh epsilon log-uniform over the
+        # range and playing mu = (1-eps).pi + eps.prior for that game —
+        # Ape-X/R2D2's epsilon ladder, assigned per game rather than per
+        # dedicated actor slot. Epsilon replaced TEMPERATURE 2026-08-21:
+        # a tempered collapsed policy is still collapsed, so the switch
+        # samples the ladder supplied shrank with the collapse it was
+        # meant to counter; the prior floor does not. Per-game draws make the explore share of produced
         # trajectories equal the probability BY CONSTRUCTION: dedicated
         # explore actors bypassed the InferenceServer full-time and
         # out-produced the server-queued base pairs ~4x, inflating the
@@ -141,9 +144,9 @@ class PlayerActor:
         # head_params); sides playing frozen opponents (do_push=False)
         # and eval actors never temper.
         self._explore_game_prob = explore_game_prob
-        self._explore_temp_range = explore_temp_range
+        self._explore_eps_range = explore_eps_range
         if explore_game_prob > 0.0:
-            assert explore_temp_range is not None
+            assert explore_eps_range is not None
         self._temp_rng = np.random.default_rng(rng_seed)
 
     def clip_actor_history(self, timestep: PlayerActorInput, min_length: int = 64):
@@ -350,9 +353,9 @@ class PlayerActor:
             and not self._is_eval
             and self._temp_rng.random() < self._explore_game_prob
         ):
-            lo, hi = self._explore_temp_range
+            lo, hi = self._explore_eps_range
             head_params = HeadParams(
-                temp=float(np.exp(self._temp_rng.uniform(np.log(lo), np.log(hi))))
+                mix=float(np.exp(self._temp_rng.uniform(np.log(lo), np.log(hi))))
             )
         if self._inference_client is not None and head_params is None:
             # The server owns device transfer behind a versioned cache, so
