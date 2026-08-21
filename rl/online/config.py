@@ -395,7 +395,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # — back this off or raise the magnet. Static config since
     # 2026-08-21, so retuning it costs one train_step recompile at the
     # next launch (nothing varies it during a run any more).
-    player_neurd_coef: float = 1.0
+    # 0.2 (2026-08-21 eve, from 1.0): the first run at 1.0 tripped the
+    # condition above inside 6k steps -- pi(switch) 0.16 -> 0.011 with the
+    # critic's gap still -0.04, clipped_switch 0.99 by 10k, switch mass
+    # ~0.1% per cell (the band floor) -- a near-zero early gap
+    # transmitted at full volume before the critic had a belief. 0.1
+    # with the old PG still present never saturated past ~0.7; 0.1-0.2
+    # brackets it.
+    player_neurd_coef: float = 0.2
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean
