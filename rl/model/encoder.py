@@ -315,11 +315,12 @@ class LatentInputRead(nn.Module):
             zip(groups, masks, types, biases, strict=True)
         ):
             num, num_tokens = group.shape[:2]
-            assert len(token_types) == num_tokens, (group_index, num_tokens)
             entity_ids = np.arange(offset, offset + num)
+            # token_types may arrive traced (nn.checkpoint traces its
+            # args), so index with it directly rather than via numpy.
             group = (
                 group.astype(dtype)
-                + token_bias[np.asarray(token_types)].astype(dtype)[None]
+                + token_bias[token_types].astype(dtype)[None]
                 + entity_bias[entity_ids].astype(dtype)[:, None]
                 + group_bias[group_index].astype(dtype)
             )
