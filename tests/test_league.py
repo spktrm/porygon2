@@ -4,15 +4,18 @@ import numpy as np
 import pytest
 
 from rl.online.league import (
-    LEAGUE_EXPLOITER_KEY,
-    MAIN_EXPLOITER_KEY,
     MAIN_KEY,
     League,
     PlayerRef,
     pfsp,
 )
 from rl.model.utils import ParamsContainer
-from rl.online.learner import _STEP_OFFSET
+
+# A ref written by an older revision: a foreign origin tag in a disjoint
+# (far higher) step_count range. The roster must still be able to answer
+# "when did MAIN last checkpoint?" with one of these present.
+FOREIGN_ORIGIN = "main_exploiter"
+FOREIGN_STEP = 100_020_000
 
 
 def make_container(step_count: int, frames: int = 0) -> ParamsContainer:
@@ -62,33 +65,24 @@ class TestRoster:
     def test_latest_player_ignores_live_and_respects_origin(self, league):
         assert league.get_latest_player() is None
         league.add_player(make_ref(100, frames=1_000, origin="main"))
-        league.add_player(
-            make_ref(20_000 + _STEP_OFFSET["main_exploiter"], frames=50, origin="main_exploiter")
-        )
-        league.add_player(
-            make_ref(20_000 + _STEP_OFFSET["league_exploiter"], frames=60, origin="league_exploiter")
-        )
+        league.add_player(make_ref(FOREIGN_STEP, frames=50, origin=FOREIGN_ORIGIN))
 
-        # Unfiltered: the exploiter offset key range wins max().
-        assert league.get_latest_player().step_count == 20_000 + _STEP_OFFSET["league_exploiter"]
+        # Unfiltered: the foreign key range wins max().
+        assert league.get_latest_player().step_count == FOREIGN_STEP
         # Regression (2026-08-14): main's checkpoint pacing must see its
-        # OWN newest snapshot, or exploiter publications pin "latest"
-        # forever and the overdue gate fires every tick.
+        # OWN newest snapshot, or a foreign-origin publication pins
+        # "latest" forever and the overdue gate fires every tick.
         assert league.get_latest_player(origin="main").step_count == 100
         assert league.get_latest_player(origin="main").player_frame_count == 1_000
 
     def test_latest_player_none_for_absent_origin(self, league):
-        league.add_player(
-            make_ref(20_000 + _STEP_OFFSET["main_exploiter"], origin="main_exploiter")
-        )
+        league.add_player(make_ref(FOREIGN_STEP, origin=FOREIGN_ORIGIN))
         assert league.get_latest_player(origin="main") is None
 
     def test_live_populations_are_not_roster_entries(self, league):
-        league.update_live(MAIN_EXPLOITER_KEY, make_container(MAIN_EXPLOITER_KEY))
-        league.update_live(LEAGUE_EXPLOITER_KEY, make_container(LEAGUE_EXPLOITER_KEY))
+        league.update_live(MAIN_KEY, make_container(MAIN_KEY))
         assert len(league.players) == 0
         assert league.has_live(MAIN_KEY)
-        assert league.has_live(MAIN_EXPLOITER_KEY)
 
 
 class TestPayoff:
@@ -161,7 +155,7 @@ class TestSerialization:
     def test_roundtrip_preserves_roster_and_stats(self, league):
         league.add_player(make_ref(100, frames=5_000, origin="main"))
         league.add_player(
-            make_ref(20_000 + _STEP_OFFSET["main_exploiter"], frames=42, origin="main_exploiter")
+            make_ref(FOREIGN_STEP, frames=42, origin=FOREIGN_ORIGIN)
         )
         main = league.get_main_player()
         for _ in range(5):
@@ -170,8 +164,8 @@ class TestSerialization:
         restored = League.deserialize(league.serialize())
         restored.update_main_player(make_container(MAIN_KEY))
 
-        assert set(restored.players) == {100, 20_000 + _STEP_OFFSET["main_exploiter"]}
-        assert restored.players[20_000 + _STEP_OFFSET["main_exploiter"]].origin == "main_exploiter"
+        assert set(restored.players) == {100, FOREIGN_STEP}
+        assert restored.players[FOREIGN_STEP].origin == FOREIGN_ORIGIN
         assert restored.players[100].player_frame_count == 5_000
         np.testing.assert_allclose(
             restored.get_winrate((restored.get_main_player(), restored.players[100])),

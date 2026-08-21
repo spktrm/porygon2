@@ -11,7 +11,13 @@ import numpy as np
 
 from rl.model.utils import ParamsContainer
 from rl.online.league import MAIN_KEY, League, PlayerRef
-from rl.online.learner import _STEP_OFFSET, Learner
+from rl.online.learner import Learner
+
+# A ref written by an older revision: a foreign origin tag in a disjoint
+# (far higher) step_count range, which is exactly what the origin filter
+# in the pacing gate has to survive.
+FOREIGN_ORIGIN = "main_exploiter"
+FOREIGN_STEP = 100_020_000
 
 MIN_FRAMES = 200_000
 MAX_FRAMES = 9_000_000
@@ -103,30 +109,21 @@ def test_not_dominant_at_prior_win_rate():
     assert gate(stub, pop) is None
 
 
-def test_exploiter_publication_does_not_reset_pacing():
-    """Regression (2026-08-14): an exploiter timeout-publication carries a
+def test_foreign_origin_publication_does_not_reset_pacing():
+    """Regression (2026-08-14): a foreign-origin publication carries a
     +100M/+200M step key and a tiny own frame count. Pacing must stay
     anchored to main's OWN last snapshot — before the fix this scenario
     fired "overdue" on every league-management tick, snapshotting main
-    every ~10 steps and handing the GPU straight back to the exploiters."""
+    every ~10 steps."""
     main_frames = 24_000_000
     stub, pop = make_learner(
         main_frames=main_frames,
         players=[
             # Main checkpointed itself recently.
             make_ref(25_510, frames=main_frames - MIN_FRAMES // 2),
-            # Exploiters published at own-step 20k with small own counters;
-            # their league key is own_step + the origin's disjoint offset.
-            make_ref(
-                20_000 + _STEP_OFFSET["main_exploiter"],
-                frames=2_000_000,
-                origin="main_exploiter",
-            ),
-            make_ref(
-                20_000 + _STEP_OFFSET["league_exploiter"],
-                frames=2_500_000,
-                origin="league_exploiter",
-            ),
+            # A foreign-origin publication in a disjoint key range: it
+            # must not pin "latest" and reset main's frames_passed clock.
+            make_ref(FOREIGN_STEP, frames=2_000_000, origin=FOREIGN_ORIGIN),
         ],
     )
     assert gate(stub, pop) is None
@@ -134,12 +131,10 @@ def test_exploiter_publication_does_not_reset_pacing():
 
 def test_dominance_is_judged_against_all_historicals():
     """AlphaStar's ready_to_checkpoint takes win_rates.min() over every
-    Historical, exploiter-origin included — beating only your own lineage
-    is not dominance."""
+    Historical, whatever its origin — beating only your own lineage is not
+    dominance."""
     main_ref = make_ref(100, frames=0)
-    exp_ref = make_ref(
-        20_000 + _STEP_OFFSET["main_exploiter"], frames=0, origin="main_exploiter"
-    )
+    exp_ref = make_ref(FOREIGN_STEP, frames=0, origin=FOREIGN_ORIGIN)
     stub, pop = make_learner(main_frames=MIN_FRAMES + 1, players=[main_ref, exp_ref])
     main = stub.league.get_main_player()
     for _ in range(20):
@@ -150,13 +145,12 @@ def test_dominance_is_judged_against_all_historicals():
 
 def test_build_population_seeds_host_step_from_restored_state():
     """Regression (2026-08-14 overdue add storm): league keys are
-    host_step + _STEP_OFFSET and League.get_latest_player picks newest as
-    max(key), so a session-local host_step restarting at 0 left the
-    pre-restart snapshot "latest" forever (frames_passed never reset ->
-    "overdue" every management tick, plus a p_{step:08} overwrite hazard).
+    host_step and League.get_latest_player picks newest as max(key), so a
+    session-local host_step restarting at 0 left the pre-restart snapshot
+    "latest" forever (frames_passed never reset -> "overdue" every
+    management tick, plus a p_{step:08} overwrite hazard).
     _build_population must seed host_step from the state's own restored
-    step_count — and a freshly forked exploiter (step_count 0) must still
-    start at 0."""
+    step_count — and a cold start (step_count 0) must still start at 0."""
     from rl.online.config import Porygon2LearnerConfig
 
     league = League(
@@ -172,8 +166,7 @@ def test_build_population_seeds_host_step_from_restored_state():
     stub = SimpleNamespace(
         config=Porygon2LearnerConfig(),
         league=league,
-        _active="main",
-        _plasticity_probe_jit=None,
+        _capacity_probe_jit=None,
         _restore_controller_state=lambda pop, blob: None,
         _create_params_container=lambda pop: None,
     )
@@ -191,4 +184,4 @@ def test_build_population_seeds_host_step_from_restored_state():
         )
 
     assert build("main", 71_139).host_step == 71_139
-    assert build("main_exploiter", 0).host_step == 0
+    assert build("main", 0).host_step == 0

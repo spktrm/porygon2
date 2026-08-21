@@ -31,16 +31,13 @@ def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndar
 
 
 MAIN_KEY = -1
-# AlphaStar-style population identities (docs/exploiter-phase-plan.md's
-# three-population redesign): MainExploiter and LeagueExploiter are live,
-# continuously-training populations too, not just frozen league members —
-# they need their own identity in the same payoff table MAIN_KEY already
-# uses, so win-rate signals between ANY pair of live/historical identities
-# (e.g. MainExploiter vs. live main) fall out of the existing machinery
-# below with zero new statistics code.
-MAIN_EXPLOITER_KEY = -2
-LEAGUE_EXPLOITER_KEY = -3
-LIVE_KEYS = (MAIN_KEY, MAIN_EXPLOITER_KEY, LEAGUE_EXPLOITER_KEY)
+# Live (currently-training) identities share the historical snapshots'
+# payoff table, so a win-rate between any pair of live/historical
+# identities falls out of the same statistics code. One entry since the
+# exploiter populations were removed (LESSONS.md 9); the tuple shape is
+# what keeps the live-vs-historical distinction explicit at every call
+# site rather than hard-coding "== MAIN_KEY".
+LIVE_KEYS = (MAIN_KEY,)
 
 
 class PlayerRef(NamedTuple):
@@ -56,31 +53,14 @@ class PlayerRef(NamedTuple):
     builder_frame_count: int
     player_key: str = "params"
     builder_key: str = "params"
-    # Explicit provenance (docs/exploiter-phase-plan.md) — an AlphaStar-
-    # style ancestry tag, not inferred from step_count's numeric range.
-    # "main" for anything main's own population added in the ordinary
-    # course of training; "main_exploiter"/"league_exploiter" for a
-    # promoted snapshot from the corresponding exploiter population — split
-    # from the single former "exploiter" tag now that both are distinct,
-    # permanently-live populations (not one-shot forked phases) with
-    # different targeting rules (lineage-restricted vs. whole-history).
-    # Defaults make this safe to unpickle from checkpoints written before
-    # this field existed, and before the three-way split: NamedTuple
-    # reconstruction fills missing trailing fields from their defaults, and
-    # "main" is the semantically correct default for every pre-existing
-    # snapshot from before either exploiter mechanism existed. A ref
-    # pickled with the old two-value origin ("exploiter") is stale data
-    # from before this split; it is not silently reinterpreted as either
-    # new value — see rl/online/promote_exploiter.py for the one write
-    # path, which now always writes one of the three current values.
-    origin: Literal["main", "main_exploiter", "league_exploiter"] = "main"
-    # For an exploiter-origin ref: the step_count of the main checkpoint
-    # it forked from (None for "main"-origin refs, and for older
-    # exploiter promotions written before this was tracked). One level
-    # today — exploiters can't recursively fork sub-exploiters — but a
-    # real field rather than an inferred one, so a deeper tree costs
-    # nothing structurally if that ever changes.
-    parent_step: int | None = None
+    # Explicit provenance tag, not inferred from step_count's numeric
+    # range. One value since the exploiter populations were removed
+    # (LESSONS.md 9), but kept as a field: refs pickled by older revisions
+    # carry "main_exploiter"/"league_exploiter"/"exploiter" here, and a
+    # NamedTuple must be able to unpickle them without a migration step.
+    # The default is what makes a ref written before the field existed
+    # load correctly.
+    origin: str = "main"
 
 
 class League:
@@ -94,14 +74,9 @@ class League:
     the lowest ``(1 - main_winrate) + c * sqrt(ln N / (n + 1))``. Under-sampled
     or still-challenging opponents are kept hot.
 
-    ``live`` holds every currently-training population (main always stays in
-    memory; main_exploiter/league_exploiter are present only once created —
-    see docs/exploiter-phase-plan.md's three-population redesign) keyed by
-    MAIN_KEY/MAIN_EXPLOITER_KEY/LEAGUE_EXPLOITER_KEY. One shared payoff table
-    below scores every live identity against every historical opponent AND
-    against each other (e.g. MainExploiter vs. live main) — this is what lets
-    MainExploiter's live-win-rate targeting signal fall out of the exact same
-    machinery league addition/eviction already uses, with no new code.
+    ``live`` holds the currently-training population, keyed by MAIN_KEY.
+    The shared payoff table below scores it against every historical
+    opponent.
     """
 
     def __init__(
@@ -124,7 +99,7 @@ class League:
 
         # main_player kept as a constructor convenience (every existing
         # caller already passes it this way) — seeds live[MAIN_KEY] only;
-        # main_exploiter/league_exploiter are added later via update_live
+        # further live identities would be added via update_live
         # once those populations are created.
         self.live: dict[int, ParamsContainer] = {}
         if main_player is not None:
@@ -247,10 +222,7 @@ class League:
         beats reliably and has sampled enough, keep challenging/under-sampled
         ones. Must not call materialize() (re-acquires self.lock).
 
-        Scored against MAIN_KEY only, deliberately — main_exploiter/
-        league_exploiter's own pinned/lineage-restricted matchmaking already
-        keeps their targets naturally "hot" from constant play, so eviction
-        doesn't need to separately account for them."""
+        Scored against MAIN_KEY."""
         main = self.live.get(MAIN_KEY)
         main_step = main.step_count if main is not None else MAIN_KEY
         while len(self.players) > self.league_size:
@@ -286,12 +258,10 @@ class League:
     def get_latest_player(self, origin: str | None = None) -> PlayerRef | None:
         """Newest historical snapshot, optionally restricted to one origin.
 
-        The origin filter exists because exploiter-origin refs carry the
-        +100M/+200M _STEP_OFFSET key ranges: an unfiltered max() pins to
-        an exploiter snapshot forever once one exists, which is wrong for
-        any caller asking "when did *main* last checkpoint?" (AlphaStar's
-        ready_to_checkpoint paces against the player's own last
-        checkpoint, never the league's newest entry)."""
+        The origin filter is what keeps a foreign-origin ref (one written
+        by an older revision, in a disjoint key range) from pinning max()
+        forever: AlphaStar's ready_to_checkpoint paces against the
+        player's own last checkpoint, never the league's newest entry."""
         with self.lock:
             keys = [
                 k
@@ -340,15 +310,12 @@ class League:
             self._evict_players_if_needed()
 
     def update_live(self, key: int, container: ParamsContainer):
-        """Sets/updates a live population's current params. key is one of
-        MAIN_KEY/MAIN_EXPLOITER_KEY/LEAGUE_EXPLOITER_KEY."""
+        """Sets/updates a live population's current params (key: MAIN_KEY)."""
         with self.lock:
             self.live[key] = container
 
     def update_main_player(self, main_player: ParamsContainer):
-        """Thin MAIN_KEY-only alias — kept so every existing main-only
-        caller (artifact.py, learner.py, promote_exploiter.py) needs no
-        changes under the live-dict generalization."""
+        """Thin MAIN_KEY-only alias."""
         self.update_live(MAIN_KEY, main_player)
 
     def update_payoff(
@@ -358,10 +325,10 @@ class League:
             home = sender.step_count
             away = receiver.step_count
 
-            # Ignore updates for players that may have been removed — any
-            # live identity (main, main_exploiter, league_exploiter) is
-            # always a valid participant even though it's never in
-            # self.players (that dict is historical snapshots only).
+            # Ignore updates for players that may have been removed — a
+            # live identity is always a valid participant even though it is
+            # never in self.players (that dict is historical snapshots
+            # only).
             if home not in LIVE_KEYS and home not in self.players:
                 return
             if away not in LIVE_KEYS and away not in self.players:
@@ -385,11 +352,9 @@ class League:
                 self.wins[away, home] += 1
 
     def get_live(self, key: int) -> ParamsContainer:
-        """Returns the current params for a live population. key is one of
-        MAIN_KEY/MAIN_EXPLOITER_KEY/LEAGUE_EXPLOITER_KEY. Raises if that
-        population doesn't exist yet (main_exploiter/league_exploiter
-        before their creation trigger fires) — callers matchmaking for a
-        not-yet-created population is a bug, not a state to handle quietly."""
+        """Returns the current params for a live population (key: MAIN_KEY).
+        Raises if it has not been set — matchmaking against a population
+        that does not exist is a bug, not a state to handle quietly."""
         with self.lock:
             container = self.live.get(key)
             if container is None:

@@ -8,15 +8,11 @@ from rl.environment.interfaces import BuilderTransition
 from rl.environment.utils import split_rng
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
-from rl.online.league import LEAGUE_EXPLOITER_KEY, MAIN_EXPLOITER_KEY, MAIN_KEY
+from rl.online.league import MAIN_KEY
 from rl.online.learner import Learner
 
-Population = Literal["main", "main_exploiter", "league_exploiter"]
-_LIVE_KEY_BY_POPULATION: dict[Population, int] = {
-    "main": MAIN_KEY,
-    "main_exploiter": MAIN_EXPLOITER_KEY,
-    "league_exploiter": LEAGUE_EXPLOITER_KEY,
-}
+Population = Literal["main"]
+_LIVE_KEY_BY_POPULATION: dict[Population, int] = {"main": MAIN_KEY}
 
 
 class BuilderActor:
@@ -24,8 +20,7 @@ class BuilderActor:
 
     Unlike PlayerActor, there is no matchmaking here — team-building isn't
     adversarial — so the only population-awareness needed is reading/
-    writing this actor's own population's live params and builder_replay,
-    never another population's."""
+    writing this actor's own live params and builder_replay."""
 
     def __init__(
         self,

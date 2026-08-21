@@ -154,7 +154,7 @@ def test_train_step_player_q_smoke():
 
     # Stage-3 blend path at full mix: the boosted advantage swaps in
     # wholesale (runtime scalar, same compiled fn) and everything stays
-    # finite — the exploiter-side mix=0 case is the default-args run above.
+    # finite — the mix=0 case is the default-args run above.
     with jax.default_device(jax.devices("cpu")[0]):
         _, _, logs_boost = train_step(
             player_state,
@@ -173,7 +173,7 @@ def test_train_step_player_q_smoke():
     # Explore-row contract (2026-08-17), tested at its extreme: an
     # all-explore batch trains EVERY player loss — the tempered rows carry
     # exact ISRs, so policy/value masks stay live — while the explore-only
-    # signals (league cadence, plasticity, builder) mask them elsewhere.
+    # signals (league cadence, builder) mask them elsewhere.
     batch_explore = batch.replace(explore=np.ones((1, B), dtype=bool))
     with jax.default_device(jax.devices("cpu")[0]):
         _, _, logs_explore = train_step(

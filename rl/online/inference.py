@@ -144,7 +144,7 @@ class InferenceServer:
         # identical layout Agent._step_player feeds the same apply_fn, so
         # no model change is involved; this is the same "vmap the
         # single-step apply over a batch axis" move the learner's
-        # plasticity probe already makes.
+        # capacity probe already makes.
         self._forward = jax.jit(jax.vmap(_single, in_axes=(None, 0, 0)))
         self._thread = threading.Thread(
             target=self._run, name="inference-server", daemon=True

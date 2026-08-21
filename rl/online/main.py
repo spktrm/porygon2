@@ -99,11 +99,9 @@ def run_training_actor_pair(
     worker_id = threading.current_thread().name
 
     while not stop_signal[0]:
-        # Block-sequential actor gating (Learner._set_active): only the
-        # active population's actors play, so the whole actor budget
-        # serves whoever's block it is. Timeout keeps the stop_signal
-        # check live while gated; the fresh dict lookup survives a
-        # population reset replacing the PopulationState object.
+        # Actor gate: timeout keeps the stop_signal check live while
+        # gated, and the fresh dict lookup survives a rebuild replacing
+        # the PopulationState object.
         pop = player._learner.populations[player.population]
         if not pop.run_gate.wait(timeout=1.0):
             continue
@@ -114,14 +112,8 @@ def run_training_actor_pair(
             player_ckpt = np.array(player_params.step_count).item()
             opponent_ckpt = np.array(opponent_params.step_count).item()
 
-            # Population-prefixed: with all three populations' actors now
-            # running concurrently (docs/exploiter-phase-plan.md's
-            # three-population redesign), each independently step-counting
-            # from its own creation/reset point, two DIFFERENT populations
-            # can otherwise produce an identical game_id — impossible
-            # under the old design (only one population was ever live at
-            # once), now a real collision risk in the TS game server's
-            # pendingGames map (service/src/server/worker.ts).
+            # Population-prefixed: game_id must be unique in the TS game
+            # server's pendingGames map (service/src/server/worker.ts).
             game_id = (
                 f"{player.population}-{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
             )
@@ -162,10 +154,7 @@ def run_eval_heuristic(
     wandb_run: wandb.wandb_run.Run,
     learner_config: Porygon2LearnerConfig,
 ):
-    """Runs an actor to produce num_trajectories trajectories. main only —
-    win-rate vs. the scripted baselines is a real strength signal for main,
-    pure diagnostic noise for an exploiter (docs/exploiter-phase-plan.md);
-    exploiter populations never get eval actors at all."""
+    """Runs an actor to produce num_trajectories trajectories."""
     learner = actor._learner
     main_pop = learner.populations["main"]
 
@@ -187,9 +176,6 @@ def run_eval_heuristic(
     smooth_weight = 0.0
 
     while not stop_signal[0]:
-        # Eval measures main; during another population's block main is
-        # (mostly) frozen, so idle at main's own block gate rather than
-        # burning shared inference on a frozen policy.
         if not main_pop.run_gate.wait(timeout=1.0):
             continue
         try:
@@ -284,7 +270,7 @@ def run_eval_heuristic(
 
 def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
     while not stop_signal[0]:
-        # Same block gating as run_training_actor_pair.
+        # Same actor gating as run_training_actor_pair.
         pop = actor._learner.populations[actor.population]
         if not pop.run_gate.wait(timeout=1.0):
             continue
@@ -315,7 +301,7 @@ def _stop_stale_wandb_runs(
     timeout eventually flips them to Crashed. Called once, before this
     process's own wandb.init() calls, so every "running" run found here is
     necessarily stale. Assumes single-box, single-training-process usage
-    (docs/exploiter-phase-plan.md) — stopping every "running" run in the
+    — stopping every "running" run in the
     project would be wrong if two training processes were ever live at
     once."""
     try:
@@ -354,15 +340,10 @@ def _stop_stale_wandb_runs(
 
 
 def main(args: argparse.Namespace):
-    """Launches one persistent process holding three live, continuously-
-    training populations — MainPlayer, MainExploiter, LeagueExploiter
-    (docs/exploiter-phase-plan.md's 2026-08-12 three-population redesign,
-    superseding the old discrete-phases-in-one-process orchestration this
-    function used to run). Everything after initial setup is driven by a
+    """Launches one persistent process: the actor pool, the inference
+    server, and the learner. Everything after initial setup is driven by a
     single call to Learner.train(), which runs for the life of the
-    process; population creation/reset happens in-process (Learner._reset_
-    population), not via a fork-a-new-phase loop here.
-    """
+    process."""
     learner_config = get_learner_config()
     debug = args.debug
     if debug:
@@ -419,8 +400,8 @@ def main(args: argparse.Namespace):
     # InferenceServer (which serves everyone at the base temperature) the
     # same way eval actors do.
 
-    # One batched-inference server for ALL training PlayerActors across
-    # the three populations (rl/online/inference.py). Same apply_fn and
+    # One batched-inference server for ALL training PlayerActors
+    # (rl/online/inference.py). Same apply_fn and
     # default HeadParams as learning_agent — eval actors stay on
     # eval_agent's direct path (different sampling temperature, and 3
     # low-volume threads don't warrant a second server). Builder actors
@@ -436,23 +417,18 @@ def main(args: argparse.Namespace):
         )
         inference_server.start()
 
-    logger.info("Loading main's train state...")
+    logger.info("Loading train state...")
     mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
-    player_state, builder_state, league, controller_bytes, resume_state = (
-        load_train_state(learner_config, player_state, builder_state, mode=mode)
+    player_state, builder_state, league, controller_bytes = load_train_state(
+        learner_config, player_state, builder_state, mode=mode
     )
     player_state = jax.device_put(player_state)
     builder_state = jax.device_put(builder_state)
 
-    # One wandb_group ties all three populations' runs together under
-    # wandb's Group view as one session — replaces the old meaning ("one
-    # episode's phases") with "one process's 3 populations", same
-    # underlying convention.
-    #
     # A checkpoint-mode restart reuses the previous session's group and
-    # per-population run ids (persisted next to the checkpoints), so each
-    # population keeps one continuous wandb run across restarts instead of
-    # a new trio per process. load_wandb_run_info returns None whenever the
+    # run id (persisted next to the checkpoints), so the run stays
+    # continuous across restarts instead of starting a new one per
+    # process. load_wandb_run_info returns None whenever the
     # resume didn't actually happen (params/scratch mode, or checkpoint
     # mode falling back to scratch because no checkpoint exists) — those
     # are new lineages and get a fresh session.
@@ -477,7 +453,7 @@ def main(args: argparse.Namespace):
 
     _stop_stale_wandb_runs(skip_ids=set(resume_run_ids.values()))
 
-    logger.info("Initializing WandB (3 persistent runs, one per population)...")
+    logger.info("Initializing WandB...")
     wandb_runs: dict[PopulationName, wandb.wandb_run.Run] = {}
     for pop_name in POPULATION_NAMES:
         run_id = resume_run_ids.get(pop_name)
@@ -491,30 +467,22 @@ def main(args: argparse.Namespace):
             # server-side, otherwise recreate it under the same id — a
             # wandb-side deletion should never block a training restart.
             resume="allow" if run_id else None,
-            # Keeps exploiter runs visually distinguishable on the
-            # dashboard so they never get mistaken for "the next real main
-            # lineage" (docs/exploiter-phase-plan.md open question 3).
-            tags=[pop_name] + (["exploiter"] if pop_name != "main" else []),
+            tags=[pop_name],
             config=model_config_payload,
-            # Required for 3 genuinely-concurrent runs from one process.
-            # wandb.init()'s default reinit mode ("default" -> "return_
-            # previous" outside notebooks) means every call AFTER the
-            # first just hands back the already-active run instead of
-            # creating a new one — confirmed the hard way: without this,
-            # main_exploiter/league_exploiter silently received main's own
-            # Run object, so only one run ever showed up per session
-            # group. "create_new" makes each call independently create a
-            # real run; its only cost (not updating the wandb.run global /
-            # top-level wandb.log) is a non-issue here since every caller
-            # already logs through the specific Run object handed back
-            # (wandb_runs[...]/pop.wandb_run), never the bare wandb.log().
+            # wandb.init()'s default reinit mode hands back the
+            # already-active run instead of creating a new one; kept
+            # explicit so a second run from this process (should one ever
+            # be added again) creates a real run rather than silently
+            # aliasing this one. Its only cost — not updating the
+            # wandb.run global — is a non-issue: every caller logs through
+            # the specific Run object, never the bare wandb.log().
             reinit="create_new",
         )
-        # Default x-axis = the population's own monotonic lifetime_step
-        # (logged with every learner metric; carried across resumes and
-        # attempt re-forks — see PopulationState.lifetime_step). Without
-        # this, charts plot against _step (log-call count) and every
-        # resume/re-fork draws a sawtooth or paints over earlier x-ranges.
+        # Default x-axis = the monotonic lifetime_step (logged with every
+        # learner metric; carried across resumes — see PopulationState.
+        # lifetime_step). Without this, charts plot against _step (log-call
+        # count) and every resume draws a sawtooth or paints over earlier
+        # x-ranges.
         wandb_runs[pop_name].define_metric("*", step_metric="lifetime_step")
         logger.info(
             "WandB serialized run (%s): %s (id=%s, resumed=%s)",
@@ -552,21 +520,10 @@ def main(args: argparse.Namespace):
 
     def spawn_actor_pool(population: PopulationName) -> None:
         """Learner's spawn_actor_pool callback (learner.py can't import
-        PlayerActor/BuilderActor itself — both already import Learner,
-        so constructing them here in main.py and registering the threads
-        back onto the population avoids a circular import). Called
-        synchronously from Learner._reset_population the instant a
-        population's live params are set — for "main" this fires once
-        during initial setup below; for the two exploiter populations it
-        fires every creation AND every reset, since their actor pools
-        must be rebuilt against the freshly-forked params each time.
-
-        Every population gets the SAME full-size pool: the per-population
-        run_gate (Learner._set_active) means only the block owner's pool
-        actually plays, so uniform sizing is what gives whoever is
-        training the full actor budget — the old smaller exploiter pools
-        were sized for all pools running concurrently, which gating made
-        obsolete."""
+        PlayerActor/BuilderActor itself — both already import Learner, so
+        constructing them here in main.py and registering the threads back
+        onto the population avoids a circular import). Fires once during
+        initial setup below."""
         num_player_actors = learner_config.num_player_actors
         num_builder_actors = learner_config.num_builder_actors
         stop_signal = learner.populations[population].stop_signal
@@ -686,23 +643,13 @@ def main(args: argparse.Namespace):
         player_state=player_state,
         builder_state=builder_state,
         main_wandb_run=wandb_runs["main"],
-        main_exploiter_wandb_run=wandb_runs["main_exploiter"],
-        league_exploiter_wandb_run=wandb_runs["league_exploiter"],
         gpu_lock=gpu_lock,
         player_network=learner_player_network,
         debug=debug,
         controller_bytes=controller_bytes,
         spawn_actor_pool=spawn_actor_pool,
     )
-    # main always exists from process start — its actor pool (and eval
-    # actors) spin up now. The two exploiter populations' pools spin up
-    # lazily, via the same spawn_actor_pool callback, the instant
-    # Learner._reset_population first creates them.
     spawn_actor_pool("main")
-    # A checkpoint-mode restart that stopped mid-exploiter-block resumes
-    # that block (restored populations get their pools via the same
-    # callback — which needs `learner` bound, hence after construction).
-    learner.restore_populations(resume_state)
 
     crashed = False
     try:

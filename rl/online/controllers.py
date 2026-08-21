@@ -41,7 +41,8 @@ effects proved hard to tune and predict:
   controller's single global lambda approximated (see targets.py). Its
   one genuinely-useful behaviour, forcing pure Monte Carlo while a
   freshly-perturbed critic is untrustworthy, survives as "upgo_coef=0
-  during plasticity recovery" in Learner._train_step.
+  during plasticity recovery" — itself removed 2026-08-21 with the
+  PlasticityController (LESSONS.md 10).
 - ExploitabilityController (caution scale; removed 2026-08-14): built to
   scale three other controllers' targets, it outlived all three — by the
   end its only action was a bounded nudge on the replay KL target,

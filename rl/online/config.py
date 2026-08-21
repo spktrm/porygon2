@@ -167,8 +167,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # member >0.7 — is ungated above min_frames, so this clock only paces
     # snapshots while the agent is NOT visibly improving. At 3e6 (~11.5k
     # steps) it filled the league with ~0.5-winrate near-copies of main
-    # (mirror play with extra staleness) and, because overdue adds are the
-    # plasticity trigger's input, made the stagnation clock hair-trigger.
+    # (mirror play with extra staleness) and made the stagnation clock
+    # hair-trigger.
     add_player_max_frames: int = int(9e6)
     # Learner steps before the first historical snapshot joins the league.
     # Kept low enough that a short (~200k step) run still trains against a
@@ -183,155 +183,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # the UCB exploration coefficient governing which stay hot.
     league_cache_size: int = 16
     league_ucb_c: float = 1.0
-
-    # Three-population league (docs/three-population-league.md, updated
-    # 2026-08-13 to block-sequential scheduling): MainPlayer,
-    # MainExploiter, and LeagueExploiter are live populations sharing one
-    # process/GPU — never torn down/refounded. Scheduling is
-    # block-sequential, not fraction-interleaved: main trains until a
-    # routine league addition closes its window, then ONE exploiter
-    # population (alternating MainExploiter/LeagueExploiter) owns the GPU
-    # for a full attempt — to its own promotion or frame-budget timeout,
-    # AlphaStar's ready_to_checkpoint shape — before main's next window.
-    # There are deliberately no frame-split fractions: each population
-    # trains to its own terminal condition against a (mostly) frozen
-    # target, sequentialising AlphaStar's concurrent league on one GPU
-    # rather than simulating concurrency by interleaving (main does still
-    # train as filler on ticks where the active exploiter's smaller actor
-    # pool has no batch ready — see Learner._select_population).
-    # MainExploiter targets main's own lineage (and live main directly,
-    # once reliable — AlphaStar's actual rule); LeagueExploiter targets
-    # the whole historical population via linear_capped PFSP,
-    # unrestricted. False means only main exists, exactly as before.
-    # OFF for the 2026-08-19 q-boosting lineage: single-population run so
-    # the boost A/B against the recorded 0→65k switch-collapse baseline is
-    # clean (exploiter blocks change the data distribution mid-lineage and
-    # cost the fork-time memory headroom). Trade-off accepted knowingly:
-    # this also gives up the exploiter mix=0 within-run contrast AND the
-    # opponent-pressure channel the collapse diagnosis called necessary-
-    # but-not-sufficient — re-enable once the formative window (~50k, when
-    # the first fork would have happened anyway) has delivered its verdict.
-    auto_exploiter_enabled: bool = False
-
-    # Centralized batched actor inference (rl/online/inference.py): all
-    # training PlayerActors submit per-step forwards to one server thread
-    # that runs a single vmapped apply over whatever is queued — zero-wait
-    # adaptive batching (no min-batch, no max-wait timer; see the module
-    # docstring for why those knobs are deliberately absent). False
-    # restores the per-actor batch-1 Agent.step_player path exactly.
-    inference_server_enabled: bool = True
-    # Compile-shape/latency cap on one batched forward. Padded to powers
-    # of two, so traced batch sizes are log2(cap)+1 distinct values.
-    inference_max_batch: int = 16
-    # Device-resident params LRU in the server, keyed by params version —
-    # each entry is one device copy of the actor player params (~81MB at
-    # 20.3M f32), so this is a VRAM knob. It REPLACES the old per-actor
-    # copies (every actor device_put its own copy per game — up to ~2x num
-    # actors live at once), and it must cover the WORKING SET of versions
-    # simultaneously referenced by in-flight games: ~2 per live population
-    # (paced by main_player_update_steps above) + ~5-7 concurrent
-    # historical PFSP opponents. 12 covers that with a slot or two spare;
-    # sizing BELOW the working set causes LRU thrash — a serial ~81MB
-    # host->device transfer per miss in the server thread, plus alloc/free
-    # churn in XLA's pool (fragmentation, the OOM class that killed
-    # session 1786537634).
-    inference_params_cache_size: int = 12
-
-    # Promotion bar, shared by both exploiter types: win-rate vs. EVERY
-    # opponent currently pinned must clear this, not just the average — a
-    # strategy that crushes one pinned target and loses to another hasn't
-    # generalized. Matches the existing "dominant" league-addition bar
-    # (win-rate > 0.7) exactly — raised from an initial 0.55 (deliberately
-    # looser on the theory that a specialist beating a narrow target set
-    # didn't need "beats everything" stringency). 0.55 turned out to be a
-    # weak statistical bar at the exploiter_promote_min_games floor:
-    # standard error at n=20 games, p~0.5 is ~0.11, so 0.55 is under half
-    # a standard error above a coin flip — barely distinguishable from
-    # noise right at the reliability floor. 0.7 (~1.8 SE above a coin flip
-    # at n=20) is a real signal.
-    exploiter_promote_winrate: float = 0.7
-    # Same reliability floor as exploit_ctrl_min_games_per_opponent /
-    # bandit_min_games_per_opponent, applied here for the identical reason:
-    # a handful of lucky games isn't a real win-rate.
-    exploiter_promote_min_games: float = 20.0
-    # Minimum dwell before a population's promotion bar is even consulted.
-    # AlphaStar's MainExploiter.ready_to_checkpoint has an explicit
-    # minimum-dwell floor (min 2e9 steps) before either a promotion or a
-    # timeout can fire; the pre-redesign code had none at all (a promotion
-    # could fire on the very first check after creation). Shared by both
-    # exploiter types.
-    exploiter_min_dwell_frames: int = int(1e6)
-
-    # Per-population frame budget before a non-promoted attempt times out
-    # and resets (main_exploiter_reset_to_main / exploiter_hard_reset_prob
-    # below). Sized the same as add_player_max_frames: roughly one main
-    # "overdue window" worth of dedicated search.
-    main_exploiter_frame_budget: int = int(9e6)
-    league_exploiter_frame_budget: int = int(9e6)
-
-    # No pinned-opponent-set width knob: neither exploiter population pins
-    # to a fixed target set at all — AlphaStar's own exploiters PFSP-sample
-    # fresh from their candidate pool every single match (whole population
-    # for LeagueExploiter, origin=="main" lineage for MainExploiter's
-    # fallback branch below), never freezing a subset for the population's
-    # whole lifetime. A fixed k (the pre-redesign single-exploiter role's
-    # mechanism) would just be re-inventing that narrower, less faithful
-    # design under a new name — see rl/online/player_actor.py's
-    # get_match().
-
-    # MainExploiter's live-target branch (AlphaStar's actual MainExploiter
-    # rule, not a simplification of it): if main_exploiter's own win-rate
-    # against LIVE main exceeds this floor, play live main directly instead
-    # of falling back to the lineage-restricted historical draw above.
-    # Reliability-gated by main_exploiter_live_target_min_games — same
-    # pattern as exploit_ctrl_min_games_per_opponent/bandit_min_games_per_
-    # opponent: until enough games are recorded, the signal is
-    # untrustworthy, so the fallback (never the optimistic) branch is
-    # taken. main_exploiter's every game (either branch) records into
-    # League's shared payoff table, so this signal keeps updating with no
-    # new statistics code.
-    main_exploiter_live_target_winrate_floor: float = 0.1
-    main_exploiter_live_target_min_games: float = 20.0
-
-    # How often (learner steps) a running exploiter checks its own
-    # promotion bar. A fraction of save_interval_steps so a clear win
-    # doesn't sit undetected for long; the check itself is cheap (a
-    # handful of dict lookups over a tiny league).
-    auto_exploiter_check_interval: int = 5_000
-
-    # On a terminal outcome (promoted or timed out): main_exploiter ALWAYS
-    # resets to a fresh fork of main's then-current live params — this is
-    # AlphaStar's actual rule for this role, not a tunable roll, hence a
-    # bool rather than a probability.
-    main_exploiter_reset_to_main: bool = True
-    # league_exploiter instead rolls this on a terminal outcome: per-attempt
-    # probability of shrink-and-perturbing toward random init instead of
-    # continuing to train its current (already-trained) weights un-reset.
-    # Adapted from AlphaStar's LeagueExploiter.checkpoint(), which has a
-    # flat 25% chance of resetting to its ORIGINAL init — this project
-    # deliberately reuses shrink_and_perturb_player_state (the same
-    # mechanism plasticity resets use) rather than a literal fresh random
-    # init: the shrink keeps the perturbed policy anchored to
-    # pre-perturbation behaviour via target_params/KL, instead of
-    # discarding everything learned so far the way a literal reinit of an
-    # already-trained network would.
-    exploiter_hard_reset_prob: float = 0.25
-
-    # Plasticity (shrink-and-perturb) params. Triggered when the main player
-    # keeps failing to dominate its own league history: after
-    # `plasticity_overdue_trigger` consecutive overdue-only league additions,
-    # player params are interpolated toward a fresh init draw. Unrelated to
-    # the three-population redesign above: this is main's own weight
-    # perturbation mechanism, orthogonal to whether exploiter populations
-    # exist.
-    plasticity_enabled: bool = True
-    # Historically paired with the old phase-based exploiter mechanism
-    # (suppress main's own perturbation while a main-pausing exploiter
-    # phase ran); kept for the manual, non-automated workflow
-    # (rl/online/promote_exploiter.py) where that still applies. Under the
-    # three-population redesign, exploiter populations never pause main, so
-    # this has no effect when auto_exploiter_enabled is set.
-    plasticity_defer_to_exploiter: bool = False
 
     # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
     # through main's periodic wandb logs: process RSS + OS-vs-python thread
@@ -358,31 +209,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     oom_guard_min_available_fraction: float = 0.15
     oom_guard_check_interval: int = 1_000
 
-    # Consecutive overdue-only adds before a perturbation. At 1 (the old
-    # value) a single stalled add window (~6k steps of not dominating the
-    # league) fired a 50% reset: the Aug 2026 run perturbed during a
-    # consolidation phase and dropped below its own 50k-step snapshot
-    # (winrate 0.485), paying a multi-10k-step recovery tax. Require a
-    # sustained stall instead.
-    plasticity_overdue_trigger: int = 3
-    # Fraction of the old weights kept (lambda). Higher = milder perturbation.
-    plasticity_default_shrink: float = 0.5
-    # Per top-level module overrides; the encoder holds expensive
-    # representations, so it is perturbed more gently than the heads.
-    plasticity_module_shrink: tuple[tuple[str, float], ...] = (("encoder", 0.5),)
-    # Recovery gate: no further perturbations until the main player beats the
-    # pre-perturbation snapshot at this winrate and the cooldown has elapsed.
-    plasticity_recovery_winrate: float = 0.6
-    plasticity_cooldown_frames: int = int(1e6)
-    # Plasticity instrumentation: every N learner steps, run an
-    # encoder-only forward on the current batch and log trunk
-    # representation health — dormant-unit fraction (ReDo criterion) and
-    # srank@0.99 — alongside the per-step fresh-vs-replayed value-error
-    # gap. Together these say whether a plateau is actually plasticity
-    # loss (dormant/rank degrading, memorisation gap opening) before a
-    # league-stagnation trigger fires a perturbation. 0 disables the
-    # probe (the value-error gap is always on).
-    plasticity_probe_interval: int = 1000
+    # Capacity instrumentation: every N learner steps, run an encoder-only
+    # forward on the current batch and log trunk representation health —
+    # dormant-unit fraction (ReDo criterion) and srank@0.99 — alongside the
+    # per-step fresh-vs-replayed value-error gap. Pure observer since the
+    # plasticity controller was removed (2026-08-21); kept because it is
+    # what caught the 1e-4 LR collapse (srank 0.27 by 13k steps while
+    # actor-KL sat at 0.002 — KL headroom is not LR headroom, LESSONS.md
+    # 5). 0 disables the probe (the value-error gap is always on).
+    capacity_probe_interval: int = 1000
 
     # Player magnet regularization (MMD-style). The policy is pulled toward a
     # fixed hierarchical magnet over legal actions (uniform over valid
@@ -454,8 +289,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Advantage-normaliser statistics EMA — deliberately much faster than
     # the target-params EMA above (the stats are per-batch scalars, not
     # parameters): ~100-step time constant so PG mis-scaling after a
-    # distribution shift (plasticity event, league addition) lasts ~0.5%
-    # of a rating window instead of ~10%.
+    # distribution shift (a league addition) lasts ~0.5% of a rating
+    # window instead of ~10%.
     player_adv_ema_rate: float = 1e-2
     # Floor for the normaliser's std divisor: below this, stop rescaling
     # so converged-policy noise is not amplified into the actor. Sized
@@ -491,10 +326,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # credit along successful lines, truncation at the first
     # worse-than-expected step. Coefficient mirrors AlphaStar's equal
     # weighting of the v-trace and UPGO PG terms. Passed to train_step
-    # as a RUNTIME scalar, zeroed while plasticity recovery is active
-    # (an optimistically-wrong post-perturbation critic would cut in the
-    # wrong places — the same regime the old lambda controller handled
-    # by forcing lambda to its ceiling).
+    # as a RUNTIME scalar (never static config: LESSONS.md 1).
     player_upgo_coef: float = 1.0
 
     # No adaptivity/entropy controller fields anymore: the magnet KL
@@ -680,8 +512,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # verbatim (zero new pytree leaves). LIVE from launch on the
     # 2026-08-19 fresh lineage, in place of the stage-2 KL (coef zeroed
     # above): boosting repairs the credit signal itself where the KL
-    # propped the policy up with a Boltzmann prior. MAIN POPULATION ONLY
-    # (host-gated), exploiters stay clean as the within-run contrast.
+    # propped the policy up with a Boltzmann prior.
     # Abort = zero this flag; q_boost_mix forces to 0 next step, no
     # recompile. Judge by switch_ratio, player_q_boost_adv_* agreement,
     # player_q_calibration_r2_fresh vs player_value_r2_fresh, and the
@@ -742,13 +573,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # value once coverage is confirmed.
     explore_game_prob: float = 1.0 / 3.0
     explore_eps_range: tuple[float, float] = (0.1, 0.6)
-    # Exploiter blocks run for hours while main's step (the checkpoint
-    # pacing basis) barely moves; the active exploiter's own periodic save
-    # paces on ITS step counter at this tighter interval so a mid-block
-    # kill (the 2026-08-15 09:38 machine shutdown lost a block segment)
-    # costs minutes, not the whole block since its boundary save.
-    exploiter_save_interval_steps: int = 5000
-
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
@@ -766,27 +590,23 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 @chex.dataclass(frozen=True)
 class RuntimeScalars:
     """The TRACED complement of Porygon2LearnerConfig: per-step scalars the
-    host computes each call (ramps, plasticity gating, per-population
-    zeroing) and passes into the jitted train_step as ONE pytree argument.
+    host computes each call and passes into the jitted train_step as ONE
+    pytree argument.
     These must never move into the static config above — config is a jit
     static_argname, and static scalars retained ~5GB of executables per
     distinct value and OOM-killed run 1326; as traced leaves they change
     freely with zero recompiles. None falls back at the use site (to the
-    static coef for upgo/magnet, to 0 for the ramped Q terms); the live
-    Learner path always fills all four."""
+    static coef for upgo/magnet, to 0 for the Q terms); the live Learner
+    path always fills all four."""
 
-    # config.player_upgo_coef, zeroed by the host during plasticity
-    # recovery (a freshly-perturbed critic cuts UPGO returns in the wrong
-    # places).
+    # config.player_upgo_coef.
     upgo_coef: chex.Array | None = None
-    # config.player_magnet_kl_coef (the entropy watchdog escalates it
-    # host-side).
+    # config.player_magnet_kl_coef.
     magnet_coef: chex.Array | None = None
-    # Host-side ramp of player_coma_coef; zero for the exploiter
-    # populations.
+    # config.player_coma_coef.
     coma_coef: chex.Array | None = None
-    # Stage-3 Q-boosting cross-fade weight (docs/q-boosting-plan.md);
-    # zero for exploiters and while player_q_boost_enabled is off.
+    # Stage-3 Q-boosting cross-fade weight (docs/q-boosting-plan.md); zero
+    # while player_q_boost_enabled is off.
     q_boost_mix: chex.Array | None = None
 
 

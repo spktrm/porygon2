@@ -27,21 +27,15 @@ from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
 from rl.online.inference import InferenceServer
 from rl.online.league import (
-    LEAGUE_EXPLOITER_KEY,
     LIVE_KEYS,
-    MAIN_EXPLOITER_KEY,
     MAIN_KEY,
     PlayerRef,
     pfsp,
 )
 from rl.online.learner import Learner
 
-Population = Literal["main", "main_exploiter", "league_exploiter"]
-_LIVE_KEY_BY_POPULATION: dict[Population, int] = {
-    "main": MAIN_KEY,
-    "main_exploiter": MAIN_EXPLOITER_KEY,
-    "league_exploiter": LEAGUE_EXPLOITER_KEY,
-}
+Population = Literal["main"]
+_LIVE_KEY_BY_POPULATION: dict[Population, int] = {"main": MAIN_KEY}
 
 
 def chunk_spans(
@@ -111,15 +105,7 @@ class PlayerActor:
         # Eval actors must never contribute to training data, nor consume the
         # builder replay buffer's reuse budget. This flag gates both.
         self._is_eval = is_eval
-        # Three-population redesign (docs/exploiter-phase-plan.md): which
-        # live population this actor generates trajectories for.
-        # main_exploiter/league_exploiter don't pin to a fixed target SET
-        # drawn once — AlphaStar's own exploiters re-sample PFSP fresh every
-        # match from their candidate pool (lineage-restricted to
-        # origin=="main" for main_exploiter, unrestricted for
-        # league_exploiter — see get_match()), never freezing a small
-        # subset for the population's whole lifetime the way the old
-        # single-generic-exploiter design's pin_opponent_steps did.
+        # Which live population this actor generates trajectories for.
         self.population = population
         self._live_key = _LIVE_KEY_BY_POPULATION[population]
         # Exploration ladder (config.explore_game_prob /
@@ -382,16 +368,13 @@ class PlayerActor:
         return chunks[-1]
 
     def pull_own_player(self) -> ParamsContainer:
-        """This actor's own live population's current params — MAIN_KEY for
-        a main actor, MAIN_EXPLOITER_KEY/LEAGUE_EXPLOITER_KEY otherwise."""
+        """This actor's own live population's current params."""
         return self._learner.league.get_live(self._live_key)
 
     def pull_main_player(self) -> ParamsContainer:
-        """Thin alias, kept for callers that specifically want main (not
-        'this actor's own population') regardless of self.population —
-        e.g. _verification_branch/_concerning_opponents intentionally
-        always weight against live main, since that's whose blind spots
-        they're checking, not whichever population happens to be asking."""
+        """Live main's params. Same thing as pull_own_player now, but the
+        two callers below mean it specifically: they weight against the
+        player whose blind spots they are checking."""
         return self._learner.league.get_main_player()
 
     def _pfsp_branch(
@@ -451,19 +434,12 @@ class PlayerActor:
         MainPlayer._verification_branch (the public league-management
         pseudocode: github.com/chengyu2/learning_alpha_star/multiagent.py).
 
-        Checks exploiter-origin opponents FIRST, matching AlphaStar's own
-        scoping (their exploitation check is specifically restricted to
-        historical snapshots descended from a MainExploiter, not checked
-        against plain history uniformly) — a promoted exploiter represents
-        a deliberately found, proven weakness, worth monitoring more
-        sensitively than an opponent that's merely whatever main happened
-        to be when an overdue window expired. Falls back to checking ALL
-        historical opponents if no exploiter-origin one currently
-        qualifies, as a general safety net AlphaStar's version doesn't
-        need (it has a separate "forgetting" check — a monotonic-suffix
-        trick on win-rate history — for that; not ported here, see
-        _concerning_opponents' docstring... the threshold check above is
-        the direct substitute).
+        AlphaStar scopes this check to snapshots descended from a
+        MainExploiter; with no such subset in this league it checks all
+        historical opponents. AlphaStar's
+        separate "forgetting" check (a monotonic-suffix trick on win-rate
+        history) is not ported — the threshold check in
+        _concerning_opponents is the direct substitute.
 
         Uses exploit_ctrl_target/exploit_ctrl_min_games_per_opponent —
         since the ExploitabilityController's removal (2026-08-14) this
@@ -480,12 +456,7 @@ class PlayerActor:
         if not historical:
             return None
 
-        # Either exploiter type's promotions represent a deliberately found,
-        # proven weakness — check both before falling back to plain history.
-        exploiter_origin = [p for p in historical if p.origin != "main"]
-        found = self._concerning_opponents(
-            exploiter_origin
-        ) or self._concerning_opponents(historical)
+        found = self._concerning_opponents(historical)
         if found is None:
             return None
         concerning_players, concerning_win_rates = found
@@ -495,74 +466,9 @@ class PlayerActor:
         )
         return league.materialize(concerning_players[pick_idx])
 
-    def _main_lineage_steps(self) -> frozenset[int]:
-        """origin=="main" historical step_counts, recomputed fresh on every
-        call — MainExploiter's candidate pool is a live filter over the
-        current league, not a fixed set decided once (AlphaStar's own
-        MainExploiter PFSP-samples fresh from the opponent's descendants
-        every match; freezing a subset at creation time and reusing it for
-        the population's whole lifetime would just be re-inventing the old
-        single-generic-exploiter design's pin_opponent_steps under a new
-        name)."""
-        return frozenset(
-            ref.step_count
-            for ref in self._learner.league.players.values()
-            if ref.origin == "main"
-        )
-
-    def _league_exploiter_match(self) -> tuple[ParamsContainer, bool]:
-        """LeagueExploiter: PFSP over the whole historical population (any
-        origin), unrestricted, re-sampled every match — identical to
-        _pfsp_branch()'s unrestricted draw, since "the whole population"
-        needs no filtering at all. Never mirror self-play, never
-        verification."""
-        opponent = self._pfsp_branch()
-        if opponent is not None:
-            return opponent, False
-        raise RuntimeError(
-            "league_exploiter actor found no historical opponents to play "
-            "— the league is empty."
-        )
-
-    def _main_exploiter_match(self) -> tuple[ParamsContainer, bool]:
-        """AlphaStar's actual MainExploiter rule: if our own win-rate
-        against LIVE main is reliable and above
-        main_exploiter_live_target_winrate_floor, play live main directly
-        (zero disk cost — already device-resident) with is_trainable=False
-        (this is a genuinely different population, not mirror self-play;
-        main does not automatically learn from this match). Otherwise fall
-        back to a fresh PFSP draw restricted to main's own lineage
-        (_main_lineage_steps). Every game either branch plays records into
-        the shared payoff table via update_player_league_stats, so the
-        live-win-rate signal keeps updating with no new statistics code."""
-        config = self._learner.config
-        league = self._learner.league
-        games = league.games.get(
-            (MAIN_EXPLOITER_KEY, MAIN_KEY), 0.0
-        ) + league.games.get((MAIN_KEY, MAIN_EXPLOITER_KEY), 0.0)
-        if games >= config.main_exploiter_live_target_min_games:
-            live_winrate = league._win_rate_by_steps(MAIN_EXPLOITER_KEY, MAIN_KEY)
-            if live_winrate > config.main_exploiter_live_target_winrate_floor:
-                return league.get_live(MAIN_KEY), False
-        lineage_steps = self._main_lineage_steps()
-        opponent = (
-            self._pfsp_branch(allowed_steps=lineage_steps) if lineage_steps else None
-        )
-        if opponent is not None:
-            return opponent, False
-        raise RuntimeError(
-            'main_exploiter actor found no origin=="main" historical '
-            "opponents to play — main hasn't added any league snapshots yet."
-        )
-
     def get_match(self) -> tuple[ParamsContainer, bool]:
-        if self.population == "league_exploiter":
-            return self._league_exploiter_match()
-        if self.population == "main_exploiter":
-            return self._main_exploiter_match()
-
-        # main: unchanged 50% PFSP / 15% verification / 35% mirror
-        # self-play split.
+        # 50% PFSP / 15% verification / 35% mirror self-play, matching
+        # AlphaStar's MainPlayer split.
         coin_toss = np.random.random()
 
         # Make sure you can beat the League (PFSP)

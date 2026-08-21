@@ -16,15 +16,7 @@ component is stored as its own file:
         builder/opt_state
         builder/scalars
         league                    # league.serialize() bytes (refs + stats)
-        controllers               # host-side controller/plasticity state
-        scheduler                 # block-sequential scheduler state (which
-                                  # population owned the GPU, rotation index,
-                                  # and which populations/ entries are live)
-        populations/{name}/       # a live exploiter population's own full
-            player/... builder/   # resumable state, same layout as main's
-            host                  # host-side counters (fork_step, budget
-                                  # anchor) that live outside the TrainState
-            controllers
+        controllers               # host-side controller state
 
 Storing components separately means an opponent can be materialised by reading
 only ``player/target_params`` (+ ``builder/target_params``) — the large
@@ -112,79 +104,11 @@ def save_train_state(
 
     # League bytes are already serialised (refs + stats only); store verbatim.
     _dump(os.path.join(ckpt_dir, "league"), league_bytes)
-    # Host-side controller + plasticity state: not parameters, but training
-    # dynamics that a resume must not silently reset (a forgotten
-    # plasticity recovery clears the perturbation cooldown; a forgotten
-    # lambda controller re-anneals from scratch).
+    # Host-side controller state: not parameters, but training dynamics a
+    # resume must not silently reset.
     if controller_bytes is not None:
         _dump(os.path.join(ckpt_dir, "controllers"), controller_bytes)
     return ckpt_dir
-
-
-def save_scheduler_state(ckpt_dir: str, scheduler: dict) -> None:
-    """Block-sequential scheduler state: {"active": ..., "rotation_idx": ...,
-    "populations": [names]}. The "populations" list is the source of truth
-    for which populations/{name}/ subdirs are live in THIS write — a reader
-    must ignore any subdir not listed, since repeated writes into the same
-    ckpt dir (main's step is frozen during an exploiter block) can leave a
-    stale subdir behind after that population's block ended."""
-    _dump(os.path.join(ckpt_dir, "scheduler"), scheduler)
-
-
-def load_scheduler_state(ckpt_dir: str) -> dict | None:
-    """None for checkpoints written before exploiter-phase resume existed
-    (those resume with a main window, exactly the old behaviour)."""
-    path = os.path.join(ckpt_dir, "scheduler")
-    if not os.path.exists(path):
-        return None
-    return _load(path)
-
-
-def save_population_state(
-    ckpt_dir: str,
-    name: str,
-    player_state_components: dict[str, Any],
-    builder_state_components: dict[str, Any],
-    host: dict[str, Any],
-    controller_bytes: bytes | None = None,
-) -> None:
-    """Write one exploiter population's full resumable state under
-    populations/{name}/, mirroring the main checkpoint's player/ + builder/
-    layout so the same component readers work on both."""
-    base = os.path.join(ckpt_dir, "populations", name)
-    player_dir = os.path.join(base, "player")
-    builder_dir = os.path.join(base, "builder")
-    os.makedirs(player_dir, exist_ok=True)
-    os.makedirs(builder_dir, exist_ok=True)
-    for comp_name, value in player_state_components.items():
-        _dump(os.path.join(player_dir, comp_name), value)
-    for comp_name, value in builder_state_components.items():
-        _dump(os.path.join(builder_dir, comp_name), value)
-    _dump(os.path.join(base, "host"), host)
-    if controller_bytes is not None:
-        _dump(os.path.join(base, "controllers"), controller_bytes)
-
-
-def load_population_state(ckpt_dir: str, name: str) -> dict[str, Any] | None:
-    """One population's saved state, or None if it isn't in this checkpoint."""
-    base = os.path.join(ckpt_dir, "populations", name)
-    if not os.path.isdir(base):
-        return None
-
-    def _read_dir(who: str) -> dict[str, Any]:
-        d = os.path.join(base, who)
-        return {n: _load(os.path.join(d, n)) for n in _component_names(d)}
-
-    host_path = os.path.join(base, "host")
-    controllers_path = os.path.join(base, "controllers")
-    return dict(
-        player_state=_read_dir("player"),
-        builder_state=_read_dir("builder"),
-        host=_load(host_path) if os.path.exists(host_path) else {},
-        controllers=(
-            _load(controllers_path) if os.path.exists(controllers_path) else None
-        ),
-    )
 
 
 def save_param_snapshot(
@@ -229,8 +153,8 @@ def load_league_bytes(ckpt_dir: str) -> bytes | None:
 
 
 def load_controller_bytes(ckpt_dir: str) -> bytes | None:
-    """Controller/plasticity state; None for checkpoints written before it
-    was persisted (those resume with freshly initialised controllers)."""
+    """Controller state; None for checkpoints written before it was
+    persisted (those resume with freshly initialised controllers)."""
     path = os.path.join(ckpt_dir, "controllers")
     if not os.path.exists(path):
         return None

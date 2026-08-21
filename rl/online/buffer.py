@@ -94,7 +94,7 @@ class BuilderTrajectoryStore:
         """Resets the store to empty.
 
         Used when reusing one persistent store across phase transitions
-        (main <-> exploiter) instead of letting each phase allocate its own
+        across populations instead of letting each allocate its own
         — a fresh-per-phase store meant an actor thread that outlived its
         phase (see main.py's straggler check) could keep writing into a
         store from a phase that had already "ended," silently leaking

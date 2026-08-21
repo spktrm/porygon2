@@ -17,7 +17,7 @@ def next_tqdm_position() -> int:
     consumer/batches) across 3 concurrently-training populations, that
     fight is what corrupted terminal output into garbled interleaved
     text. Call once per tqdm() construction, at bar-creation time, and
-    pair with close_tqdm_bar() at teardown: exploiter populations are
+    pair with close_tqdm_bar() at teardown: populations are
     reset repeatedly, and without recycling rows each reset would place
     its 4 new bars one screen-row lower, leaving the dead rows above
     permanently occupied for the life of the process."""

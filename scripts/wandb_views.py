@@ -344,9 +344,8 @@ def rl_sections():
                     ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
                 ),
                 lp(
-                    # Runtime scalar: player_coma_coef on main (no ramp
-                    # since 2026-08-21, full strength from step 1). Zero
-                    # for exploiter populations by construction.
+                    # Runtime scalar: player_coma_coef (no ramp since
+                    # 2026-08-21, full strength from step 1).
                     "NeuRD/COMA coefficient",
                     ["player_coma_coef"],
                     smooth=0,
@@ -530,8 +529,8 @@ def rl_sections():
             # learner? Both readouts exist because the global staleness
             # instruments are structurally blind to a rare modality:
             # the actor-KL feeding the replay reuse controller is an
-            # expectation over the policy, and the plasticity probe
-            # grades VALUE error, not action-distribution fidelity.
+            # expectation over the policy, and the capacity probe grades
+            # VALUE error, not action-distribution fidelity.
             name="1.9 · Modality-resolved staleness & attenuation",
             is_open=True,
             panels=[
@@ -609,8 +608,7 @@ def rl_sections():
                     # UPGO (AlphaStar-style second PG term): cut_frac is
                     # the fraction of steps whose return truncated to the
                     # bootstrap — ~0 at cold start (pessimistic critic =
-                    # pure MC), rising as the critic calibrates. Loss is
-                    # zeroed during plasticity recovery.
+                    # pure MC), rising as the critic calibrates.
                     "UPGO (cut fraction & loss)",
                     [
                         "player_upgo_cut_frac",
@@ -656,7 +654,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="3 · League & plasticity",
+            name="3 · League & representation health",
             is_open=True,
             panels=[
                 lp(
@@ -689,23 +687,17 @@ def rl_sections():
                         "title": "league payoff table (row beats column)"
                     },
                 ),
-                lp(
-                    "Plasticity controller",
-                    [
-                        "plasticity_perturbation_count",
-                        "plasticity_consecutive_overdue",
-                        "plasticity_recovering",
-                        "plasticity_recovery_winrate",
-                    ],
-                    smooth=0,
-                ),
+                # Pure observer since the plasticity controller was
+                # removed (2026-08-21). Kept because it is what caught the
+                # 1e-4 LR collapse: action-emb srank 0.27 by 13k steps
+                # while actor-KL sat quietly at 0.002.
                 lp(
                     "Representation health",
                     [
-                        "plasticity_action_emb_dormant_frac",
-                        "plasticity_value_emb_dormant_frac",
-                        "plasticity_action_emb_srank_frac",
-                        "plasticity_value_emb_srank_frac",
+                        "capacity_action_emb_dormant_frac",
+                        "capacity_value_emb_dormant_frac",
+                        "capacity_action_emb_srank_frac",
+                        "capacity_value_emb_srank_frac",
                     ],
                 ),
                 lp(
@@ -884,12 +876,11 @@ def rl_sections():
                     smooth=0,
                 ),
                 lp(
-                    # training_step (player_state.step_count) resets to 0
-                    # on an exploiter hard-reset/perturb re-fork;
-                    # lifetime_step never does — plotted together (against
-                    # the lifetime_step x-axis) a re-fork shows as
-                    # training_step visibly dropping while the x-axis
-                    # itself keeps climbing.
+                    # training_step (player_state.step_count) is the
+                    # lineage's own counter; lifetime_step is monotonic
+                    # across resumes. Plotted together, a params-mode
+                    # reload shows as training_step dropping while the
+                    # x-axis keeps climbing.
                     "Training step (raw) vs lifetime step",
                     ["training_step", "lifetime_step"],
                     smooth=0,
@@ -1105,12 +1096,10 @@ def main():
         rl_sections(),
         args.update_rl_url,
         # Learner-step x-axis for every panel: lifetime_step (not
-        # training_step = player_state.step_count) — the latter resets to
-        # 0 on an exploiter hard-reset/perturb re-fork (PopulationState's
-        # host_step is zeroed at fork; training_step tracks it), which
-        # would draw a sawtooth/overdraw on any main_exploiter/
-        # league_exploiter panel. lifetime_step is carried across re-forks
-        # by construction (rl/online/learner.py's PopulationState) and is
+        # training_step = player_state.step_count) — the latter restarts
+        # on a params-mode reload, which would draw a sawtooth/overdraw.
+        # lifetime_step is carried across resumes by construction
+        # (rl/online/learner.py's PopulationState) and is
         # already the run's own default step metric (main.py's
         # define_metric("*", step_metric="lifetime_step")) — logged on
         # every row, including the eval-actor rows that only log

@@ -50,7 +50,7 @@ def test_per_population_replay_bytes():
     stub = make_stub(
         populations={
             "main": make_pop(player_bytes=10 * 2**20, builder_bytes=2 * 2**20),
-            "main_exploiter": make_pop(player_bytes=2**20),
+            "other": make_pop(player_bytes=2**20),
         },
         cache_entries=3,
         cache_bytes=45 * 2**20,
@@ -58,8 +58,8 @@ def test_per_population_replay_bytes():
     logs = diag(stub)
     assert logs["diag_player_replay_mb_main"] == 10
     assert logs["diag_builder_replay_mb_main"] == 2
-    assert logs["diag_player_replay_mb_main_exploiter"] == 1
-    assert logs["diag_builder_replay_mb_main_exploiter"] == 0
+    assert logs["diag_player_replay_mb_other"] == 1
+    assert logs["diag_builder_replay_mb_other"] == 0
     assert logs["diag_league_cache_entries"] == 3
     assert logs["diag_league_cache_mb"] == 45
 

@@ -1,6 +1,6 @@
 """Collapse diagnostics for a specific saved checkpoint (not a fresh
 random-init model): dormant-unit / representation-rank collapse via the
-same probe the live learner uses (Learner._make_plasticity_probe), plus
+same probe the live learner uses (Learner._make_capacity_probe), plus
 separation of the small learned embedding tables (value-ladder query rows,
 target/pass action-grid rows) read directly off params.
 
@@ -86,7 +86,7 @@ def _pairwise_cosine_similarities(table: np.ndarray) -> np.ndarray:
 
 @pytest.mark.gpu
 def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
-    """Runs the live learner's plasticity probe (dormant-unit fraction +
+    """Runs the live learner's capacity probe (dormant-unit fraction +
     srank@0.99, see learner._embedding_stats) against this checkpoint's
     params on the bundled example trajectory, for both trunk embedding
     streams (action, value-all)."""
@@ -121,7 +121,7 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
             f"{', '.join(kept_fresh[:3])}) — reprobe after a run on this code"
         )
     # Probe vmaps over axis 1 (batch); re-add a batch axis of 1 to the
-    # unbatched example (same reshape test_plasticity.py uses).
+    # unbatched example.
     batched = jax.tree.map(lambda x: np.asarray(x)[:, None], actor_input)
     batch = Batch(
         player_transitions=PlayerTransition(env_output=batched.env),
@@ -129,12 +129,12 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
         player_history=batched.history,
     )
 
-    probe = Learner._make_plasticity_probe(None, network)
+    probe = Learner._make_capacity_probe(None, network)
     logs = probe(ckpt_target_params, batch)
 
     for name in ("action", "value"):
-        dormant_frac = float(np.asarray(logs[f"plasticity_{name}_emb_dormant_frac"]))
-        srank_frac = float(np.asarray(logs[f"plasticity_{name}_emb_srank_frac"]))
+        dormant_frac = float(np.asarray(logs[f"capacity_{name}_emb_dormant_frac"]))
+        srank_frac = float(np.asarray(logs[f"capacity_{name}_emb_srank_frac"]))
         assert np.isfinite(dormant_frac) and np.isfinite(srank_frac)
         assert dormant_frac < 0.5, (
             f"{name} stream: {dormant_frac:.1%} of units dormant — looks collapsed"
