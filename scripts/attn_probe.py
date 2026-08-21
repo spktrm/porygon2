@@ -3,12 +3,16 @@
 Loads a saved player checkpoint, runs ONE forward pass on the bundled
 example step with COLLECT_INTERMEDIATES=1 so MultiHeadAttention sows its
 weights, then attributes each attention module's mass to the encoder's
-substreams (state = [private, public, field, prev_action, history],
-action = [move, switch, target]).
+substreams (state = [state] -- the latent array since 2026-08-21, one
+group; action = [move, switch, target]).
 
-The headline it exists to answer: when a SWITCH action row reads the state
-stream, how much of its attention lands on the opponent's public entities
-versus its own private side? Run with the learner stopped — it wants the GPU.
+Since the latent read, the state rows are learned latents rather than
+per-entity slots, so the old headline ("when a SWITCH row reads the state
+stream, how much lands on the opponent's public entities?") is answered
+one level up: read the `latent_input_read/read` attention, whose KEYS are
+the 186 raw tokens (public 120 | private 48 | field 3 | prev 2 | history
+13), to see which token groups each latent attends. Run with the learner
+stopped — it wants the GPU.
 
     COLLECT_INTERMEDIATES=1 env/bin/python scripts/attn_probe.py \
         [--ckpt ckpts/gen9/ckpt_00040000] [--out runtime/attn_probe.html]
@@ -20,7 +24,9 @@ import pickle
 
 import numpy as np
 
-STATE_PARTS = ["private", "public", "field", "prev_action", "history"]
+STATE_PARTS = ["state"]
+# Key layout of the latent read's attention (tokens, in concat order).
+READ_TOKEN_PARTS = [("public", 12 * 10), ("private", 6 * 8), ("field", 3), ("prev_action", 2), ("history", 13)]
 ACTION_PARTS = ["move", "switch", "target"]
 
 
