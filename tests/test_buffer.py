@@ -1,7 +1,6 @@
 """PlayerTrajectoryStore: reuse caps, replacement, and staleness stamping."""
 
 import numpy as np
-import pytest
 
 from rl.environment.interfaces import Trajectory
 from rl.online.buffer import PlayerTrajectoryStore

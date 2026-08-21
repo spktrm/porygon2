@@ -229,11 +229,13 @@ class Trajectory:
     reuse_count: ArrayLike = ()
 
     # Exploration-ladder flag, shape (1,) per trajectory — (1, B) once
-    # batched. True = this trajectory was played by a raised-temperature
-    # explore actor (config.num_explore_actors) and may train only the
-    # observer Q critic: every actor/value/builder loss own-masks it out
-    # in train_step, so the policy's training distribution stays clean
-    # while the critic gets counterfactual coverage. Set at construction
+    # batched. True = this game was played under the epsilon-mixed
+    # behaviour policy mu = (1-eps).pi + eps.prior (config.
+    # explore_game_prob / explore_eps_range). These rows train EVERY
+    # player loss since 2026-08-17 — their ISRs are exact, so the
+    # off-policy correction handles them; the flag now gates only the
+    # signals a deliberately noisier policy WOULD bias: league cadence,
+    # builder losses, the replay controller. Set at construction
     # by PlayerActor; normalised at batch-assembly time (all-False when
     # unset) so the shared train_step jit sees ONE pytree structure. ()
     # outside the online path.

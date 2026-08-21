@@ -3,7 +3,7 @@ from typing import Literal
 import jax
 import numpy as np
 
-from rl.environment.data import CAT_VF_SUPPORT, NUM_PACKED_SET_FEATURES
+from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import (
     PlayerActorInput,
@@ -121,10 +121,10 @@ class PlayerActor:
         # trajectories equal the probability BY CONSTRUCTION: dedicated
         # explore actors bypassed the InferenceServer full-time and
         # out-produced the server-queued base pairs ~4x, inflating the
-        # intended ~17% row share to ~44%. Explore games are tagged so
-        # train_step routes them to the observer Q critic only (see
-        # Trajectory.explore); the recorded log_policy always reflects
-        # the tempered logits, so Retrace's ISRs are correct for free.
+        # intended ~17% row share to ~44%. Explore games are tagged (see
+        # Trajectory.explore) so the host-side signals a noisier policy
+        # would bias can exclude them; the recorded log_policy always
+        # reflects mu, so the ISRs are correct for free.
         # Tempered games route via this actor's own batch-1 Agent for
         # that game only (the batched InferenceServer has no per-request
         # head_params); sides playing frozen opponents (do_push=False)
@@ -188,7 +188,7 @@ class PlayerActor:
         or the host ParamsContainer when routing through the batched
         InferenceServer (which owns device transfer) — see unroll_and_push.
         head_params is set iff this game is an explore game (per-game
-        tempered sampling); those games always take the direct-Agent path."""
+        epsilon mix); those games always take the direct-Agent path."""
 
         player_subkeys = split_rng(rng_key, self._unroll_length)
         player_traj = []

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import os
 from collections.abc import Callable, Mapping
 from typing import NamedTuple, TypeVar
 

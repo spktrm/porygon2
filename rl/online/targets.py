@@ -60,19 +60,18 @@ def compute_player_targets(
     config.player_lambda (0.8, AlphaStar's TD(lambda) value) shapes the
     value targets.
     """
-    cat_vf_support = jnp.asarray(CAT_VF_SUPPORT, dtype=isr.dtype)
-
     dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
     mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
     discount_t = (1 - dones_expanded) * config.player_gamma * mask_expanded
 
-    alpha = config.player_alpha
-
-    rho_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
-    rho_t = jnp.expand_dims(rho_t, axis=-1)
-
-    c_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
-    c_t = jnp.expand_dims(c_t, axis=-1)
+    # Truncated importance weights, AlphaStar/IMPALA: clipped IS only.
+    # rho and c are the SAME quantity here — the two were separate
+    # expressions behind a player_alpha blend between raw and clipped IS,
+    # a dial nothing ever moved off 1.0 (removed 2026-08-21), so this is
+    # one min() instead of four multiplies and two adds.
+    truncated_isr = jnp.expand_dims(jnp.minimum(1.0, isr), axis=-1)
+    rho_t = truncated_isr
+    c_t = truncated_isr
 
     r_t = batch.player_transitions.env_output.win_reward
 
@@ -175,8 +174,8 @@ def compute_q_targets(
     recursion is E_t = delta_t + gamma_t * c_{t+1} * E_{t+1} with
     c = player_q_lambda * min(1, pi_target/mu). min(1, .) tolerates
     arbitrary behaviour policies: replay reuse, and the exploration
-    ladder's raised-temperature games (config.explore_game_prob),
-    whose recorded mu IS the tempered distribution.
+    ladder's epsilon-mixed games (config.explore_game_prob),
+    whose recorded mu IS the mixed distribution.
 
     q_logits / target_log_policy come from the fast EMA target network —
     the same IMPACT reasoning as the v-trace reference policy. Everything

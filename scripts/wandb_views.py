@@ -161,10 +161,10 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # Stage-1 acceptance dashboard (docs/q-critic-plan.md): the
-            # observer Q trains but never touches the policy, so these
-            # panels are pure measurement until stage 2 flips on.
-            name="1.5 · Observer Q critic",
+            # The Q critic drives the policy through NeuRD (1.6), so these
+            # stopped being "does the critic look sane" and became "is the
+            # thing steering the policy trustworthy".
+            name="1.5 · Q critic",
             is_open=True,
             panels=[
                 lp(
@@ -180,8 +180,8 @@ def rl_sections():
                 lp(
                     # THE switching readout: best legal switch E[Q] minus
                     # best legal move E[Q], joint-read with switch_ratio.
-                    # Gap positive while switch_ratio collapses = ratchet
-                    # (stage 2's mandate); gap negative = the critic
+                    # Gap positive while switch_ratio collapses = the
+                    # ratchet NeuRD exists to break; gap negative = the critic
                     # agrees with not switching on the visited data (fix
                     # is opponents/data, not the policy update).
                     "Switch-vs-move value gap & switch rate",
@@ -240,7 +240,7 @@ def rl_sections():
                     # is the realised share of Q training data from the
                     # raised-temperature actors (~their share of the
                     # actor pool); r2_explore persistently below
-                    # player_q_r2 means the tempered rows are too
+                    # player_q_r2 means the explore rows are too
                     # off-policy to learn from (Retrace cutting every
                     # trace) rather than free switching counterfactuals.
                     "Exploration-ladder Q intake",
@@ -327,14 +327,6 @@ def rl_sections():
                     ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
                 ),
                 lp(
-                    # config.player_neurd_coef. THE policy
-                    # learning rate since the single-action PG terms were
-                    # removed — no ramp, full strength from step 1.
-                    "NeuRD coefficient",
-                    ["player_neurd_coef"],
-                    smooth=0,
-                ),
-                lp(
                     # Loss value ≈ 0 at the stopgrad point by
                     # construction (baseline is the current policy's own
                     # expectation) — scale lives in adv_std; the loss
@@ -346,7 +338,7 @@ def rl_sections():
                 lp(
                     # A cliff in either = the policy chasing critic
                     # noise — back player_neurd_coef off (edit config,
-                    # relaunch), keep the observer.
+                    # relaunch).
                     "Abort watch: entropy & modality entropy",
                     [
                         "player_action_normalized_entropy",

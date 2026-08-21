@@ -23,7 +23,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-import wandb.wandb_run
 from flax import core, struct
 from flax.training import train_state
 from tqdm import tqdm

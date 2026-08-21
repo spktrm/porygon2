@@ -1,7 +1,6 @@
 import heapq
 import math
 import threading
-from collections.abc import Sequence
 from typing import TypeVar
 
 _tqdm_position_lock = threading.Lock()

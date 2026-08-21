@@ -48,7 +48,7 @@ class Agent:
         # head_params is a per-CALL argument of the jitted steps (a traced
         # pytree of scalars, one trace regardless of value), not baked in
         # via functools.partial: the exploration ladder samples a fresh
-        # continuous temperature every game (see PlayerActor), which a
+        # continuous epsilon every game (see PlayerActor), which a
         # baked-in python float would turn into one recompile per value.
         self._player_apply_fn = player_apply_fn or dummy_func
         self._builder_apply_fn = builder_apply_fn or dummy_func
@@ -68,7 +68,7 @@ class Agent:
         head_params: HeadParams | None = None,
     ) -> PlayerAgentOutput:
         """head_params overrides this Agent's default for one call — the
-        exploration ladder's per-game sampled temperature."""
+        exploration ladder's per-game sampled epsilon (HeadParams.mix)."""
         with self._gpu_lock:
             return self._step_player(
                 rng_key,

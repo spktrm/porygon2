@@ -284,17 +284,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
 
-    # Advantage estimation params — AlphaStar's v-trace + UPGO recipe
-    # (2026-08-14, replacing the LambdaGapController; see targets.py):
-    # the value head trains on TD(lambda)-style v-trace targets at
-    # player_lambda, the policy gradient takes v-trace advantages with NO
-    # lambda of its own (AlphaStar's vtrace_advantages is
-    # unparameterised — clipped IS weights only, i.e. lambda=1), and a
-    # separate UPGO term (below) carries the per-step outcome-conditional
-    # credit the old runtime-tuned advantage lambda was trying to
-    # approximate globally.
+    # Terminal-only reward, so gamma=1: every step of a game shares the
+    # outcome and there is nothing to discount toward. Kept as a field
+    # because it is a real RL knob, not because anything has moved it.
     player_gamma: float = 1.0
-    player_alpha: float = 1.0
     # Value-target lambda. AlphaStar's own choice: TD(lambda=0.8), a
     # short (~5-step) bootstrap horizon — they could afford heavy
     # bootstrapping because supervised init gave them a sane critic from
@@ -425,24 +418,25 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # base games sample at 1.0). Per-game draws make the explore share
     # of trajectories equal this probability BY CONSTRUCTION — the prior
     # dedicated-slot design's 2/12 actors bypassed the InferenceServer
-    # full-time (it has no per-request head_params, so tempered games
+    # full-time (it has no per-request head_params, so explore games
     # take the direct batch-1 path) and out-produced the server-queued
     # base pairs ~4x, inflating the intended ~17% row share to ~44% and
     # halving the PG/value effective batch. Sides draw INDEPENDENTLY:
-    # tempered play is graded against the true temp-1 policy it will
-    # actually face, and the untempered side of a mixed game pushes
+    # explore play is graded against the true unmixed policy it will
+    # actually face, and the unmixed side of a mixed game pushes
     # ordinary PG/value rows played under opponent-switch pressure —
     # coverage the old explorer-vs-explorer pairing kept locked inside
     # Q-only rows. Frozen-opponent sides (nothing trainable, and league
-    # payoff reads would be polluted) and eval actors never temper;
-    # tempered PFSP games are also skipped from payoff updates. Because
-    # the temp is applied to the logits BEFORE the policy metrics are
-    # computed, the recorded behaviour policy IS the tempered
-    # distribution, so v-trace/Retrace ISRs are automatically correct.
-    # Explore trajectories are tagged at the actor: own-masked out of
-    # every PG/value/builder loss at the existing choke points, consumed
-    # ONLY by the observer Q critic. 0 disables. No parameter change, so
-    # the flip is checkpoint-safe.
+    # payoff reads would be polluted) and eval actors never explore;
+    # explore PFSP games are also skipped from payoff updates. Because
+    # the mix is applied BEFORE the policy metrics are computed, the
+    # recorded behaviour policy IS mu, so v-trace/Retrace ISRs are
+    # automatically correct. Explore rows train EVERY player loss since
+    # 2026-08-17 (the Q-CE-only masking was removed — their ISRs are
+    # exact, so nothing needs protecting from them); own_rows still gates
+    # the league cadence, the builder losses and the replay controller,
+    # where a deliberately noisier policy would bias the signal. 0
+    # disables. No parameter change, so the flip is checkpoint-safe.
     # 2026-08-21: epsilon-mix with the hierarchical prior REPLACES the
     # temperature draw (mu = (1-eps).pi + eps.prior per explore game;
     # HeadParams.mix). Supply arithmetic: the prior puts ~1/2 of a

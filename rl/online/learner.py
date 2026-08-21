@@ -633,14 +633,6 @@ def train_step(
         # categorical logits against the SAME two-hot Retrace target
         # (labels come from the privileged Q_all recursion; Q_private is
         # its deployable-information sibling, all head params shared).
-        # Config-static branch — the jit variant without the head never
-        # traces this.
-        q_logs = {}
-        neurd_logs = {}
-        loss_q = 0.0
-        loss_q_private = 0.0
-        loss_neurd = 0.0
-
         def q_taken(q_logits):
             return jnp.take_along_axis(
                 q_logits.astype(jnp.float32),
@@ -1568,16 +1560,13 @@ class Learner:
         # wire it up" convention elsewhere in this file.
         self._spawn_actor_pool = spawn_actor_pool
 
-        # train_step's config is a static jit arg. There is exactly ONE
-        # Learner, constructed once, holding ONE config value for the life
-        # of the process, so nothing ever varies the jit cache key. Kept as
-        # a separate attribute name (not literally self.config) only so a
-        # future per-population config override, if one is ever needed, has
-        # an obvious place to plug in. A scalar that VARIES during a run
-        # must not live here at all — it needs its own traced pytree arg:
-        # retained executables per distinct static value OOM-killed run
-        # 1326 (LESSONS.md 1).
-        self._jit_config = config
+        # train_step's config is a static jit arg, so every field is part
+        # of the compile cache key. One Learner, constructed once, holds
+        # one config for the life of the process — nothing varies it. A
+        # value that DOES vary during a run must not live in it at all; it
+        # needs its own traced pytree argument, because retained
+        # executables per distinct static value OOM-killed run 1326
+        # (LESSONS.md 1).
 
         self._capacity_probe_jit = None
         if player_network is not None and config.capacity_probe_interval > 0:
@@ -1724,7 +1713,7 @@ class Learner:
         with sample_cond:
             sample_cond.notify_all()
 
-    # --- per-population background workers -----------------------------------
+    # --- background workers --------------------------------------------------
 
     def host_to_device_worker(self, pop: PopulationState):
         """Background thread to batch data and push to this population's
@@ -1763,7 +1752,7 @@ class Learner:
                 # rows out of the league/builder signals only).
                 # Trajectories from before the field was populated stack
                 # as False, so the shared train_step jit always sees one
-                # pytree structure across every population's batches.
+                # pytree structure across batches.
                 batch = [
                     t.replace(
                         explore=(
@@ -1800,8 +1789,7 @@ class Learner:
         """Background thread: drains log dicts for this population,
         paying the device->host transfer and wandb serialization here so
         the train loop never has to synchronize with the GPU per step. A
-        single consumer per population preserves that population's own
-        wandb step ordering. Also hosts the replay-ratio controller, which
+        single consumer preserves wandb step ordering. Also hosts the replay-ratio controller, which
         needs exactly the host-side per-step logs this thread already
         produces."""
         while True:
@@ -1984,8 +1972,6 @@ class Learner:
                 with self.gpu_lock:
                     batch = jax.device_put(batch)
                     logs = self._train_step(pop, batch)
-                    if logs is None:
-                        continue
 
                 pop.host_step += 1
                 pop.lifetime_step += 1
@@ -2151,7 +2137,7 @@ class Learner:
 
         # Return this population's 4 progress-bar rows to the shared pool
         # (close_tqdm_bar) so the replacement fork reuses the same rows —
-        # without this, every population rebuild leaked 4 dead rows and
+        # without this, every rebuild leaked 4 dead rows and
         # pushed all live bars one screen-row further down, unboundedly,
         # for the life of the process. Closing is safe against any update
         # racing in from a straggler: tqdm's close() flips .disable, which
@@ -2341,16 +2327,14 @@ class Learner:
                 copy_state(pop.player_state),
                 copy_state(pop.builder_state),
                 resized,
-                self._jit_config,
+                self.config,
             )
             logger.info(
                 "Compiled (%d, %d) in %.1fs.", t_c, h_c, time.time() - start
             )
 
-    def _train_step(self, pop: PopulationState, batch: Batch) -> dict | None:
-        """Runs the JAX update for pop via the shared compiled train_step,
-        rebinding the result onto pop (not self — every population takes
-        turns through the same compiled closure)."""
+    def _train_step(self, pop: PopulationState, batch: Batch) -> dict:
+        """Runs the JAX update, rebinding the result onto pop."""
         if not self._shape_lattice_compiled:
             self._precompile_lattice(pop, batch)
             self._shape_lattice_compiled = True
@@ -2358,12 +2342,8 @@ class Learner:
             pop.player_state,
             pop.builder_state,
             batch,
-            self._jit_config,
+            self.config,
         )
-        if logs is not None:
-            # Static now, but still logged: the dashboard panel is how you
-            # confirm which coefficient a lineage actually trained under.
-            logs["player_neurd_coef"] = self.config.player_neurd_coef
         return logs
 
     def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):

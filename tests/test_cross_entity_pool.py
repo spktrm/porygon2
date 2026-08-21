@@ -14,7 +14,6 @@ to open them first or it passes vacuously.
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from flax.traverse_util import flatten_dict, unflatten_dict
 
 from rl.model.config import get_player_model_config

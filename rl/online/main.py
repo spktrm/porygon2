@@ -395,10 +395,10 @@ def main(args: argparse.Namespace):
     )
     # No separate exploration Agents: head_params is a per-call traced
     # argument of Agent.step_player now, so ladder actors share
-    # learning_agent and pass their per-game sampled temperature
-    # themselves (see PlayerActor). They bypass the batched
-    # InferenceServer (which serves everyone at the base temperature) the
-    # same way eval actors do.
+    # learning_agent and pass their per-game sampled epsilon themselves
+    # (see PlayerActor). They bypass the batched InferenceServer (which
+    # serves everyone at mix=0, i.e. pi itself) the same way eval actors
+    # do.
 
     # One batched-inference server for ALL training PlayerActors
     # (rl/online/inference.py). Same apply_fn and
@@ -557,12 +557,12 @@ def main(args: argparse.Namespace):
         )
         # Exploration ladder: every actor independently draws a per-game
         # explore coin (explore_game_prob) and, on explore games, a fresh
-        # log-uniform temperature — no dedicated ladder slots. Dedicated
+        # log-uniform epsilon — no dedicated ladder slots. Dedicated
         # slots bypassed the InferenceServer full-time and out-produced
         # the server-queued base pairs ~4x (44% row share instead of the
         # intended ~17%); a per-game coin makes the trajectory share equal
-        # the probability by construction, and tempered play is spread
-        # across the whole matchmaking mix. The untempered side of a
+        # the probability by construction, and explore play is spread
+        # across the whole matchmaking mix. The unmixed side of a
         # mixed game still pushes ordinary PG/value rows — played against
         # an exploring opponent, which is exactly the opponent-switch-
         # pressure coverage mirror self-play stopped producing.
