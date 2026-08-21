@@ -11,7 +11,7 @@ import numpy as np
 
 from rl.model.utils import ParamsContainer
 from rl.online.league import MAIN_KEY, League, PlayerRef
-from rl.online.learner import Learner
+from rl.online.training import Learner
 
 # A ref written by an older revision: a foreign origin tag in a disjoint
 # (far higher) step_count range, which is exactly what the origin filter

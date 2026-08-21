@@ -31,7 +31,7 @@ from rl.online.league import (
     PlayerRef,
     pfsp,
 )
-from rl.online.learner import Learner
+from rl.online.training import Learner
 
 
 def chunk_spans(

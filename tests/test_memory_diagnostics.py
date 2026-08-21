@@ -8,7 +8,7 @@ import json
 import time
 from types import SimpleNamespace
 
-from rl.online.learner import Learner
+from rl.online.training import Learner
 
 
 def make_stub(run_state=None, cache_entries=0, cache_bytes=0):
@@ -116,7 +116,7 @@ def test_malformed_node_stats_file_does_not_raise(tmp_path, monkeypatch):
 def test_heap_census_runs_and_logs_without_raising(caplog):
     import logging
 
-    with caplog.at_level(logging.INFO, logger="rl.online.learner"):
+    with caplog.at_level(logging.INFO, logger="rl.online.training.learner"):
         diag(make_stub())
     assert any("Heap census" in r.message for r in caplog.records)
 

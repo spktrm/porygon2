@@ -30,7 +30,7 @@ def test_train_step_player_q_smoke():
     from rl.model.player_model import get_player_model
     from rl.online.artifact import create_train_state
     from rl.online.config import Porygon2LearnerConfig
-    from rl.online.learner import train_step
+    from rl.online.training import train_step
 
     with jax.default_device(jax.devices("cpu")[0]):
         config = Porygon2LearnerConfig()

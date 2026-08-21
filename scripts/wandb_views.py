@@ -961,7 +961,7 @@ def main():
         # training_step = player_state.step_count) — the latter restarts
         # on a params-mode reload, which would draw a sawtooth/overdraw.
         # lifetime_step is carried across resumes by construction
-        # (rl/online/learner.py's PopulationState) and is
+        # (rl/online/training/run_state.py's RunState) and is
         # already the run's own default step metric (main.py's
         # define_metric("*", step_metric="lifetime_step")) — logged on
         # every row, including the eval-actor rows that only log

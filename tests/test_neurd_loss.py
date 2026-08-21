@@ -1,4 +1,4 @@
-"""NeuRD prefactor identity (rl/online/learner.py, 2026-08-21).
+"""NeuRD prefactor identity (rl/online/training/train_step.py, 2026-08-21).
 
 L = -sum_a sg(w(a)) . y(a) on the RAW logits y, with w the advantage
 CENTRED over legal cells and zeroed where the logit-gap clip is closed. The

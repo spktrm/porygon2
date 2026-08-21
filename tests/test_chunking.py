@@ -306,7 +306,10 @@ def test_shape_lattice_trim_is_lossless():
     each chunk's real content and _trim_to_lattice slices to the first
     fitting combo — never dropping a valid history step, and preserving
     the [-1] outcome reads (padding rows are terminal-step copies)."""
-    from rl.online.learner import _chunk_required_shape, _trim_to_lattice
+    from rl.online.training.batching import (
+        _chunk_required_shape,
+        _trim_to_lattice,
+    )
 
     lattice = ((48, 128), (64, 192), (64, 256))
     history, packed = _windows_fixture(valid_steps=50, rows_per_step=2, capacity=256)

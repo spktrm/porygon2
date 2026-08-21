@@ -136,7 +136,7 @@ def geometric_bucket(length: int, lo: int, hi: int) -> int:
     correlated (e.g. all describing the same trajectory's game length),
     prefer computing one shared level via _bucket_level per field, taking
     their max, and applying it uniformly via _bucket_value — see
-    rl/online/learner.py's batch assembly (now fixed-shape _stack_batch).
+    rl/online/training/batching.py (now fixed-shape stack_batch).
     """
     return _bucket_value(_bucket_level(length, lo), lo, hi)
 

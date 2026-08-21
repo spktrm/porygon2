@@ -8,7 +8,7 @@ from rl.environment.utils import split_rng
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
 from rl.online.league import MAIN_KEY
-from rl.online.learner import Learner
+from rl.online.training import Learner
 
 
 class BuilderActor:

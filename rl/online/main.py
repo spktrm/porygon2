@@ -35,7 +35,8 @@ from rl.online.artifact import (
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.inference import InferenceServer
-from rl.online.learner import CAT_VF_SUPPORT, Learner, OOMGuardTriggered
+from rl.environment.data import CAT_VF_SUPPORT
+from rl.online.training import Learner, OOMGuardTriggered
 from rl.online.player_actor import ActorStopped, PlayerActor
 
 logger = logging.getLogger(__name__)
