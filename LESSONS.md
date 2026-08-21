@@ -31,16 +31,16 @@ git revert <removing sha>                                      # undo one commit
 
 | mechanism | paths / symbols deleted | removed in | why it went |
 |---|---|---|---|
-| Exploiter populations (MainExploiter / LeagueExploiter) | `learner.py` population dispatch, `_fork_population`, `_begin_exploiter_block`, `_check_exploiter_transitions`, `_check_promotion_bar`, frame-budget tables; `player_actor.py` exploiter matchmaking; `league.py` origin split; 12 config fields; `populations/` checkpoint layout | (pending) | `auto_exploiter_enabled=False` since 2026-08-19; three populations do not fit 12GB on this box (OOM at the first `league_exploiter` block, 2026-08-15) |
-| Plasticity controller (shrink-and-perturb) | `rl/online/plasticity.py`, `learner._update_plasticity`, `_apply_plasticity_update`, controller checkpoint state, 6 config fields, `tests/test_plasticity.py` | (pending) | fired rarely and expensively; the Aug-2026 firing hit a consolidation phase and cost a multi-10k-step recovery |
-| Single-action policy gradient | `learner.loss_pg`, `loss.py::spo_objective`, `ppo_objective`, advantage EMA normaliser + std floor, 6 config fields | (pending) | updates only the sampled action's path; replaced by all-action NeuRD |
-| UPGO | `targets.py::upgo_returns`, `loss_upgo`, `RuntimeScalars.upgo_coef`, `player_upgo_coef` | (pending) | same single-action objection; its optimistic credit had no all-action form |
-| Q-boost cross-fade | `RuntimeScalars.q_boost_mix`, the PG-advantage blend, the `q_taken` / `retrace_g − v_exp` variant switch, `player_q_boost_*` diagnostics, dashboard §1.7, 3 config fields | (pending) | its only consumer was `loss_pg` |
-| Stage-A root search | `rl/model/search.py` | (pending) | zero callers ever; the `act_search` orchestration it names was never written |
-| Attention visualiser | `rl/model/viz.py` | (pending) | superseded by `scripts/attn_probe.py`, which is maintained |
-| PriorityLock | `rl/concurrency/` | (pending) | referenced only inside its own file since 2025-09 |
-| Offline critic analysis tools | `rl/offline/{announced_leak,baseline,causality,diagnose,visualise}.py` | (pending) | unimported `__main__` scripts; the offline trainer they analysed stays |
-| Dead helpers + config fields | see the "dead code sweep" commit body for the full symbol list | (pending) | no callers / no readers |
+| Exploiter populations (MainExploiter / LeagueExploiter) | `learner.py` population dispatch, `_fork_population`, `_begin_exploiter_block`, `_check_exploiter_transitions`, `_check_promotion_bar`, frame-budget + `_STEP_OFFSET` tables; `player_actor.py` exploiter matchmaking; `league.py` origin split; 13 config fields; `populations/` + `scheduler` checkpoint layout | `b219d84` | `auto_exploiter_enabled=False` since 2026-08-19; three populations do not fit 12GB on this box (OOM at the first `league_exploiter` block, 2026-08-15) |
+| Plasticity controller (shrink-and-perturb) | `rl/online/plasticity.py`, `learner._update_plasticity`, `_apply_plasticity_update`, controller checkpoint state, 6 config fields, `tests/test_plasticity.py` | `b219d84` | fired rarely and expensively; the Aug-2026 firing hit a consolidation phase and cost a multi-10k-step recovery |
+| Single-action policy gradient | `learner.loss_pg`, `loss.py::ppo_objective`, the advantage EMA normaliser + std floor, `ema_adv_mean`/`ema_adv_std` on the TrainState, 6 config fields (`spo_objective` survives — the builder still uses it) | `4234016` | updates only the sampled action's path; replaced by all-action NeuRD |
+| UPGO | `targets.py::upgo_returns`, `loss_upgo`, `RuntimeScalars.upgo_coef`, `player_upgo_coef` | `4234016` | same single-action objection; its optimistic credit had no all-action form |
+| Q-boost cross-fade | `RuntimeScalars.q_boost_mix`, the PG-advantage blend, the `q_taken` / `retrace_g − v_exp` variant switch, the boost-vs-vtrace agreement diagnostics, 3 config fields | `4234016` | its only consumer was `loss_pg` |
+| Stage-A root search | `rl/model/search.py` | `65a4774` | zero callers ever; the `act_search` orchestration it names was never written |
+| Attention visualiser | `rl/model/viz.py` | `65a4774` | superseded by `scripts/attn_probe.py`, which is maintained |
+| PriorityLock | `rl/concurrency/` | `65a4774` | referenced only inside its own file since 2025-09 |
+| Offline critic analysis tools | `rl/offline/{announced_leak,baseline,causality,diagnose,visualise}.py` | `65a4774` | unimported `__main__` scripts; the offline trainer they analysed stays |
+| Dead helpers + config fields | 16 never-called symbols, `artifact.save_train_state` + the cloud-upload path, `gradient_accumulation_steps`, 4 unread config fields — full list in the commit body | `65a4774` | no callers / no readers |
 
 ---
 
@@ -114,8 +114,10 @@ the wrong path.
 - **`-inf * 0` poisons a vjp.** Padded steps carry all-zero targets and zero
   weight; use a finite floor (`-1e9`) for masked logits, never `-inf`. *(live)*
 - **One NaN batch poisons an EMA forever.** `mean`/`std` with `where=` go NaN on
-  an all-masked batch; freeze the advantage EMAs on such batches instead of
-  updating them.
+  an all-masked batch (every row forced single-option or terminal — rare, but it
+  happens), so any running statistic must be frozen on such batches rather than
+  updated. The advantage-EMA normaliser this was written for is gone, but the
+  constraint applies to the next running statistic anyone adds.
 - **The non-finite update gate is checkpoint protection, not just numerics.** A
   poisoned update is permanent, and the next periodic save then overwrites the
   last good checkpoint with it. *(live)*
