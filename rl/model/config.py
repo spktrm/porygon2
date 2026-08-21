@@ -221,21 +221,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
-    # Multi-lambda auxiliary value head (learner-only): K categorical
-    # rows over the same win/draw/loss support as v_head, one per
-    # auxiliary lambda. num_heads must match the learner config's
-    # player_aux_lambdas length (shape mismatch fails loudly otherwise).
-    cfg.aux_v_head = ConfigDict()
-    cfg.aux_v_head.num_heads = 4
-    cfg.aux_v_head.mlp = ConfigDict()
-    # Same depth as v_head (see comment there); final width = one
-    # categorical row per aux lambda.
-    cfg.aux_v_head.mlp.layer_sizes = (
-        2 * entity_size,
-        entity_size,
-        cfg.aux_v_head.num_heads * len(CAT_VF_SUPPORT),
-    )
-
     # Privileged two-rung all-action Q head (learner-only;
     # docs/q-critic-plan.md): categorical logits over CAT_VF_SUPPORT per
     # src x tgt cell, read off the same action embeddings as the policy

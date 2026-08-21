@@ -516,27 +516,6 @@ class CategoricalValueLogitHead(nn.Module):
         )
 
 
-class MultiLambdaValueLogitHead(nn.Module):
-    """Learner-only categorical value logits for K auxiliary lambdas.
-
-    Output (..., K, n_bins): row k is trained by CE against the gamma=1
-    v-trace distribution target built with player_aux_lambdas[k]
-    (rl/online/targets.py). With terminal-only reward every row estimates
-    the same win probability from a different bias/variance target
-    construction — lambda=1 is the Monte Carlo anchor (a gamma spectrum
-    would degenerate here: gamma^45 kills the signal). Representation
-    shaping only — the policy's advantages read the main v_head; these
-    rows never feed the actor loss.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(self, embedding: jax.Array):
-        logits = MLP(**self.cfg.mlp.to_dict())(embedding)
-        return logits.reshape(*logits.shape[:-1], self.cfg.num_heads, -1)
-
-
 class RegressionValueLogitHead(nn.Module):
     cfg: ConfigDict
 

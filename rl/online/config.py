@@ -300,9 +300,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # bootstrapping because supervised init gave them a sane critic from
     # step one. This project starts from scratch AND the 1328 five-arm
     # sweep pointed the same direction (monotone lower-lambda-better,
-    # confounded but directional), so 0.8 is adopted as-is. The aux
-    # spectrum's lambda=1.0 MC-anchor row (player_aux_lambdas) keeps the
-    # bootstrap-bias readout (player_bootstrap_gap) alive regardless.
+    # confounded but directional), so 0.8 is adopted as-is. NOTE: the
+    # lambda=1.0 MC-anchor row of the aux spectrum used to keep a live
+    # bootstrap-bias readout (player_bootstrap_gap) on this
+    # bootstrap-heavy target; the aux heads went 2026-08-21, so that
+    # instrument is gone with them (LESSONS.md ledger).
     player_lambda: float = 0.8
 
     # No adaptivity/entropy controller fields anymore: the magnet KL
@@ -315,33 +317,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # at 0.08 on that axis) is now watched on the dashboard, not
     # auto-corrected.
 
-    # BT-rating telemetry (rl/online/ratings.py): every bandit_window_steps
-    # the learner fits a Bradley-Terry rating for main against the frozen
-    # league snapshots from the payoff table the league already keeps,
-    # and logs it plus the exploitability auditors (worst-matchup drift,
-    # BT non-transitivity residual). Pure self-play signal: mirror games
-    # carry no reward and the scripted eval baselines are never
-    # consulted. Before bandit_min_rated_opponents snapshots have
-    # bandit_min_games_per_opponent effective games against main, no
-    # rating exists and rating_logs reports bandit_rating_valid=0.
-    # These fields used to also configure LambdaBandit, a discounted-UCB
-    # bandit that retuned the advantage lambda from this same rating —
-    # retired in favour of the lambda gap-controller (itself since
-    # removed, 2026-08-14, for UPGO + fixed player_lambda) and the
-    # exploitability controller (the rating itself needs hundreds of
-    # games per point, so it stays an auditor, never a control signal —
-    # see ratings.py). The bandit_ field and metric prefixes are kept for
-    # wandb continuity across lineages.
-    bandit_window_steps: int = 20_000
-    bandit_min_games_per_opponent: float = 20.0
-    bandit_min_rated_opponents: int = 2
 
     # No ExploitabilityController anymore (removed 2026-08-14, the last
     # adaptive hyperparameter loop — see rl/online/controllers.py's
     # module docstring). The replay KL target is fixed at
     # player_replay_kl_target; the worst-matchup win-rate it sensed still
-    # exists as _should_add_new_player's "dominant" gate and the
-    # league_main_winrate_min auditor, it just doesn't actuate anything.
+    # exists as _should_add_new_player's "dominant" gate, it just doesn't
+    # actuate anything.
     #
     # Both fields below now serve main's VERIFICATION branch
     # (player_actor._concerning_opponents) exclusively; names kept from
@@ -371,39 +353,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     ## Player
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
-    # Multi-lambda auxiliary value heads: K extra categorical value
-    # readouts trained by CE against per-lambda v-trace targets at the
-    # main gamma — a target bias/variance spectrum that shapes the shared
-    # representation (the main head keeps sole ownership of the policy's
-    # advantages). See player_aux_lambdas. Coefficient kept modest — the
-    # grad-norm lesson from the integrated-critic era: heavy aux gradient
-    # globally clips everything.
-    # Multi-lambda aux value heads: all at the main gamma (=1, win prob),
-    # differing in target construction — lambda=1 is the Monte Carlo
-    # anchor, low lambda leans on the critic. A gamma spectrum would
-    # degenerate here (terminal-only reward: gamma^45 kills the signal).
-    # Spectrum chosen ~geometric in effective horizon 1/(1-lambda):
-    # 2, 10, 20, inf turns against a ~45-turn mean game, bracketing the
-    # main head's own lambda=0.8 ~ 5-turn horizon. Two rows dropped as
-    # redundant-with-another-head, same logic both times:
-    # - lambda=0.2 (2026-08-14): near-pure next-step self-distillation
-    #   with terminal-only reward; its R2 series correlated 0.984 with
-    #   lambda=0.5's over 223k steps (run 1786583261-main).
-    # - lambda=0.8 (2026-08-14, after player_lambda moved 0.99->0.8):
-    #   the main head's target became exactly lambda=0.8 v-trace at the
-    #   same gamma — a copy, not a horizon.
-    # The lambda=1.0 row is the MC anchor player_bootstrap_gap reads —
-    # the safety instrument for the bootstrap-heavy lambda=0.8 value
-    # target — and must stay. Length must match the model config's
-    # aux_v_head.num_heads.
-    player_aux_lambdas: tuple = (0.5, 0.9, 0.95, 1.0)
-    player_aux_value_coef: float = 0.5
-
     # Counterfactual value ladder (2026-08-16): shared coefficient for the
     # own-info (no opponent sheet) and public-info (history-only) value
-    # heads' CE losses. Critic-only representation/diagnostic heads like
-    # the aux spectrum — the policy reads the main (privileged) head's
-    # advantages exclusively.
+    # heads' CE losses. Critic-only: the policy reads the main
+    # (privileged) head exclusively.
     player_value_ladder_coef: float = 0.25
 
     # All-action Q critic (docs/q-critic-plan.md) — STRUCTURAL since
@@ -411,69 +364,53 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # part of the model, its CE always trains, and every consumer (boost,
     # COMA, diagnostics) assumes it exists. Singles only (asserted in
     # get_player_model_config).
-    # CE weight — same modest scale as the aux value spectrum, and for the
-    # same reason (heavy aux gradient globally clips everything).
+    # CE weight — deliberately modest, per the grad-norm lesson from the
+    # integrated-critic era: a heavy auxiliary gradient globally clips
+    # everything (LESSONS.md 5).
     player_q_coef: float = 0.5
     # Retrace trace parameter; matches player_lambda's 0.8 default.
     player_q_lambda: float = 0.8
-    # COMA-style all-action counterfactual policy loss (2026-08-19,
-    # REPLACES the stage-2 forward KL; derivation in
-    # docs/entropy-gradient-pressure.md). Per legal cell:
-    # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')] — the COMA
-    # counterfactual baseline (swap own action, hold the world fixed,
-    # marginalise under the CURRENT policy) — and the loss is
-    # −Σ_a π(a)·sg(adv(a)), whose per-cell gradient π(a)·adv(a) is the
-    # exact all-action policy gradient: zero sampling variance, and
-    # counterfactual pressure lands on EVERY real-choice row, untaken
-    # actions included (the sampled boost advantage structurally carries
-    # none — on a move row, retrace−v_exp says nothing about the switch
-    # not taken). Still π-weighted, so it converts rare-kick recovery
-    # into steady exponential re-mixing toward the critic's per-state
-    # preferences rather than a mass-independent barrier — deliberate:
-    # it transmits only what the critic believes per state, never a
-    # fixed prior. Q̄_all is the PRIVILEGED rung (COMA's centralised
-    # critic): advantages enter as stop-gradient scalars, so the policy
-    # stays bitwise invariant to opp_private_team (value-ladder tests
-    # still bind).
+    # THE policy gradient. All-action NeuRD (Hennes et al. 2020 eq. 10):
+    # per legal cell of every real-choice row,
+    # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')] (the COMA
+    # counterfactual baseline — swap own action, hold the world fixed,
+    # marginalise under the CURRENT policy), centred over legal cells,
+    # applied to the RAW LOGITS with no π prefactor. Zero sampling
+    # variance, and counterfactual pressure lands on untaken actions —
+    # which a sampled objective structurally cannot do (on a move row,
+    # retrace−v_exp says nothing about the switch not taken). Q̄_all is
+    # the PRIVILEGED rung (COMA's centralised critic): advantages enter
+    # as stop-gradient scalars, so the policy stays bitwise invariant to
+    # opp_private_team (value-ladder tests still bind).
     #
-    # THE policy gradient since 2026-08-21: the single-action PG and UPGO
-    # terms are gone, so this is the only loss that moves the action
-    # logits toward return. -adv(b) lands on the LOGITS directly (Hennes
-    # et al. 2020 eq. 10, all-action over Q_all, so no 1/pi importance
-    # weight and none of the sampled-NeuRD variance). COMA's own pi
-    # prefactor was dropped first (2026-08-21): NeuRD eq. 6's restoring
-    # force shrinks with the starved cell's own mass, and the 157k-step
-    # 2026-08-20 lineage measured absadv_ratio ~4 against prob_ratio
-    # ~0.075 — the critic preferred switch cells MORE than move cells and
-    # pi alone throttled the update (LESSONS.md 3).
-    player_coma_enabled: bool = True
-    # This coefficient is now the POLICY LEARNING RATE, not a 1% nudge
-    # beside a coef-1.0 PG term. History: 0.05 was sized as ~1% relative
-    # pressure against normalised PG advantages; 0.1 came from the
-    # 2026-08-21 NeuRD retune (dropping pi over ~10 legal cells makes the
-    # raw per-cell gradient ~10x COMA's, so a starved switch cell at
-    # pi 0.02 / adv +0.15 gets ~0.015/logit, the magnet's order). With PG
-    # gone this must be re-sized against the magnet (the only opposing
-    # force left) — judge on player_neurd_clipped_switch and normalised
-    # modality entropy. Runtime scalar: retuning never recompiles.
-    player_coma_coef: float = 0.1
+    # Lineage: this was COMA proper (−π(b)·adv(b) per logit) until
+    # 2026-08-21. NeuRD eq. 6's restoring force shrinks with the starved
+    # cell's own mass, and the 157k-step 2026-08-20 run measured
+    # absadv_ratio ~4 against prob_ratio ~0.075 — the critic preferred
+    # switch cells MORE than move cells and π alone throttled the update
+    # (LESSONS.md 3). The single-action PG and UPGO terms went the same
+    # day, leaving this as the only loss that moves the action logits
+    # toward return.
+    #
+    # 1.0 (up from 0.1, 2026-08-21): this is the policy learning rate
+    # now, so it takes the coefficient the PG term it replaced carried.
+    # Scale check — the PG advantages it stands in for were EMA-
+    # normalised to ~unit std, while these are raw win units (~0.1-0.2
+    # spread), so at 1.0 a starved switch cell at adv +0.15 gets
+    # ~0.15/logit: ~10x its pull at 0.1, and about an order above the
+    # magnet's. That asymmetry is the point (the magnet is the only
+    # opposing force left), but it is also the thing to watch: if
+    # normalised modality entropy cliffs or player_neurd_clipped_switch
+    # pins at 1, the clip rather than the critic is bounding switch mass
+    # — back this off or raise the magnet. Runtime scalar, so retuning
+    # never recompiles.
+    player_neurd_coef: float = 1.0
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean
     # per row, so unclipped logits diverge); other losses still move
     # cells outside the band. 2.0 = OpenSpiel's NeuRD default.
     player_neurd_logit_clip: float = 2.0
-    # Boltzmann temperature for the p_q OBSERVER kept from stage 2
-    # (softmax(E[Q̄_private]/tau) diagnostics — the "what does the critic
-    # want" leading indicator; no loss reads it since the stage-2 KL's
-    # removal). 0.1 = sharp but not argmax.
-    player_q_observer_tau: float = 0.1
-    # Loss-free critic-quality diagnostics (player_q_action_var and its
-    # uniform/p90 companions, calibration r2 fresh/replay); on
-    # permanently. They matter more, not less, now that NeuRD through
-    # Q_all is the policy's only link to return: if the critic is
-    # action-flat there is nothing for it to amplify but noise.
-    player_q_diagnostic_enabled: bool = True
     # Agent57/Ape-X-style exploration ladder (replaces stage 4's
     # cross-population intake, removed 2026-08-15: it conflated another
     # agent's policy evidence with main's own action values, and its
@@ -544,13 +481,13 @@ class RuntimeScalars:
     static_argname, and static scalars retained ~5GB of executables per
     distinct value and OOM-killed run 1326; as traced leaves they change
     freely with zero recompiles. None falls back at the use site (to the
-    static coef for magnet, to 0 for coma); the live Learner path always
+    static coef for magnet, to 0 for neurd); the live Learner path always
     fills both."""
 
     # config.player_magnet_kl_coef.
     magnet_coef: chex.Array | None = None
-    # config.player_coma_coef — the policy gradient's coefficient.
-    coma_coef: chex.Array | None = None
+    # config.player_neurd_coef — the policy gradient's coefficient.
+    neurd_coef: chex.Array | None = None
 
 
 def get_learner_config():

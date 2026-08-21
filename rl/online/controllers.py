@@ -49,9 +49,10 @@ thing they controlled:
   driven by a slow, prior-dominated worst-matchup win-rate sensor (which
   false-positived in 1338 from lightly-played snapshots reading ~0.5).
   AlphaStar has no analogue. The sensor's signal survives as
-  _should_add_new_player's "dominant" gate and the
-  league_main_winrate_min auditor; the replay KL target is fixed at
-  config.player_replay_kl_target.
+  _should_add_new_player's "dominant" gate; the replay KL target is
+  fixed at config.player_replay_kl_target. (The BT-rating auditors it
+  also fed went 2026-08-21 with rl/online/ratings.py — a rating needs
+  hundreds of games per point, so it never became actionable.)
 """
 
 import numpy as np

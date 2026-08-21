@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 
 from rl.online.targets import (
-    compute_aux_value_targets,
     compute_player_targets,
     compute_q_targets,
     two_hot,
@@ -264,18 +263,3 @@ class TestPlayerTargetsOnExTrajectory:
         np.testing.assert_allclose(float(logs["player_isr_ess"]), 1.0, atol=1e-3)
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
 
-    def test_aux_targets_per_lambda(self, ex_target_inputs):
-        batch, _, isr, config = ex_target_inputs
-        T, B = batch.player_transitions.env_output.done.shape
-        K = len(config.player_aux_lambdas)
-        aux_log_probs = jnp.full((T, B, K, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)
-        aux = compute_aux_value_targets(batch, aux_log_probs, isr, config)
-        assert aux.shape == (T, B, K, 3)
-        assert np.isfinite(np.asarray(aux)).all()
-        # The lambda=1.0 MC-anchor row must also stay a distribution on
-        # masked steps (same argument as the main head).
-        done = np.asarray(batch.player_transitions.env_output.done)
-        mask = (1 - (np.cumsum(done, axis=0) - done)).astype(bool)
-        sums = np.asarray(aux).sum(-1)
-        for k in range(K):
-            np.testing.assert_allclose(sums[..., k][mask], 1.0, atol=1e-4)

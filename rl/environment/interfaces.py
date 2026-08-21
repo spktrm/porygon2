@@ -90,18 +90,13 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    # Learner-only (cfg.train): (T, K, n_bins) categorical logits for the
-    # K auxiliary discounts (multi-gamma value aux). Actors leave this
-    # empty so replay transitions stay small.
-    aux_value_logits: ArrayLike = ()
     # Learner-only (cfg.train; the Q critic is structural): (T, A, n_bins)
     # categorical logits of the all-action Q critic over the flat src x tgt
     # action grid (docs/q-critic-plan.md). q_logits is the privileged rung
     # (conditioned on value_all — drives the Retrace recursion);
     # private_q_logits shares every head param but is conditioned on the
     # deployable information set, and trains by CE against the same Retrace
-    # labels. Actors leave both empty for the same replay-size reason as
-    # aux_value_logits.
+    # labels. Actors leave both empty so replay transitions stay small.
     q_logits: ArrayLike = ()
     private_q_logits: ArrayLike = ()
     # Learner-only (cfg.train): (T, n_bins) categorical logits of the

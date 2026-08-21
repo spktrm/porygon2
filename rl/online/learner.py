@@ -53,7 +53,6 @@ from rl.online.artifact import (
     Porygon2PlayerTrainState,
     write_checkpoint_components,
 )
-from rl.online.ratings import rating_logs
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig, RuntimeScalars
 from rl.online.controllers import PILogController
@@ -70,7 +69,6 @@ from rl.online.loss import (
     policy_gradient_loss,
 )
 from rl.online.targets import (
-    compute_aux_value_targets,
     compute_builder_targets,
     compute_player_targets,
     compute_q_targets,
@@ -122,7 +120,7 @@ def train_step(
     semantics and None fallbacks are documented on RuntimeScalars itself.
     """
     magnet_coef = scalars.magnet_coef
-    coma_coef = scalars.coma_coef
+    neurd_coef = scalars.neurd_coef
 
     player_transitions = batch.player_transitions
     player_history = batch.player_history
@@ -188,17 +186,6 @@ def train_step(
     if not isinstance(batch.explore, tuple):
         own_rows = jnp.logical_not(batch.explore[0].astype(bool))  # (B,)
 
-    # Per-lambda v-trace distribution targets for the multi-lambda aux
-    # value heads, bootstrapped from each lambda's OWN fast-target readout
-    # so every row's target is self-consistent.
-    player_aux_targets = compute_aux_value_targets(
-        batch,
-        aux_value_log_probs=jax.nn.log_softmax(
-            player_target_pred.aux_value_logits.astype(jnp.float32), axis=-1
-        ),
-        isr=target_actor_ratio,
-        config=config,
-    )
     # Fraction of steps where the IMPACT clipped-target correction is
     # saturated at its cap — a second staleness signal alongside the actor
     # KL and ESS diagnostics.
@@ -422,93 +409,92 @@ def train_step(
             q_retrace_g, q_move_mask & has_both & explore_cols
         )
 
-    if config.player_q_diagnostic_enabled:
-        # Loss-free critic-quality diagnostics, on permanently. Since
-        # 2026-08-21 the policy's ONLY link to returns is NeuRD through
-        # Q_all, so these stopped being nice-to-have: action-value spread
-        # (is there anything to prefer?) and calibration of the taken-cell
-        # readout against its own realised Retrace targets.
-        #
-        # pi_target computed above (pivotal-state panel). The MEAN
-        # undersells the spread by construction when action-value spread
-        # concentrates in few high-leverage states (which is how this game
-        # works) — the p90 is the honest readout.
-        qvar_state = (
-            pi_target * jnp.square(q_all_target - q_v_exp[..., None])
+    # Loss-free critic-quality diagnostics, on permanently. Since
+    # 2026-08-21 the policy's ONLY link to returns is NeuRD through
+    # Q_all, so these stopped being nice-to-have: action-value spread
+    # (is there anything to prefer?) and calibration of the taken-cell
+    # readout against its own realised Retrace targets.
+    #
+    # pi_target computed above (pivotal-state panel). The MEAN
+    # undersells the spread by construction when action-value spread
+    # concentrates in few high-leverage states (which is how this game
+    # works) — the p90 is the honest readout.
+    qvar_state = (
+        pi_target * jnp.square(q_all_target - q_v_exp[..., None])
+    ).sum(axis=-1)
+    training_logs["player_q_action_var"] = average(qvar_state, q_mask)
+    training_logs["player_q_action_var_p90"] = jnp.nanquantile(
+        jnp.where(q_mask, qvar_state, jnp.nan), 0.9
+    )
+    # π-free counterpart: uniform-over-legal variance of the same
+    # Q̄_all means. The π-weighted qvar above is squashed by a
+    # collapsed policy regardless of what the critic believes (94%
+    # move mass hides any spread on the move↔switch axis), so it
+    # can't distinguish "critic is action-flat" from "critic is
+    # confidently anti-switch" — opposite remedies (head capacity /
+    # supervision vs nothing). Read the pair together: uniform ≫
+    # π-weighted means the spread lives on actions the policy has
+    # abandoned; both ≈ 0 means the critic genuinely can't tell
+    # actions apart.
+    n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
+    q_mean_uniform = (
+        jnp.where(flat_action_mask, q_all_target, 0.0).sum(axis=-1) / n_legal
+    )
+    qvar_uniform = (
+        jnp.where(
+            flat_action_mask,
+            jnp.square(q_all_target - q_mean_uniform[..., None]),
+            0.0,
         ).sum(axis=-1)
-        training_logs["player_q_action_var"] = average(qvar_state, q_mask)
-        training_logs["player_q_action_var_p90"] = jnp.nanquantile(
-            jnp.where(q_mask, qvar_state, jnp.nan), 0.9
-        )
-        # π-free counterpart: uniform-over-legal variance of the same
-        # Q̄_all means. The π-weighted qvar above is squashed by a
-        # collapsed policy regardless of what the critic believes (94%
-        # move mass hides any spread on the move↔switch axis), so it
-        # can't distinguish "critic is action-flat" from "critic is
-        # confidently anti-switch" — opposite remedies (head capacity /
-        # supervision vs nothing). Read the pair together: uniform ≫
-        # π-weighted means the spread lives on actions the policy has
-        # abandoned; both ≈ 0 means the critic genuinely can't tell
-        # actions apart.
-        n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
-        q_mean_uniform = (
-            jnp.where(flat_action_mask, q_all_target, 0.0).sum(axis=-1) / n_legal
-        )
-        qvar_uniform = (
-            jnp.where(
-                flat_action_mask,
-                jnp.square(q_all_target - q_mean_uniform[..., None]),
-                0.0,
-            ).sum(axis=-1)
-            / n_legal
-        )
-        training_logs["player_q_action_var_uniform"] = average(
-            qvar_uniform, q_mask
-        )
-        training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
-            jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
-        )
-        if not isinstance(batch.reuse_count, tuple):
-            fresh_cols = batch.reuse_count[0] == 0
-            replay_cols = ~fresh_cols
-            if own_rows is not None:
-                # Same standard-temperature filter as the capacity
-                # gap: tempered rows would contaminate calibration.
-                fresh_cols = fresh_cols & own_rows
-                replay_cols = replay_cols & own_rows
+        / n_legal
+    )
+    training_logs["player_q_action_var_uniform"] = average(
+        qvar_uniform, q_mask
+    )
+    training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
+        jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
+    )
+    if not isinstance(batch.reuse_count, tuple):
+        fresh_cols = batch.reuse_count[0] == 0
+        replay_cols = ~fresh_cols
+        if own_rows is not None:
+            # Same standard-temperature filter as the capacity
+            # gap: tempered rows would contaminate calibration.
+            fresh_cols = fresh_cols & own_rows
+            replay_cols = replay_cols & own_rows
 
-            def q_calibration_r2(cols):
-                m = q_mask & cols[None, :]
-                return jnp.where(
-                    m.any(),
-                    calculate_r2(
-                        value_prediction=q_taken_target,
-                        value_target=q_retrace_g,
-                        mask=m,
-                    ),
-                    0.0,
-                )
-
-            training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(
-                fresh_cols
-            )
-            training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(
-                replay_cols
-            )
-            vm_fresh = value_mask & fresh_cols[None, :]
-            training_logs["player_value_r2_fresh"] = jnp.where(
-                vm_fresh.any(),
+        def q_calibration_r2(cols):
+            m = q_mask & cols[None, :]
+            return jnp.where(
+                m.any(),
                 calculate_r2(
-                    value_prediction=player_target_pred.value_head.expectation.astype(
-                        jnp.float32
-                    ),
-                    value_target=(
-                        player_targets.win_returns @ cat_vf_support
-                    ).astype(jnp.float32),
-                    mask=vm_fresh,
+                    value_prediction=q_taken_target,
+                    value_target=q_retrace_g,
+                    mask=m,
                 ),
                 0.0,
             )
+
+        training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(
+            fresh_cols
+        )
+        training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(
+            replay_cols
+        )
+        vm_fresh = value_mask & fresh_cols[None, :]
+        training_logs["player_value_r2_fresh"] = jnp.where(
+            vm_fresh.any(),
+            calculate_r2(
+                value_prediction=player_target_pred.value_head.expectation.astype(
+                    jnp.float32
+                ),
+                value_target=(
+                    player_targets.win_returns @ cat_vf_support
+                ).astype(jnp.float32),
+                mask=vm_fresh,
+            ),
+            0.0,
+        )
 
     def player_loss_fn(params: Params):
 
@@ -585,46 +571,6 @@ def train_step(
         # automated backstop — watch player_normalized_modality_entropy
         # on the dashboard; 1330 died at 0.08 on that axis.)
 
-        # Multi-gamma auxiliary value heads (Metamon/AMAGO-style): each
-        # row is a categorical value readout for one auxiliary discount,
-        # trained by CE against its own v-trace distribution target.
-        # Pure representation shaping across horizons — the policy's
-        # advantages read ONLY the main gamma=1 v_head; short-gamma
-        # advantages are material/tempo-greedy and not policy-invariant,
-        # so they never touch the actor loss.
-        aux_logits = learner_player_pred.aux_value_logits.astype(jnp.float32)
-        loss_v_aux = average(
-            optax.softmax_cross_entropy(
-                logits=aux_logits, labels=player_aux_targets
-            ).mean(axis=-1),
-            value_mask,
-        )
-
-        aux_expectations = jax.nn.softmax(aux_logits, axis=-1) @ cat_vf_support.astype(
-            jnp.float32
-        )
-        aux_target_expectations = player_aux_targets @ cat_vf_support.astype(
-            jnp.float32
-        )
-        aux_value_r2 = calculate_r2(
-            value_prediction=aux_expectations,
-            value_target=aux_target_expectations,
-            mask=jnp.broadcast_to(value_mask[..., None], aux_logits.shape[:-1]),
-        )
-        # Sensor for the lambda controller: mean absolute gap between the
-        # main head's value and the lambda=1.0 Monte Carlo anchor row —
-        # the live per-batch bootstrap-bias estimate. Blind spot: trunk
-        # errors shared by both readouts cancel here, which is why the
-        # controller keeps a lambda floor.
-        mc_row = config.player_aux_lambdas.index(1.0)
-        bootstrap_gap = average(
-            jnp.abs(
-                learner_value_head.expectation.astype(jnp.float32)
-                - aux_expectations[..., mc_row]
-            ),
-            value_mask,
-        )
-
         # Counterfactual value ladder: private (deployable information set —
         # no opponent sheet) and public (history-context-only) heads, CE
         # against the SAME win targets as the privileged main head. Each
@@ -680,21 +626,6 @@ def train_step(
             ),
         )
 
-        # Per-row R2, keyed by lambda. The lambda=1.0 (Monte Carlo) row is
-        # the calibration anchor: its gap to the main head is a direct
-        # bootstrap-bias readout — large/growing gap means the critic is
-        # drifting off the data (replay staleness, self-referential
-        # low-lambda targets); tiny gap during a strength plateau points
-        # at transfer saturation instead.
-        aux_row_r2 = {
-            f"player_aux_r2_lam{round(lam * 100):03d}": calculate_r2(
-                value_prediction=aux_expectations[..., k],
-                value_target=aux_target_expectations[..., k],
-                mask=value_mask,
-            )
-            for k, lam in enumerate(config.player_aux_lambdas)
-        }
-
         # Two-rung Q CE (docs/q-critic-plan.md): each rung's taken-action
         # categorical logits against the SAME two-hot Retrace target
         # (labels come from the privileged Q_all recursion; Q_private is
@@ -702,11 +633,10 @@ def train_step(
         # Config-static branch — the jit variant without the head never
         # traces this.
         q_logs = {}
-        q_improve_logs = {}
-        coma_logs = {}
+        neurd_logs = {}
         loss_q = 0.0
         loss_q_private = 0.0
-        loss_coma = 0.0
+        loss_neurd = 0.0
 
         def q_taken(q_logits):
             return jnp.take_along_axis(
@@ -732,24 +662,9 @@ def train_step(
             q_mask,
         )
 
-        # p_q OBSERVER (kept when the stage-2 forward KL was removed,
-        # 2026-08-19): Boltzmann distribution over the EMA target's
-        # deployable-rung action values — the "what does the critic
-        # want" leading indicator (pq vs pi switch mass on states
-        # where both a switch and a non-switch are legal, the slice
-        # the ratchet starves). Loss-free; no term reads pq.
-        q_bar = jax.nn.softmax(
-            player_target_pred.private_q_logits.astype(jnp.float32),
-            axis=-1,
-        ) @ cat_vf_support.astype(jnp.float32)
-        pq_logits = jnp.where(
-            flat_action_mask,
-            q_bar / config.player_q_observer_tau,
-            -1e9,
-        )
-        pq = jax.nn.softmax(pq_logits, axis=-1)
-        pq_log = jax.nn.log_softmax(pq_logits, axis=-1)
-
+        # Real-choice rows on the stay/switch axis: both a switch and a
+        # non-switch are legal. This is the slice the collapse forms in,
+        # and every NeuRD decomposition readout below is scoped to it.
         switch_actions = jnp.asarray(
             FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
         )
@@ -758,24 +673,6 @@ def train_step(
             flat_action_mask & jnp.logical_not(switch_actions)
         ).any(axis=-1)
         switch_choice_mask = policy_mask & has_switch & has_other
-        pq_switch_mass = (pq * switch_actions).sum(axis=-1)
-        pi_switch_mass = (
-            jnp.exp(learner_log_policy.astype(jnp.float32))
-            * flat_action_mask
-            * switch_actions
-        ).sum(axis=-1)
-        q_improve_logs = dict(
-            player_q_improve_pq_switch_mass=average(
-                pq_switch_mass, switch_choice_mask
-            ),
-            player_q_improve_pi_switch_mass=average(
-                pi_switch_mass, switch_choice_mask
-            ),
-            player_q_improve_pq_entropy=average(
-                -jnp.where(flat_action_mask, pq * pq_log, 0.0).sum(axis=-1),
-                policy_mask,
-            ),
-        )
 
         # COMA-style all-action counterfactual policy loss (replaced
         # the stage-2 forward KL, 2026-08-19 — see the config comment
@@ -790,162 +687,161 @@ def train_step(
         # PRIVILEGED rung (COMA's centralised critic); it enters as
         # stop-gradient scalars only, exactly like the privileged
         # v_head advantages, so the policy stays bitwise invariant
-        # to opp_private_team. Weighted by the coma_coef runtime
+        # to opp_private_team. Weighted by the neurd_coef runtime
         # scalar.
-        if config.player_coma_enabled:
-            pi_learner = (
-                jnp.exp(learner_log_policy.astype(jnp.float32))
-                * flat_action_mask
+        pi_learner = (
+            jnp.exp(learner_log_policy.astype(jnp.float32))
+            * flat_action_mask
+        )
+        pi_learner = pi_learner / jnp.maximum(
+            pi_learner.sum(axis=-1, keepdims=True), 1e-8
+        )
+        v_cf = jax.lax.stop_gradient(
+            (pi_learner * q_all_target).sum(axis=-1)
+        )
+        neurd_adv = jax.lax.stop_gradient(
+            jnp.where(
+                flat_action_mask, q_all_target - v_cf[..., None], 0.0
             )
-            pi_learner = pi_learner / jnp.maximum(
-                pi_learner.sum(axis=-1, keepdims=True), 1e-8
-            )
-            v_cf = jax.lax.stop_gradient(
-                (pi_learner * q_all_target).sum(axis=-1)
-            )
-            coma_adv = jax.lax.stop_gradient(
-                jnp.where(
-                    flat_action_mask, q_all_target - v_cf[..., None], 0.0
-                )
-            )
-            # NeuRD prefactor (2026-08-21): the advantage lands on the
-            # LOGITS with no pi factor, CENTRED over legal cells so the
-            # softmax-invariant mean direction carries no push on its
-            # own. Logit-gap clip (NeuRD eq. 10): a cell already
-            # beyond +-beta of the row's legal-mean logit gets no
-            # further push in the outward direction -- the sum of
-            # advantages is not zero-mean in general, so unclipped
-            # logits diverge; harmless at the policy level since beta
-            # still permits probabilities arbitrarily close to 0/1
-            # through the magnet, NeuRD simply stops contributing
-            # outside the band.
-            legal_count = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
-            adv_centred = coma_adv - (
-                coma_adv.sum(axis=-1) / legal_count
-            )[..., None]
-            raw_logits = jnp.where(
-                flat_action_mask,
-                learner_action_head.logits.astype(jnp.float32),
-                0.0,
-            )
-            logit_gap = jax.lax.stop_gradient(
-                raw_logits
-                - (raw_logits.sum(axis=-1) / legal_count)[..., None]
-            )
-            beta = config.player_neurd_logit_clip
-            neurd_open = flat_action_mask & jnp.logical_not(
-                ((logit_gap > beta) & (adv_centred > 0))
-                | ((logit_gap < -beta) & (adv_centred < 0))
-            )
-            neurd_weight = jax.lax.stop_gradient(
-                jnp.where(neurd_open, adv_centred, 0.0)
-            )
-            # Against the RAW logits: d/dy_b = -w(b) exactly, open
-            # or clipped, with no softmax cross-term (the log_policy
-            # form only matches while the weights are zero-sum,
-            # which the clip breaks).
-            loss_coma = -average(
-                (neurd_weight * raw_logits).sum(axis=-1), policy_mask
-            )
-            coma_grad_prefactor = neurd_open.astype(jnp.float32)
-            # Gradient decomposition for the pi-prefactor question
-            # (docs/rare-action-rl-literature.md). The COMA loss
-            # -sum_a pi(a).sg(adv(a)) has exact per-logit gradient
-            # -pi(b).adv(b) -- the sum_a pi.adv correction term
-            # vanishes because the COMA baseline makes it identically
-            # zero -- which is NeuRD eq. (6): the counterfactual
-            # regret SCALED BY THE ACTION'S OWN PROBABILITY. A starved
-            # switch cell therefore gets a restoring force
-            # proportional to how starved it already is, so COMA
-            # cannot be the restorer on its own.
-            #
-            # These three pairs decompose the per-cell gradient
-            # magnitude pi.|adv| into its two factors, over legal
-            # cells of real-choice rows (both a switch and a non-
-            # switch legal), so that
-            #     grad_ratio ~ prob_ratio x absadv_ratio.
-            # prob_ratio << 1 with absadv_ratio ~ 1: the whole
-            # suppression is the pi prefactor, and dropping it (NeuRD
-            # -- advantage on the LOGITS, no pi) is the fix.
-            # absadv_ratio ~ 0: the critic carries no switch belief to
-            # amplify, and NeuRD would amplify noise instead. NOTE
-            # loss_q supervises only the TAKEN cell, so untaken switch
-            # cells are extrapolation from the zero-init head rather
-            # than belief -- read absadv_ratio against
-            # player_q_switch_target_frac (the supervision coverage)
-            # before concluding the critic "means it".
-            coma_row = switch_choice_mask[..., None]
-            coma_switch_cells = flat_action_mask & switch_actions & coma_row
-            coma_move_cells = (
-                flat_action_mask & jnp.logical_not(switch_actions) & coma_row
-            )
-            coma_abs_adv = jnp.abs(coma_adv)
-            # Per-cell |d loss / d logit|: pi.|adv| under COMA,
-            # 1{clip open}.|adv| under NeuRD.
-            coma_grad_mag = coma_grad_prefactor * coma_abs_adv
-            coma_grad_switch = average(coma_grad_mag, coma_switch_cells)
-            coma_grad_move = average(coma_grad_mag, coma_move_cells)
-            coma_prob_switch = average(pi_learner, coma_switch_cells)
-            coma_prob_move = average(pi_learner, coma_move_cells)
-            coma_absadv_switch = average(coma_abs_adv, coma_switch_cells)
-            coma_absadv_move = average(coma_abs_adv, coma_move_cells)
+        )
+        # NeuRD prefactor (2026-08-21): the advantage lands on the
+        # LOGITS with no pi factor, CENTRED over legal cells so the
+        # softmax-invariant mean direction carries no push on its
+        # own. Logit-gap clip (NeuRD eq. 10): a cell already
+        # beyond +-beta of the row's legal-mean logit gets no
+        # further push in the outward direction -- the sum of
+        # advantages is not zero-mean in general, so unclipped
+        # logits diverge; harmless at the policy level since beta
+        # still permits probabilities arbitrarily close to 0/1
+        # through the magnet, NeuRD simply stops contributing
+        # outside the band.
+        legal_count = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
+        adv_centred = neurd_adv - (
+            neurd_adv.sum(axis=-1) / legal_count
+        )[..., None]
+        raw_logits = jnp.where(
+            flat_action_mask,
+            learner_action_head.logits.astype(jnp.float32),
+            0.0,
+        )
+        logit_gap = jax.lax.stop_gradient(
+            raw_logits
+            - (raw_logits.sum(axis=-1) / legal_count)[..., None]
+        )
+        beta = config.player_neurd_logit_clip
+        neurd_open = flat_action_mask & jnp.logical_not(
+            ((logit_gap > beta) & (adv_centred > 0))
+            | ((logit_gap < -beta) & (adv_centred < 0))
+        )
+        neurd_weight = jax.lax.stop_gradient(
+            jnp.where(neurd_open, adv_centred, 0.0)
+        )
+        # Against the RAW logits: d/dy_b = -w(b) exactly, open
+        # or clipped, with no softmax cross-term (the log_policy
+        # form only matches while the weights are zero-sum,
+        # which the clip breaks).
+        loss_neurd = -average(
+            (neurd_weight * raw_logits).sum(axis=-1), policy_mask
+        )
+        neurd_grad_prefactor = neurd_open.astype(jnp.float32)
+        # Gradient decomposition for the pi-prefactor question
+        # (docs/rare-action-rl-literature.md). The COMA loss
+        # -sum_a pi(a).sg(adv(a)) has exact per-logit gradient
+        # -pi(b).adv(b) -- the sum_a pi.adv correction term
+        # vanishes because the COMA baseline makes it identically
+        # zero -- which is NeuRD eq. (6): the counterfactual
+        # regret SCALED BY THE ACTION'S OWN PROBABILITY. A starved
+        # switch cell therefore gets a restoring force
+        # proportional to how starved it already is, so COMA
+        # cannot be the restorer on its own.
+        #
+        # These three pairs decompose the per-cell gradient
+        # magnitude pi.|adv| into its two factors, over legal
+        # cells of real-choice rows (both a switch and a non-
+        # switch legal), so that
+        #     grad_ratio ~ prob_ratio x absadv_ratio.
+        # prob_ratio << 1 with absadv_ratio ~ 1: the whole
+        # suppression is the pi prefactor, and dropping it (NeuRD
+        # -- advantage on the LOGITS, no pi) is the fix.
+        # absadv_ratio ~ 0: the critic carries no switch belief to
+        # amplify, and NeuRD would amplify noise instead. NOTE
+        # loss_q supervises only the TAKEN cell, so untaken switch
+        # cells are extrapolation from the zero-init head rather
+        # than belief -- read absadv_ratio against
+        # player_q_switch_target_frac (the supervision coverage)
+        # before concluding the critic "means it".
+        neurd_row = switch_choice_mask[..., None]
+        neurd_switch_cells = flat_action_mask & switch_actions & neurd_row
+        neurd_move_cells = (
+            flat_action_mask & jnp.logical_not(switch_actions) & neurd_row
+        )
+        neurd_abs_adv = jnp.abs(neurd_adv)
+        # Per-cell |d loss / d logit|: pi.|adv| under COMA,
+        # 1{clip open}.|adv| under NeuRD.
+        neurd_grad_mag = neurd_grad_prefactor * neurd_abs_adv
+        neurd_grad_switch = average(neurd_grad_mag, neurd_switch_cells)
+        neurd_grad_move = average(neurd_grad_mag, neurd_move_cells)
+        neurd_prob_switch = average(pi_learner, neurd_switch_cells)
+        neurd_prob_move = average(pi_learner, neurd_move_cells)
+        neurd_absadv_switch = average(neurd_abs_adv, neurd_switch_cells)
+        neurd_absadv_move = average(neurd_abs_adv, neurd_move_cells)
 
-            def coma_ratio(numerator, denominator):
-                return numerator / jnp.maximum(denominator, 1e-8)
+        def neurd_ratio(numerator, denominator):
+            return numerator / jnp.maximum(denominator, 1e-8)
 
-            coma_logs = dict(
-                player_loss_coma=loss_coma,
-                # Per-cell |d loss_coma / d logit| on legal switch
-                # cells vs legal non-switch cells of the same
-                # real-choice rows, and the two factors it is the
-                # product of. The ratios are the readout: if
-                # grad_ratio tracks prob_ratio while absadv_ratio
-                # stays near 1, the restoring force is being throttled
-                # by the pi prefactor alone.
-                player_coma_grad_switch=coma_grad_switch,
-                player_coma_grad_move=coma_grad_move,
-                player_coma_grad_ratio=coma_ratio(
-                    coma_grad_switch, coma_grad_move
+        neurd_logs = dict(
+            player_loss_neurd=loss_neurd,
+            # Per-cell |d loss_neurd / d logit| on legal switch
+            # cells vs legal non-switch cells of the same
+            # real-choice rows, and the two factors it is the
+            # product of. The ratios are the readout: if
+            # grad_ratio tracks prob_ratio while absadv_ratio
+            # stays near 1, the restoring force is being throttled
+            # by the pi prefactor alone.
+            player_neurd_grad_switch=neurd_grad_switch,
+            player_neurd_grad_move=neurd_grad_move,
+            player_neurd_grad_ratio=neurd_ratio(
+                neurd_grad_switch, neurd_grad_move
+            ),
+            player_neurd_prob_switch=neurd_prob_switch,
+            player_neurd_prob_move=neurd_prob_move,
+            player_neurd_prob_ratio=neurd_ratio(
+                neurd_prob_switch, neurd_prob_move
+            ),
+            player_neurd_absadv_switch=neurd_absadv_switch,
+            player_neurd_absadv_move=neurd_absadv_move,
+            player_neurd_absadv_ratio=neurd_ratio(
+                neurd_absadv_switch, neurd_absadv_move
+            ),
+            # Net signed gradient mass toward the switch modality
+            # per real-choice row (prefactor x adv summed over the
+            # row's switch cells): positive = the loss is currently
+            # pushing switch logits UP (the critic prefers more
+            # switching than the policy carries).
+            player_neurd_switch_push=average(
+                (neurd_grad_prefactor * neurd_adv * switch_actions).sum(
+                    axis=-1
                 ),
-                player_coma_prob_switch=coma_prob_switch,
-                player_coma_prob_move=coma_prob_move,
-                player_coma_prob_ratio=coma_ratio(
-                    coma_prob_switch, coma_prob_move
-                ),
-                player_coma_absadv_switch=coma_absadv_switch,
-                player_coma_absadv_move=coma_absadv_move,
-                player_coma_absadv_ratio=coma_ratio(
-                    coma_absadv_switch, coma_absadv_move
-                ),
-                # Net signed gradient mass toward the switch modality
-                # per real-choice row (prefactor x adv summed over the
-                # row's switch cells): positive = the loss is currently
-                # pushing switch logits UP (the critic prefers more
-                # switching than the policy carries).
-                player_coma_switch_push=average(
-                    (coma_grad_prefactor * coma_adv * switch_actions).sum(
-                        axis=-1
-                    ),
-                    switch_choice_mask,
-                ),
-                player_coma_adv_std=coma_adv.std(
-                    where=flat_action_mask & policy_mask[..., None]
-                ),
-                # NeuRD clip occupancy: fraction of legal switch / move
-                # cells on real-choice rows whose outward push is
-                # currently blocked by the logit-gap clip. Under the
-                # COMA prefactor nothing is clipped (reads 0).
-                player_neurd_clipped_switch=1.0
-                - average(
-                    (coma_grad_prefactor > 0).astype(jnp.float32),
-                    coma_switch_cells,
-                ),
-                player_neurd_clipped_move=1.0
-                - average(
-                    (coma_grad_prefactor > 0).astype(jnp.float32),
-                    coma_move_cells,
-                ),
-            )
+                switch_choice_mask,
+            ),
+            player_neurd_adv_std=neurd_adv.std(
+                where=flat_action_mask & policy_mask[..., None]
+            ),
+            # NeuRD clip occupancy: fraction of legal switch / move
+            # cells on real-choice rows whose outward push is
+            # currently blocked by the logit-gap clip. Under the
+            # COMA prefactor nothing is clipped (reads 0).
+            player_neurd_clipped_switch=1.0
+            - average(
+                (neurd_grad_prefactor > 0).astype(jnp.float32),
+                neurd_switch_cells,
+            ),
+            player_neurd_clipped_move=1.0
+            - average(
+                (neurd_grad_prefactor > 0).astype(jnp.float32),
+                neurd_move_cells,
+            ),
+        )
         q_taken_pred = jax.nn.softmax(
             learner_q_logits_taken, axis=-1
         ) @ cat_vf_support.astype(jnp.float32)
@@ -1003,7 +899,6 @@ def train_step(
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
             * loss_magnet_kl
-            + config.player_aux_value_coef * loss_v_aux
             + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
             # One coefficient for both rungs — same estimator family on
             # the same labels, mirroring the value-ladder coef above.
@@ -1011,22 +906,17 @@ def train_step(
             # THE policy gradient since 2026-08-21: all-action NeuRD is
             # the only term that moves the action logits toward return
             # (magnet/actor KL only regularise). Runtime scalar.
-            + (0.0 if coma_coef is None else coma_coef) * loss_coma
+            + (0.0 if neurd_coef is None else neurd_coef) * loss_neurd
         )
 
         return loss, dict(
             **q_logs,
-            **q_improve_logs,
-            **coma_logs,
+            **neurd_logs,
             **value_ladder_logs,
             # Loss values
             player_loss_v_win=loss_v_win,
-            player_loss_v_aux=loss_v_aux,
             player_loss_kl=loss_actor_backward_kl,
             player_loss_magnet_kl=loss_magnet_kl,
-            player_aux_value_r2=aux_value_r2,
-            player_bootstrap_gap=bootstrap_gap,
-            **aux_row_r2,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
@@ -2406,7 +2296,7 @@ class Learner:
 
         dummy_scalars = RuntimeScalars(
             magnet_coef=np.float32(0.0),
-            coma_coef=np.float32(0.0),
+            neurd_coef=np.float32(0.0),
         )
         current = (
             batch.player_transitions.env_output.done.shape[0],
@@ -2466,9 +2356,7 @@ class Learner:
         # than the one it was checkpointed under). Runtime scalar, never
         # static config: retained executables per distinct static value
         # OOM-killed run 1326 (LESSONS.md 1).
-        coma_coef = (
-            self.config.player_coma_coef if self.config.player_coma_enabled else 0.0
-        )
+        neurd_coef = self.config.player_neurd_coef
         pop.player_state, pop.builder_state, logs = self._train_step_jit(
             pop.player_state,
             pop.builder_state,
@@ -2476,11 +2364,11 @@ class Learner:
             self._jit_config,
             RuntimeScalars(
                 magnet_coef=np.float32(self.config.player_magnet_kl_coef),
-                coma_coef=np.float32(coma_coef),
+                neurd_coef=np.float32(neurd_coef),
             ),
         )
         if logs is not None:
-            logs["player_coma_coef"] = coma_coef
+            logs["player_neurd_coef"] = neurd_coef
         return logs
 
     def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):
@@ -2496,15 +2384,6 @@ class Learner:
         if step % self.config.league_winrate_log_steps == 0:
             logs.update(self._get_league_winrates(pop))
             logs.update(self._get_league_winrate_heatmap(pop))
-
-        if step % self.config.bandit_window_steps == 0:
-            logs.update(
-                rating_logs(
-                    self.league,
-                    self.config.bandit_min_games_per_opponent,
-                    self.config.bandit_min_rated_opponents,
-                )
-            )
 
         if (
             pop.name == "main"
@@ -2654,8 +2533,7 @@ class Learner:
     # (_measure_exploitability/_update_exploit_controller/_apply_exploit_
     # scale removed 2026-08-14 with the ExploitabilityController — the
     # worst-matchup win-rate signal still exists in _should_add_new_player's
-    # "dominant" gate and the league_main_winrate_min auditor; it just
-    # doesn't actuate anything anymore.)
+    # "dominant" gate; it just doesn't actuate anything anymore.)
 
     def _should_add_new_player(self, pop: PopulationState) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.

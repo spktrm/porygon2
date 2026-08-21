@@ -114,28 +114,23 @@ def test_train_step_player_q_smoke():
         # itself; nonzero norm proves the CE loss actually reaches the
         # Q family's MacroMicroHead params.
         "player_q_macro_micro_gradient_norm",
-        # p_q observer (kept when the stage-2 KL was removed 2026-08-19):
-        # loss-free readouts — p_q vs pi switch mass on real-choice states.
-        "player_q_improve_pq_switch_mass",
-        "player_q_improve_pi_switch_mass",
-        "player_q_improve_pq_entropy",
-        # COMA all-action counterfactual policy loss (replaced stage 2):
-        # loss value plus the signed switch-modality push readout.
-        "player_loss_coma",
-        "player_coma_switch_push",
-        "player_coma_adv_std",
-        # pi-prefactor decomposition: |d loss_coma / d logit| on
+        # All-action NeuRD, the policy gradient: loss value plus the
+        # signed switch-modality push readout.
+        "player_loss_neurd",
+        "player_neurd_switch_push",
+        "player_neurd_adv_std",
+        # pi-prefactor decomposition: |d loss_neurd / d logit| on
         # switch vs non-switch legal cells of real-choice rows, split
         # into its pi and |adv| factors (grad ~ prob x absadv).
-        "player_coma_grad_switch",
-        "player_coma_grad_move",
-        "player_coma_grad_ratio",
-        "player_coma_prob_switch",
-        "player_coma_prob_move",
-        "player_coma_prob_ratio",
-        "player_coma_absadv_switch",
-        "player_coma_absadv_move",
-        "player_coma_absadv_ratio",
+        "player_neurd_grad_switch",
+        "player_neurd_grad_move",
+        "player_neurd_grad_ratio",
+        "player_neurd_prob_switch",
+        "player_neurd_prob_move",
+        "player_neurd_prob_ratio",
+        "player_neurd_absadv_switch",
+        "player_neurd_absadv_move",
+        "player_neurd_absadv_ratio",
         # Loss-free critic-quality diagnostics. (Calibration r2
         # fresh/replay needs batch.reuse_count, absent in this minimal
         # batch.)
@@ -155,9 +150,9 @@ def test_train_step_player_q_smoke():
             builder_state,
             batch,
             config,
-            scalars=RuntimeScalars(coma_coef=np.float32(1.0)),
+            scalars=RuntimeScalars(neurd_coef=np.float32(1.0)),
         )
-    assert np.isfinite(np.asarray(logs_neurd["player_loss_coma"], dtype=np.float32))
+    assert np.isfinite(np.asarray(logs_neurd["player_loss_neurd"], dtype=np.float32))
 
     # Explore-row contract (2026-08-17), tested at its extreme: an
     # all-explore batch trains EVERY player loss — the tempered rows carry

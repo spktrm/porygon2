@@ -50,8 +50,6 @@ def compute_player_targets(
 
     PBRS/potential shaping retired (Aug 2026): the shaped-advantage era's
     channel machinery lived here; the win channel is now the sole reward.
-    Multi-gamma auxiliary value targets (compute_aux_value_targets)
-    supply the dense representation-shaping signal instead.
 
     IMPACT-style: ``value_log_probs`` are the *fast* EMA target's predictions
     and ``isr = pi_target/mu`` its ratio to the behavior policy, so v-trace
@@ -97,8 +95,8 @@ def compute_player_targets(
     # step trains as row 0 of the NEXT chunk. Exception: a done row on the
     # final position is the game's own terminal row (no next chunk) and
     # keeps its value target (= the terminal reward). policy_mask below
-    # inherits this through value_mask; so do the aux-CE, Q-CE and EMA
-    # masks in train_step.
+    # inherits this through value_mask; so does the Q-CE mask in
+    # train_step.
     is_final_row = (
         jnp.arange(value_mask.shape[0])[:, None] == value_mask.shape[0] - 1
     )
@@ -245,55 +243,6 @@ def compute_q_targets(
     retrace_g = jnp.clip(q_taken + errors, support[0], support[-1]) * mask
     q_target_probs = two_hot(retrace_g, support)
     return q_target_probs, retrace_g, q_all, v_exp, q_taken
-
-
-def compute_aux_value_targets(
-    batch: Batch,
-    aux_value_log_probs: jax.Array,
-    isr: jax.Array,
-    config: Porygon2LearnerConfig,
-) -> jax.Array:
-    """Per-lambda v-trace distribution targets for the multi-lambda
-    auxiliary value heads.
-
-    Mirrors compute_player_targets bin-space v-trace at the main gamma,
-    vectorised over config.player_aux_lambdas, with each lambda
-    bootstrapping from its OWN head's readout. With terminal-only reward
-    a gamma spectrum degenerates (gamma^45 kills the signal), so the aux
-    spectrum varies the bias/variance of the TARGET instead: lambda=1 is
-    the Monte Carlo anchor (its gap to the main lambda=0.99 head is a
-    direct bootstrap-bias readout), low lambda leans on the critic. The
-    spectrum is deliberately independent of the value-target lambda
-    (config.player_lambda) — aux target semantics stay fixed if that is
-    ever retuned. Targets only — the aux heads never produce advantages;
-    the policy reads the main head exclusively.
-
-    aux_value_log_probs: (T, B, K, n_bins) from the fast EMA target.
-    Returns (T, B, K, n_bins) distribution targets.
-    """
-    lambdas = jnp.asarray(config.player_aux_lambdas, dtype=isr.dtype)
-
-    dones = jnp.expand_dims(
-        batch.player_transitions.env_output.done, axis=(-2, -1)
-    )  # (T, B, 1, 1)
-    mask_expanded = 1 - (jnp.cumsum(dones, axis=0) - dones)
-    discount_t = (1 - dones) * config.player_gamma * mask_expanded
-
-    alpha = config.player_alpha
-    rho_t = (1 - alpha) * isr + alpha * jnp.minimum(1.0, isr)
-    rho_t = jnp.expand_dims(rho_t, axis=(-2, -1))
-    c_t = rho_t
-
-    r_t = batch.player_transitions.env_output.win_reward[:, :, None, :]
-
-    v_tm1 = jnp.exp(aux_value_log_probs)  # (T, B, K, n_bins)
-    v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
-
-    td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
-
-    errors = vtrace(td_errors, discount_t, c_t * lambdas[None, None, :, None])
-
-    return (errors + v_tm1) * mask_expanded
 
 
 def compute_builder_targets(

@@ -143,33 +143,19 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    # Main gamma=1 head (feeds advantages) vs the
-                    # multi-lambda aux CE (representation shaping only)
-                    # vs the counterfactual ladder rungs (private/public).
-                    "Value losses (main + aux + ladder)",
+                    # Main gamma=1 head vs the counterfactual ladder
+                    # rungs (private/public).
+                    "Value losses (main + ladder)",
                     [
                         "player_loss_v_win",
-                        "player_loss_v_aux",
                         "player_loss_v_private",
                         "player_loss_v_public",
                     ],
                 ),
                 lp(
-                    # R2 of expectations vs v-trace targets: main head
-                    # and the pooled aux-lambda rows.
-                    "Value R2 (main vs aux lambdas)",
-                    ["player_value_head_r2", "player_aux_value_r2"],
-                    range_y=(-1, 1),
-                ),
-                lp(
-                    # Per-lambda aux R2. The lam100 (Monte Carlo) row vs
-                    # the main head is the bootstrap-bias readout: a
-                    # large/growing gap = critic drifting off the data; a
-                    # tiny gap during a margin plateau = transfer
-                    # saturation, not value miscalibration.
-                    "Aux value R2 per lambda",
-                    [],
-                    regex="^player_aux_r2_lam",
+                    # R2 of expectations vs v-trace targets.
+                    "Value R2 (main head)",
+                    ["player_value_head_r2"],
                     range_y=(-1, 1),
                 ),
             ],
@@ -267,24 +253,23 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # COMA all-action counterfactual policy loss (2026-08-19,
-            # replaced the stage-2 forward KL; derivation in
-            # docs/entropy-gradient-pressure.md): per-cell gradient
-            # pi(a)·(E[Q̄_all(a)] − Σ pi·E[Q̄_all]) on every real-choice
-            # row — zero sampling variance, counterfactual pressure on
-            # untaken actions. The p_q observer panels stay as the
-            # "what does the critic want" leading indicator.
-            name="1.6 · NeuRD/COMA all-action loss + p_q observer",
+            # THE policy gradient since 2026-08-21: all-action NeuRD,
+            # -adv(b) on the raw logits over every legal cell of every
+            # real-choice row (Hennes et al. 2020 eq. 10). Zero sampling
+            # variance, counterfactual pressure on untaken actions. Was
+            # COMA (2026-08-19) until the pi prefactor was measured to be
+            # the throttle — see the decomposition panels below.
+            name="1.6 · NeuRD all-action policy loss",
             is_open=True,
             panels=[
                 lp(
                     # THE worth-it readout: signed gradient mass toward
                     # the switch modality on both-modality states.
                     # Positive = the critic wants more switching than the
-                    # policy carries and COMA is pushing it up; pinned
-                    # negative = COMA is transmitting critic aversion.
-                    "COMA switch push (signed, both-modality states)",
-                    ["player_coma_switch_push"],
+                    # policy carries and NeuRD is pushing it up; pinned
+                    # negative = NeuRD is transmitting critic aversion.
+                    "NeuRD switch push (signed, both-modality states)",
+                    ["player_neurd_switch_push"],
                 ),
                 lp(
                     # THE decision panel for NeuRD (research note:
@@ -303,51 +288,50 @@ def rl_sections():
                     #     untrained) — NeuRD would amplify noise.
                     "pi-prefactor decomposition (ratios, switch/move)",
                     [
-                        "player_coma_grad_ratio",
-                        "player_coma_prob_ratio",
-                        "player_coma_absadv_ratio",
+                        "player_neurd_grad_ratio",
+                        "player_neurd_prob_ratio",
+                        "player_neurd_absadv_ratio",
                     ],
                     log_y=True,
                 ),
                 lp(
                     # The magnitudes behind the ratios: mean per-cell
-                    # |d loss_coma / d logit| on legal switch vs legal
+                    # |d loss_neurd / d logit| on legal switch vs legal
                     # non-switch cells of the same rows.
-                    "COMA per-cell gradient magnitude (pi·|adv|)",
+                    "Per-cell gradient magnitude (switch vs move)",
                     [
-                        "player_coma_grad_switch",
-                        "player_coma_grad_move",
+                        "player_neurd_grad_switch",
+                        "player_neurd_grad_move",
                     ],
                     log_y=True,
                 ),
                 lp(
                     # The two factors separately. prob_* is the
-                    # per-cell mass (not the modality mass — that is
-                    # player_q_improve_pi_switch_mass above).
-                    "COMA gradient factors: per-cell pi and |adv|",
+                    # per-cell mass, not the modality mass.
+                    "Gradient factors: per-cell pi and |adv|",
                     [
-                        "player_coma_prob_switch",
-                        "player_coma_prob_move",
-                        "player_coma_absadv_switch",
-                        "player_coma_absadv_move",
+                        "player_neurd_prob_switch",
+                        "player_neurd_prob_move",
+                        "player_neurd_absadv_switch",
+                        "player_neurd_absadv_move",
                     ],
                     log_y=True,
                 ),
                 lp(
                     # NeuRD logit-gap clip occupancy: share of legal
                     # switch / move cells on real-choice rows whose
-                    # outward push is blocked (|gap| > beta). Reads 0
-                    # under the COMA prefactor. Switch climbing toward
-                    # 1 = the clip, not the critic, now bounds switch
-                    # mass -> raise player_neurd_logit_clip.
+                    # outward push is blocked (|gap| > beta). Switch
+                    # climbing toward 1 = the clip, not the critic, now
+                    # bounds switch mass -> raise player_neurd_logit_clip.
                     "NeuRD clipped fraction (switch vs move)",
                     ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
                 ),
                 lp(
-                    # Runtime scalar: player_coma_coef (no ramp since
-                    # 2026-08-21, full strength from step 1).
-                    "NeuRD/COMA coefficient",
-                    ["player_coma_coef"],
+                    # Runtime scalar: player_neurd_coef. THE policy
+                    # learning rate since the single-action PG terms were
+                    # removed — no ramp, full strength from step 1.
+                    "NeuRD coefficient",
+                    ["player_neurd_coef"],
                     smooth=0,
                 ),
                 lp(
@@ -356,30 +340,13 @@ def rl_sections():
                     # expectation) — scale lives in adv_std; the loss
                     # trending negative means pi is drifting toward the
                     # critic's preferences between updates.
-                    "COMA loss & counterfactual advantage spread",
-                    ["player_loss_coma", "player_coma_adv_std"],
+                    "NeuRD loss & counterfactual advantage spread",
+                    ["player_loss_neurd", "player_neurd_adv_std"],
                 ),
                 lp(
-                    # p_q observer (loss-free since the stage-2 KL's
-                    # removal): the critic's Boltzmann preferences vs the
-                    # policy's own switch mass — a persistent gap here
-                    # with a flat switch_push above means the pi-weighting
-                    # is the bottleneck, not the critic.
-                    "p_q vs pi switch mass (both-modality states)",
-                    [
-                        "player_q_improve_pq_switch_mass",
-                        "player_q_improve_pi_switch_mass",
-                    ],
-                ),
-                lp(
-                    "p_q entropy",
-                    ["player_q_improve_pq_entropy"],
-                ),
-                lp(
-                    # A cliff in either within ~2k steps of the ramp =
-                    # the policy chasing critic noise — zero
-                    # player_coma_enabled (mix to 0 next step, no
-                    # recompile), keep the observer.
+                    # A cliff in either = the policy chasing critic
+                    # noise — back player_neurd_coef off (runtime
+                    # scalar, no recompile), keep the observer.
                     "Abort watch: entropy & modality entropy",
                     [
                         "player_action_normalized_entropy",
@@ -428,7 +395,7 @@ def rl_sections():
                 lp(
                     # switch_ratio is the number this whole saga is about;
                     # an entropy cliff is the abort signal (back
-                    # player_coma_coef off — runtime scalar, no recompile).
+                    # player_neurd_coef off — runtime scalar, no recompile).
                     "Outcome watch: switch ratio & modality entropy",
                     [
                         "switch_ratio",
@@ -560,26 +527,6 @@ def rl_sections():
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
                 ),
                 lp(
-                    # Critic calibration: |main head - MC anchor| value
-                    # gap. Diagnostic only since the lambda controller's
-                    # removal (2026-08-14) — a large/growing gap means
-                    # bootstrap bias is leaking into targets.
-                    "Bootstrap gap (critic calibration)",
-                    ["player_bootstrap_gap"],
-                ),
-                lp(
-                    # Slow BT-fit auditors, never controlled on (hundreds
-                    # of games per point): worst-matchup drift and BT
-                    # non-transitivity are the exploitability signature
-                    # of under-regularisation.
-                    "Exploitability auditors (BT-fit, slow)",
-                    [
-                        "league_main_winrate_min",
-                        "league_main_winrate_mean",
-                        "league_bt_residual",
-                    ],
-                ),
-                lp(
                     # THE collapse watch panel — with the adaptivity
                     # controller removed (2026-08-13) modality collapse
                     # has no automated backstop, only these eyes-on axes
@@ -591,12 +538,6 @@ def rl_sections():
                         "player_normalized_modality_entropy",
                         "switch_ratio",
                     ],
-                ),
-                lp(
-                    # BT rating of main vs the frozen snapshot pool.
-                    # rating_valid drops to 0 when the pool is unrateable.
-                    "League BT rating (auditor)",
-                    ["bandit_bt_rating", "bandit_rating_valid"],
                 ),
                 lp(
                     "Gradient / param norm",
@@ -668,7 +609,7 @@ def rl_sections():
                 lp(
                     "Loss components",
                     [
-                        "player_loss_coma",
+                        "player_loss_neurd",
                         "player_loss_kl",
                         "player_loss_magnet_kl",
                         "player_loss_v_win",
@@ -803,7 +744,6 @@ def rl_sections():
                         "player_policy_adapter_gradient_norm",
                         "player_v_head_gradient_norm",
                         "player_public_v_head_gradient_norm",
-                        "player_aux_v_head_gradient_norm",
                         "player_q_macro_micro_gradient_norm",
                     ],
                     log_y=True,

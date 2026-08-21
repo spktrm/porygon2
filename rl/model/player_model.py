@@ -27,7 +27,6 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     MacroMicroHead,
-    MultiLambdaValueLogitHead,
     SlotConditioning,
     calculate_hierarchical_prior,
     compose_action_grid,
@@ -55,7 +54,6 @@ class Porygon2PlayerModel(nn.Module):
         self.macro_micro_head = MacroMicroHead(self.cfg.macro_micro)
         self.policy_adapter = ActionAdapter(self.cfg.policy_adapter)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
-        self.aux_v_head = MultiLambdaValueLogitHead(self.cfg.aux_v_head)
         # Counterfactual value ladder (2026-08-16): all/private/public are
         # independent estimators per information route (separate query
         # inits and residual gates in the trunk; shared read module). The
@@ -461,14 +459,10 @@ class Porygon2PlayerModel(nn.Module):
         )(action_embeddings, value_embeddings, actor_input.env, actor_output)
 
         if self.cfg.train:
-            # Learner-only: multi-gamma auxiliary value readouts from the
-            # value tokens — (T, K, n_bins) categorical logits, one row
-            # per auxiliary discount, turned into CE losses learner-side.
+            # Counterfactual value ladder, learner-only so replay
+            # transitions stay small. private reads the SHARED v_head —
+            # see setup.
             outputs = outputs.replace(
-                aux_value_logits=self.aux_v_head(value_embeddings),
-                # Counterfactual value ladder, learner-only like the aux
-                # heads so replay transitions stay small. private reads the
-                # SHARED v_head — see setup.
                 private_value_logits=self.v_head(private_value_embeddings).logits,
                 public_value_logits=self.public_v_head(
                     public_value_embeddings
