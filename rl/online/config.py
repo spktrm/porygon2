@@ -413,7 +413,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # switch_ratio 0.47 -> 0.076, switch_push pinned at -0.035, magnet KL
     # 0.43 and climbing; no checkpoint yet (first save 20k) so relaunched
     # from scratch.
-    player_neurd_coef: float = 0.1
+    # 0.2 (2026-08-22, from 0.1, with magnet 0.1 in place): 0.1 + magnet
+    # 0.1 held switching but learnt nothing -- normalised entropy 0.9+
+    # parked next to the anchor (magnet KL ~0.1, not straining), eval wr
+    # vs the heuristic flat at 0.07 from 48k to 65k while the collapsed
+    # 0.2/0.05 lineage was at 0.15-0.23 by 20k. NeuRD is the sole
+    # improvement term now, so halving it halved the learning. Tests
+    # whether magnet 0.1 holds 0.2 where 0.05 didn't; resumed @60k.
+    player_neurd_coef: float = 0.2
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean
