@@ -94,4 +94,3 @@ def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
 
     total_params = calculate_params("base", vars)
     return build_param_dict(vars, total_params, 0)
-

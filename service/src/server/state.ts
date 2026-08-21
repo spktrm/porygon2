@@ -4329,7 +4329,10 @@ export class StateHandler {
         return { publicBuffer, revealedBuffer };
     }
 
-    getPrivateTeam(playerIndex: number, requestOverride?: AnyObject): Int16Array {
+    getPrivateTeam(
+        playerIndex: number,
+        requestOverride?: AnyObject,
+    ): Int16Array {
         // requestOverride (used by TrainablePlayerAI.ensureFirstPrivateTeam
         // with the frozen firstRequest) sources BOTH the current- and
         // first-request views from the override, so the encoding is a
@@ -4745,8 +4748,7 @@ export class StateHandler {
         state.setOppPrivateTeam(
             new Uint8Array(
                 (
-                    oppSheet ??
-                    new Int16Array(6 * numPrivateEntityNodeFeatures)
+                    oppSheet ?? new Int16Array(6 * numPrivateEntityNodeFeatures)
                 ).buffer,
             ),
         );

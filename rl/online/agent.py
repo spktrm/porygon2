@@ -58,7 +58,9 @@ class Agent:
         self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput
     ) -> BuilderAgentOutput:
         with self._gpu_lock:
-            return self._step_builder(rng_key, params, actor_input, self.builder_head_params)
+            return self._step_builder(
+                rng_key, params, actor_input, self.builder_head_params
+            )
 
     def step_player(
         self,

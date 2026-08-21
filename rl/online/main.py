@@ -18,6 +18,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
+from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
@@ -35,9 +36,8 @@ from rl.online.artifact import (
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.inference import InferenceServer
-from rl.environment.data import CAT_VF_SUPPORT
-from rl.online.training import Learner, OOMGuardTriggered
 from rl.online.player_actor import ActorStopped, PlayerActor
+from rl.online.training import Learner, OOMGuardTriggered
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +109,7 @@ def run_training_actor_pair(
 
             # Population-prefixed: game_id must be unique in the TS game
             # server's pendingGames map (service/src/server/worker.ts).
-            game_id = (
-                f"{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
-            )
+            game_id = f"{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
             for actor in (player, opponent):
                 actor.set_game_id(game_id)
 
@@ -193,8 +191,12 @@ def run_eval_heuristic(
                 if use_main:
                     prefix = "main"
                     with learner.gpu_lock:
-                        player_params = jax.device_get(main_run_state.player_state.params)
-                        builder_params = jax.device_get(main_run_state.builder_state.params)
+                        player_params = jax.device_get(
+                            main_run_state.player_state.params
+                        )
+                        builder_params = jax.device_get(
+                            main_run_state.builder_state.params
+                        )
                 else:
                     prefix = "ema"
                     with learner.gpu_lock:
@@ -527,9 +529,7 @@ def main(args: argparse.Namespace):
                     )
                 )
 
-        logger.info(
-            "Initializing %d player actors (self-play)...", num_player_actors
-        )
+        logger.info("Initializing %d player actors (self-play)...", num_player_actors)
         # Exploration ladder: every actor independently draws a per-game
         # explore coin (explore_game_prob) and, on explore games, a fresh
         # log-uniform epsilon — no dedicated ladder slots. Dedicated

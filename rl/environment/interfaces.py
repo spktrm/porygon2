@@ -245,4 +245,3 @@ class Trajectory:
 @dataclass
 class Batch(Trajectory):
     rng_key: ArrayLike = ()
-

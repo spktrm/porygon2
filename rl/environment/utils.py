@@ -189,10 +189,7 @@ def clip_packed_history(
 # All eight RELEVANT_ENTITY_IDX columns (the model's _RELEVANT_ENTITY_
 # FEATURES reads the first four; the service writes up to eight).
 _ALL_RELEVANT_IDX_COLUMNS = np.array(
-    [
-        FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{k}")
-        for k in range(8)
-    ]
+    [FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{k}") for k in range(8)]
 )
 
 

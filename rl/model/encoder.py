@@ -299,12 +299,8 @@ class LatentInputRead(nn.Module):
         entity_bias = self.param(
             "entity_bias", nn.initializers.zeros_init(), (num_entities, model_size)
         )
-        group_bias = self.param(
-            "group_bias", embedding_init, (len(groups), model_size)
-        )
-        latents = self.param(
-            "latents", embedding_init, (self.num_latents, model_size)
-        )
+        group_bias = self.param("group_bias", embedding_init, (len(groups), model_size))
+        latents = self.param("latents", embedding_init, (self.num_latents, model_size))
         if biases is None:
             biases = (None,) * len(groups)
 
@@ -451,9 +447,7 @@ class RoundBlock(nn.Module):
                 jnp.asarray([n for _, n in action_parts], dtype=jnp.int32),
             )
 
-        action_valid = jnp.concatenate(
-            (move_valid, switch_valid, target_valid), axis=0
-        )
+        action_valid = jnp.concatenate((move_valid, switch_valid, target_valid), axis=0)
 
         def gate(name: str) -> jax.Array:
             return self.param(name, nn.initializers.zeros_init(), (1,)).astype(
@@ -464,7 +458,10 @@ class RoundBlock(nn.Module):
             """Per-substream zero-init scalars broadcast to a (rows, 1)
             gate vector over the group concat."""
             return jnp.concatenate(
-                [jnp.broadcast_to(gate(pattern.format(name)), (n,)) for name, n in parts]
+                [
+                    jnp.broadcast_to(gate(pattern.format(name)), (n,))
+                    for name, n in parts
+                ]
             )[:, None]
 
         def attend(name: str, q, q_valid, kv, kv_valid, allowed=None):
@@ -596,9 +593,7 @@ class GroupNorm(nn.Module):
         return jnp.concatenate(
             [
                 MLP(self.layer_sizes, name=f"{name}_norm")(tokens)
-                for name, tokens in zip(
-                    self.substream_names, substreams, strict=True
-                )
+                for name, tokens in zip(self.substream_names, substreams, strict=True)
             ],
             axis=0,
         )
@@ -1496,9 +1491,7 @@ class Encoder(nn.Module):
             Encoder._private_entity_tokens
         )(self, env_step.private_team)
         private_bias = jnp.broadcast_to(
-            self.side_bias(jnp.zeros((), dtype=jnp.int32)).astype(
-                private_tokens.dtype
-            ),
+            self.side_bias(jnp.zeros((), dtype=jnp.int32)).astype(private_tokens.dtype),
             private_tokens.shape[:1] + private_tokens.shape[-1:],
         )
         public_vectors = (

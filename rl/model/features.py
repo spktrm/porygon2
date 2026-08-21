@@ -145,4 +145,3 @@ def encode_reg_boosts(boosts: jax.Array):
 def encode_spe_boosts(boosts: jax.Array):
     """Encodes according to https://bulbapedia.bulbagarden.net/wiki/Stat_modifier#Stage_multipliers"""
     return (2 / math.log(3)) * jnp.log(encode_boosts(boosts, 3))
-

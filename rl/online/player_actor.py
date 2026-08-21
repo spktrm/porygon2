@@ -1,4 +1,3 @@
-
 import jax
 import numpy as np
 
@@ -25,12 +24,7 @@ from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
 from rl.online.inference import InferenceServer
-from rl.online.league import (
-    LIVE_KEYS,
-    MAIN_KEY,
-    PlayerRef,
-    pfsp,
-)
+from rl.online.league import LIVE_KEYS, MAIN_KEY, PlayerRef, pfsp
 from rl.online.training import Learner
 
 
@@ -204,8 +198,7 @@ class PlayerActor:
                 )
                 if run_state.done:
                     raise ActorStopped(
-                        "training stopped during "
-                        "builder-replay sample wait"
+                        "training stopped during " "builder-replay sample wait"
                     )
                 # Eval samples teams read-only: it doesn't increment reuse
                 # counts, so it can't evict builder trajectories that training

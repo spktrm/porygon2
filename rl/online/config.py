@@ -214,7 +214,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per-step fresh-vs-replayed value-error gap below stays: it is
     # computed from tensors train_step already has.
 
-
     # Player magnet regularization (MMD-style). The policy is pulled toward a
     # fixed hierarchical magnet over legal actions (uniform over valid
     # modalities, uniform within each modality — the composed head's init
@@ -308,7 +307,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # player_normalized_modality_entropy); modality collapse (1330 died
     # at 0.08 on that axis) is now watched on the dashboard, not
     # auto-corrected.
-
 
     # No ExploitabilityController anymore (removed 2026-08-14, the last
     # adaptive hyperparameter loop — see rl/online/controllers.py's

@@ -22,12 +22,12 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
-    behaviour_log_policy,
     ActionAdapter,
     CategoricalValueLogitHead,
     HeadParams,
     MacroMicroHead,
     SlotConditioning,
+    behaviour_log_policy,
     calculate_hierarchical_prior,
     compose_action_grid,
     compute_policy_metrics,
@@ -464,9 +464,7 @@ class Porygon2PlayerModel(nn.Module):
             # see setup.
             outputs = outputs.replace(
                 private_value_logits=self.v_head(private_value_embeddings).logits,
-                public_value_logits=self.public_v_head(
-                    public_value_embeddings
-                ).logits,
+                public_value_logits=self.public_v_head(public_value_embeddings).logits,
             )
             # Two-rung all-action Q readout over the flat action grid —
             # (T, N*N, n_bins) categorical logits per rung. Q_all is

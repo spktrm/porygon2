@@ -295,7 +295,10 @@ export async function runBattle(
         // other side's OWN first-state private team byte-for-byte (same
         // encoder, same frozen first request).
         for (const result of results) {
-            if (result.oppPrivateSheet === undefined && result.stateCount >= 2) {
+            if (
+                result.oppPrivateSheet === undefined &&
+                result.stateCount >= 2
+            ) {
                 throw new Error(
                     "opp_private_team never populated over a full battle",
                 );
@@ -333,4 +336,3 @@ export async function runBattle(
     }
     return results;
 }
-
