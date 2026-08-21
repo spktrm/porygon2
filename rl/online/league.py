@@ -99,8 +99,8 @@ class League:
 
         # main_player kept as a constructor convenience (every existing
         # caller already passes it this way) — seeds live[MAIN_KEY] only;
-        # further live identities would be added via update_live
-        # once those populations are created.
+        # a second live identity, if one is ever added again, would come
+        # in via update_live.
         self.live: dict[int, ParamsContainer] = {}
         if main_player is not None:
             self.live[MAIN_KEY] = main_player

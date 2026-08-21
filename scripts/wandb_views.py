@@ -538,7 +538,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="3 · League & representation health",
+            name="3 · League",
             is_open=True,
             panels=[
                 lp(
@@ -570,19 +570,6 @@ def rl_sections():
                     chart_strings={
                         "title": "league payoff table (row beats column)"
                     },
-                ),
-                # Pure observer since the plasticity controller was
-                # removed (2026-08-21). Kept because it is what caught the
-                # 1e-4 LR collapse: action-emb srank 0.27 by 13k steps
-                # while actor-KL sat quietly at 0.002.
-                lp(
-                    "Representation health",
-                    [
-                        "capacity_action_emb_dormant_frac",
-                        "capacity_value_emb_dormant_frac",
-                        "capacity_action_emb_srank_frac",
-                        "capacity_value_emb_srank_frac",
-                    ],
                 ),
                 lp(
                     "Fresh vs replayed value error",

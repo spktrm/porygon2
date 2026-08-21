@@ -147,7 +147,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Self-play evaluation params
     save_interval_steps: int = 20_000
     league_winrate_log_steps: int = 1_000
-    # How often (own steps) each population publishes fresh live params for
+    # How often (learner steps) the run publishes fresh live params for
     # its actors (update_live). Every interval mints a NEW params version,
     # and versions stay referenced until their in-flight games end, so this
     # directly sets the inference server's params-cache working set: at 10
@@ -206,15 +206,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     oom_guard_min_available_fraction: float = 0.15
     oom_guard_check_interval: int = 1_000
 
-    # Capacity instrumentation: every N learner steps, run an encoder-only
-    # forward on the current batch and log trunk representation health —
-    # dormant-unit fraction (ReDo criterion) and srank@0.99 — alongside the
-    # per-step fresh-vs-replayed value-error gap. Pure observer since the
-    # plasticity controller was removed (2026-08-21); kept because it is
-    # what caught the 1e-4 LR collapse (srank 0.27 by 13k steps while
-    # actor-KL sat at 0.002 — KL headroom is not LR headroom, LESSONS.md
-    # 5). 0 disables the probe (the value-error gap is always on).
-    capacity_probe_interval: int = 1000
+    # NOTE the representation-health probe (dormant-unit fraction,
+    # srank@0.99) moved OFFLINE 2026-08-21 — rl/model/capacity.py, run
+    # against a saved checkpoint by tests/test_checkpoint_collapse.py. It
+    # cost an extra encoder forward plus an eigendecomposition per probe
+    # inside the train loop, and no training decision read it. The
+    # per-step fresh-vs-replayed value-error gap below stays: it is
+    # computed from tensors train_step already has.
+
 
     # Player magnet regularization (MMD-style). The policy is pulled toward a
     # fixed hierarchical magnet over legal actions (uniform over valid

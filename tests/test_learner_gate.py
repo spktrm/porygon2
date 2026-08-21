@@ -53,60 +53,60 @@ def make_learner(main_frames: int, players: list[PlayerRef], main_steps: int = 1
             minimum_historical_player_steps=MIN_INITIAL_STEPS,
         ),
     )
-    pop = SimpleNamespace(
+    run_state = SimpleNamespace(
         live_key=MAIN_KEY,
         player_state=SimpleNamespace(step_count=np.array(main_steps)),
     )
-    return stub, pop
+    return stub, run_state
 
 
-def gate(stub, pop):
-    return Learner._should_add_new_player(stub, pop)
+def gate(stub, run_state):
+    return Learner._should_add_new_player(stub, run_state)
 
 
 def test_empty_league_waits_for_minimum_steps():
-    stub, pop = make_learner(main_frames=MIN_FRAMES + 1, players=[], main_steps=100)
-    assert gate(stub, pop) is None
+    stub, run_state = make_learner(main_frames=MIN_FRAMES + 1, players=[], main_steps=100)
+    assert gate(stub, run_state) is None
 
 
 def test_empty_league_initial_add_after_minimum_steps():
-    stub, pop = make_learner(
+    stub, run_state = make_learner(
         main_frames=MIN_FRAMES + 1, players=[], main_steps=MIN_INITIAL_STEPS + 1
     )
-    assert gate(stub, pop) == "initial"
+    assert gate(stub, run_state) == "initial"
 
 
 def test_no_add_soon_after_own_checkpoint():
-    stub, pop = make_learner(
+    stub, run_state = make_learner(
         main_frames=1_000_000,
         players=[make_ref(100, frames=1_000_000 - MIN_FRAMES // 2)],
     )
-    assert gate(stub, pop) is None
+    assert gate(stub, run_state) is None
 
 
 def test_overdue_after_max_frames():
-    stub, pop = make_learner(
+    stub, run_state = make_learner(
         main_frames=MAX_FRAMES + 1_000,
         players=[make_ref(100, frames=0)],
     )
-    assert gate(stub, pop) == "overdue"
+    assert gate(stub, run_state) == "overdue"
 
 
 def test_dominant_before_max_frames():
     ref = make_ref(100, frames=0)
-    stub, pop = make_learner(main_frames=MIN_FRAMES + 1, players=[ref])
+    stub, run_state = make_learner(main_frames=MIN_FRAMES + 1, players=[ref])
     main = stub.league.get_main_player()
     for _ in range(20):
         stub.league.update_payoff(main, ref, payoff=1.0)
-    assert gate(stub, pop) == "dominant"
+    assert gate(stub, run_state) == "dominant"
 
 
 def test_not_dominant_at_prior_win_rate():
     # Prior is 0.5 with no games recorded: min win rate 0.5 < 0.7.
-    stub, pop = make_learner(
+    stub, run_state = make_learner(
         main_frames=MIN_FRAMES + 1, players=[make_ref(100, frames=0)]
     )
-    assert gate(stub, pop) is None
+    assert gate(stub, run_state) is None
 
 
 def test_foreign_origin_publication_does_not_reset_pacing():
@@ -116,7 +116,7 @@ def test_foreign_origin_publication_does_not_reset_pacing():
     fired "overdue" on every league-management tick, snapshotting main
     every ~10 steps."""
     main_frames = 24_000_000
-    stub, pop = make_learner(
+    stub, run_state = make_learner(
         main_frames=main_frames,
         players=[
             # Main checkpointed itself recently.
@@ -126,7 +126,7 @@ def test_foreign_origin_publication_does_not_reset_pacing():
             make_ref(FOREIGN_STEP, frames=2_000_000, origin=FOREIGN_ORIGIN),
         ],
     )
-    assert gate(stub, pop) is None
+    assert gate(stub, run_state) is None
 
 
 def test_dominance_is_judged_against_all_historicals():
@@ -135,21 +135,21 @@ def test_dominance_is_judged_against_all_historicals():
     dominance."""
     main_ref = make_ref(100, frames=0)
     exp_ref = make_ref(FOREIGN_STEP, frames=0, origin=FOREIGN_ORIGIN)
-    stub, pop = make_learner(main_frames=MIN_FRAMES + 1, players=[main_ref, exp_ref])
+    stub, run_state = make_learner(main_frames=MIN_FRAMES + 1, players=[main_ref, exp_ref])
     main = stub.league.get_main_player()
     for _ in range(20):
         stub.league.update_payoff(main, main_ref, payoff=1.0)
         stub.league.update_payoff(main, exp_ref, payoff=-1.0)
-    assert gate(stub, pop) is None
+    assert gate(stub, run_state) is None
 
 
-def test_build_population_seeds_host_step_from_restored_state():
+def test_build_run_state_seeds_host_step_from_restored_state():
     """Regression (2026-08-14 overdue add storm): league keys are
     host_step and League.get_latest_player picks newest as max(key), so a
     session-local host_step restarting at 0 left the pre-restart snapshot
     "latest" forever (frames_passed never reset -> "overdue" every
     management tick, plus a p_{step:08} overwrite hazard).
-    _build_population must seed host_step from the state's own restored
+    _build_run_state must seed host_step from the state's own restored
     step_count — and a cold start (step_count 0) must still start at 0."""
     from rl.online.config import Porygon2LearnerConfig
 
@@ -166,16 +166,14 @@ def test_build_population_seeds_host_step_from_restored_state():
     stub = SimpleNamespace(
         config=Porygon2LearnerConfig(),
         league=league,
-        _capacity_probe_jit=None,
-        _restore_controller_state=lambda pop, blob: None,
-        _create_params_container=lambda pop: None,
+        _restore_controller_state=lambda run_state, blob: None,
+        _create_params_container=lambda run_state: None,
     )
     stub.league.update_live = lambda key, container: None
 
-    def build(name, steps):
-        return Learner._build_population(
+    def build(steps):
+        return Learner._build_run_state(
             stub,
-            name,
             player_state=SimpleNamespace(
                 step_count=np.array(steps), frame_count=np.array(0)
             ),
@@ -183,5 +181,5 @@ def test_build_population_seeds_host_step_from_restored_state():
             wandb_run=None,
         )
 
-    assert build("main", 71_139).host_step == 71_139
-    assert build("main", 0).host_step == 0
+    assert build(71_139).host_step == 71_139
+    assert build(0).host_step == 0

@@ -11,15 +11,15 @@ from types import SimpleNamespace
 from rl.online.learner import Learner
 
 
-def make_stub(populations=None, cache_entries=0, cache_bytes=0):
+def make_stub(run_state=None, cache_entries=0, cache_bytes=0):
     return SimpleNamespace(
         _THREAD_NAME_BUCKETS=Learner._THREAD_NAME_BUCKETS,
-        populations=populations or {},
+        run_state=run_state or make_run_state(),
         league=SimpleNamespace(cache_stats=lambda: (cache_entries, cache_bytes)),
     )
 
 
-def make_pop(player_bytes=0, builder_bytes=0):
+def make_run_state(player_bytes=0, builder_bytes=0):
     return SimpleNamespace(
         player_replay=SimpleNamespace(nbytes=lambda: player_bytes),
         builder_replay=SimpleNamespace(nbytes=lambda: builder_bytes),
@@ -46,20 +46,15 @@ def test_thread_buckets_sum_to_total():
     assert sum(logs[k] for k in bucket_keys) == logs["diag_py_threads"]
 
 
-def test_per_population_replay_bytes():
+def test_replay_and_cache_bytes():
     stub = make_stub(
-        populations={
-            "main": make_pop(player_bytes=10 * 2**20, builder_bytes=2 * 2**20),
-            "other": make_pop(player_bytes=2**20),
-        },
+        run_state=make_run_state(player_bytes=10 * 2**20, builder_bytes=2 * 2**20),
         cache_entries=3,
         cache_bytes=45 * 2**20,
     )
     logs = diag(stub)
-    assert logs["diag_player_replay_mb_main"] == 10
-    assert logs["diag_builder_replay_mb_main"] == 2
-    assert logs["diag_player_replay_mb_other"] == 1
-    assert logs["diag_builder_replay_mb_other"] == 0
+    assert logs["diag_player_replay_mb"] == 10
+    assert logs["diag_builder_replay_mb"] == 2
     assert logs["diag_league_cache_entries"] == 3
     assert logs["diag_league_cache_mb"] == 45
 

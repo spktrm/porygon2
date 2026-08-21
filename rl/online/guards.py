@@ -17,7 +17,7 @@ def should_push_trajectory(is_eval: bool, do_push: bool, username: str) -> bool:
     isEvalUser, service/src/server/utils.ts) is retained as a defensive
     cross-check rather than as the sole safeguard — unlike a fixed "train"
     prefix, this doesn't depend on the training-actor naming scheme, which
-    is population-prefixed (main:, ...).
+    is prefixed (main:, eval-heuristic:, ...).
     """
     if is_eval:
         return False

@@ -12,12 +12,11 @@ def next_tqdm_position() -> int:
     """Assigns each tqdm progress bar a unique, stable terminal row (via
     tqdm's position= kwarg / ANSI cursor movement) instead of letting
     concurrent bars fight over "the current line" with bare \\r redraws —
-    with up to 4 bars per population (player_producer/builder_producer/
-    consumer/batches) across 3 concurrently-training populations, that
-    fight is what corrupted terminal output into garbled interleaved
-    text. Call once per tqdm() construction, at bar-creation time, and
-    pair with close_tqdm_bar() at teardown: populations are
-    reset repeatedly, and without recycling rows each reset would place
+    with 4 concurrent bars (player_producer/builder_producer/consumer/
+    batches), that fight is what corrupted terminal output into garbled
+    interleaved text. Call once per tqdm() construction, at bar-creation
+    time, and pair with close_tqdm_bar() at teardown: bars are rebuilt on
+    restart, and without recycling rows each rebuild would place
     its 4 new bars one screen-row lower, leaving the dead rows above
     permanently occupied for the life of the process."""
     global _tqdm_positions_issued

@@ -93,11 +93,10 @@ class BuilderTrajectoryStore:
     def clear(self):
         """Resets the store to empty.
 
-        Used when reusing one persistent store across phase transitions
-        across populations instead of letting each allocate its own
-        — a fresh-per-phase store meant an actor thread that outlived its
-        phase (see main.py's straggler check) could keep writing into a
-        store from a phase that had already "ended," silently leaking
+        Used when reusing one persistent store instead of allocating a
+        fresh one per lineage — a fresh store meant an actor thread that
+        outlived the old one (see main.py's straggler check) could keep
+        writing into a store that had already "ended," silently leaking
         trajectories from the wrong model into whatever ran next. Only
         safe to call once every actor thread from the previous phase has
         actually stopped.

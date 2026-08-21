@@ -1,6 +1,6 @@
 """Collapse diagnostics for a specific saved checkpoint (not a fresh
 random-init model): dormant-unit / representation-rank collapse via the
-same probe the live learner uses (Learner._make_capacity_probe), plus
+same probe as rl/model/capacity.py (offline by design), plus
 separation of the small learned embedding tables (value-ladder query rows,
 target/pass action-grid rows) read directly off params.
 
@@ -87,14 +87,14 @@ def _pairwise_cosine_similarities(table: np.ndarray) -> np.ndarray:
 @pytest.mark.gpu
 def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
     """Runs the live learner's capacity probe (dormant-unit fraction +
-    srank@0.99, see learner._embedding_stats) against this checkpoint's
+    srank@0.99, see rl.model.capacity.embedding_stats) against this checkpoint's
     params on the bundled example trajectory, for both trunk embedding
     streams (action, value-all)."""
     from rl.environment.interfaces import Batch, PlayerTransition
     from rl.environment.utils import get_ex_player_step
     from rl.model.config import get_player_model_config
+    from rl.model.capacity import make_capacity_probe
     from rl.model.player_model import get_player_model
-    from rl.online.learner import Learner
 
     manifest = read_manifest(ckpt_dir) or {}
     generation = int(manifest.get("generation", 9))
@@ -129,7 +129,7 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
         player_history=batched.history,
     )
 
-    probe = Learner._make_capacity_probe(None, network)
+    probe = make_capacity_probe(network)
     logs = probe(ckpt_target_params, batch)
 
     for name in ("action", "value"):

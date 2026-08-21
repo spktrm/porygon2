@@ -1,4 +1,3 @@
-from typing import Literal
 
 import jax
 import numpy as np
@@ -34,9 +33,6 @@ from rl.online.league import (
 )
 from rl.online.learner import Learner
 
-Population = Literal["main"]
-_LIVE_KEY_BY_POPULATION: dict[Population, int] = {"main": MAIN_KEY}
-
 
 def chunk_spans(
     num_steps: int, chunk_length: int, game_done: bool
@@ -65,10 +61,10 @@ def chunk_spans(
 
 
 class ActorStopped(Exception):
-    """Raised inside an unroll when its population began shutting down —
+    """Raised inside an unroll when training began shutting down —
     unwinds the actor thread out of a blocking wait it would otherwise
     never leave (e.g. the builder-replay sample wait, where no data is
-    coming once that population's producers have stopped). Handled as a
+    coming once the producers have stopped). Handled as a
     clean loop exit by main.py's actor runners, never as an error —
     without it, Ctrl-C left actor threads stuck in these waits, tripping
     the shutdown straggler check."""
@@ -85,7 +81,6 @@ class PlayerActor:
         learner: Learner,
         rng_seed: int = 42,
         is_eval: bool = False,
-        population: Population = "main",
         inference_client: InferenceServer | None = None,
         explore_game_prob: float = 0.0,
         explore_eps_range: tuple[float, float] | None = None,
@@ -105,9 +100,6 @@ class PlayerActor:
         # Eval actors must never contribute to training data, nor consume the
         # builder replay buffer's reuse budget. This flag gates both.
         self._is_eval = is_eval
-        # Which live population this actor generates trajectories for.
-        self.population = population
-        self._live_key = _LIVE_KEY_BY_POPULATION[population]
         # Exploration ladder (config.explore_game_prob /
         # explore_eps_range): each GAME this actor plays with its own
         # live params is independently an explore game with this
@@ -197,22 +189,22 @@ class PlayerActor:
         builder_trajectory = ()
         builder_history = ()
         if self._learner.config.smogon_format != "randombattle":
-            pop = self._learner.populations[self.population]
-            builder_replay = pop.builder_replay
+            run_state = self._learner.run_state
+            builder_replay = run_state.builder_replay
             sample_cond = builder_replay._sample_cv
             with sample_cond:
                 # done-aware, like builder_actor.py's add-side wait and
-                # Learner.enqueue_traj already are: once this population is
+                # Learner.enqueue_traj already are: once training is
                 # shutting down no builder trajectory is ever coming, so a
                 # bare ready_to_sample predicate blocked this thread forever
-                # (_stop_population_workers notifies this CV precisely so
+                # (_stop_workers notifies this CV precisely so
                 # waiters re-check and see done).
                 sample_cond.wait_for(
-                    lambda: pop.done or builder_replay.ready_to_sample()
+                    lambda: run_state.done or builder_replay.ready_to_sample()
                 )
-                if pop.done:
+                if run_state.done:
                     raise ActorStopped(
-                        f"population {self.population} stopped during "
+                        "training stopped during "
                         "builder-replay sample wait"
                     )
                 # Eval samples teams read-only: it doesn't increment reuse
@@ -360,7 +352,7 @@ class PlayerActor:
 
         if should_push_trajectory(self._is_eval, do_push, self._env.username):
             for chunk in chunks:
-                self._learner.enqueue_traj(self.population, chunk)
+                self._learner.enqueue_traj(chunk)
         # Callers consume whole-game facts off the return value
         # (win_reward[-1] payoff, public_team[-1] mon differential, the
         # explore flag): the last chunk's padding rows copy the terminal
@@ -368,8 +360,8 @@ class PlayerActor:
         return chunks[-1]
 
     def pull_own_player(self) -> ParamsContainer:
-        """This actor's own live population's current params."""
-        return self._learner.league.get_live(self._live_key)
+        """The live player's current params."""
+        return self._learner.league.get_live(MAIN_KEY)
 
     def pull_main_player(self) -> ParamsContainer:
         """Live main's params. Same thing as pull_own_player now, but the

@@ -35,13 +35,7 @@ from rl.online.artifact import (
 from rl.online.builder_actor import BuilderActor
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.inference import InferenceServer
-from rl.online.learner import (
-    CAT_VF_SUPPORT,
-    POPULATION_NAMES,
-    Learner,
-    OOMGuardTriggered,
-    PopulationName,
-)
+from rl.online.learner import CAT_VF_SUPPORT, Learner, OOMGuardTriggered
 from rl.online.player_actor import ActorStopped, PlayerActor
 
 logger = logging.getLogger(__name__)
@@ -54,7 +48,7 @@ class TqdmLoggingHandler(logging.Handler):
     the default StreamHandler writes straight to stderr with no knowledge
     of tqdm's cursor position, which is what corrupted terminal output
     into garbled interleaved text once multiple bars were running
-    concurrently (one per population per producer/consumer/batches)."""
+    concurrently (producer/consumer/batches)."""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -101,9 +95,9 @@ def run_training_actor_pair(
     while not stop_signal[0]:
         # Actor gate: timeout keeps the stop_signal check live while
         # gated, and the fresh dict lookup survives a rebuild replacing
-        # the PopulationState object.
-        pop = player._learner.populations[player.population]
-        if not pop.run_gate.wait(timeout=1.0):
+        # the RunState object.
+        run_state = player._learner.run_state
+        if not run_state.run_gate.wait(timeout=1.0):
             continue
         try:
             player_params = player.pull_own_player()
@@ -115,7 +109,7 @@ def run_training_actor_pair(
             # Population-prefixed: game_id must be unique in the TS game
             # server's pendingGames map (service/src/server/worker.ts).
             game_id = (
-                f"{player.population}-{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
+                f"{worker_id}-p{player_ckpt}-v-p{opponent_ckpt}"
             )
             for actor in (player, opponent):
                 actor.set_game_id(game_id)
@@ -138,8 +132,8 @@ def run_training_actor_pair(
                     player_params, opponent_params, trajectory
                 )
         except ActorStopped:
-            # Clean shutdown unwind (Ctrl-C / population reset) — the
-            # population stopped while this actor was blocked inside an
+            # Clean shutdown unwind (Ctrl-C) — training stopped while
+            # this actor was blocked inside an
             # unroll. Not an error; just stop producing.
             break
         except Exception as e:
@@ -156,10 +150,10 @@ def run_eval_heuristic(
 ):
     """Runs an actor to produce num_trajectories trajectories."""
     learner = actor._learner
-    main_pop = learner.populations["main"]
+    main_run_state = learner.run_state
 
     with learner.gpu_lock:
-        step_count = np.array(main_pop.player_state.step_count).item()
+        step_count = np.array(main_run_state.player_state.step_count).item()
 
     # Metric identity comes from the eval thread's name (set at spawn:
     # EvalActor-simpleheuristic-0, ...), not the env username, so renaming
@@ -176,11 +170,11 @@ def run_eval_heuristic(
     smooth_weight = 0.0
 
     while not stop_signal[0]:
-        if not main_pop.run_gate.wait(timeout=1.0):
+        if not main_run_state.run_gate.wait(timeout=1.0):
             continue
         try:
             with learner.gpu_lock:
-                new_step_count = np.array(main_pop.player_state.step_count).item()
+                new_step_count = np.array(main_run_state.player_state.step_count).item()
             if new_step_count > step_count:
                 step_count = new_step_count
                 games += 1
@@ -198,16 +192,16 @@ def run_eval_heuristic(
                 if use_main:
                     prefix = "main"
                     with learner.gpu_lock:
-                        player_params = jax.device_get(main_pop.player_state.params)
-                        builder_params = jax.device_get(main_pop.builder_state.params)
+                        player_params = jax.device_get(main_run_state.player_state.params)
+                        builder_params = jax.device_get(main_run_state.builder_state.params)
                 else:
                     prefix = "ema"
                     with learner.gpu_lock:
                         player_params = jax.device_get(
-                            main_pop.player_state.target_params
+                            main_run_state.player_state.target_params
                         )
                         builder_params = jax.device_get(
-                            main_pop.builder_state.target_params
+                            main_run_state.builder_state.target_params
                         )
 
                 player = ParamsContainer(
@@ -271,8 +265,8 @@ def run_eval_heuristic(
 def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
     while not stop_signal[0]:
         # Same actor gating as run_training_actor_pair.
-        pop = actor._learner.populations[actor.population]
-        if not pop.run_gate.wait(timeout=1.0):
+        run_state = actor._learner.run_state
+        if not run_state.run_gate.wait(timeout=1.0):
             continue
         try:
             param_container = actor.pull_own_player()
@@ -375,9 +369,9 @@ def main(args: argparse.Namespace):
         learner_config,
     )
 
-    # Shared across all three populations — same architecture, so one
+    # Shared by the learner and the actors — same architecture, so one
     # Agent/gpu_lock serves everyone. Constructing a separate Agent per
-    # population would trigger redundant jax.jit traces of the identical
+    # extra network would trigger redundant jax.jit traces of the identical
     # apply_fn for no reason (rl/online/agent.py's Agent is already fully
     # stateless w.r.t. "which model": params are a per-call argument).
     gpu_lock = threading.Lock()
@@ -454,61 +448,46 @@ def main(args: argparse.Namespace):
     _stop_stale_wandb_runs(skip_ids=set(resume_run_ids.values()))
 
     logger.info("Initializing WandB...")
-    wandb_runs: dict[PopulationName, wandb.wandb_run.Run] = {}
-    for pop_name in POPULATION_NAMES:
-        run_id = resume_run_ids.get(pop_name)
-        wandb_runs[pop_name] = wandb.init(
-            project="pokemon-rl",
-            group=wandb_group,
-            job_type=pop_name,
-            name=f"{wandb_group}-{pop_name}",
-            id=run_id,
-            # "allow", not "must": resume the run when it still exists
-            # server-side, otherwise recreate it under the same id — a
-            # wandb-side deletion should never block a training restart.
-            resume="allow" if run_id else None,
-            tags=[pop_name],
-            config=model_config_payload,
-            # wandb.init()'s default reinit mode hands back the
-            # already-active run instead of creating a new one; kept
-            # explicit so a second run from this process (should one ever
-            # be added again) creates a real run rather than silently
-            # aliasing this one. Its only cost — not updating the
-            # wandb.run global — is a non-issue: every caller logs through
-            # the specific Run object, never the bare wandb.log().
-            reinit="create_new",
-        )
-        # Default x-axis = the monotonic lifetime_step (logged with every
-        # learner metric; carried across resumes — see PopulationState.
-        # lifetime_step). Without this, charts plot against _step (log-call
-        # count) and every resume draws a sawtooth or paints over earlier
-        # x-ranges.
-        wandb_runs[pop_name].define_metric("*", step_metric="lifetime_step")
-        logger.info(
-            "WandB serialized run (%s): %s (id=%s, resumed=%s)",
-            pop_name,
-            wandb_runs[pop_name].name,
-            wandb_runs[pop_name].id,
-            wandb_runs[pop_name].resumed,
-        )
+    run_id = resume_run_ids.get("main")
+    wandb_run = wandb.init(
+        project="pokemon-rl",
+        group=wandb_group,
+        job_type="main",
+        name=f"{wandb_group}-main",
+        id=run_id,
+        # "allow", not "must": resume the run when it still exists
+        # server-side, otherwise recreate it under the same id — a
+        # wandb-side deletion should never block a training restart.
+        resume="allow" if run_id else None,
+        tags=["main"],
+        config=model_config_payload,
+    )
+    # Default x-axis = the monotonic lifetime_step (logged with every
+    # learner metric; carried across resumes — see RunState.
+    # lifetime_step). Without this, charts plot against _step (log-call
+    # count) and every resume draws a sawtooth or paints over earlier
+    # x-ranges.
+    wandb_run.define_metric("*", step_metric="lifetime_step")
+    logger.info(
+        "WandB serialized run: %s (id=%s, resumed=%s)",
+        wandb_run.name,
+        wandb_run.id,
+        wandb_run.resumed,
+    )
 
     # Written every session (fresh or resumed): the next checkpoint-mode
-    # restart reads this to resume these exact runs.
-    save_wandb_run_info(
-        learner_config,
-        wandb_group,
-        {pop_name: run.id for pop_name, run in wandb_runs.items()},
-    )
+    # restart reads this to resume this exact run. Kept as a dict keyed by
+    # "main" so a runtime file written before the single-population
+    # collapse still loads.
+    save_wandb_run_info(learner_config, wandb_group, {"main": wandb_run.id})
 
     env_func = functools.partial(
         SinglePlayerSyncEnvironment,
         generation=learner_config.generation,
         smogon_format=learner_config.smogon_format,
     )
-    # Every population's pool is main-sized now, but the run_gate means at
-    # most one pool plays at a time (plus a brief overlap while a
-    # just-gated-off pool finishes its in-flight games at a block switch,
-    # plus the eval actors) — hence 2x one pool, not 3x.
+    # Two workers per player actor (both sides of a game step
+    # concurrently), plus the eval actors.
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=(
             2 * learner_config.num_player_actors
@@ -518,42 +497,37 @@ def main(args: argparse.Namespace):
 
     learner: Learner | None = None
 
-    def spawn_actor_pool(population: PopulationName) -> None:
+    def spawn_actor_pool() -> None:
         """Learner's spawn_actor_pool callback (learner.py can't import
         PlayerActor/BuilderActor itself — both already import Learner, so
         constructing them here in main.py and registering the threads back
-        onto the population avoids a circular import). Fires once during
-        initial setup below."""
+        on the Learner avoids a circular import). Fires once during initial
+        setup below."""
         num_player_actors = learner_config.num_player_actors
         num_builder_actors = learner_config.num_builder_actors
-        stop_signal = learner.populations[population].stop_signal
+        stop_signal = learner.run_state.stop_signal
         salt = time.time_ns()
         new_threads: list[threading.Thread] = []
 
         if "randombattle" not in learner_config.smogon_format:
-            logger.info(
-                "[%s] Initializing %d builder actors...", population, num_builder_actors
-            )
+            logger.info("Initializing %d builder actors...", num_builder_actors)
             for builder_id in range(num_builder_actors):
                 actor = BuilderActor(
                     agent=learning_agent,
                     learner=learner,
                     rng_seed=len(new_threads) + salt,
-                    population=population,
                 )
                 new_threads.append(
                     threading.Thread(
                         target=run_builder_actor,
                         args=(actor, stop_signal),
-                        name=f"BuilderActor-{population}-{builder_id}",
+                        name=f"BuilderActor-{builder_id}",
                         daemon=True,
                     )
                 )
 
         logger.info(
-            "[%s] Initializing %d player actors (self-play)...",
-            population,
-            num_player_actors,
+            "Initializing %d player actors (self-play)...", num_player_actors
         )
         # Exploration ladder: every actor independently draws a per-game
         # explore coin (explore_game_prob) and, on explore games, a fresh
@@ -573,11 +547,10 @@ def main(args: argparse.Namespace):
                 actors.append(
                     PlayerActor(
                         agent=learning_agent,
-                        env=env_func(f"{population}:p{player_id}g{game_id:02d}"),
+                        env=env_func(f"main:p{player_id}g{game_id:02d}"),
                         unroll_length=learner_config.unroll_length,
                         learner=learner,
                         rng_seed=len(new_threads) + salt + slot,
-                        population=population,
                         inference_client=inference_server,
                         explore_game_prob=learner_config.explore_game_prob,
                         explore_eps_range=learner_config.explore_eps_range,
@@ -587,69 +560,66 @@ def main(args: argparse.Namespace):
                 threading.Thread(
                     target=run_training_actor_pair,
                     args=(*actors, executor, stop_signal),
-                    name=f"Selfplay-{population}-{game_id}",
+                    name=f"Selfplay-{game_id}",
                     daemon=True,
                 )
             )
 
-        if population == "main":
-            logger.info(
-                "[main] Initializing %d evaluation actors (baseline indices: %s)...",
-                len(learner_config.eval_baselines),
-                learner_config.eval_baselines,
+        logger.info(
+            "Initializing %d evaluation actors (baseline indices: %s)...",
+            len(learner_config.eval_baselines),
+            learner_config.eval_baselines,
+        )
+        for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
+            baseline_name = EVAL_BASELINE_NAMES[baseline_index]
+            actor = PlayerActor(
+                agent=eval_agent,
+                # The username MUST start with "eval-heuristic" (the
+                # service routes such clients into games against a
+                # baseline bot by that prefix,
+                # service/src/server/utils.ts) and its ":<n>" suffix
+                # selects which baseline: the service parses the
+                # trailing number into an evalActionMapping index
+                # (service/src/server/runner.ts).
+                env=env_func(
+                    f"eval-heuristic-{baseline_name}-{eval_id}:{baseline_index:04d}"
+                ),
+                unroll_length=learner_config.unroll_length,
+                learner=learner,
+                rng_seed=len(new_threads) + salt,
+                is_eval=True,
             )
-            for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
-                baseline_name = EVAL_BASELINE_NAMES[baseline_index]
-                actor = PlayerActor(
-                    agent=eval_agent,
-                    # The username MUST start with "eval-heuristic" (the
-                    # service routes such clients into games against a
-                    # baseline bot by that prefix,
-                    # service/src/server/utils.ts) and its ":<n>" suffix
-                    # selects which baseline: the service parses the
-                    # trailing number into an evalActionMapping index
-                    # (service/src/server/runner.ts).
-                    env=env_func(
-                        f"eval-heuristic-{baseline_name}-{eval_id}:{baseline_index:04d}"
+            new_threads.append(
+                threading.Thread(
+                    target=run_eval_heuristic,
+                    args=(
+                        actor,
+                        executor,
+                        stop_signal,
+                        wandb_run,
+                        learner_config,
                     ),
-                    unroll_length=learner_config.unroll_length,
-                    learner=learner,
-                    rng_seed=len(new_threads) + salt,
-                    is_eval=True,
-                    population="main",
+                    name=f"EvalActor-{baseline_name}-{eval_id}",
+                    daemon=True,
                 )
-                new_threads.append(
-                    threading.Thread(
-                        target=run_eval_heuristic,
-                        args=(
-                            actor,
-                            executor,
-                            stop_signal,
-                            wandb_runs["main"],
-                            learner_config,
-                        ),
-                        name=f"EvalActor-{baseline_name}-{eval_id}",
-                        daemon=True,
-                    )
-                )
+            )
 
         for t in new_threads:
             t.start()
-        learner.register_actor_threads(population, new_threads)
+        learner.register_actor_threads(new_threads)
 
     learner = Learner(
         config=learner_config,
         league=league,
         player_state=player_state,
         builder_state=builder_state,
-        main_wandb_run=wandb_runs["main"],
+        main_wandb_run=wandb_run,
         gpu_lock=gpu_lock,
-        player_network=learner_player_network,
         debug=debug,
         controller_bytes=controller_bytes,
         spawn_actor_pool=spawn_actor_pool,
     )
-    spawn_actor_pool("main")
+    spawn_actor_pool()
 
     crashed = False
     try:
@@ -678,18 +648,14 @@ def main(args: argparse.Namespace):
         # SIGINT (main thread only, which is where this finally runs).
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         logger.info(
-            "Shutting down: finishing %d wandb runs (further Ctrl-C is "
-            "ignored — this takes a few seconds)...",
-            len(wandb_runs),
+            "Shutting down: finishing the wandb run (further Ctrl-C is "
+            "ignored — this takes a few seconds)..."
         )
         executor.shutdown(wait=False, cancel_futures=True)
-        for wandb_run in wandb_runs.values():
-            try:
-                wandb_run.finish(exit_code=1 if crashed else 0)
-            except Exception:
-                logger.warning(
-                    "wandb_run.finish() failed during shutdown", exc_info=True
-                )
+        try:
+            wandb_run.finish(exit_code=1 if crashed else 0)
+        except Exception:
+            logger.warning("wandb_run.finish() failed during shutdown", exc_info=True)
 
     if crashed:
         logger.error("Training run crashed — see traceback above.")

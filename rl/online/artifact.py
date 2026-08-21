@@ -214,9 +214,9 @@ def create_train_state(
 
 
 def _ckpt_root(learner_config: Porygon2LearnerConfig) -> str:
-    """Root directory for this process's checkpoints. Flat: one population
-    means one resumable checkpoint tree, with no namespacing needed to keep
-    two from colliding."""
+    """Root directory for this process's checkpoints. Flat: one training
+    run means one resumable checkpoint tree, with no namespacing needed to
+    keep two from colliding."""
     return f"./ckpts/gen{learner_config.generation}/"
 
 
@@ -337,9 +337,10 @@ def save_wandb_run_info(
     group: str,
     run_ids: dict[str, str],
 ) -> None:
-    """Persists this session's wandb identity (group + per-population run
-    ids) next to the checkpoints, so a checkpoint-mode restart resumes the
-    same wandb runs instead of opening a fresh session trio."""
+    """Persists this session's wandb identity (group + run id) next to the
+    checkpoints, so a checkpoint-mode restart resumes the same wandb run
+    instead of opening a fresh session. Still a dict so a runtime file
+    written before the single-run collapse still loads."""
     path = _wandb_run_info_path(learner_config)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:

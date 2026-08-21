@@ -1,4 +1,3 @@
-from typing import Literal
 
 import jax
 import numpy as np
@@ -11,23 +10,18 @@ from rl.online.agent import Agent
 from rl.online.league import MAIN_KEY
 from rl.online.learner import Learner
 
-Population = Literal["main"]
-_LIVE_KEY_BY_POPULATION: dict[Population, int] = {"main": MAIN_KEY}
-
 
 class BuilderActor:
     """Manages the state of a single agent/environment interaction loop.
 
     Unlike PlayerActor, there is no matchmaking here — team-building isn't
-    adversarial — so the only population-awareness needed is reading/
-    writing this actor's own live params and builder_replay."""
+    adversarial."""
 
     def __init__(
         self,
         agent: Agent,
         learner: Learner,
         rng_seed: int = 42,
-        population: Population = "main",
     ):
         self._agent = agent
         self._env = TeamBuilderEnvironment(
@@ -36,14 +30,13 @@ class BuilderActor:
         )
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
-        self.population = population
 
     def split_rng(self) -> jax.Array:
         self._rng_key, subkey = split_rng(self._rng_key)
         return subkey
 
     def pull_own_player(self) -> ParamsContainer:
-        return self._learner.league.get_live(_LIVE_KEY_BY_POPULATION[self.population])
+        return self._learner.league.get_live(MAIN_KEY)
 
     def unroll(self, rng_key: jax.Array, builder_params: Params) -> None:
         """Run unroll_length agent/environment steps, returning the trajectory."""
@@ -82,7 +75,7 @@ class BuilderActor:
             lambda *xs: np.stack(xs), *builder_trajectory
         )
 
-        builder_replay = self._learner.populations[self.population].builder_replay
+        builder_replay = self._learner.run_state.builder_replay
         add_cond = builder_replay._add_cv
         with add_cond:
             add_cond.wait_for(

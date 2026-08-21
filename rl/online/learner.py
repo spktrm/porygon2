@@ -83,11 +83,6 @@ logger = logging.getLogger(__name__)
 # expired, which is the plateau signature.
 AddReason = Literal["initial", "dominant", "overdue"]
 
-PopulationName = Literal["main"]
-POPULATION_NAMES: tuple[PopulationName, ...] = ("main",)
-_LIVE_KEY_BY_POPULATION: dict[PopulationName, int] = {"main": MAIN_KEY}
-
-
 class OOMGuardTriggered(Exception):
     """Raised by Learner._check_oom_guard when available system RAM drops
     below config.oom_guard_min_available_fraction — a self-monitoring
@@ -1426,46 +1421,19 @@ def _stack_batch(
     )
 
 
-def _embedding_stats(emb: jax.Array, valid: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """Representation-health stats over one batch of trunk embeddings.
-
-    Returns the dormant-unit fraction (ReDo criterion: units whose mean
-    |activation| over valid steps is ≤ 0.025× the layer mean) and the
-    srank@0.99 fraction (smallest number of singular values holding 99% of
-    the spectrum mass, over the feature dim). emb is (T, B, ..., d), valid
-    is (T, B); padded rows are zeroed, which leaves the Gram spectrum
-    unchanged versus dropping them.
-    """
-    d = emb.shape[-1]
-    lead = valid.reshape(valid.shape + (1,) * (emb.ndim - valid.ndim - 1))
-    mask = jnp.broadcast_to(lead, emb.shape[:-1]).reshape(-1).astype(jnp.float32)
-    flat = emb.reshape(-1, d).astype(jnp.float32) * mask[:, None]
-    denom = mask.sum() + 1e-8
-
-    unit_score = jnp.abs(flat).sum(axis=0) / denom
-    dormant_frac = (unit_score <= 0.025 * unit_score.mean()).mean()
-
-    gram = flat.T @ flat / denom
-    singular_values = jnp.sqrt(jnp.maximum(jnp.linalg.eigvalsh(gram), 0.0))
-    singular_values = jnp.sort(singular_values)[::-1]
-    srank = (jnp.cumsum(singular_values) < 0.99 * singular_values.sum()).sum() + 1
-    return dormant_frac, srank / d
-
-
 @dataclasses.dataclass
-class PopulationState:
-    """The live, continuously-training population's mutable state.
+class RunState:
+    """The training run's mutable state.
 
-    Single population since 2026-08-21 (the MainExploiter/LeagueExploiter
-    redesign was removed — see LESSONS.md's removal ledger). The container
-    is kept rather than flattened into Learner because it draws a clean
-    line between per-lineage mutable state (train state, replay, controller
-    EMAs, worker threads) and the process-wide singletons Learner owns
-    (the League, the gpu_lock, the compiled train_step).
+    Kept as a container rather than flattened onto Learner because it
+    draws a clean line: everything here is per-lineage and mutable (train
+    state, replay stores, controller EMAs, queues, worker threads), while
+    Learner owns the process-wide singletons (the League, the gpu_lock,
+    the compiled train_step). Was PopulationState until 2026-08-21, when
+    the MainExploiter/LeagueExploiter populations were removed and the
+    dict-of-one plus its single-inhabitant Literal went with them.
     """
 
-    name: PopulationName
-    live_key: int
     wandb_run: wandb.wandb_run.Run
     player_replay: PlayerTrajectoryStore
     builder_replay: BuilderTrajectoryStore
@@ -1476,10 +1444,10 @@ class PopulationState:
     device_q: "queue.Queue" = None
     log_q: "queue.Queue" = None
     ckpt_q: "queue.Queue" = None
-    # This population's own 3 internal background workers (host_to_device/
+    # The 3 internal background workers (host_to_device/
     # log/checkpoint) — owned and joined entirely within this file.
     worker_threads: list = dataclasses.field(default_factory=list)
-    # This population's PlayerActor/BuilderActor game-playing threads —
+    # The PlayerActor/BuilderActor game-playing threads —
     # constructed and started by main.py (Learner can't import
     # player_actor.py/builder_actor.py without a circular import, since
     # both already import Learner), registered here via
@@ -1488,10 +1456,9 @@ class PopulationState:
     actor_threads: list = dataclasses.field(default_factory=list)
     stop_signal: list = dataclasses.field(default_factory=lambda: [False])
     done: bool = False
-    # Actor gate: set = this population's actor threads may play games.
-    # Held open for the whole run now that there is one population; kept
-    # because the actor threads wait on it between games and shutdown
-    # relies on that same wait.
+    # Actor gate: set = the actor threads may play games. Held open for
+    # the whole run; kept because the actor threads wait on it between
+    # games and shutdown relies on that same wait.
     run_gate: "threading.Event" = None
     replay_pi: PILogController | None = None
     # Fixed at config.player_replay_kl_target — the ExploitabilityController
@@ -1505,7 +1472,7 @@ class PopulationState:
     replay_realised_ratio: float = float("nan")
     # Cumulative frames trained since process start. Telemetry only.
     frames_trained_total: int = 0
-    # Monotonic train-tick counter over this population's WHOLE wandb-run
+    # Monotonic train-tick counter over the WHOLE wandb-run
     # lifetime: restored from the checkpoint's host blob, so it never
     # rewinds or resets across a resume. Logged as "lifetime_step" with every
     # metric and set as the run's default x-axis (wandb.define_metric in
@@ -1515,7 +1482,6 @@ class PopulationState:
     lifetime_step: int = 0
     consumer_progress: object = None
     train_progress: object = None
-    capacity_probe_jit: object = None
 
     def __post_init__(self):
         if self.device_q is None:
@@ -1530,9 +1496,9 @@ class PopulationState:
 
 class Learner:
     """Owns the League, the gpu_lock, the compiled train_step and the one
-    live PopulationState. The MainExploiter/LeagueExploiter populations
-    were removed 2026-08-21 — see LESSONS.md 9 for the design and why it
-    never ran on this box."""
+    live RunState. The MainExploiter/LeagueExploiter populations were
+    removed 2026-08-21 — see LESSONS.md 9 for the design and why it never
+    ran on this box."""
 
     def __init__(
         self,
@@ -1542,21 +1508,19 @@ class Learner:
         builder_state: Porygon2BuilderTrainState,
         main_wandb_run: wandb.wandb_run.Run,
         gpu_lock: LockType | None = None,
-        player_network=None,
         debug: bool = False,
         controller_bytes: bytes | None = None,
-        spawn_actor_pool: "Callable[[PopulationName], None] | None" = None,
+        spawn_actor_pool: "Callable[[], None] | None" = None,
     ):
         self.config = config
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
         self.debug = debug
-        # Fires the instant a population is created/reset, so main.py's
-        # orchestration (which owns PlayerActor/BuilderActor construction —
-        # Learner can't import those without a circular import) can spin up
-        # that population's actor pool. None is fine for standalone/direct
-        # construction (tests, debug scripts): that population just never
-        # gets actors, matching today's "nothing passed in means don't
+        # Lets main.py spin up the actor pool once the run state exists
+        # (main.py owns PlayerActor/BuilderActor construction — Learner
+        # can't import those without a circular import). None is fine for
+        # standalone construction (tests, debug scripts): the run just
+        # never gets actors, matching the "nothing passed in means don't
         # wire it up" convention elsewhere in this file.
         self._spawn_actor_pool = spawn_actor_pool
 
@@ -1568,19 +1532,13 @@ class Learner:
         # executables per distinct static value OOM-killed run 1326
         # (LESSONS.md 1).
 
-        self._capacity_probe_jit = None
-        if player_network is not None and config.capacity_probe_interval > 0:
-            self._capacity_probe_jit = self._make_capacity_probe(player_network)
-
         self._train_step_jit = train_step if debug else _TRAIN_STEP_JIT
         # Shape-lattice fail-fast: every combo compiles at the FIRST batch
         # (_precompile_lattice) so no variant can arrive as a surprise
         # compile mid-run. Process-local by design.
         self._shape_lattice_compiled: bool = False
 
-        self.populations: dict[PopulationName, PopulationState] = {}
-        self.populations["main"] = self._build_population(
-            "main",
+        self.run_state = self._build_run_state(
             player_state,
             builder_state,
             main_wandb_run,
@@ -1589,36 +1547,33 @@ class Learner:
 
         self.done = False
 
-    # --- population construction / lifecycle --------------------------------
+    # --- run-state construction ----------------------------------------------
 
-    def _build_population(
+    def _build_run_state(
         self,
-        name: PopulationName,
         player_state: Porygon2PlayerTrainState,
         builder_state: Porygon2BuilderTrainState,
         wandb_run: wandb.wandb_run.Run,
         controller_bytes: bytes | None = None,
-    ) -> PopulationState:
-        """Builds a fresh PopulationState around an already-constructed
+    ) -> RunState:
+        """Builds a fresh RunState around an already-constructed
         player_state/builder_state. Controllers and replay are always
         fresh here; restore_controller_state (below) reinstates their EMAs
         from the checkpoint when there is one."""
         config = self.config
         is_not_randoms = config.smogon_format != "randombattle"
-        pop = PopulationState(
-            name=name,
-            live_key=_LIVE_KEY_BY_POPULATION[name],
+        run_state = RunState(
             wandb_run=wandb_run,
             player_replay=PlayerTrajectoryStore(
                 max_size=config.player_replay_buffer_capacity,
                 max_reuses=config.player_replay_ratio,
                 need_tracking=is_not_randoms,
-                name=name,
+                name="player",
             ),
             builder_replay=BuilderTrajectoryStore(
                 max_size=config.builder_replay_buffer_capacity,
                 max_reuses=config.builder_replay_ratio,
-                name=name,
+                name="builder",
             ),
             player_state=player_state,
             builder_state=builder_state,
@@ -1642,109 +1597,66 @@ class Learner:
             ),
             replay_kl_target=float(config.player_replay_kl_target),
             consumer_progress=tqdm(
-                desc=f"consumer-{name}", smoothing=0.1, position=next_tqdm_position()
+                desc="consumer", smoothing=0.1, position=next_tqdm_position()
             ),
             train_progress=tqdm(
-                desc=f"batches-{name}", smoothing=0.1, position=next_tqdm_position()
+                desc="batches", smoothing=0.1, position=next_tqdm_position()
             ),
-            capacity_probe_jit=self._capacity_probe_jit,
         )
-        pop.run_gate.set()
-        self._restore_controller_state(pop, controller_bytes)
-        self.league.update_live(pop.live_key, self._create_params_container(pop))
-        return pop
+        run_state.run_gate.set()
+        self._restore_controller_state(run_state, controller_bytes)
+        self.league.update_live(MAIN_KEY, self._create_params_container(run_state))
+        return run_state
 
-    # --- capacity probe / trajectory intake ----------------------------------
+    # --- trajectory intake ---------------------------------------------------
 
-    def _make_capacity_probe(self, network):
-        """Builds the jitted capacity probe: an encoder-only forward on the
-        current batch, returning dormant-unit fraction and srank@0.99 for
-        both trunk embedding streams. Pure observer — it is what caught the
-        1e-4 learning-rate collapse (action-embedding srank 0.27 by 13k
-        steps while actor-KL sat quietly at 0.002; LESSONS.md §5), which is
-        why it outlived the plasticity controller that used to consume it."""
-
-        def encoder_only(module, actor_input: PlayerActorInput):
-            return module.encoder(
-                actor_input.env, actor_input.packed_history, actor_input.history
-            )
-
-        encode = jax.vmap(
-            lambda params, actor_input: network.apply(
-                params, actor_input, method=encoder_only
-            ),
-            in_axes=(None, 1),
-            out_axes=1,
-        )
-
-        def probe(params, batch: Batch) -> dict[str, jax.Array]:
-            actor_input = PlayerActorInput(
-                env=batch.player_transitions.env_output,
-                packed_history=batch.player_packed_history,
-                history=batch.player_history,
-            )
-            # Encoder returns the action stream plus the three value-ladder
-            # readouts (all/private/public) since 2026-08-16; probe the
-            # action stream and the main (all) value readout as before.
-            action_emb, value_emb, _, _ = encode(params, actor_input)
-            dones = batch.player_transitions.env_output.done
-            valid = (jnp.cumsum(dones, axis=0) - dones) == 0
-            logs = {}
-            for name, emb in (("action", action_emb), ("value", value_emb)):
-                dormant_frac, srank_frac = _embedding_stats(emb, valid)
-                logs[f"capacity_{name}_emb_dormant_frac"] = dormant_frac
-                logs[f"capacity_{name}_emb_srank_frac"] = srank_frac
-            return logs
-
-        return jax.jit(probe)
-
-    def enqueue_traj(self, population: PopulationName, traj: Trajectory):
-        """Called by actors to push data into their own population's
+    def enqueue_traj(self, traj: Trajectory):
+        """Called by actors to push data into the run's
         replay buffer."""
-        pop = self.populations[population]
-        add_cond = pop.player_replay._add_cv
+        run_state = self.run_state
+        add_cond = run_state.player_replay._add_cv
         with add_cond:
-            add_cond.wait_for(lambda: pop.done or pop.player_replay.ready_to_add())
-            if pop.done:
+            add_cond.wait_for(lambda: run_state.done or run_state.player_replay.ready_to_add())
+            if run_state.done:
                 return
-            pop.player_replay.add(traj)
+            run_state.player_replay.add(traj)
 
-        sample_cond = pop.player_replay._sample_cv
+        sample_cond = run_state.player_replay._sample_cv
         with sample_cond:
             sample_cond.notify_all()
 
     # --- background workers --------------------------------------------------
 
-    def host_to_device_worker(self, pop: PopulationState):
-        """Background thread to batch data and push to this population's
+    def host_to_device_worker(self, run_state: RunState):
+        """Background thread to batch data and push to the run's
         own GPU queue."""
         max_burst = 8
         batch_size = self.config.batch_size
 
-        sample_cond = pop.player_replay._sample_cv
+        sample_cond = run_state.player_replay._sample_cv
         with sample_cond:
             sample_cond.wait_for(
-                lambda: pop.done
-                or pop.player_replay.is_min_fill_fraction_reached(
+                lambda: run_state.done
+                or run_state.player_replay.is_min_fill_fraction_reached(
                     self.config.replay_buffer_min_fill_fraction
                 )
             )
 
         init_key = jax.random.PRNGKey(random.randint(0, 2**16 - 1))
-        while not pop.done:
+        while not run_state.done:
             for _ in range(max_burst):
-                if pop.done:
+                if run_state.done:
                     break
 
-                sample_cond = pop.player_replay._sample_cv
+                sample_cond = run_state.player_replay._sample_cv
                 with sample_cond:
                     sample_cond.wait_for(
-                        lambda: pop.done
-                        or pop.player_replay.ready_to_sample(batch_size)
+                        lambda: run_state.done
+                        or run_state.player_replay.ready_to_sample(batch_size)
                     )
-                    if pop.done:
+                    if run_state.done:
                         break
-                    batch = pop.player_replay.sample(batch_size)
+                    batch = run_state.player_replay.sample(batch_size)
 
                 # Normalise the exploration-ladder tag every trajectory
                 # carries (explore actors mark theirs explore=True at
@@ -1764,11 +1676,11 @@ class Learner:
                     for t in batch
                 ]
 
-                add_cond = pop.player_replay._add_cv
+                add_cond = run_state.player_replay._add_cv
                 with add_cond:
                     add_cond.notify_all()
 
-                pop.consumer_progress.update(batch_size)
+                run_state.consumer_progress.update(batch_size)
 
                 init_key, batch_key = jax.random.split(init_key)
                 stacked = _stack_batch(
@@ -1776,34 +1688,34 @@ class Learner:
                     rng_key=batch_key,
                     lattice=self.config.player_shape_lattice,
                 )
-                while not pop.done:
+                while not run_state.done:
                     try:
-                        pop.device_q.put(stacked, timeout=1.0)
+                        run_state.device_q.put(stacked, timeout=1.0)
                         break
                     except queue.Full:
                         continue
 
-        logger.info("host_to_device_worker[%s] exiting.", pop.name)
+        logger.info("host_to_device_worker exiting.")
 
-    def _wandb_log_worker(self, pop: PopulationState):
-        """Background thread: drains log dicts for this population,
+    def _wandb_log_worker(self, run_state: RunState):
+        """Background thread: drains log dicts for the run,
         paying the device->host transfer and wandb serialization here so
         the train loop never has to synchronize with the GPU per step. A
         single consumer preserves wandb step ordering. Also hosts the replay-ratio controller, which
         needs exactly the host-side per-step logs this thread already
         produces."""
         while True:
-            logs = pop.log_q.get()
+            logs = run_state.log_q.get()
             if logs is None:
                 break
             try:
                 host_logs = jax.device_get(logs)
-                self._update_replay_controller(pop, host_logs)
-                pop.wandb_run.log(host_logs)
+                self._update_replay_controller(run_state, host_logs)
+                run_state.wandb_run.log(host_logs)
             except Exception:
-                logger.exception("wandb logging failed for population %s", pop.name)
+                logger.exception("wandb logging failed")
 
-    def _checkpoint_writer_worker(self, pop: PopulationState):
+    def _checkpoint_writer_worker(self, run_state: RunState):
         """Background thread: does the actual checkpoint disk I/O so the
         training loop never blocks on it. Payloads are already fully
         host-side and pre-serialized by
@@ -1811,7 +1723,7 @@ class Learner:
         never touches a live device buffer or mutates self.league
         directly, only writes what it was handed."""
         while True:
-            payload = pop.ckpt_q.get()
+            payload = run_state.ckpt_q.get()
             if payload is None:
                 break
             try:
@@ -1827,30 +1739,29 @@ class Learner:
                 )
             except Exception:
                 logger.exception(
-                    "Background checkpoint write failed for population %s @ "
+                    "Background checkpoint write failed @ "
                     "step %s — the next periodic checkpoint will simply try "
                     "again.",
-                    pop.name,
                     payload.get("step_count"),
                 )
 
     # --- controller state ----------------------------------------------------
 
-    def controller_state_bytes(self, pop: PopulationState) -> bytes:
+    def controller_state_bytes(self, run_state: RunState) -> bytes:
         """Host-side training dynamics for the checkpoint. Every adaptive
         controller this project built has since been removed (LESSONS.md
         §10), so what is left is the monotonic x-axis counter — but the
         section-wise shape is kept: it is what lets a checkpoint written by
         a superseded revision resume without failing."""
         state = {
-            # Monotonic per-run x-axis counter (see PopulationState.
+            # Monotonic per-run x-axis counter (see RunState.
             # lifetime_step) — restored so charts never rewind at a resume.
-            "lifetime_step": pop.lifetime_step,
+            "lifetime_step": run_state.lifetime_step,
         }
         return pickle.dumps(state)
 
     def _restore_controller_state(
-        self, pop: PopulationState, data: bytes | None
+        self, run_state: RunState, data: bytes | None
     ) -> None:
         """Counterpart to controller_state_bytes. Missing sections (older
         checkpoints, or a controller since removed) are simply skipped.
@@ -1867,7 +1778,7 @@ class Learner:
             return
         # Pre-lifetime_step checkpoints fall back to host_step, which is
         # exact: the counter only ever advances with training.
-        pop.lifetime_step = int(state.get("lifetime_step", pop.host_step))
+        run_state.lifetime_step = int(state.get("lifetime_step", run_state.host_step))
         # Checkpoints written before the controller removals (entropy_ctrl
         # 2026-08-13; lambda_ctrl/exploit_ctrl 2026-08-14) carry those
         # sections — simply never read, same as any other extra section.
@@ -1879,9 +1790,9 @@ class Learner:
     # fixed player_lambda replaced it (see targets.py). The replay
     # reuse-cap controller below is the one remaining per-log-tick loop.
 
-    def _update_replay_controller(self, pop: PopulationState, host_logs: dict) -> None:
+    def _update_replay_controller(self, run_state: RunState, host_logs: dict) -> None:
         """Velocity-form PI loop holding the replayed-batch actor KL at
-        pop.replay_kl_target by adjusting that population's own reuse
+        run_state.replay_kl_target by adjusting the reuse
         cap."""
         config = self.config
         if not config.player_replay_ctrl_enabled:
@@ -1891,111 +1802,102 @@ class Learner:
         # the controller silently cut the reuse cap).
         kl = host_logs.get("player_learner_actor_forward_kl_own")
         if kl is not None and np.isfinite(kl):
-            pop.replay_ctrl_kl_sum += float(kl)
-            pop.replay_ctrl_kl_count += 1
+            run_state.replay_ctrl_kl_sum += float(kl)
+            run_state.replay_ctrl_kl_count += 1
 
-        if pop.replay_ctrl_kl_count >= config.player_replay_ctrl_interval:
-            kl_mean = pop.replay_ctrl_kl_sum / pop.replay_ctrl_kl_count
-            pop.replay_ctrl_kl_sum = 0.0
-            pop.replay_ctrl_kl_count = 0
+        if run_state.replay_ctrl_kl_count >= config.player_replay_ctrl_interval:
+            kl_mean = run_state.replay_ctrl_kl_sum / run_state.replay_ctrl_kl_count
+            run_state.replay_ctrl_kl_sum = 0.0
+            run_state.replay_ctrl_kl_count = 0
 
-            err = (pop.replay_kl_target - kl_mean) / pop.replay_kl_target
-            pop.replay_pi.step(err)
+            err = (run_state.replay_kl_target - kl_mean) / run_state.replay_kl_target
+            run_state.replay_pi.step(err)
 
-            cap = int(round(np.exp(pop.replay_pi.log)))
-            if cap != pop.player_replay.max_reuses:
-                pop.player_replay.set_max_reuses(cap)
+            cap = int(round(np.exp(run_state.replay_pi.log)))
+            if cap != run_state.player_replay.max_reuses:
+                run_state.player_replay.set_max_reuses(cap)
 
-            adds = pop.player_replay.total_adds
-            samples = pop.player_replay.total_samples
-            delta_adds = adds - pop.replay_ctrl_prev_adds
-            delta_samples = samples - pop.replay_ctrl_prev_samples
-            pop.replay_ctrl_prev_adds = adds
-            pop.replay_ctrl_prev_samples = samples
+            adds = run_state.player_replay.total_adds
+            samples = run_state.player_replay.total_samples
+            delta_adds = adds - run_state.replay_ctrl_prev_adds
+            delta_samples = samples - run_state.replay_ctrl_prev_samples
+            run_state.replay_ctrl_prev_adds = adds
+            run_state.replay_ctrl_prev_samples = samples
             if delta_adds > 0:
-                pop.replay_realised_ratio = delta_samples / delta_adds
+                run_state.replay_realised_ratio = delta_samples / delta_adds
 
-        host_logs["player_replay_max_reuses"] = float(pop.player_replay.max_reuses)
-        host_logs["player_replay_realised_ratio"] = pop.replay_realised_ratio
+        host_logs["player_replay_max_reuses"] = float(run_state.player_replay.max_reuses)
+        host_logs["player_replay_realised_ratio"] = run_state.replay_realised_ratio
 
     # --- scheduler -----------------------------------------------------------
 
-    def _select_population(self) -> PopulationState | None:
-        """Returns the population to train this tick, or None if nothing is
-        ready. One population since 2026-08-21, so this is a readiness
-        check: warm-enough replay buffer, a batch already on device.
+    def _ready_run_state(self) -> RunState | None:
+        """The run state if it is ready to train this tick, else None:
+        warm-enough replay buffer, a batch already on device.
 
         The .empty() peek is race-free for our purposes: this (the train
         loop) is the sole consumer of the device_q, so an observed
         non-empty queue can't be emptied by anyone else before train()
         collects it."""
-        pop = self.populations.get("main")
+        run_state = self.run_state
         if (
-            pop is not None
-            and pop.player_state is not None
-            and pop.player_replay.is_min_fill_fraction_reached(
+            run_state is not None
+            and run_state.player_state is not None
+            and run_state.player_replay.is_min_fill_fraction_reached(
                 self.config.replay_buffer_min_fill_fraction
             )
-            and not pop.device_q.empty()
+            and not run_state.device_q.empty()
         ):
-            return pop
+            return run_state
         return None
 
     def train(self):
-        """Training loop. Each tick: check readiness (_select_population),
+        """Training loop. Each tick: check readiness (_ready_run_state),
         pull one batch from the device_q, train via the compiled train_step
         under the gpu_lock, run the periodic tasks. The actor pool runs
         continuously and independently."""
-        for pop in self.populations.values():
-            self._start_population_workers(pop)
+        for run_state in (self.run_state,):
+            self._start_workers(run_state)
 
         try:
             for _ in range(self.config.num_steps):
                 if self.done:
                     break
-                pop = self._select_population()
-                if pop is None:
+                run_state = self._ready_run_state()
+                if run_state is None:
                     # Nothing has a warm-enough replay buffer yet (e.g. at
                     # process start, before main's own buffer fills), or
-                    # every ready population's device_q is momentarily
+                    # the device_q is momentarily
                     # empty — brief wait rather than a busy spin.
                     threading.Event().wait(timeout=0.1)
                     continue
 
                 try:
-                    # Never blocks: _select_population only returns a
-                    # population it observed a batch for, and this thread
+                    # Never blocks: _ready_run_state only returns after
+                    # observing a batch, and this thread
                     # is the sole consumer of every device_q.
-                    batch = pop.device_q.get_nowait()
+                    batch = run_state.device_q.get_nowait()
                 except queue.Empty:
                     continue
                 with self.gpu_lock:
                     batch = jax.device_put(batch)
-                    logs = self._train_step(pop, batch)
+                    logs = self._train_step(run_state, batch)
 
-                pop.host_step += 1
-                pop.lifetime_step += 1
-                pop.frames_trained_total = (
-                    int(jax.device_get(pop.player_state.frame_count))
-                    - pop.created_at_frame
+                run_state.host_step += 1
+                run_state.lifetime_step += 1
+                run_state.frames_trained_total = (
+                    int(jax.device_get(run_state.player_state.frame_count))
+                    - run_state.created_at_frame
                 )
-                if (
-                    pop.capacity_probe_jit is not None
-                    and pop.host_step % self.config.capacity_probe_interval == 0
-                ):
-                    with self.gpu_lock:
-                        logs.update(
-                            pop.capacity_probe_jit(pop.player_state.params, batch)
-                        )
-                self._handle_periodic_tasks(pop, pop.host_step, logs)
+                self._handle_periodic_tasks(run_state, run_state.host_step, logs)
 
         except KeyboardInterrupt:
             # One synchronous full save so a deliberate restart loses
             # nothing since the last periodic checkpoint.
             logger.info("Keyboard interrupt received. Saving checkpoint...")
-            pop = self.populations["main"]
+            run_state = self.run_state
             try:
-                self._write_checkpoint(pop, synchronous=True)
+                self._write_checkpoint(run_state, synchronous=True)
             except RuntimeError:
                 logger.exception(
                     "Skipping interrupt checkpoint: train state was donated "
@@ -2013,97 +1915,96 @@ class Learner:
             raise
         finally:
             self.done = True
-            for pop in self.populations.values():
+            for run_state in (self.run_state,):
                 # strict=False: process is exiting — a straggler here is
                 # tolerable (daemon threads die with the process), and
                 # raising would mask the real outcome, turning e.g. a
                 # clean Ctrl-C into a crash. Resets keep strict=True.
-                self._stop_population_workers(pop, strict=False)
+                self._stop_workers(run_state, strict=False)
             tqdm.write("Training Finished.")
 
     def register_actor_threads(
-        self, population: PopulationName, threads: list[threading.Thread]
+        self, threads: list[threading.Thread]
     ) -> None:
         """Called by main.py right after it constructs and starts a
-        population's PlayerActor/BuilderActor pool (in response to the
+        run's PlayerActor/BuilderActor pool (in response to the
         spawn_actor_pool callback, on creation, or after a reset) — Learner
         can't spawn these itself without a circular import. Registering
-        them here means a shutdown or population reset waits for (and
+        them here means a shutdown waits for (and
         straggler-checks) them exactly like the 3 internal workers,
         instead of silently leaving them running against now-stale state."""
-        self.populations[population].actor_threads.extend(threads)
+        self.run_state.actor_threads.extend(threads)
 
-    def _start_population_workers(self, pop: PopulationState) -> None:
+    def _start_workers(self, run_state: RunState) -> None:
         transfer_thread = threading.Thread(
             target=self.host_to_device_worker,
-            args=(pop,),
+            args=(run_state,),
             daemon=True,
-            name=f"transfer-{pop.name}",
+            name="transfer",
         )
         transfer_thread.start()
         log_thread = threading.Thread(
             target=self._wandb_log_worker,
-            args=(pop,),
+            args=(run_state,),
             daemon=True,
-            name=f"log-{pop.name}",
+            name="log",
         )
         log_thread.start()
         ckpt_thread = threading.Thread(
             target=self._checkpoint_writer_worker,
-            args=(pop,),
+            args=(run_state,),
             daemon=True,
-            name=f"ckpt-{pop.name}",
+            name="ckpt",
         )
         ckpt_thread.start()
-        pop.worker_threads.extend([transfer_thread, log_thread, ckpt_thread])
+        run_state.worker_threads.extend([transfer_thread, log_thread, ckpt_thread])
 
-    def _stop_population_workers(
-        self, pop: PopulationState, strict: bool = True
+    def _stop_workers(
+        self, run_state: RunState, strict: bool = True
     ) -> None:
-        pop.done = True
-        pop.stop_signal[0] = True
+        run_state.done = True
+        run_state.stop_signal[0] = True
         # Wake actors idling at the block gate so they observe stop_signal
         # immediately instead of on their next wait() timeout.
-        pop.run_gate.set()
+        run_state.run_gate.set()
         try:
-            pop.device_q.get_nowait()
+            run_state.device_q.get_nowait()
         except queue.Empty:
             pass
         for cond in (
-            pop.player_replay._add_cv,
-            pop.player_replay._sample_cv,
-            pop.builder_replay._add_cv,
-            pop.builder_replay._sample_cv,
+            run_state.player_replay._add_cv,
+            run_state.player_replay._sample_cv,
+            run_state.builder_replay._add_cv,
+            run_state.builder_replay._sample_cv,
         ):
             with cond:
                 cond.notify_all()
 
-        for t in pop.worker_threads:
+        for t in run_state.worker_threads:
             if t.name.startswith("transfer-"):
                 t.join(timeout=10)
-        pop.log_q.put(None)
-        for t in pop.worker_threads:
+        run_state.log_q.put(None)
+        for t in run_state.worker_threads:
             if t.name.startswith("log-"):
                 t.join(timeout=30)
-        pop.ckpt_q.put(None)
-        for t in pop.worker_threads:
+        run_state.ckpt_q.put(None)
+        for t in run_state.worker_threads:
             if t.name.startswith("ckpt-"):
                 t.join(timeout=60)
         # External actor threads (main.py's PlayerActor/BuilderActor pool,
         # registered via register_actor_threads): already signalled via
-        # pop.stop_signal[0] above — just wait for them here.
-        for t in pop.actor_threads:
+        # run_state.stop_signal[0] above — just wait for them here.
+        for t in run_state.actor_threads:
             t.join(timeout=30)
 
-        all_threads = pop.worker_threads + pop.actor_threads
+        all_threads = run_state.worker_threads + run_state.actor_threads
         stragglers = [t for t in all_threads if t.is_alive()]
         if stragglers:
             logger.warning(
-                "%d worker thread(s) for population %s did not stop within "
+                "%d worker thread(s) did not stop within "
                 "their join timeout: %s — giving a 30s grace period before "
                 "treating this as a hung shutdown.",
                 len(stragglers),
-                pop.name,
                 [t.name for t in stragglers],
             )
             for t in stragglers:
@@ -2112,14 +2013,13 @@ class Learner:
         if stragglers:
             if strict:
                 raise RuntimeError(
-                    f"{len(stragglers)} worker thread(s) for population "
-                    f"{pop.name} never stopped: {[t.name for t in stragglers]}. "
-                    "Refusing to proceed with this population's state still "
-                    "reachable from a live thread."
+                    f"{len(stragglers)} worker thread(s) never stopped: "
+                    f"{[t.name for t in stragglers]}. Refusing to proceed with "
+                    "training state still reachable from a live thread."
                 )
             # strict=False is the whole-PROCESS shutdown path (train()'s
             # finally, incl. Ctrl-C): the straggler raise exists to stop a
-            # population RESET from rebuilding on top of state a leaked
+            # rebuild from starting on top of state a leaked
             # thread still holds (the 2026-08-11 RAM/VRAM leak) — at
             # process exit there is no next phase to protect, every
             # thread is a daemon that dies with the process, and raising
@@ -2127,15 +2027,14 @@ class Learner:
             # (an actor blocked on the game-server websocket mid-game is
             # normal at this point, not a leak).
             logger.warning(
-                "%d thread(s) for population %s still alive at process "
+                "%d thread(s) still alive at process "
                 "shutdown: %s — proceeding; they are daemons and exit "
                 "with the process.",
                 len(stragglers),
-                pop.name,
                 [t.name for t in stragglers],
             )
 
-        # Return this population's 4 progress-bar rows to the shared pool
+        # Return the 4 progress-bar rows to the shared pool
         # (close_tqdm_bar) so the replacement fork reuses the same rows —
         # without this, every rebuild leaked 4 dead rows and
         # pushed all live bars one screen-row further down, unboundedly,
@@ -2143,10 +2042,10 @@ class Learner:
         # racing in from a straggler: tqdm's close() flips .disable, which
         # every update() checks first.
         for bar in (
-            pop.consumer_progress,
-            pop.train_progress,
-            pop.player_replay._progress,
-            pop.builder_replay._progress,
+            run_state.consumer_progress,
+            run_state.train_progress,
+            run_state.player_replay._progress,
+            run_state.builder_replay._progress,
         ):
             close_tqdm_bar(bar)
 
@@ -2202,7 +2101,7 @@ class Learner:
 
         # Heap census: attributes host RSS the byte-exact counters below
         # (replay buffers, league cache) don't cover — e.g. the ~3GB the
-        # 2026-08-18 population-fork jump left unexplained by thread counts
+        # 2026-08-18 fork jump left unexplained by thread counts
         # and league cache alone. sys.getsizeof is shallow (a dict/list's
         # own overhead, not its contents), but that's exactly what surfaces
         # a genuine culprit: a huge COUNT of one type (numpy arrays, proto
@@ -2225,9 +2124,9 @@ class Learner:
         except Exception:
             logger.exception("Heap census failed")
 
-        for name, pop in self.populations.items():
-            logs[f"diag_player_replay_mb_{name}"] = pop.player_replay.nbytes() / 2**20
-            logs[f"diag_builder_replay_mb_{name}"] = pop.builder_replay.nbytes() / 2**20
+        run_state = self.run_state
+        logs["diag_player_replay_mb"] = run_state.player_replay.nbytes() / 2**20
+        logs["diag_builder_replay_mb"] = run_state.builder_replay.nbytes() / 2**20
         try:
             with open("runtime/service_memory.json") as f:
                 node_stats = json.load(f)
@@ -2249,7 +2148,7 @@ class Learner:
         logs["diag_league_cache_entries"] = entries
         logs["diag_league_cache_mb"] = cache_bytes / 2**20
 
-    def _precompile_lattice(self, pop: PopulationState, batch: Batch) -> None:
+    def _precompile_lattice(self, run_state: RunState, batch: Batch) -> None:
         """Fail-fast compilation of EVERY lattice combo at the first
         batch, so a shape variant can never arrive as a surprise compile
         mid-run (the exact mechanism that OOM'd the geometric-bucket
@@ -2324,8 +2223,8 @@ class Learner:
                 )
 
             self._train_step_jit(
-                copy_state(pop.player_state),
-                copy_state(pop.builder_state),
+                copy_state(run_state.player_state),
+                copy_state(run_state.builder_state),
                 resized,
                 self.config,
             )
@@ -2333,74 +2232,73 @@ class Learner:
                 "Compiled (%d, %d) in %.1fs.", t_c, h_c, time.time() - start
             )
 
-    def _train_step(self, pop: PopulationState, batch: Batch) -> dict:
-        """Runs the JAX update, rebinding the result onto pop."""
+    def _train_step(self, run_state: RunState, batch: Batch) -> dict:
+        """Runs the JAX update, rebinding the result onto run_state."""
         if not self._shape_lattice_compiled:
-            self._precompile_lattice(pop, batch)
+            self._precompile_lattice(run_state, batch)
             self._shape_lattice_compiled = True
-        pop.player_state, pop.builder_state, logs = self._train_step_jit(
-            pop.player_state,
-            pop.builder_state,
+        run_state.player_state, run_state.builder_state, logs = self._train_step_jit(
+            run_state.player_state,
+            run_state.builder_state,
             batch,
             self.config,
         )
         return logs
 
-    def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):
-        """Handles logging, progress bars, and checkpointing for pop."""
-        pop.train_progress.update(1)
+    def _handle_periodic_tasks(self, run_state: RunState, step: int, logs: dict):
+        """Handles logging, progress bars, and checkpointing for run_state."""
+        run_state.train_progress.update(1)
 
         if (
             self.config.smogon_format != "randombattle"
             and step % self.config.save_interval_steps == 0
         ):
-            logs.update(self._get_usage_counts(pop))
+            logs.update(self._get_usage_counts(run_state))
 
         if step % self.config.league_winrate_log_steps == 0:
-            logs.update(self._get_league_winrates(pop))
-            logs.update(self._get_league_winrate_heatmap(pop))
+            logs.update(self._get_league_winrates(run_state))
+            logs.update(self._get_league_winrate_heatmap(run_state))
 
         if (
-            pop.name == "main"
-            and self.config.memory_diag_interval > 0
+            self.config.memory_diag_interval > 0
             and step % self.config.memory_diag_interval == 0
         ):
             self._log_memory_diagnostics(logs)
 
-        # The default x-axis for every metric on this population's run
+        # The default x-axis for every metric on the run
         # (wandb.define_metric in main.py): monotonic across resumes AND
         # attempt re-forks, unlike host_step/frames.
-        logs["lifetime_step"] = pop.lifetime_step
-        pop.log_q.put(logs)
+        logs["lifetime_step"] = run_state.lifetime_step
+        run_state.log_q.put(logs)
 
-        # PlayerActor.pull_own_player() reads league.get_live(pop.live_key),
+        # PlayerActor.pull_own_player() reads league.get_live(MAIN_KEY),
         # so this is what makes the actors play the CURRENT policy rather
         # than the one they were started with.
         if step % self.config.main_player_update_steps == 0:
-            self.league.update_live(pop.live_key, self._create_params_container(pop))
+            self.league.update_live(MAIN_KEY, self._create_params_container(run_state))
 
         if step % self.config.save_interval_steps == 0:
-            self._write_checkpoint(pop)
+            self._write_checkpoint(run_state)
 
         if step % self.config.manage_league_interval == 0:
-            self._manage_league(pop, step)
+            self._manage_league(run_state, step)
 
-        self._check_oom_guard(pop, step)
+        self._check_oom_guard(run_state, step)
 
-    def _write_checkpoint(self, pop: PopulationState, synchronous: bool = False) -> str:
+    def _write_checkpoint(self, run_state: RunState, synchronous: bool = False) -> str:
         """Writes the full resumable state: params, target_params,
         opt_state, host counters, the serialized League and the controller
-        blob, keyed to the population's own step_count.
+        blob, keyed to the run's own step_count.
 
         Everything host-side/fast happens synchronously here (device
         pulls, small in-memory serializations); only the actual disk
-        write goes to pop's own background writer, via a payload that's
+        write goes to run_state's own background writer, via a payload that's
         already fully host-side (plain dicts/bytes/ints, never a live
         TrainState or the live League object itself). synchronous=True
         (Ctrl-C/OOM-guard path) writes inline instead, since there may be
         no time left for the background writer to run."""
-        host_player_state = jax.device_get(pop.player_state)
-        host_builder_state = jax.device_get(pop.builder_state)
+        host_player_state = jax.device_get(run_state.player_state)
+        host_builder_state = jax.device_get(run_state.builder_state)
         player_components = dict(
             params=host_player_state.params,
             target_params=host_player_state.target_params,
@@ -2431,7 +2329,7 @@ class Learner:
             player_components=player_components,
             builder_components=builder_components,
             league_bytes=self.league.serialize(),
-            controller_bytes=self.controller_state_bytes(pop),
+            controller_bytes=self.controller_state_bytes(run_state),
             step_count=int(np.asarray(host_player_state.step_count)),
             frame_count=int(np.asarray(host_player_state.frame_count)),
         )
@@ -2446,16 +2344,16 @@ class Learner:
                 step_count=payload["step_count"],
                 frame_count=payload["frame_count"],
             )
-        pop.ckpt_q.put(payload)
+        run_state.ckpt_q.put(payload)
         return save_path
 
-    def _manage_league(self, pop: PopulationState, step: int):
+    def _manage_league(self, run_state: RunState, step: int):
         """Checks whether a new snapshot should be added to the league."""
-        reason = self._should_add_new_player(pop)
+        reason = self._should_add_new_player(run_state)
         if reason is not None:
             tqdm.write(f"Adding new player to league @ {step} ({reason})")
-            self._add_player_to_league(pop, step, origin="main")
-            pop.player_replay.reset_usage_counts()
+            self._add_player_to_league(run_state, step, origin="main")
+            run_state.player_replay.reset_usage_counts()
 
     def _available_memory_fraction() -> float | None:
         """Fraction of total system RAM currently available (reclaimable
@@ -2474,7 +2372,7 @@ class Learner:
         except Exception:
             return None
 
-    def _check_oom_guard(self, pop: PopulationState, step: int) -> None:
+    def _check_oom_guard(self, run_state: RunState, step: int) -> None:
         """Self-monitoring safety valve, not a leak fix: if available RAM
         drops below config.oom_guard_min_available_fraction, save a
         full checkpoint now and raise OOMGuardTriggered — better to stop on
@@ -2493,15 +2391,14 @@ class Learner:
         ):
             logger.warning(
                 "Available memory fraction %.3f < oom_guard_min_available_fraction "
-                "%.3f @ population %s step %d — saving a checkpoint and "
+                "%.3f @ step %d — saving a checkpoint and "
                 "stopping before the kernel OOM-kills this process.",
                 available_fraction,
                 self.config.oom_guard_min_available_fraction,
-                pop.name,
                 step,
             )
             save_path = self._write_checkpoint(
-                self.populations["main"], synchronous=True
+                self.run_state, synchronous=True
             )
             raise OOMGuardTriggered(save_path)
 
@@ -2510,7 +2407,7 @@ class Learner:
     # worst-matchup win-rate signal still exists in _should_add_new_player's
     # "dominant" gate; it just doesn't actuate anything anymore.)
 
-    def _should_add_new_player(self, pop: PopulationState) -> AddReason | None:
+    def _should_add_new_player(self, run_state: RunState) -> AddReason | None:
         """Returns why a snapshot should join the league, or None to skip.
         main only."""
         # Pacing is measured against main's OWN last checkpoint (AlphaStar
@@ -2520,7 +2417,7 @@ class Learner:
         # max()) with a frame count that never advances, firing an overdue
         # add on every league-management tick.
         latest = self.league.get_latest_player(origin="main")
-        current = self.league.get_live(pop.live_key)
+        current = self.league.get_live(MAIN_KEY)
 
         latest_frames = latest.player_frame_count if latest is not None else 0
         frames_passed = int(current.player_frame_count - latest_frames)
@@ -2534,7 +2431,7 @@ class Learner:
 
         if not historical_players:
             if (
-                int(pop.player_state.step_count)
+                int(run_state.player_state.step_count)
                 > self.config.minimum_historical_player_steps
             ):
                 return "initial"
@@ -2548,17 +2445,17 @@ class Learner:
             return "overdue"
         return None
 
-    def _create_params_container(self, pop: PopulationState) -> ParamsContainer:
+    def _create_params_container(self, run_state: RunState) -> ParamsContainer:
         return ParamsContainer(
-            player_frame_count=jax.device_get(pop.player_state.frame_count).item(),
-            builder_frame_count=jax.device_get(pop.builder_state.frame_count).item(),
-            step_count=pop.live_key,
-            player_params=jax.device_get(pop.player_state.params),
-            builder_params=jax.device_get(pop.builder_state.params),
+            player_frame_count=jax.device_get(run_state.player_state.frame_count).item(),
+            builder_frame_count=jax.device_get(run_state.builder_state.frame_count).item(),
+            step_count=MAIN_KEY,
+            player_params=jax.device_get(run_state.player_state.params),
+            builder_params=jax.device_get(run_state.builder_state.params),
         )
 
     def _add_player_to_league(
-        self, pop: PopulationState, step: int, origin: PopulationName = "main"
+        self, run_state: RunState, step: int, origin: str = "main"
     ):
         """Persist the current params as an opponent snapshot and register
         a ref. Only the params files are written (no optimiser state); the
@@ -2570,21 +2467,21 @@ class Learner:
         checkpoint.save_param_snapshot(
             snapshot_dir,
             player_components=dict(
-                params=jax.device_get(pop.player_state.params),
-                target_params=jax.device_get(pop.player_state.target_params),
+                params=jax.device_get(run_state.player_state.params),
+                target_params=jax.device_get(run_state.player_state.target_params),
             ),
             builder_components=dict(
-                params=jax.device_get(pop.builder_state.params),
-                target_params=jax.device_get(pop.builder_state.target_params),
+                params=jax.device_get(run_state.builder_state.params),
+                target_params=jax.device_get(run_state.builder_state.target_params),
             ),
         )
         self.league.add_player(
             PlayerRef(
                 step_count=league_step,
                 snapshot_dir=snapshot_dir,
-                player_frame_count=jax.device_get(pop.player_state.frame_count).item(),
+                player_frame_count=jax.device_get(run_state.player_state.frame_count).item(),
                 builder_frame_count=jax.device_get(
-                    pop.builder_state.frame_count
+                    run_state.builder_state.frame_count
                 ).item(),
                 player_key="params",
                 builder_key="params",
@@ -2592,13 +2489,13 @@ class Learner:
             )
         )
 
-    def _get_usage_counts(self, pop: PopulationState):
+    def _get_usage_counts(self, run_state: RunState):
         result = {}
         for key, counts in [
-            ("species", pop.player_replay._species_counts),
-            ("items", pop.player_replay._item_counts),
-            ("abilities", pop.player_replay._ability_counts),
-            ("moves", pop.player_replay._move_counts),
+            ("species", run_state.player_replay._species_counts),
+            ("items", run_state.player_replay._item_counts),
+            ("abilities", run_state.player_replay._ability_counts),
+            ("moves", run_state.player_replay._move_counts),
         ]:
             names = list(STOI[key])
             table = wandb.Table(columns=[key, "usage"])
@@ -2616,8 +2513,8 @@ class Learner:
         """Payoff-table label: the snapshot's own step count."""
         return f"{ref.step_count}"
 
-    def _get_league_winrates(self, pop: PopulationState):
-        current = self.league.get_live(pop.live_key)
+    def _get_league_winrates(self, run_state: RunState):
+        current = self.league.get_live(MAIN_KEY)
         others = self._winrate_tracked_opponents()
         if not others:
             return {}
@@ -2630,7 +2527,7 @@ class Learner:
             for i, wr in enumerate(win_rates)
         }
 
-    def _get_league_winrate_heatmap(self, pop: PopulationState):
+    def _get_league_winrate_heatmap(self, run_state: RunState):
         """Full pairwise win-rate matrix over the whole shared payoff
         table: live main and every historical snapshot (when they
         exist), and every historical snapshot with an origin-labelled
@@ -2657,7 +2554,7 @@ class Learner:
         chart's ordinal axes sort by league structure rather than
         wandb's default alphabetical sort. A pair that has never actually
         played just shows the table's prior."""
-        current = self.league.get_live(pop.live_key)
+        current = self.league.get_live(MAIN_KEY)
         others = self._winrate_tracked_opponents()
         if not others:
             return {}
