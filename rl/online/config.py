@@ -4,8 +4,7 @@ import chex
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
 
-PolicyObjectiveT = Literal["spo", "ppo"]
-QBoostVariantT = Literal["multistep", "onestep"]
+PolicyObjectiveT = Literal["spo"]
 
 
 @chex.dataclass(frozen=True)
@@ -286,16 +285,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (R-NaD likewise keeps a 1e-3 target purely for v-trace stability,
     # separate from its slow anchors.)
     player_ema_update_rate: float = 1e-3
-    # Advantage-normaliser statistics EMA — deliberately much faster than
-    # the target-params EMA above (the stats are per-batch scalars, not
-    # parameters): ~100-step time constant so PG mis-scaling after a
-    # distribution shift (a league addition) lasts ~0.5% of a rating
-    # window instead of ~10%.
-    player_adv_ema_rate: float = 1e-2
-    # Floor for the normaliser's std divisor: below this, stop rescaling
-    # so converged-policy noise is not amplified into the actor. Sized
-    # ~10-15% of the healthy running adv-std (0.34-0.6 observed).
-    player_adv_std_floor: float = 0.05
     builder_ema_update_rate: float = 1e-3
 
     # Advantage estimation params — AlphaStar's v-trace + UPGO recipe
@@ -318,16 +307,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # spectrum's lambda=1.0 MC-anchor row (player_aux_lambdas) keeps the
     # bootstrap-bias readout (player_bootstrap_gap) alive regardless.
     player_lambda: float = 0.8
-
-    # UPGO (AlphaStar rl.py upgo_returns): policy-gradient-only return
-    # that follows the actual trajectory while the continuation performs
-    # at least as well as the critic expected (lambda_t = 1 where
-    # Q_hat >= V, else cut to the critic's value) — full Monte Carlo
-    # credit along successful lines, truncation at the first
-    # worse-than-expected step. Coefficient mirrors AlphaStar's equal
-    # weighting of the v-trace and UPGO PG terms. Passed to train_step
-    # as a RUNTIME scalar (never static config: LESSONS.md 1).
-    player_upgo_coef: float = 1.0
 
     # No adaptivity/entropy controller fields anymore: the magnet KL
     # coefficient is exactly player_magnet_kl_coef, always. The
@@ -387,19 +366,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_alpha: float = 1.0
     builder_lambda: float = 0.99
 
-    # Player policy objective: ratio-based surrogates with a trust region.
-    player_policy_objective: PolicyObjectiveT = "spo"
-
-    player_ppo_clip_threshold: float = 0.3
+    # Builder policy objective: ratio-based surrogate with a trust region.
+    # The player has no ratio-surrogate term anymore — the single-action PG
+    # and UPGO losses were removed 2026-08-21 (LESSONS.md 3).
+    builder_policy_objective: PolicyObjectiveT = "spo"
     builder_ppo_clip_threshold: float = 0.3
-
-    # Advantage EMA normalization. When disabled, raw advantages are used;
-    # the EMA statistics keep updating either way so re-enabling is smooth.
-    player_advantage_ema_enabled: bool = True
 
     # Loss coefficients
     ## Player
-    player_policy_loss_coef: float = 1.0
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
     # Multi-lambda auxiliary value heads: K extra categorical value
@@ -463,34 +437,31 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # preferences rather than a mass-independent barrier — deliberate:
     # it transmits only what the critic believes per state, never a
     # fixed prior. Q̄_all is the PRIVILEGED rung (COMA's centralised
-    # critic): advantages enter as stop-gradient scalars exactly like
-    # the privileged v_head advantages, so the policy stays bitwise
-    # invariant to opp_private_team (value-ladder tests still bind).
-    # MAIN POPULATION ONLY (host-gated in Learner._train_step).
+    # critic): advantages enter as stop-gradient scalars, so the policy
+    # stays bitwise invariant to opp_private_team (value-ladder tests
+    # still bind).
+    #
+    # THE policy gradient since 2026-08-21: the single-action PG and UPGO
+    # terms are gone, so this is the only loss that moves the action
+    # logits toward return. -adv(b) lands on the LOGITS directly (Hennes
+    # et al. 2020 eq. 10, all-action over Q_all, so no 1/pi importance
+    # weight and none of the sampled-NeuRD variance). COMA's own pi
+    # prefactor was dropped first (2026-08-21): NeuRD eq. 6's restoring
+    # force shrinks with the starved cell's own mass, and the 157k-step
+    # 2026-08-20 lineage measured absadv_ratio ~4 against prob_ratio
+    # ~0.075 — the critic preferred switch cells MORE than move cells and
+    # pi alone throttled the update (LESSONS.md 3).
     player_coma_enabled: bool = True
-    # Raw counterfactual advantages are in win units (~0.1-0.2 typical
-    # spread), so 0.05 ≈ 1% relative pressure vs the coef-1.0 normalised
-    # PG — steady and compounding rather than assertive.
-    # 2026-08-21 retune for the NeuRD prefactor: dropping pi (~0.1 on
-    # ~10 legal cells) makes the raw per-cell gradient ~10x COMA's, so
-    # 0.05 was no longer "1% pressure". At 0.1 a starved switch cell
-    # (pi 0.02, adv +0.15) gets ~0.015/logit -- on par with the
-    # magnet's pull at that mass, and the clip below bounds the band.
-    # Applied at full strength from the first main-pop step (no ramp
-    # since 2026-08-21). Runtime scalar: retuning never recompiles.
+    # This coefficient is now the POLICY LEARNING RATE, not a 1% nudge
+    # beside a coef-1.0 PG term. History: 0.05 was sized as ~1% relative
+    # pressure against normalised PG advantages; 0.1 came from the
+    # 2026-08-21 NeuRD retune (dropping pi over ~10 legal cells makes the
+    # raw per-cell gradient ~10x COMA's, so a starved switch cell at
+    # pi 0.02 / adv +0.15 gets ~0.015/logit, the magnet's order). With PG
+    # gone this must be re-sized against the magnet (the only opposing
+    # force left) — judge on player_neurd_clipped_switch and normalised
+    # modality entropy. Runtime scalar: retuning never recompiles.
     player_coma_coef: float = 0.1
-    # Which prefactor multiplies the counterfactual advantage per cell:
-    # "pi" is COMA proper (-pi(b).adv(b) per logit; NeuRD eq. 6 -- the
-    # restoring force on a starved cell shrinks with its own mass, and
-    # the 157k-step lineage of 2026-08-20 measured absadv_ratio ~4 with
-    # prob_ratio ~0.075: the critic preferred switch cells MORE than
-    # move cells and pi alone throttled the update). "neurd" puts the
-    # advantage on the logits directly (-adv(b) per logit, Hennes et
-    # al. 2020 eq. 10; docs/rare-action-rl-literature.md 1.3) -- all-
-    # action form over Q_all, so no 1/pi importance weight and none of
-    # the sampled-NeuRD variance. The decomposition panels keep their
-    # meaning: grad = prefactor x |adv| with prefactor = 1{clip open}.
-    player_coma_prefactor: str = "neurd"
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean
@@ -502,29 +473,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # want" leading indicator; no loss reads it since the stage-2 KL's
     # removal). 0.1 = sharp but not argmax.
     player_q_observer_tau: float = 0.1
-    # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md; Fan & Farina,
-    # arXiv 2605.19235): cross-fade the PG advantage from the v-trace
-    # channel to retrace_g − v_exp — unbiased at lambda=1 for ANY critic
-    # accuracy (their Thm 3.1) and lower-MSE than the GAE family exactly
-    # where the policy must keep randomising (Var_a[Q] > 0), i.e. the
-    # mixed-strategy stay/switch states the collapse forms in. Blended
-    # PRE-normalisation so the existing ema_adv_mean/std fields serve
-    # verbatim (zero new pytree leaves). LIVE from launch on the
-    # 2026-08-19 fresh lineage, in place of the stage-2 KL (coef zeroed
-    # above): boosting repairs the credit signal itself where the KL
-    # propped the policy up with a Boltzmann prior.
-    # Abort = zero this flag; q_boost_mix forces to 0 next step, no
-    # recompile. Judge by switch_ratio, player_q_boost_adv_* agreement,
-    # player_q_calibration_r2_fresh vs player_value_r2_fresh, and the
-    # entropy-cliff watch inherited from stage 2.
-    player_q_boost_enabled: bool = True
-    # Loss-free Stage-3a diagnostics (player_q_boost_adv_*,
-    # player_q_action_var, calibration r2 fresh/replay); on permanently.
-    player_q_boost_diagnostic_enabled: bool = True
-    # multistep = retrace_g − v_exp (the paper's Thm 3.1 estimator);
-    # onestep = q_taken − v_exp fallback arm. Config-static: switching
-    # variants recompiles.
-    player_q_boost_variant: QBoostVariantT = "multistep"
+    # Loss-free critic-quality diagnostics (player_q_action_var and its
+    # uniform/p90 companions, calibration r2 fresh/replay); on
+    # permanently. They matter more, not less, now that NeuRD through
+    # Q_all is the policy's only link to return: if the critic is
+    # action-flat there is nothing for it to amplify but noise.
+    player_q_diagnostic_enabled: bool = True
     # Agent57/Ape-X-style exploration ladder (replaces stage 4's
     # cross-population intake, removed 2026-08-15: it conflated another
     # agent's policy evidence with main's own action values, and its
@@ -596,18 +550,13 @@ class RuntimeScalars:
     static_argname, and static scalars retained ~5GB of executables per
     distinct value and OOM-killed run 1326; as traced leaves they change
     freely with zero recompiles. None falls back at the use site (to the
-    static coef for upgo/magnet, to 0 for the Q terms); the live Learner
-    path always fills all four."""
+    static coef for magnet, to 0 for coma); the live Learner path always
+    fills both."""
 
-    # config.player_upgo_coef.
-    upgo_coef: chex.Array | None = None
     # config.player_magnet_kl_coef.
     magnet_coef: chex.Array | None = None
-    # config.player_coma_coef.
+    # config.player_coma_coef — the policy gradient's coefficient.
     coma_coef: chex.Array | None = None
-    # Stage-3 Q-boosting cross-fade weight (docs/q-boosting-plan.md); zero
-    # while player_q_boost_enabled is off.
-    q_boost_mix: chex.Array | None = None
 
 
 def get_learner_config():

@@ -389,57 +389,23 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md, LIVE
-            # from launch on the 2026-08-19 fresh lineage, in place of the
-            # stage-2 KL): PG advantage cross-faded from v-trace to
-            # retrace_g − v_exp, main population only.
-            name="1.7 · Q-boosting advantage (stage 3)",
+            # Does the critic have anything for NeuRD to amplify? Since
+            # 2026-08-21 the policy's only link to return runs through
+            # Q_all, so an action-flat critic means NeuRD amplifies noise.
+            name="1.7 · Critic quality (what NeuRD reads)",
             is_open=True,
             panels=[
                 lp(
-                    # Runtime scalar, 1.0 on main from step 1 (the 2k
-                    # cross-fade was removed 2026-08-21); advantage fully
-                    # Q-anchored; drops to 0 instantly on abort
-                    # (player_q_boost_enabled=False, no recompile).
-                    "Blend mix",
-                    ["player_q_boost_mix"],
-                    smooth=0,
-                ),
-                lp(
-                    # Agreement with the v-trace channel it replaces.
-                    # Moderate-positive is healthy (identical would make
-                    # the swap pointless, anti-correlated means one of
-                    # the two estimators is broken).
-                    "Boost vs v-trace advantage agreement",
-                    [
-                        "player_q_boost_adv_corr",
-                        "player_q_boost_adv_sign_agree",
-                    ],
-                ),
-                lp(
-                    # Same-order std vs the EMA-tracked (blended) channel
-                    # is the scale sanity check; mean near zero is the
-                    # empirical face of Thm 3.1's unbiasedness.
-                    "Boost advantage scale",
-                    [
-                        "player_q_boost_adv_mean",
-                        "player_q_boost_adv_std",
-                        "player_state_adv_std",
-                    ],
-                ),
-                lp(
-                    # Thm 3.1's precondition Var_a~pi[Q] > 0: near-zero
-                    # means the policy is already ~deterministic wherever
-                    # Q is evaluated, so boosting has no headroom to help
-                    # regardless of critic quality.
-                    # p90 alongside the mean: action-value spread
+                    # Action-value spread. Near-zero means the critic
+                    # cannot tell actions apart, so there is nothing to
+                    # push toward. p90 alongside the mean: spread
                     # concentrates in few high-leverage states, so the
-                    # mean undersells headroom by construction.
+                    # mean undersells by construction.
                     # The uniform (π-free) pair is the flat-vs-anti-switch
                     # discriminator: uniform ≫ π-weighted = spread lives on
                     # abandoned actions (critic discriminates, policy
                     # collapsed); both ≈ 0 = critic genuinely action-flat.
-                    "Thm 3.1 headroom: Var_a~pi[Q] + uniform",
+                    "Action-value spread: Var_a~pi[Q] + uniform",
                     [
                         "player_q_action_var",
                         "player_q_action_var_p90",
@@ -448,12 +414,10 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # The 3b gate the plan wanted BEFORE going live (this
-                    # lineage went live at launch instead): the Q readout
-                    # should calibrate at least as well as the V head on
-                    # fresh rows. q_fresh persistently below value_fresh =
-                    # the blend is anchored on the worse critic — back
-                    # the mix off.
+                    # The Q readout should calibrate at least as well as
+                    # the V head on fresh rows. q_fresh persistently below
+                    # value_fresh = the policy is steering off the worse
+                    # critic.
                     "Calibration r2: Q fresh/replay vs V fresh",
                     [
                         "player_q_calibration_r2_fresh",
@@ -462,10 +426,9 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Outcome + abort watch, same criteria as stage 2:
-                    # entropy/winrate cliff within ~2k steps of the ramp
-                    # -> flag off; switch_ratio is the number this whole
-                    # saga is about.
+                    # switch_ratio is the number this whole saga is about;
+                    # an entropy cliff is the abort signal (back
+                    # player_coma_coef off — runtime scalar, no recompile).
                     "Outcome watch: switch ratio & modality entropy",
                     [
                         "switch_ratio",
@@ -605,18 +568,6 @@ def rl_sections():
                     ["player_bootstrap_gap"],
                 ),
                 lp(
-                    # UPGO (AlphaStar-style second PG term): cut_frac is
-                    # the fraction of steps whose return truncated to the
-                    # bootstrap — ~0 at cold start (pessimistic critic =
-                    # pure MC), rising as the critic calibrates.
-                    "UPGO (cut fraction & loss)",
-                    [
-                        "player_upgo_cut_frac",
-                        "player_loss_upgo",
-                        "player_upgo_adv_std",
-                    ],
-                ),
-                lp(
                     # Slow BT-fit auditors, never controlled on (hundreds
                     # of games per point): worst-matchup drift and BT
                     # non-transitivity are the exploitability signature
@@ -717,8 +668,7 @@ def rl_sections():
                 lp(
                     "Loss components",
                     [
-                        "player_loss_pg",
-                        "player_loss_upgo",
+                        "player_loss_coma",
                         "player_loss_kl",
                         "player_loss_magnet_kl",
                         "player_loss_v_win",
@@ -759,14 +709,6 @@ def rl_sections():
                 lp(
                     "Win returns",
                     ["player_win_returns_sum", "player_win_returns_min"],
-                ),
-                lp(
-                    "State advantage",
-                    [
-                        "player_state_adv_mean",
-                        "player_state_adv_std",
-                        "player_win_adv_std",
-                    ],
                 ),
                 lp(
                     # Counterfactual value ladder (2026-08-16): all

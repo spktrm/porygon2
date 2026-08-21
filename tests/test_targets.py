@@ -11,7 +11,6 @@ from rl.online.targets import (
     compute_player_targets,
     compute_q_targets,
     two_hot,
-    upgo_returns,
     vtrace,
 )
 
@@ -45,55 +44,19 @@ def test_vtrace_zero_trace_is_identity():
     np.testing.assert_allclose(np.asarray(got), np.asarray(td))
 
 
-def test_upgo_hand_example():
-    # T=4, single trajectory, terminal win at the last step.
-    v = jnp.array([0.5, 0.6, 0.2, 0.3])
-    r = jnp.array([0.0, 0.0, 0.0, 1.0])
-    disc = jnp.array([1.0, 1.0, 1.0, 0.0])
-
-    # q_hat = r + disc * v_next = [0.6, 0.2, 0.3, 1.0]
-    # follow = q_hat[t+1] >= v[t+1] -> [False, True, True, (last) False]
-    # g3 = 1.0 (terminal); g2 follows -> 1.0; g1 follows -> 1.0;
-    # g0 cut -> bootstraps v_next[0] = 0.6
-    g, cut = upgo_returns(v, r, disc)
-    np.testing.assert_allclose(np.asarray(g), [0.6, 1.0, 1.0, 1.0], atol=1e-6)
-    np.testing.assert_array_equal(np.asarray(cut), [True, False, False, True])
-
-
-def test_upgo_all_better_than_expected_is_monte_carlo():
-    # Zero critic + non-negative rewards: lookahead never underperforms,
-    # so no truncation before the (always-cut) final step and G is the
-    # plain discounted return.
-    v = jnp.zeros(4)
-    r = jnp.array([0.0, 0.0, 0.0, 1.0])
-    disc = jnp.array([0.9, 0.9, 0.9, 0.0])
-    g, cut = upgo_returns(v, r, disc)
-    np.testing.assert_allclose(np.asarray(g), [0.9**3, 0.9**2, 0.9, 1.0], rtol=1e-6)
-    assert not np.asarray(cut)[:-1].any()
-
-
-def test_upgo_bf16_inputs_upcast_to_f32():
-    # Regression for the 2026-08-13 session crash (fixed in 15b6a3f): bf16
-    # values with f32 python-scalar-promoted discounts made the scan carry
-    # dtype disagree. The recursion must run and return f32.
-    v = jnp.array([0.5, 0.25, 0.125], dtype=jnp.bfloat16)
-    r = jnp.array([0.0, 0.0, 1.0], dtype=jnp.bfloat16)
+def test_vtrace_bf16_inputs_do_not_break_the_scan_carry():
+    """Regression for the 2026-08-13 session crash (fixed in 15b6a3f):
+    bf16 values with f32 python-scalar-promoted discounts made the scan
+    carry dtype disagree. The recursion must run and stay finite. (The
+    original guard rode on upgo_returns, deleted 2026-08-21 with the
+    single-action PG terms — the constraint is on the recursion, so it
+    moved to the one that survives.)"""
+    td = jnp.array([0.5, 0.25, 0.125], dtype=jnp.bfloat16)
     disc = jnp.array([1.0, 1.0, 0.0], dtype=jnp.float32)
-    g, cut = upgo_returns(v, r, disc)
-    assert g.dtype == jnp.float32
-    assert np.isfinite(np.asarray(g)).all()
-
-
-def test_upgo_batched_shapes():
-    T, B = 6, 3
-    rng = np.random.default_rng(1)
-    v = jnp.asarray(rng.normal(size=(T, B)).astype(np.float32))
-    r = jnp.asarray(rng.normal(size=(T, B)).astype(np.float32))
-    disc = jnp.ones((T, B), dtype=jnp.float32)
-    g, cut = upgo_returns(v, r, disc)
-    assert g.shape == (T, B)
-    assert cut.shape == (T, B)
-    assert np.isfinite(np.asarray(g)).all()
+    c = jnp.ones(3, dtype=jnp.float32)
+    got = vtrace(td, disc, c)
+    assert got.dtype == jnp.bfloat16
+    assert np.isfinite(np.asarray(got.astype(jnp.float32))).all()
 
 
 class TestTwoHot:
@@ -264,12 +227,9 @@ class TestPlayerTargetsOnExTrajectory:
         targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
 
         assert targets.win_returns.shape == (T, B, 3)
-        assert targets.advantages.shape == (T, B)
-        assert targets.upgo_advantages.shape == (T, B)
         assert targets.policy_mask.shape == (T, B)
         assert targets.value_mask.shape == (T, B)
-        for leaf in (targets.win_returns, targets.advantages, targets.upgo_advantages):
-            assert np.isfinite(np.asarray(leaf)).all()
+        assert np.isfinite(np.asarray(targets.win_returns)).all()
 
     def test_masks_follow_episode_structure(self, ex_target_inputs):
         batch, value_log_probs, isr, config = ex_target_inputs

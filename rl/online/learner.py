@@ -121,10 +121,8 @@ def train_step(
     of executables per distinct value and OOM-killed run 1326). Per-field
     semantics and None fallbacks are documented on RuntimeScalars itself.
     """
-    upgo_coef = scalars.upgo_coef
     magnet_coef = scalars.magnet_coef
     coma_coef = scalars.coma_coef
-    q_boost_mix = scalars.q_boost_mix
 
     player_transitions = batch.player_transitions
     player_history = batch.player_history
@@ -424,51 +422,17 @@ def train_step(
             q_retrace_g, q_move_mask & has_both & explore_cols
         )
 
-    # Stage 3 Q-boosting advantage (docs/q-boosting-plan.md): the
-    # Retrace return minus the target policy's Q expectation — the
-    # Fan & Farina estimator (arXiv 2605.19235), algebraically
-    # retrace_g − v_exp; unbiased at lambda=1 for any critic accuracy
-    # (their Thm 3.1), lower-MSE than the GAE family exactly where
-    # the policy must keep randomising. Masked to acted rows
-    # (retrace_g is already masked; v_exp is not).
-    q_boost_raw = (
-        q_retrace_g
-        if config.player_q_boost_variant == "multistep"
-        else q_taken_target
-    )
-    q_boost_advantages = (q_boost_raw - q_v_exp) * q_mask.astype(jnp.float32)
-
-    if config.player_q_boost_diagnostic_enabled:
-        # Stage 3a diagnostics (loss-free, on permanently): scale and
-        # agreement vs the v-trace advantage channel, Thm 3.1's
-        # Var_a~pi[Q] > 0 precondition, and fresh/replay calibration
-        # of the taken-action Q readout against its own realised
-        # Retrace targets (the plan's 3b gate, alongside
-        # player_value_r2_fresh as the same-subset V comparator).
-        win_adv = player_targets.advantages.astype(jnp.float32)
-        qb_mean = q_boost_advantages.mean(where=policy_mask)
-        training_logs["player_q_boost_adv_mean"] = qb_mean
-        training_logs["player_q_boost_adv_std"] = q_boost_advantages.std(
-            where=policy_mask
-        )
-        training_logs["player_q_boost_adv_corr"] = (
-            (q_boost_advantages - qb_mean)
-            * (win_adv - win_adv.mean(where=policy_mask))
-        ).mean(where=policy_mask) / (
-            q_boost_advantages.std(where=policy_mask)
-            * win_adv.std(where=policy_mask)
-            + 1e-8
-        )
-        training_logs["player_q_boost_adv_sign_agree"] = average(
-            (jnp.sign(q_boost_advantages) == jnp.sign(win_adv)).astype(
-                jnp.float32
-            ),
-            policy_mask,
-        )
+    if config.player_q_diagnostic_enabled:
+        # Loss-free critic-quality diagnostics, on permanently. Since
+        # 2026-08-21 the policy's ONLY link to returns is NeuRD through
+        # Q_all, so these stopped being nice-to-have: action-value spread
+        # (is there anything to prefer?) and calibration of the taken-cell
+        # readout against its own realised Retrace targets.
+        #
         # pi_target computed above (pivotal-state panel). The MEAN
-        # undersells Thm 3.1 headroom by construction when action-value
-        # spread concentrates in few high-leverage states (which is how
-        # this game works) — the p90 is the honest readout.
+        # undersells the spread by construction when action-value spread
+        # concentrates in few high-leverage states (which is how this game
+        # works) — the p90 is the honest readout.
         qvar_state = (
             pi_target * jnp.square(q_all_target - q_v_exp[..., None])
         ).sum(axis=-1)
@@ -546,40 +510,6 @@ def train_step(
                 0.0,
             )
 
-    # Advantage channel. Stage 3 Q-boosting cross-fades the Q-anchored
-    # advantage into the v-trace one PRE-normalisation, so the existing
-    # EMA mean/std fields and their update rule track the blended
-    # distribution verbatim — zero new pytree leaves, zero manifest risk.
-    # q_boost_mix is a runtime scalar (never static config: see
-    # while player_q_boost_enabled is off, so one compiled fn serves both.
-    raw_advantages = player_targets.advantages
-    if q_boost_mix is not None:
-        raw_advantages = (
-            (1.0 - q_boost_mix) * raw_advantages.astype(jnp.float32)
-            + q_boost_mix * q_boost_advantages
-        ).astype(float_dtype)
-    if config.player_advantage_ema_enabled:
-        # Floor on the std divisor: as the policy converges true
-        # advantages shrink, and dividing by a vanishing std amplifies
-        # value-estimation noise into the actor precisely when the real
-        # signal is weakest. Below the floor, normalisation stops
-        # rescaling and the gradient is allowed to get small.
-        adv_std_divisor = jnp.maximum(
-            player_state.ema_adv_std, config.player_adv_std_floor
-        )
-        player_advantages = (
-            raw_advantages - player_state.ema_adv_mean
-        ) / adv_std_divisor
-        # UPGO shares the std divisor (both channels live on the same +-1
-        # value scale) but is NOT mean-recentered: its positive skew —
-        # extra credit along better-than-expected lines — is the
-        # mechanism, not a normalisation artefact to remove. It stays on
-        # the V channel: Q-boosting replaces only the v-trace advantage.
-        player_upgo_advantages = player_targets.upgo_advantages / adv_std_divisor
-    else:
-        player_advantages = raw_advantages
-        player_upgo_advantages = player_targets.upgo_advantages
-
     def player_loss_fn(params: Params):
 
         learner_player_pred = player_state.apply_fn(
@@ -598,26 +528,6 @@ def train_step(
 
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
-
-        # IMPACT surrogate: ratio recentered on the fast target via the
-        # clipped correction.
-        loss_pg = policy_gradient_loss(
-            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-            advantages=player_advantages,
-            valid=policy_mask,
-            threshold=config.player_ppo_clip_threshold,
-            objective=config.player_policy_objective,
-        )
-        # UPGO PG term (AlphaStar: v-trace loss + UPGO loss, summed) —
-        # same surrogate/clipping, the outcome-conditional advantage
-        # channel. upgo_coef is a runtime scalar (see RuntimeScalars).
-        loss_upgo = policy_gradient_loss(
-            policy_ratios=learner_actor_ratio * actor_target_clipped_ratio,
-            advantages=player_upgo_advantages,
-            valid=policy_mask,
-            threshold=config.player_ppo_clip_threshold,
-            objective=config.player_policy_objective,
-        )
 
         # Softmax cross-entropy loss for value head
         loss_v_win = average(
@@ -907,43 +817,37 @@ def train_step(
             # advantages is not zero-mean in general, so unclipped
             # logits diverge; harmless at the policy level since beta
             # still permits probabilities arbitrarily close to 0/1
-            # through the OTHER losses (PG, magnet), NeuRD simply
-            # stops contributing outside the band.
-            if config.player_coma_prefactor == "neurd":
-                legal_count = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
-                adv_centred = coma_adv - (
-                    coma_adv.sum(axis=-1) / legal_count
-                )[..., None]
-                raw_logits = jnp.where(
-                    flat_action_mask,
-                    learner_action_head.logits.astype(jnp.float32),
-                    0.0,
-                )
-                logit_gap = jax.lax.stop_gradient(
-                    raw_logits
-                    - (raw_logits.sum(axis=-1) / legal_count)[..., None]
-                )
-                beta = config.player_neurd_logit_clip
-                neurd_open = flat_action_mask & jnp.logical_not(
-                    ((logit_gap > beta) & (adv_centred > 0))
-                    | ((logit_gap < -beta) & (adv_centred < 0))
-                )
-                neurd_weight = jax.lax.stop_gradient(
-                    jnp.where(neurd_open, adv_centred, 0.0)
-                )
-                # Against the RAW logits: d/dy_b = -w(b) exactly, open
-                # or clipped, with no softmax cross-term (the log_policy
-                # form only matches while the weights are zero-sum,
-                # which the clip breaks).
-                loss_coma = -average(
-                    (neurd_weight * raw_logits).sum(axis=-1), policy_mask
-                )
-                coma_grad_prefactor = neurd_open.astype(jnp.float32)
-            else:
-                loss_coma = -average(
-                    (pi_learner * coma_adv).sum(axis=-1), policy_mask
-                )
-                coma_grad_prefactor = pi_learner
+            # through the magnet, NeuRD simply stops contributing
+            # outside the band.
+            legal_count = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
+            adv_centred = coma_adv - (
+                coma_adv.sum(axis=-1) / legal_count
+            )[..., None]
+            raw_logits = jnp.where(
+                flat_action_mask,
+                learner_action_head.logits.astype(jnp.float32),
+                0.0,
+            )
+            logit_gap = jax.lax.stop_gradient(
+                raw_logits
+                - (raw_logits.sum(axis=-1) / legal_count)[..., None]
+            )
+            beta = config.player_neurd_logit_clip
+            neurd_open = flat_action_mask & jnp.logical_not(
+                ((logit_gap > beta) & (adv_centred > 0))
+                | ((logit_gap < -beta) & (adv_centred < 0))
+            )
+            neurd_weight = jax.lax.stop_gradient(
+                jnp.where(neurd_open, adv_centred, 0.0)
+            )
+            # Against the RAW logits: d/dy_b = -w(b) exactly, open
+            # or clipped, with no softmax cross-term (the log_policy
+            # form only matches while the weights are zero-sum,
+            # which the clip breaks).
+            loss_coma = -average(
+                (neurd_weight * raw_logits).sum(axis=-1), policy_mask
+            )
+            coma_grad_prefactor = neurd_open.astype(jnp.float32)
             # Gradient decomposition for the pi-prefactor question
             # (docs/rare-action-rl-literature.md). The COMA loss
             # -sum_a pi(a).sg(adv(a)) has exact per-logit gradient
@@ -1095,9 +999,7 @@ def train_step(
             )
 
         loss = (
-            config.player_policy_loss_coef * loss_pg
-            + (config.player_upgo_coef if upgo_coef is None else upgo_coef) * loss_upgo
-            + config.player_value_head_loss_coef * loss_v_win
+            config.player_value_head_loss_coef * loss_v_win
             + config.player_kl_loss_coef * loss_actor_backward_kl
             + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
             * loss_magnet_kl
@@ -1106,8 +1008,9 @@ def train_step(
             # One coefficient for both rungs — same estimator family on
             # the same labels, mirroring the value-ladder coef above.
             + config.player_q_coef * (loss_q + loss_q_private)
-            # Stage 2 improvement term; coef is a host-ramped runtime
-            # scalar.
+            # THE policy gradient since 2026-08-21: all-action NeuRD is
+            # the only term that moves the action logits toward return
+            # (magnet/actor KL only regularise). Runtime scalar.
             + (0.0 if coma_coef is None else coma_coef) * loss_coma
         )
 
@@ -1117,8 +1020,6 @@ def train_step(
             **coma_logs,
             **value_ladder_logs,
             # Loss values
-            player_loss_pg=loss_pg,
-            player_loss_upgo=loss_upgo,
             player_loss_v_win=loss_v_win,
             player_loss_v_aux=loss_v_aux,
             player_loss_kl=loss_actor_backward_kl,
@@ -1191,12 +1092,6 @@ def train_step(
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
 
     prev_player_state = player_state
-    # A batch with an empty policy_mask (every row forced single-option
-    # or terminal — rare but possible) makes mean/std with `where=` NaN,
-    # and one NaN batch poisons the advantage EMAs forever — freeze them
-    # on such batches instead. (Explore rows train the policy since
-    # 2026-08-17, so an all-explore batch no longer trips this.)
-    has_policy_rows = policy_mask.any()
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
@@ -1212,31 +1107,6 @@ def train_step(
             player_state.params,
             player_state.target_params,
             config.player_ema_update_rate,
-        ),
-        # Advantage stats use their own, much faster EMA rate: they are
-        # scalars estimated from ~180 samples per batch (well-averaged at
-        # a 100-step time constant), and a slow EMA mis-scales the policy
-        # gradient for ~1k steps after every distribution shift — league
-        # snapshot adds most visibly.
-        # raw_advantages, not player_targets.advantages: the EMA must
-        # track the (possibly Q-boost-blended) distribution it normalises.
-        ema_adv_mean=jnp.where(
-            has_policy_rows,
-            optax.incremental_update(
-                raw_advantages.mean(where=policy_mask),
-                player_state.ema_adv_mean,
-                config.player_adv_ema_rate,
-            ),
-            player_state.ema_adv_mean,
-        ),
-        ema_adv_std=jnp.where(
-            has_policy_rows,
-            optax.incremental_update(
-                raw_advantages.std(where=policy_mask),
-                player_state.ema_adv_std,
-                config.player_adv_ema_rate,
-            ),
-            player_state.ema_adv_std,
         ),
     )
     # A non-finite loss or gradient must never reach the params or the EMA
@@ -1276,8 +1146,6 @@ def train_step(
             player_shape_H=float(batch.player_history.field.shape[0]),
             player_policy_value_mask_ratio=policy_mask.sum()
             / (value_mask.sum() + 1e-8),
-            player_state_adv_mean=player_state.ema_adv_mean,
-            player_state_adv_std=player_state.ema_adv_std,
             player_update_skipped=1.0 - player_update_finite.astype(jnp.float32),
         )
     )
@@ -1391,11 +1259,16 @@ def train_step(
                 builder_actor_target_clipped_ratio * learner_actor_ratio
             )
 
-            # Calculate the losses.
+            # Calculate the losses. threshold is REQUIRED (keyword-only,
+            # no default): omitting it was a latent TypeError on the first
+            # builder train step, unreachable only because randombattle
+            # skips this branch entirely.
             loss_pg = policy_gradient_loss(
                 policy_ratios=builder_policy_ratio,
                 advantages=builder_advantages,
                 valid=builder_valid,
+                threshold=config.builder_ppo_clip_threshold,
+                objective=config.builder_policy_objective,
             )
 
             loss_v = average(
@@ -2542,10 +2415,8 @@ class Learner:
             return jnp.pad(x, widths)
 
         dummy_scalars = RuntimeScalars(
-            upgo_coef=np.float32(0.0),
             magnet_coef=np.float32(0.0),
             coma_coef=np.float32(0.0),
-            q_boost_mix=np.float32(0.0),
         )
         current = (
             batch.player_transitions.env_output.done.shape[0],
@@ -2598,33 +2469,28 @@ class Learner:
         if not self._shape_lattice_compiled:
             self._precompile_lattice(pop, batch)
             self._shape_lattice_compiled = True
-        upgo_coef = self.config.player_upgo_coef
-        # NeuRD/COMA all-action loss and the Stage-3 Q-boost advantage, at
-        # full strength from the first step — the 2k-step host ramps were
-        # removed 2026-08-21 (every restart re-ramped from zero, so a
+        # The all-action NeuRD coefficient — THE policy gradient since
+        # 2026-08-21 — at full strength from the first step (the 2k-step
+        # host ramp was removed: every restart re-ramped from zero, so a
         # resume spent its first 2k steps training a different objective
-        # than the one it was checkpointed under). Runtime scalars, never
+        # than the one it was checkpointed under). Runtime scalar, never
         # static config: retained executables per distinct static value
         # OOM-killed run 1326 (LESSONS.md 1).
         coma_coef = (
             self.config.player_coma_coef if self.config.player_coma_enabled else 0.0
         )
-        q_boost_mix = 1.0 if self.config.player_q_boost_enabled else 0.0
         pop.player_state, pop.builder_state, logs = self._train_step_jit(
             pop.player_state,
             pop.builder_state,
             batch,
             self._jit_config,
             RuntimeScalars(
-                upgo_coef=np.float32(upgo_coef),
                 magnet_coef=np.float32(self.config.player_magnet_kl_coef),
                 coma_coef=np.float32(coma_coef),
-                q_boost_mix=np.float32(q_boost_mix),
             ),
         )
         if logs is not None:
             logs["player_coma_coef"] = coma_coef
-            logs["player_q_boost_mix"] = q_boost_mix
         return logs
 
     def _handle_periodic_tasks(self, pop: PopulationState, step: int, logs: dict):
@@ -2698,8 +2564,6 @@ class Learner:
             scalars=dict(
                 step_count=host_player_state.step_count,
                 frame_count=host_player_state.frame_count,
-                ema_adv_mean=host_player_state.ema_adv_mean,
-                ema_adv_std=host_player_state.ema_adv_std,
             ),
         )
         builder_components = dict(

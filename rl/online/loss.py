@@ -16,18 +16,6 @@ def spo_objective(
     ) / (2 * clip_ppo)
 
 
-def ppo_objective(
-    *,
-    policy_ratios: jax.Array,
-    advantages: jax.Array,
-    clip_ppo: float,
-):
-    """Generic PPO clipped surrogate loss"""
-    l1 = policy_ratios * advantages
-    l2 = jnp.clip(policy_ratios, 1.0 - clip_ppo, 1.0 + clip_ppo) * advantages
-    return jnp.minimum(l1, l2)
-
-
 def policy_gradient_loss(
     *,
     policy_ratios: jax.Array,
@@ -36,7 +24,9 @@ def policy_gradient_loss(
     threshold: float,
     objective: str = "spo",
 ):
-    objective_fn = {"spo": spo_objective, "ppo": ppo_objective}[objective]
+    """Ratio-surrogate PG loss. Builder-only since 2026-08-21 — the player
+    policy is trained by all-action NeuRD alone (LESSONS.md 3)."""
+    objective_fn = {"spo": spo_objective}[objective]
     pg_loss = objective_fn(
         policy_ratios=policy_ratios,
         advantages=advantages,
@@ -45,38 +35,8 @@ def policy_gradient_loss(
     return -average(pg_loss, valid)
 
 
-def clip_fraction(
-    *,
-    policy_ratios: jax.Array,
-    valid: jax.Array,
-    clip_ppo: float,
-):
-    """Calculate the fraction of clips."""
-    clipped = jnp.abs(policy_ratios - 1) > clip_ppo
-    return average(clipped, valid)
-
-
 def mse_value_loss(*, pred: jax.Array, target: jax.Array, valid: jax.Array):
     mse_loss = jnp.square(pred - target)
-    return average(mse_loss, valid)
-
-
-def clipped_value_loss(
-    *,
-    pred_v: jax.Array,
-    target_v: jax.Array,
-    old_v: jax.Array,
-    valid: jax.Array,
-    clip_val: float = 0.2,
-):
-    loss_unclipped = jnp.square(pred_v - target_v)
-    pred_v_clipped = old_v + jnp.clip(pred_v - old_v, -clip_val, clip_val)
-    loss_clipped = jnp.square(pred_v_clipped - target_v)
-    return average(jnp.maximum(loss_unclipped, loss_clipped), valid)
-
-
-def ce_value_loss(*, pred_v: jax.Array, target_v: jax.Array, valid: jax.Array):
-    mse_loss = -(pred_v * target_v).sum(axis=-1)
     return average(mse_loss, valid)
 
 
@@ -120,8 +80,3 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
-def power_schedule(
-    coef: float, step: int, decay: float, floor: float, ceil: float, scale: float = 1.0
-) -> jax.Array:
-    x = coef / (((step + 1.0) * scale) ** decay)
-    return jnp.clip(x, min=floor, max=ceil)

@@ -126,13 +126,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
 
-    ema_adv_mean: jax.Array = struct.field(
-        default_factory=lambda: jnp.array(0.0, dtype=jnp.float32), pytree_node=True
-    )
-    ema_adv_std: jax.Array = struct.field(
-        default_factory=lambda: jnp.array(1.0, dtype=jnp.float32), pytree_node=True
-    )
-
 
 class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
@@ -302,8 +295,6 @@ def save_state(
         scalars=dict(
             step_count=player_state.step_count,
             frame_count=player_state.frame_count,
-            ema_adv_mean=player_state.ema_adv_mean,
-            ema_adv_std=player_state.ema_adv_std,
         ),
     )
     builder_components = dict(
@@ -502,8 +493,6 @@ def load_from_checkpoint(
         opt_state=ckpt_player_state["opt_state"],
         step_count=player_scalars["step_count"],
         frame_count=player_scalars["frame_count"],
-        ema_adv_mean=player_scalars["ema_adv_mean"],
-        ema_adv_std=player_scalars["ema_adv_std"],
     )
 
     # Fully replace builder state

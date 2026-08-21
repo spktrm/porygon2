@@ -136,15 +136,9 @@ def test_train_step_player_q_smoke():
         "player_coma_absadv_switch",
         "player_coma_absadv_move",
         "player_coma_absadv_ratio",
-        # Stage 3 Q-boosting (docs/q-boosting-plan.md): loss-free 3a
-        # diagnostics — blend candidate's scale/agreement vs the v-trace
-        # channel, plus Thm 3.1's Var_a~pi[Q] precondition readout.
-        # (Calibration r2 fresh/replay needs batch.reuse_count, absent
-        # in this minimal batch; player_q_boost_mix is host-side only.)
-        "player_q_boost_adv_mean",
-        "player_q_boost_adv_std",
-        "player_q_boost_adv_corr",
-        "player_q_boost_adv_sign_agree",
+        # Loss-free critic-quality diagnostics. (Calibration r2
+        # fresh/replay needs batch.reuse_count, absent in this minimal
+        # batch.)
         "player_q_action_var",
         "player_q_action_var_p90",
     ):
@@ -152,23 +146,18 @@ def test_train_step_player_q_smoke():
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_q_macro_micro_gradient_norm"]) > 0.0
 
-    # Stage-3 blend path at full mix: the boosted advantage swaps in
-    # wholesale (runtime scalar, same compiled fn) and everything stays
-    # finite — the mix=0 case is the default-args run above.
+    # NeuRD at full coefficient (runtime scalar, same compiled fn): the
+    # policy's only gradient path stays finite — the coef=0 case is the
+    # default-args run above.
     with jax.default_device(jax.devices("cpu")[0]):
-        _, _, logs_boost = train_step(
+        _, _, logs_neurd = train_step(
             player_state,
             builder_state,
             batch,
             config,
-            scalars=RuntimeScalars(
-                q_boost_mix=np.float32(1.0), coma_coef=np.float32(1.0)
-            ),
+            scalars=RuntimeScalars(coma_coef=np.float32(1.0)),
         )
-    assert np.isfinite(np.asarray(logs_boost["player_loss_pg"], dtype=np.float32))
-    assert np.isfinite(
-        np.asarray(logs_boost["player_state_adv_mean"], dtype=np.float32)
-    )
+    assert np.isfinite(np.asarray(logs_neurd["player_loss_coma"], dtype=np.float32))
 
     # Explore-row contract (2026-08-17), tested at its extreme: an
     # all-explore batch trains EVERY player loss — the tempered rows carry
@@ -181,7 +170,6 @@ def test_train_step_player_q_smoke():
         )
     assert float(logs_explore["player_policy_mask_sum"]) > 0.0
     assert float(logs_explore["player_value_mask_sum"]) > 0.0
-    assert np.isfinite(np.asarray(logs_explore["player_loss_pg"], dtype=np.float32))
     assert np.isfinite(
         np.asarray(logs_explore["player_loss_v_win"], dtype=np.float32)
     )
