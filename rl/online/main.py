@@ -404,15 +404,12 @@ def main(args: argparse.Namespace):
     # low-volume threads don't warrant a second server). Builder actors
     # also stay direct: builder inference is one team-build per game vs.
     # ~35 player steps, negligible traffic.
-    inference_server = None
-    if learner_config.inference_server_enabled:
-        inference_server = InferenceServer(
-            actor_player_network.apply,
-            gpu_lock=gpu_lock,
-            max_batch=learner_config.inference_max_batch,
-            params_cache_size=learner_config.inference_params_cache_size,
-        )
-        inference_server.start()
+    # Always on: b219d84 deleted the inference_* config fields (the
+    # batch-1 fallback path had no remaining user) but left these reads
+    # behind, which raised AttributeError at the first launch after it.
+    # The server's constructor defaults are the values the fields held.
+    inference_server = InferenceServer(actor_player_network.apply, gpu_lock=gpu_lock)
+    inference_server.start()
 
     logger.info("Loading train state...")
     mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
