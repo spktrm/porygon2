@@ -480,14 +480,18 @@ class RuntimeScalars:
     These must never move into the static config above — config is a jit
     static_argname, and static scalars retained ~5GB of executables per
     distinct value and OOM-killed run 1326; as traced leaves they change
-    freely with zero recompiles. None falls back at the use site (to the
-    static coef for magnet, to 0 for neurd); the live Learner path always
-    fills both."""
+    freely with zero recompiles.
+
+    Both fields are REQUIRED. They used to default to None with per-field
+    fallbacks at the use site — magnet to its static coef, neurd to 0.0 —
+    which meant a partially-constructed RuntimeScalars silently trained
+    with no policy gradient at all. A scalar that changes the objective
+    must be stated by its caller, not defaulted."""
 
     # config.player_magnet_kl_coef.
-    magnet_coef: chex.Array | None = None
+    magnet_coef: chex.Array
     # config.player_neurd_coef — the policy gradient's coefficient.
-    neurd_coef: chex.Array | None = None
+    neurd_coef: chex.Array
 
 
 def get_learner_config():

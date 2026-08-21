@@ -110,14 +110,15 @@ def train_step(
     builder_state: Porygon2BuilderTrainState,
     batch: Batch,
     config: Porygon2LearnerConfig,
-    scalars: RuntimeScalars = RuntimeScalars(),
+    scalars: RuntimeScalars,
 ):
     """Train for a single step.
 
     ``scalars`` bundles the RUNTIME scalars (traced pytree, not static —
     runtime values never recompile; static-config scalars retained ~5GB
-    of executables per distinct value and OOM-killed run 1326). Per-field
-    semantics and None fallbacks are documented on RuntimeScalars itself.
+    of executables per distinct value and OOM-killed run 1326). Required
+    and fully populated: every caller states the objective it is training,
+    so no default can silently drop a term.
     """
     magnet_coef = scalars.magnet_coef
     neurd_coef = scalars.neurd_coef
@@ -894,19 +895,25 @@ def train_step(
                 q_mask & jnp.logical_not(own_rows)[None, :]
             )
 
+        # pg + (v + q) + kl + ent.
         loss = (
-            config.player_value_head_loss_coef * loss_v_win
+            # pg: all-action NeuRD is the ONLY term that moves the action
+            # logits toward return — the two below only regularise.
+            neurd_coef * loss_neurd
+            # v + q: the critic stack. One coefficient for both Q rungs —
+            # same estimator family on the same labels, mirroring the
+            # value-ladder coef.
+            + (
+                config.player_value_head_loss_coef * loss_v_win
+                + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
+                + config.player_q_coef * (loss_q + loss_q_private)
+            )
+            # kl: trust region against the behaviour policy.
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            + (config.player_magnet_kl_coef if magnet_coef is None else magnet_coef)
-            * loss_magnet_kl
-            + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
-            # One coefficient for both rungs — same estimator family on
-            # the same labels, mirroring the value-ladder coef above.
-            + config.player_q_coef * (loss_q + loss_q_private)
-            # THE policy gradient since 2026-08-21: all-action NeuRD is
-            # the only term that moves the action logits toward return
-            # (magnet/actor KL only regularise). Runtime scalar.
-            + (0.0 if neurd_coef is None else neurd_coef) * loss_neurd
+            # ent: the magnet KL is per-state entropy regularisation
+            # (uniform-over-legal hierarchical prior), and the only force
+            # opposing pg.
+            + magnet_coef * loss_magnet_kl
         )
 
         return loss, dict(
