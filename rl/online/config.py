@@ -402,7 +402,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # transmitted at full volume before the critic had a belief. 0.1
     # with the old PG still present never saturated past ~0.7; 0.1-0.2
     # brackets it.
-    player_neurd_coef: float = 0.2
+    # 0.1 (2026-08-21 night, from 0.2): 0.2 on a fresh lineage tripped
+    # the same wire, only slower -- clipped_switch 0 -> 0.83 by 12.9k,
+    # switch_ratio 0.47 -> 0.076, switch_push pinned at -0.035, magnet KL
+    # 0.43 and climbing; no checkpoint yet (first save 20k) so relaunched
+    # from scratch.
+    player_neurd_coef: float = 0.1
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean
