@@ -37,6 +37,13 @@ RECV_POLL_SECONDS = 1.0
 class ActorStopped(Exception):
     """Raised inside an unroll when training began shutting down —
     unwinds the actor thread out of a blocking wait it would otherwise
+class BattleError(Exception):
+    """The game service reported a failure for this battle (an
+    ErrorResponse frame: a server-side throw, or its step/reset watchdog
+    firing on a wedged battle). The game is gone on the server; the actor
+    should abandon it and start another, never wait."""
+
+
     never leave: the builder-replay sample wait (no data is coming once
     the producers have stopped) and, since 2026-08-21, the game
     server receive. The latter is the one that made Ctrl-C take
@@ -97,6 +104,8 @@ class SinglePlayerSyncEnvironment:
             reset=ResetRequest(
                 username=self.username,
                 smogon_format=f"gen{self.generation}{self.smogon_format}",
+        if worker_response.HasField("error_response"):
+            raise BattleError(worker_response.error_response.trace)
                 game_id=self.game_id,
                 packed_teams=packed_team,
             )

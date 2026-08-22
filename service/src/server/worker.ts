@@ -2,6 +2,8 @@ import { MessagePort, parentPort } from "worker_threads";
 
 import {
     EnvironmentResponse,
+    EnvironmentState,
+    ErrorResponse,
     ResetRequest,
     StepRequest,
     WorkerRequest,
@@ -15,6 +17,33 @@ import { Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 
 Teams.setGeneratorFactory(TeamGenerators);
+
+// Battle-lifecycle guarantees (2026-08-23). Before these, a battle that
+// stopped producing states — a swallowed choose() error, an RQID
+// mismatch thrown out of the stream loop, a partner that never reset —
+// parked the client's receive forever: the worker's catch only logged,
+// nothing ever went back over the socket, and the python side polls its
+// receive only against training shutdown. Both actor slots of that game
+// were then silently lost for the rest of the run (~2% of games in the
+// 2026-08-23 offline sweep). Every await on a battle is now bounded and
+// every failure reaches the client as an ErrorResponse.
+const STEP_TIMEOUT_MS = Number(process.env.STEP_TIMEOUT_MS ?? 120_000);
+const RESET_TIMEOUT_MS = Number(process.env.RESET_TIMEOUT_MS ?? 300_000);
+
+function withTimeout<T>(
+    promise: Promise<T>,
+    ms: number,
+    what: () => string,
+): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+            () => reject(new Error(`${what()} did not complete within ${ms}ms`)),
+            ms,
+        );
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 interface PlayerDetails {
     userName: string;
@@ -196,11 +225,29 @@ export class WorkerHandler {
                 `Waiting for opponent on GameID ${gameId} (User: ${userName})`,
             );
 
-            return new Promise((resolve) => {
-                // Store this player as the waiting party for this GameID
+            return new Promise((resolve, reject) => {
+                // Store this player as the waiting party for this GameID,
+                // bounded: a partner that never resets must not park this
+                // request (and its actor thread) forever.
+                const timer = setTimeout(() => {
+                    if (
+                        this.pendingGames.get(gameId)?.playerDetails === details
+                    ) {
+                        this.pendingGames.delete(gameId);
+                    }
+                    reject(
+                        new Error(
+                            `No opponent arrived for GameID ${gameId} ` +
+                                `(User: ${userName}) within ${RESET_TIMEOUT_MS}ms`,
+                        ),
+                    );
+                }, RESET_TIMEOUT_MS);
                 this.pendingGames.set(gameId, {
                     playerDetails: details,
-                    resolve,
+                    resolve: (args) => {
+                        clearTimeout(timer);
+                        resolve(args);
+                    },
                 });
             });
         }
@@ -266,7 +313,76 @@ export class WorkerHandler {
                 workerRequest.toObject(),
                 error,
             );
+            this.sendError(taskId, error);
         }
+    }
+
+    private sendError(taskId: number, error: unknown): void {
+        const errorResponse = new ErrorResponse();
+        const trace =
+            error instanceof Error
+                ? (error.stack ?? error.message)
+                : String(error);
+        errorResponse.setTrace(trace);
+        const workerResponse = new WorkerResponse();
+        workerResponse.setErrorResponse(errorResponse);
+        try {
+            this.sendMessage(taskId, workerResponse);
+        } catch (sendErr) {
+            console.error("Failed to send error response:", sendErr);
+        }
+    }
+
+    private describe(player: TrainablePlayerAI): string {
+        const opp = player.opponent;
+        return (
+            `${player.userName} turn=${player.privateBattle.turn} ` +
+            `requests=${player.requestCount} done=${player.done} ` +
+            `queued=${player.outgoingQueue.size()}` +
+            (opp
+                ? ` | opponent ${opp.userName} requests=${opp.requestCount} ` +
+                  `done=${opp.done} queued=${opp.outgoingQueue.size()}`
+                : "")
+        );
+    }
+
+    // Tears down both sides of a wedged battle so the opponent's pending
+    // await resolves (its queue is cleared) and a later reset for either
+    // username starts clean.
+    private abortBattle(player: TrainablePlayerAI, reason: string): void {
+        console.error(`Aborting battle: ${reason} [${this.describe(player)}]`);
+        for (const p of [player, player.opponent]) {
+            if (p === undefined) continue;
+            try {
+                p.outgoingQueue.clear();
+                p.destroy();
+            } catch (err) {
+                console.error("Error during abort:", err);
+            }
+            this.playerMapping.delete(p.userName);
+        }
+    }
+
+    private async awaitState(
+        player: TrainablePlayerAI,
+        what: string,
+    ): Promise<EnvironmentState> {
+        let state: EnvironmentState | undefined;
+        try {
+            state = await withTimeout(
+                player.receiveEnvironmentState(),
+                STEP_TIMEOUT_MS,
+                () => `${what} for ${player.userName}`,
+            );
+        } catch (err) {
+            this.abortBattle(player, String(err));
+            throw err;
+        }
+        if (state === undefined) {
+            // The queue was cleared by an abort from the other side.
+            throw new Error(`${what} for ${player.userName}: battle aborted`);
+        }
+        return state;
     }
 
     private createResponseFromRequest(
@@ -285,8 +401,7 @@ export class WorkerHandler {
         const player = this.getPlayerFromUsername(userName);
 
         player.submitStepRequest(stepRequest);
-
-        const state = await player.receiveEnvironmentState();
+        const state = await this.awaitState(player, "step");
 
         const environmentResponse = this.createResponseFromRequest(stepRequest);
         environmentResponse.setState(state);
@@ -352,7 +467,7 @@ export class WorkerHandler {
             smogonFormat,
             packedTeam,
         );
-        const state = await player.receiveEnvironmentState();
+        const state = await this.awaitState(player, "reset");
 
         const environmentResponse =
             this.createResponseFromRequest(resetRequest);

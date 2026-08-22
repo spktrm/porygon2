@@ -20,7 +20,7 @@ from tqdm import tqdm
 
 import wandb
 from rl.environment.data import CAT_VF_SUPPORT
-from rl.environment.env import SinglePlayerSyncEnvironment
+from rl.environment.env import BattleError, SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
@@ -126,6 +126,16 @@ def run_training_actor_pair(
             future2 = executor.submit(
                 opponent.unroll_and_push, opponent_params, is_trainable
             )
+            # Both sides must have returned before either actor is reused:
+            # one side's failure must not submit a second unroll onto an
+            # actor whose first is still running.
+            concurrent.futures.wait([future1, future2])
+            errors = [f.exception() for f in (future1, future2)]
+            if any(isinstance(e, ActorStopped) for e in errors):
+                raise ActorStopped("training stopped")
+            battle_errors = [e for e in errors if isinstance(e, BattleError)]
+            if battle_errors:
+                raise battle_errors[0]
             trajectory = future1.result()
             future2.result()
 
@@ -138,6 +148,21 @@ def run_training_actor_pair(
             # this actor was blocked inside an
             # unroll. Not an error; just stop producing.
             break
+        except BattleError as e:
+            # The service aborted this battle (its step/reset watchdog,
+            # or a server-side throw it now reports instead of swallowing).
+            # The game is gone on the server; whatever the surviving side
+            # pushed before the abort is ordinary truncated-game data.
+            # Start another rather than kill this pair's thread — a dead
+            # Selfplay thread silently costs the run two actor slots.
+            logger.warning(
+                "%s: battle aborted by the service, starting a new game — %s",
+                worker_id,
+                str(e).splitlines()[0] if str(e) else e,
+            )
+            for actor in (player, opponent):
+                actor.reset_game_id()
+            continue
         except Exception as e:
             logger.error(f"Error in {worker_id}: {e}", exc_info=True)
             raise e
