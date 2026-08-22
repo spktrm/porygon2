@@ -6,6 +6,7 @@ import http from "http";
 import {
     ClientRequest,
     EnvironmentResponse,
+    ErrorResponse,
     ResetRequest,
     StepRequest,
     WorkerRequest,
@@ -35,6 +36,9 @@ export class WorkerPool {
     private tasks: TaskQueueSystem<WorkerResponse>;
     private readonly workerInfos: WorkerInfo[] = [];
     private rr = 0; // round-robin counter for training actors
+    // Task ids in flight on this worker — failed back to their clients
+    // as ErrorResponses if the worker dies (see spawnWorker).
+    pending: Set<number>;
     private er = 0; // round-robin counter for eval actors
 
     private readonly sessionToWorkerIndex = new Map<string, number>();
@@ -44,6 +48,7 @@ export class WorkerPool {
     // since the coordinator's own process.memoryUsage() can't see it.
     private readonly workerMemoryStats = new Map<
         number,
+    private closing = false;
         { heapUsedMb: number; heapTotalMb: number; externalMb: number }
     >();
 
@@ -57,52 +62,82 @@ export class WorkerPool {
 
     private spawnWorkers(): void {
         for (let i = 0; i < this.numWorkers; i++) {
-            const worker = new Worker(WORKER_PATH);
-            const info: WorkerInfo = { worker, id: i };
+            this.workerInfos.push(this.spawnWorker(i));
+        }
+    }
 
-            worker.on(
-                "message",
-                (
-                    data:
-                        | Buffer
-                        | Uint8Array
-                        | {
-                              type: string;
-                              heapUsedMb: number;
-                              heapTotalMb: number;
-                              externalMb: number;
-                          },
-                ) => {
-                    // Same posture as worker.ts's own incoming handler:
-                    // protobuf responses arrive as Uint8Array (Buffer is a
-                    // subclass, so this covers both), typed messages as a
-                    // plain tagged object.
-                    if (data instanceof Uint8Array) {
-                        this.onWorkerMsg(Buffer.from(data));
-                    } else if (data?.type === "memory_stats") {
-                        this.workerMemoryStats.set(info.id, {
-                            heapUsedMb: data.heapUsedMb,
-                            heapTotalMb: data.heapTotalMb,
-                            externalMb: data.externalMb,
-                        });
-                    }
-                },
-            );
-            worker.on("error", (err) =>
-                console.error(`[worker ${i}] error`, err),
-            );
-            worker.on("exit", (code) =>
-                console.log(`[worker ${i}] exited`, code),
+    // One worker isolate at routing index i. A worker that throws
+    // (2026-08-23: a TypeError in sendFinalState after a mid-battle
+    // destroy) used to be logged and left in the routing table, so every
+    // gameId hashing to it — 1/numWorkers of all games — waited on a dead
+    // isolate forever. Now its in-flight tasks are failed back to their
+    // clients and a fresh isolate takes its slot; sessions that lived on
+    // the dead one get "No player found" on their next step, which the
+    // python side turns into a BattleError and a new game.
+    private spawnWorker(i: number): WorkerInfo {
+        const worker = new Worker(WORKER_PATH);
+        const info: WorkerInfo = { worker, id: i, pending: new Set() };
+        worker.on(
+            "message",
+            (
+                data:
+                    | Buffer
+                    | Uint8Array
+                    | {
+                          type: string;
+                          heapUsedMb: number;
+                          heapTotalMb: number;
+                          externalMb: number;
+                      },
+            ) => {
+                // Same posture as worker.ts's own incoming handler:
+                // protobuf responses arrive as Uint8Array (Buffer is a
+                // subclass, so this covers both), typed messages as a
+                // plain tagged object.
+                if (data instanceof Uint8Array) {
+                    this.onWorkerMsg(Buffer.from(data));
+                } else if (data?.type === "memory_stats") {
+                    this.workerMemoryStats.set(info.id, {
+                        heapUsedMb: data.heapUsedMb,
+                        heapTotalMb: data.heapTotalMb,
+                        externalMb: data.externalMb,
+                    });
+                }
+            },
+        );
+        worker.on("error", (err) => console.error(`[worker ${i}] error`, err));
+        worker.on("exit", (code) => {
+            console.error(
+                `[worker ${i}] exited with code ${code}; failing ` +
+                    `${info.pending.size} in-flight task(s)` +
+                    (this.closing ? "" : " and respawning"),
             );
 
-            this.workerInfos.push(info);
+    private failPending(info: WorkerInfo, reason: string): void {
+        for (const taskId of info.pending) {
+            const errorResponse = new ErrorResponse();
+            errorResponse.setTrace(reason);
+            const workerResponse = new WorkerResponse();
+            workerResponse.setErrorResponse(errorResponse);
+            try {
+                this.tasks.submitResult(taskId, workerResponse);
+            } catch (err) {
+                console.error("failed to fail pending task", taskId, err);
+            }
         }
     }
 
     /** Sum of the latest self-reported heap stats across all workers that
+            this.failPending(info, `worker ${i} exited with code ${code}`);
+            if (this.closing) return;
+            this.workerInfos[i] = this.spawnWorker(i);
+        });
+        return info;
+    }
      * have reported at least once — a fresher/live worker that hasn't hit
      * its first 10s tick yet is simply absent, not zero, so totals grow in
      * as workers report rather than under-counting from t=0. */
+        info.pending.clear();
     workerMemoryTotals(): {
         heap_used_mb: number;
         heap_total_mb: number;
@@ -226,12 +261,17 @@ export class WorkerPool {
         const taskId = this.tasks.createJob();
         workerRequest.setTaskId(taskId);
         const binaryMessage = workerRequest.serializeBinary();
-        workerInfo.worker.postMessage(binaryMessage, [
-            binaryMessage.buffer as ArrayBuffer,
-        ]);
-        const workerResponse = await this.tasks.getResult(taskId);
-        workerResponse.setTaskId(taskId);
-        return workerResponse;
+        workerInfo.pending.add(taskId);
+        try {
+            workerInfo.worker.postMessage(binaryMessage, [
+                binaryMessage.buffer as ArrayBuffer,
+            ]);
+            const workerResponse = await this.tasks.getResult(taskId);
+            workerResponse.setTaskId(taskId);
+            return workerResponse;
+        } finally {
+            workerInfo.pending.delete(taskId);
+        }
     }
 
     async step(stepRequest: StepRequest): Promise<WorkerResponse> {
@@ -278,6 +318,7 @@ export class WorkerPool {
     workerCount(): number {
         return this.numWorkers;
     }
+        this.closing = true;
 
     /** Fire-and-forget cleanup: tell the worker this session was last routed
      * to drop any pendingGames entry for gameId. A no-op if that session was
