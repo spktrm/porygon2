@@ -141,3 +141,23 @@ def test_prior_twin_receives_no_gradient():
     assert all(float(jnp.abs(g).max()) == 0.0 for g in prior)
     assert any(float(jnp.abs(g).max()) > 0.0 for g in other)
     assert head.apply(params, x).shape == (4, 3, 3)
+
+
+
+def test_ucb_tilt_lifts_bonus_cells_and_respects_cap():
+    from rl.model.heads import ucb_tilt
+    from rl.model.utils import legal_log_policy
+
+    logits = jnp.asarray([2.0, 0.0, -1.0, 5.0, 0.5])
+    valid = jnp.asarray([True, True, True, False, True])
+    log_mu = legal_log_policy(logits, valid)
+    bonus = jnp.asarray([0.0, 0.0, 4.0, 9.0, 0.0])  # lift the rare cell
+    tilted, kl = ucb_tilt(log_mu, bonus, valid, kl_max=0.1)
+    mu, mu_t = np.exp(np.asarray(log_mu)), np.exp(np.asarray(tilted))
+    assert mu_t[2] > mu[2] and mu_t[0] < mu[0]
+    assert abs(mu_t[valid].sum() - 1.0) < 1e-5 and mu_t[3] < 1e-20
+    assert 0.0 < float(kl) <= 0.1 * 1.05
+    # Zero bonus: KL 0 and the distribution unchanged.
+    same, kl0 = ucb_tilt(log_mu, jnp.zeros(5), valid, kl_max=0.1)
+    np.testing.assert_allclose(np.exp(np.asarray(same))[valid], mu[valid], rtol=1e-5)
+    assert float(kl0) < 1e-6

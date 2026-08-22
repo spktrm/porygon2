@@ -368,7 +368,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # of the intrinsic advantage at the taken cell inside the NeuRD
     # advantage, in units of the normalised bonus; 0 keeps the heads
     # training as observers.
-    player_int_coef: float = 0.5
+    # 0.0 since the UCB behaviour policy landed the same day: the
+    # literature (Chen et al. 2017) rates disagreement-as-reward below
+    # disagreement-as-selection, so the V ensemble stays an OBSERVER --
+    # its panels still answer whether disagreement concentrates on
+    # post-switch states -- while player_ucb_c carries the mechanism.
+    player_int_coef: float = 0.0
     # Discount on the intrinsic channel: the bonus is local (reach an
     # untested state), so a short ~20-step horizon rather than the win
     # channel's gamma=1.
@@ -383,6 +388,22 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Huber weight of V_int.
     player_ens_loss_coef: float = 0.25
     player_int_value_loss_coef: float = 0.5
+
+    # Optimistic behaviour policy from the private Q ensemble
+    # (2026-08-22; heads.HeadParams.ucb_c, model cfg.q_ens). Every live
+    # training game plays mu ~ softmax(log pi + ucb_c * sigma_epi /
+    # (sigma_ale + eps)), KL(mu||pi) <= cfg.q_ens.kl_max per state; pi is
+    # never touched (Retrace's min(1, pi/mu) absorbs the tilt exactly as
+    # it does the eps ladder's). The InferenceServer has no per-request
+    # head_params, so this is the STANDING behaviour policy at one c, not
+    # a ladder rung; eval actors and frozen opponents play pi. With the
+    # bonus in units of "epistemic sigmas over aleatoric", c = 1 lifts a
+    # cell the ensemble disagrees on by one sigma-ratio nat before the
+    # cap bites. 0 = off (bitwise pi).
+    player_ucb_c: float = 1.0
+    # Q-ensemble CE weight (modest, LESSONS.md 5) and bootstrap keep-prob.
+    player_q_ens_loss_coef: float = 0.25
+    player_q_ens_bootstrap_p: float = 0.5
 
     # All-action Q critic (docs/q-critic-plan.md) — STRUCTURAL since
     # 2026-08-20 (no enable flag): the two-rung hierarchical Q head is

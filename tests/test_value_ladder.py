@@ -145,3 +145,45 @@ def test_intrinsic_stack_on_private_rung(real_model_and_trajectory):
 
     # Heads differ at init (prior twin is live): the spread is not zero.
     assert np.abs(ens - ens.mean(axis=1, keepdims=True)).max() > 0.0
+
+
+def test_q_ensemble_private_and_ucb_tilt_contract(real_model_and_trajectory):
+    """Q ensemble reads the private rung (sheet-invariant, (T, A, K, n_bins),
+    non-degenerate at init via the prior); HeadParams.ucb_c = 0 is bitwise
+    pi; ucb_c > 0 changes the behaviour log_prob, keeps log_policy (pi)
+    bitwise, and records KL(mu||pi) under the configured cap."""
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    params = _open_all_gates(params)
+    populated = actor_input.replace(
+        env=actor_input.env.replace(opp_private_team=actor_input.env.private_team)
+    )
+    base = network.apply(params, actor_input, actor_output, HeadParams())
+    priv = network.apply(params, populated, actor_output, HeadParams())
+    T = actor_input.env.done.shape[0]
+    A = int(np.prod(actor_input.env.action_mask.shape[-2:]))
+    n_bins = np.asarray(base.value_head.log_probs).shape[-1]
+    q = np.asarray(base.q_ens_logits, dtype=np.float32)
+    assert q.shape[0] == T and q.shape[1] == A and q.shape[-1] == n_bins
+    assert q.shape[2] >= 2 and np.isfinite(q).all()
+    np.testing.assert_array_equal(np.asarray(base.q_ens_logits), np.asarray(priv.q_ens_logits))
+    assert np.abs(q - q.mean(axis=2, keepdims=True)).max() > 0.0
+    # c = 0: bitwise pi everywhere, zero KL.
+    assert np.all(np.asarray(base.action_head.ucb_kl) == 0.0)
+    zero = network.apply(params, actor_input, actor_output, HeadParams(ucb_c=0.0))
+    np.testing.assert_array_equal(
+        np.asarray(base.action_head.log_prob), np.asarray(zero.action_head.log_prob)
+    )
+    # c > 0: the learner path (train=True, action given) still evaluates
+    # log_prob under mu, pi untouched, KL within the cap.
+    hot = network.apply(params, actor_input, actor_output, HeadParams(ucb_c=3.0))
+    np.testing.assert_array_equal(
+        np.asarray(base.action_head.log_policy), np.asarray(hot.action_head.log_policy)
+    )
+    kl = np.asarray(hot.action_head.ucb_kl, dtype=np.float32)
+    assert np.isfinite(kl).all() and kl.max() > 0.0
+    assert kl.max() <= network.cfg.q_ens.kl_max * 1.1
+    assert not np.array_equal(
+        np.asarray(base.action_head.log_prob), np.asarray(hot.action_head.log_prob)
+    )

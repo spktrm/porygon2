@@ -9,7 +9,11 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
+from rl.environment.data import (
+    CAT_VF_SUPPORT,
+    FLAT_MODALITY_MASK,
+    NUM_MODALITY_FEATURES,
+)
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -34,6 +38,8 @@ from rl.model.heads import (
     sample_categorical,
     EnsembleValueLogitHead,
     RegressionValueLogitHead,
+    EnsembleGridPrior,
+    ucb_tilt,
 )
 from rl.model.utils import get_num_params, legal_log_policy
 
@@ -93,6 +99,15 @@ class Porygon2PlayerModel(nn.Module):
         self.q_cond_norm = nn.LayerNorm()
         self.q_adapter = ActionAdapter(self.cfg.q_head.adapter)
         self.q_macro_micro = MacroMicroHead(self.cfg.q_head.macro_micro)
+        # Private-rung Q ensemble + frozen prior for the optimistic
+        # behaviour policy (cfg.q_ens; HeadParams.ucb_c). Shares the Q
+        # rungs' cond/adapter; its own K*n_bins-wide macro/micro readout.
+        q_ens_cfg = self.cfg.q_head.macro_micro.copy_and_resolve_references()
+        q_ens_cfg.num_logits = self.cfg.q_ens.num_heads * len(CAT_VF_SUPPORT)
+        self.q_ens_macro_micro = MacroMicroHead(q_ens_cfg)
+        self.q_ens_prior = EnsembleGridPrior(
+            self.cfg.q_head.macro_micro.micro_qk, num_outputs=q_ens_cfg.num_logits
+        )
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
@@ -155,17 +170,20 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
         mix=0.0,
+        ucb_bonus=None,
+        ucb_c=0.0,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
         the grid (the historical path, unchanged); doubles = two head-level
         stages over per-slot masks with slot 2 conditioned on slot 1's
-        choice — the trunk is forwarded once either way."""
+        choice — the trunk is forwarded once either way. The optimistic
+        UCB tilt is singles-only (doubles plumbing is incomplete)."""
         if self.cfg.num_decision_slots == 2:
             return self._forward_two_slots(
                 action_embeddings, valid_mask, head, train, temp, mix
             )
         return self._forward_single_slot(
-            action_embeddings, valid_mask, head, train, temp, mix
+            action_embeddings, valid_mask, head, train, temp, mix, ucb_bonus, ucb_c
         )
 
     def _forward_single_slot(
@@ -176,6 +194,8 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
         mix=0.0,
+        ucb_bonus=None,
+        ucb_c=0.0,
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
@@ -221,6 +241,18 @@ class Porygon2PlayerModel(nn.Module):
         log_mu = behaviour_log_policy(
             policy_metrics.log_policy, prior, flat_valid_mask, mix
         )
+        # Optimistic tilt on top of the (possibly prior-mixed) behaviour
+        # policy: directed at the cells the private Q ensemble is unsure
+        # of, KL-capped per state. ucb_c is a traced per-call scalar
+        # selected by jnp.where so the learner's 0 path is bitwise log_mu.
+        ucb_kl = jnp.zeros((), dtype=jnp.float32)
+        if ucb_bonus is not None:
+            ucb_c = jnp.asarray(ucb_c, dtype=jnp.float32)
+            tilted, kl = ucb_tilt(
+                log_mu, ucb_c * ucb_bonus, flat_valid_mask, self.cfg.q_ens.kl_max
+            )
+            log_mu = jnp.where(ucb_c > 0, tilted.astype(log_mu.dtype), log_mu)
+            ucb_kl = jnp.where(ucb_c > 0, kl, 0.0)
 
         if train:
             action_index = head.action_index
@@ -250,6 +282,7 @@ class Porygon2PlayerModel(nn.Module):
             normalized_entropy=policy_metrics.normalized_entropy,
             magnet_kl=policy_metrics.magnet_kl,
             normalized_modality_entropy=normalized_modality_entropy,
+            ucb_kl=ucb_kl,
         )
 
     def _score_stage(
@@ -420,12 +453,50 @@ class Porygon2PlayerModel(nn.Module):
         flat_valid_mask = valid_mask.reshape(*valid_mask.shape[:-2], -1)
         return compose_action_grid(macro, micro, flat_valid_mask, reduce="mean")
 
+    def _forward_q_ensemble(
+        self, action_embeddings: jax.Array, cond: jax.Array, valid_mask: jax.Array
+    ) -> jax.Array:
+        """Private-rung Q ensemble: (..., N*N, K, n_bins) categorical
+        logits = trained K-wide macro/micro readout + prior_scale *
+        sg(frozen random pointer prior). Same cond/adapter as the Q rungs."""
+        c = self.q_cond_norm(self.q_cond_proj(cond)).astype(action_embeddings.dtype)
+        adapted = self.q_adapter(action_embeddings, cond=c)
+        src_valid = valid_mask.any(axis=-1)
+        macro, micro = self.q_ens_macro_micro(adapted, src_valid, cond=c)
+        flat_valid_mask = valid_mask.reshape(*valid_mask.shape[:-2], -1)
+        logits = compose_action_grid(macro, micro, flat_valid_mask, reduce="mean")
+        prior = jax.lax.stop_gradient(self.q_ens_prior(adapted)).astype(logits.dtype)
+        logits = logits + self.cfg.q_ens.prior_scale * prior
+        return logits.reshape(
+            *logits.shape[:-1], self.cfg.q_ens.num_heads, len(CAT_VF_SUPPORT)
+        )
+
+    def _ucb_bonus(self, q_ens_logits: jax.Array, valid_mask: jax.Array) -> jax.Array:
+        """(..., N*N) optimism bonus sigma_epi / (sigma_ale + eps) from the
+        ensemble (Clements et al. 2019 law-of-total-variance split), f32,
+        zero on illegal cells. Scaled by HeadParams.ucb_c downstream."""
+        support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
+        probs = jax.nn.softmax(q_ens_logits.astype(jnp.float32), axis=-1)
+        mean_k = probs @ support  # (..., A, K)
+        var_k = probs @ (support**2) - mean_k**2
+        # sqrt(var + eps), not .std(): the gradient of std at zero spread
+        # is NaN, and although the learner's jnp.where(ucb_c > 0, ...)
+        # never SELECTS the tilted branch, NaN * 0 is still NaN. The bonus
+        # is a behaviour-policy input and never a training signal, so it
+        # is also stop_gradient'ed outright.
+        sigma_epi = jnp.sqrt(mean_k.var(axis=-1) + 1e-12)
+        sigma_ale = jnp.sqrt(jnp.maximum(var_k.mean(axis=-1), 0.0) + 1e-12)
+        bonus = sigma_epi / (sigma_ale + self.cfg.q_ens.sigma_eps)
+        flat_valid_mask = valid_mask.reshape(*valid_mask.shape[:-2], -1)
+        return jax.lax.stop_gradient(jnp.where(flat_valid_mask, bonus, 0.0))
+
     def get_head_outputs(
         self,
         action_embeddings: jax.Array,
         value_embeddings: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
+        ucb_bonus: jax.Array,
         head_params: HeadParams,
     ):
 
@@ -436,6 +507,8 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
             temp=head_params.temp,
             mix=head_params.mix,
+            ucb_bonus=ucb_bonus,
+            ucb_c=head_params.ucb_c,
         )
 
         return PlayerActorOutput(
@@ -461,9 +534,23 @@ class Porygon2PlayerModel(nn.Module):
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
+        # Private-rung Q ensemble, batched over T (no vmap needed): the
+        # optimistic behaviour tilt needs its spread at act time; the
+        # learner trains it and logs it.
+        q_ens_logits = self._forward_q_ensemble(
+            action_embeddings, private_value_embeddings, actor_input.env.action_mask
+        )
+        ucb_bonus = self._ucb_bonus(q_ens_logits, actor_input.env.action_mask)
+
         outputs = jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
+        )(
+            action_embeddings,
+            value_embeddings,
+            actor_input.env,
+            actor_output,
+            ucb_bonus,
+        )
 
         if self.cfg.train:
             # Counterfactual value ladder, learner-only so replay
@@ -479,6 +566,7 @@ class Porygon2PlayerModel(nn.Module):
                 # ladder's bitwise-invariance contract covers it.
                 ens_value_logits=self.v_ens_head(private_value_embeddings),
                 int_value=self.v_int_head(private_value_embeddings).logits,
+                q_ens_logits=q_ens_logits,
             )
             # Two-rung all-action Q readout over the flat action grid —
             # (T, N*N, n_bins) categorical logits per rung. Q_all is

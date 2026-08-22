@@ -408,7 +408,14 @@ def main(args: argparse.Namespace):
     # batch-1 fallback path had no remaining user) but left these reads
     # behind, which raised AttributeError at the first launch after it.
     # The server's constructor defaults are the values the fields held.
-    inference_server = InferenceServer(actor_player_network.apply, gpu_lock=gpu_lock)
+    # The server forwards every live self-play game under the standing
+    # optimistic behaviour policy (player_ucb_c); eval_agent above keeps
+    # the default HeadParams (pi, tempered) so evaluations read pi.
+    inference_server = InferenceServer(
+        actor_player_network.apply,
+        head_params=HeadParams(ucb_c=learner_config.player_ucb_c),
+        gpu_lock=gpu_lock,
+    )
     inference_server.start()
 
     logger.info("Loading train state...")
@@ -452,14 +459,12 @@ def main(args: argparse.Namespace):
     wandb_run = wandb.init(
         project="pokemon-rl",
         group=wandb_group,
-        job_type="main",
         name=f"{wandb_group}-main",
         id=run_id,
         # "allow", not "must": resume the run when it still exists
         # server-side, otherwise recreate it under the same id — a
         # wandb-side deletion should never block a training restart.
         resume="allow" if run_id else None,
-        tags=["main"],
         config=model_config_payload,
     )
     # Default x-axis = the monotonic lifetime_step (logged with every
@@ -552,6 +557,7 @@ def main(args: argparse.Namespace):
                         inference_client=inference_server,
                         explore_game_prob=learner_config.explore_game_prob,
                         explore_eps_range=learner_config.explore_eps_range,
+                        ucb_c=learner_config.player_ucb_c,
                     )
                 )
             new_threads.append(

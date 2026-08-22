@@ -614,6 +614,71 @@ def train_step(
             ),
         )
 
+        # Private-rung Q ensemble (optimistic behaviour policy): each head
+        # CE against the taken cell's Retrace labels under its own
+        # bootstrap mask. sigma split per Clements et al. 2019.
+        q_ens_logits = learner_player_pred.q_ens_logits.astype(jnp.float32)
+        num_q_ens = q_ens_logits.shape[-2]
+        action_index_for_q = player_actor_action_head.action_index
+        q_ens_taken = jnp.take_along_axis(
+            q_ens_logits, action_index_for_q[..., None, None, None], axis=-3
+        ).squeeze(-3)  # (T, B, K, n_bins)
+        q_boot_mask = jax.random.bernoulli(
+            jax.random.fold_in(boot_key, 1),
+            config.player_q_ens_bootstrap_p,
+            q_ens_taken.shape[:-1],
+        )
+        loss_q_ens = average(
+            optax.softmax_cross_entropy(
+                logits=q_ens_taken, labels=q_target_probs[..., None, :]
+            ),
+            q_mask[..., None] & q_boot_mask,
+        )
+        q_ens_probs = jax.nn.softmax(q_ens_logits, axis=-1)
+        q_ens_mean = q_ens_probs @ f32_support  # (T, B, A, K)
+        q_ens_var = q_ens_probs @ (f32_support**2) - q_ens_mean**2
+        sigma_epi = jnp.sqrt(q_ens_mean.var(axis=-1) + 1e-12)  # (T, B, A)
+        sigma_ale = jnp.sqrt(jnp.maximum(q_ens_var.mean(axis=-1), 0.0) + 1e-12)
+        legal_f = flat_action_mask.astype(jnp.float32)
+        legal_n = jnp.maximum(legal_f.sum(axis=-1), 1.0)
+        taken_epi = jnp.take_along_axis(
+            sigma_epi, action_index_for_q[..., None], axis=-1
+        ).squeeze(-1)
+        taken_ale = jnp.take_along_axis(
+            sigma_ale, action_index_for_q[..., None], axis=-1
+        ).squeeze(-1)
+        best_switch_epi = jnp.where(valid_switch, sigma_epi, 0.0).max(axis=-1)
+        best_move_epi = jnp.where(valid_move, sigma_epi, 0.0).max(axis=-1)
+        # Actor-recorded; an absent leaf (pre-field trajectories, stub
+        # batches) reads as zero optimism rather than a structure error.
+        ucb_kl_raw = player_actor_action_head.ucb_kl
+        ucb_kl_actor = (
+            jnp.asarray(ucb_kl_raw, dtype=jnp.float32)
+            if getattr(ucb_kl_raw, "shape", ()) != ()
+            else jnp.zeros(policy_mask.shape, dtype=jnp.float32)
+        )
+        q_ens_logs = dict(
+            player_loss_q_ens=loss_q_ens,
+            player_q_ens_heads=jnp.asarray(num_q_ens, dtype=jnp.float32),
+            # Decision panel: is the ensemble less sure about switching
+            # than moving, per state (legal-cell max) and on the taken cell?
+            player_q_ens_epi_best_switch=average(best_switch_epi, q_mask & has_both),
+            player_q_ens_epi_best_move=average(best_move_epi, q_mask & has_both),
+            player_q_ens_epi_taken_switch=average(taken_epi, q_voluntary_switch_mask),
+            player_q_ens_epi_taken_move=average(taken_epi, q_move_mask),
+            player_q_ens_ale_taken_switch=average(taken_ale, q_voluntary_switch_mask),
+            player_q_ens_ale_taken_move=average(taken_ale, q_move_mask),
+            player_q_ens_epi_legal_mean=average(
+                (sigma_epi * legal_f).sum(axis=-1) / legal_n, q_mask
+            ),
+            player_q_ens_ale_legal_mean=average(
+                (sigma_ale * legal_f).sum(axis=-1) / legal_n, q_mask
+            ),
+            # Cost of optimism actually paid at act time (actor-recorded).
+            player_ucb_kl=average(ucb_kl_actor, policy_mask),
+            player_ucb_kl_switch=average(ucb_kl_actor, q_voluntary_switch_mask),
+        )
+
         private_expectation = jax.nn.softmax(private_logits, axis=-1) @ f32_support
         public_expectation = jax.nn.softmax(public_logits, axis=-1) @ f32_support
         all_expectation = learner_value_head.expectation.astype(jnp.float32)
@@ -938,6 +1003,7 @@ def train_step(
                 # V_int that prices the payment.
                 + config.player_ens_loss_coef * loss_v_ens
                 + config.player_int_value_loss_coef * loss_v_int
+                + config.player_q_ens_loss_coef * loss_q_ens
             )
             # kl: trust region against the behaviour policy.
             + config.player_kl_loss_coef * loss_actor_backward_kl
@@ -952,6 +1018,7 @@ def train_step(
             **neurd_logs,
             **value_ladder_logs,
             **int_logs,
+            **q_ens_logs,
             # Loss values
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
