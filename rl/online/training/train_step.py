@@ -38,6 +38,7 @@ from rl.online.training.loss import (
 )
 from rl.online.training.targets import (
     compute_builder_targets,
+    compute_intrinsic_targets,
     compute_player_targets,
     compute_q_targets,
 )
@@ -204,6 +205,19 @@ def train_step(
             config=config,
         )
     )
+    # Intrinsic channel (targets.compute_intrinsic_targets): the fast
+    # target's ensemble spread at s_{t+1}, RMS-normalised by the OLD
+    # train-state scalar, v-traced into V_int targets and a taken-action
+    # advantage. Stop-gradient data from here on, like q_all_target.
+    int_targets = compute_intrinsic_targets(
+        batch,
+        ens_value_logits=player_target_pred.ens_value_logits,
+        int_value=player_target_pred.int_value,
+        isr=target_actor_ratio,
+        int_rms=player_state.int_rms,
+        config=config,
+    )
+    int_targets = jax.tree.map(jax.lax.stop_gradient, int_targets)
     # Q(s, a) exists wherever an action was actually taken — including
     # forced single-option steps (policy_mask excludes those; the Q
     # regression must not) — but not on terminal rows.
@@ -545,6 +559,61 @@ def train_step(
             value_mask,
         )
         f32_support = cat_vf_support.astype(jnp.float32)
+
+        # Intrinsic-reward critic stack. Ensemble: K heads, CE against the
+        # same win targets as the ladder, each head under its own
+        # Bernoulli bootstrap mask (keyed on step_count — deterministic
+        # per step, different per step and per head) so the heads see
+        # different data and the prior twin has something to keep apart.
+        ens_logits = learner_player_pred.ens_value_logits.astype(jnp.float32)
+        num_ens = ens_logits.shape[-2]
+        boot_key = jax.random.PRNGKey(player_state.step_count)
+        boot_mask = jax.random.bernoulli(
+            boot_key, config.player_ens_bootstrap_p, ens_logits.shape[:-1]
+        )
+        ens_ce = optax.softmax_cross_entropy(
+            logits=ens_logits,
+            labels=player_targets.win_returns[..., None, :].astype(jnp.float32),
+        )
+        loss_v_ens = average(ens_ce, value_mask[..., None] & boot_mask)
+        # V_int: Huber against its v-trace target on the intrinsic channel.
+        int_value_pred = learner_player_pred.int_value.astype(jnp.float32)
+        loss_v_int = average(
+            optax.huber_loss(int_value_pred, int_targets.int_returns), value_mask
+        )
+        learner_ens = jax.nn.softmax(ens_logits, axis=-1) @ f32_support
+        int_logs = dict(
+            player_loss_v_ens=loss_v_ens,
+            player_loss_v_int=loss_v_int,
+            player_ens_heads=jnp.asarray(num_ens, dtype=jnp.float32),
+            # Spread of the LEARNER heads (the target net's spread is what
+            # pays, but this is the same quantity one EMA constant ahead).
+            player_ens_std_mean=average(learner_ens.std(axis=-1), q_mask),
+            player_ens_std_switch=average(
+                learner_ens.std(axis=-1), q_voluntary_switch_mask
+            ),
+            player_ens_std_move=average(learner_ens.std(axis=-1), q_move_mask),
+            # The decision panel: the normalised bonus paid after a
+            # voluntary switch vs after a move. Ratio > 1 means the
+            # critic is less tested after switches — the mechanism is
+            # aimed where it should be; <= 1 means the spread is tracking
+            # RNG (aleatoric), not ignorance.
+            player_int_reward_switch=average(
+                int_targets.int_reward, q_voluntary_switch_mask
+            ),
+            player_int_reward_move=average(int_targets.int_reward, q_move_mask),
+            player_int_reward_mean=average(int_targets.int_reward, q_mask),
+            player_int_reward_rms=jnp.sqrt(int_targets.int_rms_new),
+            player_int_adv_abs=average(jnp.abs(int_targets.int_adv), q_mask),
+            player_int_adv_switch=average(int_targets.int_adv, q_voluntary_switch_mask),
+            player_int_adv_move=average(int_targets.int_adv, q_move_mask),
+            player_int_value_r2=calculate_r2(
+                value_prediction=int_value_pred,
+                value_target=int_targets.int_returns,
+                mask=value_mask,
+            ),
+        )
+
         private_expectation = jax.nn.softmax(private_logits, axis=-1) @ f32_support
         public_expectation = jax.nn.softmax(public_logits, axis=-1) @ f32_support
         all_expectation = learner_value_head.expectation.astype(jnp.float32)
@@ -642,9 +711,25 @@ def train_step(
         v_cf = jax.lax.stop_gradient(
             (pi_learner * q_all_target).sum(axis=-1)
         )
+        # Intrinsic channel enters here: beta * int_adv at the TAKEN
+        # cell (a sampled, rho-weighted IMPALA advantage on r_int — there
+        # is no all-action Q_int, so only the reached state is priced).
+        # The centring below spreads the push to the row's other cells
+        # with the opposite sign, exactly as a sampled PG term would.
+        taken_one_hot = jax.nn.one_hot(
+            player_actor_action_head.action_index, q_all_target.shape[-1]
+        )
+        int_push = (
+            config.player_int_coef
+            * int_targets.int_adv[..., None]
+            * taken_one_hot
+            * q_mask[..., None]
+        )
         neurd_adv = jax.lax.stop_gradient(
             jnp.where(
-                flat_action_mask, q_all_target - v_cf[..., None], 0.0
+                flat_action_mask,
+                q_all_target - v_cf[..., None] + int_push,
+                0.0,
             )
         )
         # NeuRD prefactor (2026-08-21): the advantage lands on the
@@ -849,6 +934,10 @@ def train_step(
                 config.player_value_head_loss_coef * loss_v_win
                 + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
                 + config.player_q_coef * (loss_q + loss_q_private)
+                # intrinsic stack: the ensemble whose spread pays, and
+                # V_int that prices the payment.
+                + config.player_ens_loss_coef * loss_v_ens
+                + config.player_int_value_loss_coef * loss_v_int
             )
             # kl: trust region against the behaviour policy.
             + config.player_kl_loss_coef * loss_actor_backward_kl
@@ -862,6 +951,7 @@ def train_step(
             **q_logs,
             **neurd_logs,
             **value_ladder_logs,
+            **int_logs,
             # Loss values
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
@@ -947,6 +1037,7 @@ def train_step(
             player_state.target_params,
             config.player_ema_update_rate,
         ),
+        int_rms=int_targets.int_rms_new,
     )
     # A non-finite loss or gradient must never reach the params or the EMA
     # scalars: one poisoned update is permanent, and the next periodic save

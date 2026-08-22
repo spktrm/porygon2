@@ -112,3 +112,36 @@ def test_ladder_heads_present_and_shaped(real_model_and_trajectory):
     assert np.asarray(out.q_logits).shape == (T, A, n_bins)
     assert np.asarray(out.private_q_logits).shape == (T, A, n_bins)
     assert np.isfinite(np.asarray(out.private_q_logits, dtype=np.float32)).all()
+
+
+def test_intrinsic_stack_on_private_rung(real_model_and_trajectory):
+    """The ensemble and V_int read the PRIVATE rung: bitwise invariant to
+    opp_private_team (the bonus must be the agent's own uncertainty), with
+    the expected (T, K, n_bins) / (T,) shapes, and the ensemble must not be
+    degenerate at init — the randomised prior keeps the K heads apart."""
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    params = _open_all_gates(params)
+    populated = actor_input.replace(
+        env=actor_input.env.replace(opp_private_team=actor_input.env.private_team)
+    )
+    base = network.apply(params, actor_input, actor_output, HeadParams())
+    priv = network.apply(params, populated, actor_output, HeadParams())
+
+    T = actor_input.env.done.shape[0]
+    n_bins = np.asarray(base.value_head.log_probs).shape[-1]
+    ens = np.asarray(base.ens_value_logits, dtype=np.float32)
+    assert ens.ndim == 3 and ens.shape[0] == T and ens.shape[-1] == n_bins
+    assert ens.shape[1] >= 2
+    assert np.isfinite(ens).all()
+    assert np.asarray(base.int_value).shape == (T,)
+    assert np.isfinite(np.asarray(base.int_value, dtype=np.float32)).all()
+
+    np.testing.assert_array_equal(
+        np.asarray(base.ens_value_logits), np.asarray(priv.ens_value_logits)
+    )
+    np.testing.assert_array_equal(np.asarray(base.int_value), np.asarray(priv.int_value))
+
+    # Heads differ at init (prior twin is live): the spread is not zero.
+    assert np.abs(ens - ens.mean(axis=1, keepdims=True)).max() > 0.0

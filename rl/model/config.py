@@ -210,6 +210,25 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
 
+    # Intrinsic-reward critic stack (learner-only, private rung; see
+    # EnsembleValueLogitHead). v_ens: K bootstrapped categorical value
+    # heads + randomised prior, same depth as v_head; their spread is the
+    # intrinsic reward. v_int: scalar regression head for the intrinsic
+    # return under player_int_gamma. K and prior_scale live here because
+    # they shape params; the learner reads K off the logits.
+    cfg.v_ens = ConfigDict()
+    cfg.v_ens.num_heads = 5
+    cfg.v_ens.prior_scale = 1.0
+    cfg.v_ens.mlp = ConfigDict()
+    cfg.v_ens.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.v_ens.num_heads * len(CAT_VF_SUPPORT),
+    )
+    cfg.v_int = ConfigDict()
+    cfg.v_int.mlp = ConfigDict()
+    cfg.v_int.mlp.layer_sizes = (2 * entity_size, entity_size, 1)
+
     # Privileged two-rung all-action Q head (learner-only;
     # docs/q-critic-plan.md): categorical logits over CAT_VF_SUPPORT per
     # src x tgt cell, read off the same action embeddings as the policy

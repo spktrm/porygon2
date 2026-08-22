@@ -188,6 +188,43 @@ def rl_sections():
                     ["player_q_switch_move_gap", "switch_ratio"],
                 ),
                 lp(
+                    # Intrinsic-reward decision panel: the normalised
+                    # ensemble-spread bonus paid after a voluntary switch vs
+                    # after a move. switch > move = the critic is less
+                    # tested after switches, the mechanism aims where it
+                    # should; switch <= move = the spread tracks RNG, not
+                    # ignorance (aleatoric follow-up).
+                    "Intrinsic reward by modality",
+                    [
+                        "player_int_reward_switch",
+                        "player_int_reward_move",
+                        "player_int_reward_mean",
+                    ],
+                ),
+                lp(
+                    # Is the disagreement signal alive? ens std collapsing
+                    # toward 0 = heads converged (prior too weak / bootstrap
+                    # too mild); rms is the normaliser's scale.
+                    "Ensemble spread & intrinsic scale",
+                    [
+                        "player_ens_std_mean",
+                        "player_ens_std_switch",
+                        "player_ens_std_move",
+                        "player_int_reward_rms",
+                    ],
+                ),
+                lp(
+                    # The intrinsic push actually reaching NeuRD, by
+                    # modality, with V_int's fit.
+                    "Intrinsic advantage & V_int R2",
+                    [
+                        "player_int_adv_switch",
+                        "player_int_adv_move",
+                        "player_int_adv_abs",
+                        "player_int_value_r2",
+                    ],
+                ),
+                lp(
                     # |sum(pi*E[Q]) - V|: the two heads' state-value
                     # disagreement. Should shrink to a small stable
                     # residual; growing while both R2s look fine points

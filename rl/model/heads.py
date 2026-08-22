@@ -516,6 +516,36 @@ class CategoricalValueLogitHead(nn.Module):
         )
 
 
+class EnsembleValueLogitHead(nn.Module):
+    """Learner-only bootstrapped value ensemble with randomised priors.
+
+    Output (..., K, n_bins): K categorical value readouts over
+    CAT_VF_SUPPORT from one MLP (reshaped), each trained by CE against the
+    same win targets under its OWN Bernoulli bootstrap mask
+    (train_step), plus a frozen randomised-prior twin (Osband et al.
+    2018): effective logits = f_k + prior_scale * sg(p_k). The prior is
+    what keeps the heads apart where no data has arrived — without it
+    same-trunk heads on the same labels converge and the disagreement
+    signal dies everywhere at once. The spread std_k E[V_k] is the
+    critic's epistemic uncertainty and becomes the intrinsic reward
+    (docs: plan i-want-a-principled). Reads the PRIVATE rung so the
+    uncertainty is the agent's own, not the opponent sheet's.
+
+    The prior MLP's params sit in the params tree (so EMA / checkpoints
+    carry them) but receive exactly zero gradient; adamw with
+    weight_decay 0 therefore never moves them.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, embedding: jax.Array):
+        logits = MLP(**self.cfg.mlp.to_dict())(embedding)
+        prior = MLP(**self.cfg.mlp.to_dict(), name="prior")(embedding)
+        logits = logits + self.cfg.prior_scale * jax.lax.stop_gradient(prior)
+        return logits.reshape(*logits.shape[:-1], self.cfg.num_heads, -1)
+
+
 class RegressionValueLogitHead(nn.Module):
     cfg: ConfigDict
 

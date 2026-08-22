@@ -355,6 +355,35 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (privileged) head exclusively.
     player_value_ladder_coef: float = 0.25
 
+    # Intrinsic reward from critic-ensemble disagreement (2026-08-22;
+    # targets.compute_intrinsic_targets). The escape mechanism for the
+    # greedy no-switch attractor every lineage since Aug-9 fell into:
+    # the win critic went action-flat, so NeuRD had no gap to transmit
+    # and no pi-prefactored regulariser could refill a dead modality. K
+    # bootstrapped value heads with a randomised prior (model cfg.v_ens)
+    # disagree exactly where the critic is flat BECAUSE UNTESTED, and
+    # that spread, RMS-normalised, is paid as a per-step reward through
+    # a separate V_int critic — the win critic's targets are untouched.
+    # Self-play-derived only. beta (player_int_coef) is THE dial: weight
+    # of the intrinsic advantage at the taken cell inside the NeuRD
+    # advantage, in units of the normalised bonus; 0 keeps the heads
+    # training as observers.
+    player_int_coef: float = 0.5
+    # Discount on the intrinsic channel: the bonus is local (reach an
+    # untested state), so a short ~20-step horizon rather than the win
+    # channel's gamma=1.
+    player_int_gamma: float = 0.95
+    # EMA rate of the running mean-square that normalises r_int; 1e-3 =
+    # ~1k-step memory, slower than the heads move.
+    player_int_rms_rate: float = 1e-3
+    # Per-(head, row) Bernoulli keep-probability of the ensemble's
+    # bootstrap masks (0.5 = each head sees half the rows).
+    player_ens_bootstrap_p: float = 0.5
+    # CE weight of the ensemble heads (modest, per LESSONS.md 5) and
+    # Huber weight of V_int.
+    player_ens_loss_coef: float = 0.25
+    player_int_value_loss_coef: float = 0.5
+
     # All-action Q critic (docs/q-critic-plan.md) — STRUCTURAL since
     # 2026-08-20 (no enable flag): the two-rung hierarchical Q head is
     # part of the model, its CE always trains, and every consumer (boost,
