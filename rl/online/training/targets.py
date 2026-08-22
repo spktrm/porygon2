@@ -6,7 +6,6 @@ from rl.environment.interfaces import (
     Batch,
     BuilderActorOutput,
     BuilderTargets,
-    IntrinsicTargets,
     PlayerTargets,
     Trajectory,
 )
@@ -243,84 +242,6 @@ def compute_q_targets(
     retrace_g = jnp.clip(q_taken + errors, support[0], support[-1]) * mask
     q_target_probs = two_hot(retrace_g, support)
     return q_target_probs, retrace_g, q_all, v_exp, q_taken
-
-
-def compute_intrinsic_targets(
-    batch: Batch,
-    ens_value_logits: jax.Array,
-    int_value: jax.Array,
-    isr: jax.Array,
-    int_rms: jax.Array,
-    config: Porygon2LearnerConfig,
-) -> IntrinsicTargets:
-    """Intrinsic reward from the critic's own epistemic uncertainty.
-
-    Why: every lineage since Aug-9 collapsed to a greedy no-switch policy
-    the terminal win signal cannot pull back out of — the critic is near
-    action-flat (sigma ~0.06) so NeuRD has no gap to transmit, and every
-    gradient-side regulariser carries a pi prefactor
-    (docs/entropy-gradient-pressure.md). This pays the policy for reaching
-    states the critic has not yet tested, from self-play alone.
-
-    r_int_t = std_k E[V_k(s_{t+1})] over the K bootstrapped ensemble heads
-    (EnsembleValueLogitHead, target net): the uncertainty of the state the
-    action REACHED, so the credit lands on a_t. Zero where s_{t+1} is
-    terminal (its value is the known reward), past done, and on the
-    bootstrap-only final row (no s_{t+1} in this chunk). Divided by the
-    running RMS (int_rms, a train-state leaf updated per step; the OLD
-    value normalises this batch so the jit is a pure function of its
-    inputs) so player_int_coef is dimensionless and the bonus cannot grow
-    with critic scale. Disagreement from aleatoric RNG (crits, misses)
-    leaks in too — the prior twin keeps epistemic spread alive where data
-    never arrives while aleatoric spread shrinks with data; judged live by
-    player_int_reward_switch / player_int_reward_move.
-
-    V_int learns the discounted (player_int_gamma, short: the bonus is
-    local) return of r_int under the same truncated-IS v-trace as the win
-    critic; int_adv = rho * (r_t + gamma * int_returns_{t+1} - V_int(s_t))
-    is IMPALA's policy advantage on the intrinsic channel, along the taken
-    action, and enters NeuRD as a stop-gradient scalar at the taken cell.
-    f32 throughout (value recursions never in bf16 — LESSONS.md 2).
-    """
-    support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
-    dones = batch.player_transitions.env_output.done.astype(jnp.float32)  # (T, B)
-    mask = 1 - (jnp.cumsum(dones, axis=0) - dones)
-    discount_t = (1 - dones) * config.player_int_gamma * mask
-
-    ens = jax.nn.softmax(ens_value_logits.astype(jnp.float32), axis=-1) @ support
-    ens_std = ens.std(axis=-1) * mask  # (T, B)
-
-    # Reward for a_t is the spread at s_{t+1}; the final row has no
-    # successor in this chunk and is bootstrap-only anyway.
-    std_next = jnp.concatenate([ens_std[1:], jnp.zeros_like(ens_std[-1:])], axis=0)
-    done_next = jnp.concatenate([dones[1:], jnp.ones_like(dones[-1:])], axis=0)
-    r_raw = jnp.where(done_next > 0, 0.0, std_next) * (1 - dones) * mask
-
-    reward_rows = (1 - dones) * mask
-    batch_ms = (r_raw**2 * reward_rows).sum() / jnp.maximum(reward_rows.sum(), 1.0)
-    int_rms = int_rms.astype(jnp.float32)
-    int_rms_new = int_rms + config.player_int_rms_rate * (batch_ms - int_rms)
-    r_t = r_raw / jnp.sqrt(jnp.maximum(int_rms, 1e-8))
-
-    rho_t = jnp.minimum(1.0, isr.astype(jnp.float32))
-    v_tm1 = int_value.astype(jnp.float32) * mask
-    v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
-    td_errors = rho_t * mask * (r_t + discount_t * v_t - v_tm1)
-    errors = vtrace(td_errors, discount_t, rho_t * config.player_lambda)
-    int_returns = (errors + v_tm1) * mask
-
-    returns_next = jnp.concatenate(
-        [int_returns[1:], jnp.zeros_like(int_returns[-1:])], axis=0
-    )
-    int_adv = rho_t * (r_t + discount_t * returns_next - v_tm1) * (1 - dones) * mask
-
-    return IntrinsicTargets(
-        int_reward=r_t,
-        int_returns=int_returns,
-        int_adv=int_adv,
-        ens_std=ens_std,
-        int_rms_new=int_rms_new,
-    )
 
 
 def compute_builder_targets(

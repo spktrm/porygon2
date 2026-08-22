@@ -107,12 +107,6 @@ class PlayerActorOutput:
     # readouts.
     private_value_logits: ArrayLike = ()
     public_value_logits: ArrayLike = ()
-    # Learner-only (cfg.train), private rung: (T, K, n_bins) logits of the
-    # bootstrapped value ensemble whose spread std_k E[V_k] is the
-    # intrinsic reward, and (T,) scalar V_int — the critic of that
-    # reward's discounted return. Actors leave both empty.
-    ens_value_logits: ArrayLike = ()
-    int_value: ArrayLike = ()
 
 
 @dataclass
@@ -206,25 +200,6 @@ class PlayerTargets:
     win_returns: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()
-
-
-@dataclass
-class IntrinsicTargets:
-    """Learner-side intrinsic-reward channel (targets.compute_intrinsic_targets).
-
-    int_reward: (T, B) RMS-normalised r_int_t = std_k E[V_k(s_{t+1})]
-    (0 on terminal / past-done / bootstrap-only rows); int_returns: (T, B)
-    v-trace targets for V_int under player_int_gamma; int_adv: (T, B)
-    rho-weighted one-step advantage r + gamma * int_returns_{t+1} - V_int
-    along the taken action; ens_std: (T, B) the raw spread at s_t;
-    int_rms_new: () the running mean-square after this batch.
-    """
-
-    int_reward: ArrayLike = ()
-    int_returns: ArrayLike = ()
-    int_adv: ArrayLike = ()
-    ens_std: ArrayLike = ()
-    int_rms_new: ArrayLike = ()
 
 
 @dataclass

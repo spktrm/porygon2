@@ -32,8 +32,6 @@ from rl.model.heads import (
     compose_action_grid,
     compute_policy_metrics,
     sample_categorical,
-    EnsembleValueLogitHead,
-    RegressionValueLogitHead,
 )
 from rl.model.utils import get_num_params, legal_log_policy
 
@@ -65,11 +63,6 @@ class Porygon2PlayerModel(nn.Module):
         # rungs' output calibration comparable; public (history-context-
         # only) gets its own head.
         self.public_v_head = CategoricalValueLogitHead(self.cfg.v_head)
-        # Intrinsic-reward critic stack (learner-only, private rung):
-        # bootstrapped ensemble whose spread is the intrinsic reward, and
-        # the scalar V_int that learns its discounted return.
-        self.v_ens_head = EnsembleValueLogitHead(self.cfg.v_ens)
-        self.v_int_head = RegressionValueLogitHead(self.cfg.v_int)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected; a future
@@ -472,13 +465,6 @@ class Porygon2PlayerModel(nn.Module):
             outputs = outputs.replace(
                 private_value_logits=self.v_head(private_value_embeddings).logits,
                 public_value_logits=self.public_v_head(public_value_embeddings).logits,
-                # Intrinsic-reward stack on the PRIVATE rung: the
-                # ensemble's spread must be the agent's own epistemic
-                # uncertainty, not a readout of the opponent sheet, and
-                # V_int must stay deployable-information-set so the
-                # ladder's bitwise-invariance contract covers it.
-                ens_value_logits=self.v_ens_head(private_value_embeddings),
-                int_value=self.v_int_head(private_value_embeddings).logits,
             )
             # Two-rung all-action Q readout over the flat action grid —
             # (T, N*N, n_bins) categorical logits per rung. Q_all is

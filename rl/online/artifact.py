@@ -124,13 +124,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     frame_count: jax.Array = struct.field(
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
-    # Running mean-square of the raw intrinsic reward (ensemble spread);
-    # normalises r_int inside train_step so player_int_coef is
-    # dimensionless. A train-state leaf (not config) because it changes
-    # every step — config is a jit static.
-    int_rms: jax.Array = struct.field(
-        default_factory=lambda: jnp.array(1.0, dtype=jnp.float32), pytree_node=True
-    )
 
 
 class Porygon2BuilderTrainState(train_state.TrainState):
@@ -265,7 +258,6 @@ def save_state(
         scalars=dict(
             step_count=player_state.step_count,
             frame_count=player_state.frame_count,
-            int_rms=player_state.int_rms,
         ),
     )
     builder_components = dict(
@@ -465,7 +457,6 @@ def load_from_checkpoint(
         opt_state=ckpt_player_state["opt_state"],
         step_count=player_scalars["step_count"],
         frame_count=player_scalars["frame_count"],
-        int_rms=jnp.asarray(player_scalars.get("int_rms", 1.0), dtype=jnp.float32),
     )
 
     # Fully replace builder state
