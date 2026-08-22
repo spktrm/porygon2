@@ -67,16 +67,10 @@ class Agent:
         rng_key: jax.Array,
         params: Params,
         actor_input: PlayerActorInput,
-        head_params: HeadParams | None = None,
     ) -> PlayerAgentOutput:
-        """head_params overrides this Agent's default for one call — the
-        exploration ladder's per-game sampled epsilon (HeadParams.mix)."""
         with self._gpu_lock:
             return self._step_player(
-                rng_key,
-                params,
-                actor_input,
-                self.player_head_params if head_params is None else head_params,
+                rng_key, params, actor_input, self.player_head_params
             )
 
     @overload

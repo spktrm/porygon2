@@ -136,10 +136,5 @@ def stack_batch(
             if isinstance(stacked_trajectory.reuse_count, tuple)
             else stacked_trajectory.reuse_count
         ),
-        explore=(
-            ()
-            if isinstance(stacked_trajectory.explore, tuple)
-            else stacked_trajectory.explore
-        ),
         rng_key=rng_key,
     )

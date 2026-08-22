@@ -27,13 +27,17 @@ from rl.model.heads import (
     HeadParams,
     MacroMicroHead,
     SlotConditioning,
-    behaviour_log_policy,
     calculate_hierarchical_prior,
     compose_action_grid,
     compute_policy_metrics,
     sample_categorical,
 )
 from rl.model.utils import get_num_params, legal_log_policy
+
+
+def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
+    """log pi with illegal cells at the dtype's min, for sample_categorical."""
+    return jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min)
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -147,7 +151,6 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        mix=0.0,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
         the grid (the historical path, unchanged); doubles = two head-level
@@ -155,10 +158,10 @@ class Porygon2PlayerModel(nn.Module):
         choice — the trunk is forwarded once either way."""
         if self.cfg.num_decision_slots == 2:
             return self._forward_two_slots(
-                action_embeddings, valid_mask, head, train, temp, mix
+                action_embeddings, valid_mask, head, train, temp
             )
         return self._forward_single_slot(
-            action_embeddings, valid_mask, head, train, temp, mix
+            action_embeddings, valid_mask, head, train, temp
         )
 
     def _forward_single_slot(
@@ -168,7 +171,6 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        mix=0.0,
     ):
         flat_valid_mask = valid_mask.reshape(-1)
 
@@ -208,12 +210,9 @@ class Porygon2PlayerModel(nn.Module):
         policy_metrics = compute_policy_metrics(
             logits=pi_logits, valid_mask=flat_valid_mask, prior=prior
         )
-        # Behaviour policy mu (== pi unless head_params.mix > 0, explore
-        # games only): what gets SAMPLED and what log_prob RECORDS, so the
-        # learner's pi/mu ratio is exact. log_policy stays pi's.
-        log_mu = behaviour_log_policy(
-            policy_metrics.log_policy, prior, flat_valid_mask, mix
-        )
+        # Behaviour policy mu == pi; illegal cells carry the dtype's min so
+        # the sampler never draws them.
+        log_mu = _sampling_log_policy(policy_metrics.log_policy, flat_valid_mask)
 
         if train:
             action_index = head.action_index
@@ -251,7 +250,6 @@ class Porygon2PlayerModel(nn.Module):
         valid_mask: jax.Array,
         given_index: jax.Array | None,
         temp: float,
-        mix,
     ):
         """One decision stage of the doubles path: score the grid with the
         per-modality heads (params shared across stages), compose with the
@@ -283,9 +281,7 @@ class Porygon2PlayerModel(nn.Module):
         policy_metrics = compute_policy_metrics(
             logits=pi_logits, valid_mask=flat_valid_mask, prior=prior
         )
-        log_mu = behaviour_log_policy(
-            policy_metrics.log_policy, prior, flat_valid_mask, mix
-        )
+        log_mu = _sampling_log_policy(policy_metrics.log_policy, flat_valid_mask)
         if given_index is not None:
             action_index = given_index
         else:
@@ -319,7 +315,6 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        mix=0.0,
     ):
         """Doubles: valid_mask is (2, N, N) per-slot masks and, in train,
         head.action_index is (2,). One trunk pass serves both decisions —
@@ -339,7 +334,7 @@ class Porygon2PlayerModel(nn.Module):
         """
         stage1_given = head.action_index[0] if train else None
         flat_valid_1, metrics_1, index_1, log_prob_1 = self._score_stage(
-            action_embeddings, valid_mask[0], stage1_given, temp, mix
+            action_embeddings, valid_mask[0], stage1_given, temp
         )
 
         mask_width = valid_mask.shape[-1]
@@ -349,7 +344,7 @@ class Porygon2PlayerModel(nn.Module):
         mask_2 = self._apply_choice_collision(valid_mask[1], index_1)
         stage2_given = head.action_index[1] if train else None
         flat_valid_2, metrics_2, index_2, log_prob_2 = self._score_stage(
-            cond_embeddings, mask_2, stage2_given, temp, mix
+            cond_embeddings, mask_2, stage2_given, temp
         )
 
         action_index = jnp.stack([index_1, index_2])
@@ -428,7 +423,6 @@ class Porygon2PlayerModel(nn.Module):
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
-            mix=head_params.mix,
         )
 
         return PlayerActorOutput(

@@ -102,9 +102,7 @@ def test_train_step_player_q_smoke():
         "player_q_target_voluntary_switch",
         "player_q_target_move",
         # Pivotal-state decision panel: tail statistics conditioned on the
-        # critic-flagged switch-worthy states, not the taken action (the
-        # explore-row return split needs own_rows, absent in this minimal
-        # batch — same reason player_q_explore_frac isn't listed).
+        # critic-flagged switch-worthy states, not the taken action.
         "player_q_pivotal_frac",
         "player_q_pivotal_pi_switch_mass",
         "player_q_pivotal_taken_switch_frac",
@@ -157,22 +155,3 @@ def test_train_step_player_q_smoke():
             np.asarray(logs_neurd["player_loss_neurd"], dtype=np.float32)
         )
 
-    # Explore-row contract (2026-08-17), tested at its extreme: an
-    # all-explore batch trains EVERY player loss — the tempered rows carry
-    # exact ISRs, so policy/value masks stay live — while the explore-only
-    # signals (league cadence, builder) mask them elsewhere.
-    batch_explore = batch.replace(explore=np.ones((1, B), dtype=bool))
-    with jax.default_device(jax.devices("cpu")[0]):
-        _, _, logs_explore = train_step(
-            player_state, builder_state, batch_explore, config
-        )
-    assert float(logs_explore["player_policy_mask_sum"]) > 0.0
-    assert float(logs_explore["player_value_mask_sum"]) > 0.0
-    assert np.isfinite(
-        np.asarray(logs_explore["player_loss_v_win"], dtype=np.float32)
-    )
-    assert float(logs_explore["player_q_explore_frac"]) == 1.0
-    assert "player_q_r2_explore" in logs_explore
-    assert "player_learner_actor_forward_kl_own" in logs_explore
-    assert np.isfinite(np.asarray(logs_explore["player_loss_q"], dtype=np.float32))
-    assert float(logs_explore["player_q_macro_micro_gradient_norm"]) > 0.0

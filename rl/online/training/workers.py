@@ -55,24 +55,6 @@ def host_to_device_worker(run_state: RunState, config: Porygon2LearnerConfig):
                     break
                 batch = run_state.player_replay.sample(batch_size)
 
-            # Normalise the exploration-ladder tag every trajectory
-            # carries (explore actors mark theirs explore=True at
-            # construction — see PlayerActor; train_step keeps those
-            # rows out of the league/builder signals only).
-            # Trajectories from before the field was populated stack
-            # as False, so the shared train_step jit always sees one
-            # pytree structure across batches.
-            batch = [
-                t.replace(
-                    explore=(
-                        np.array([False])
-                        if isinstance(t.explore, tuple)
-                        else np.asarray(t.explore).reshape(1)
-                    )
-                )
-                for t in batch
-            ]
-
             add_cond = run_state.player_replay._add_cv
             with add_cond:
                 add_cond.notify_all()
@@ -149,10 +131,7 @@ def update_replay_controller(
     cap."""
     if not config.player_replay_ctrl_enabled:
         return
-    # The _own variant excludes tempered explore rows (which train the
-    # policy since 2026-08-17 but would inflate the mean KL and make
-    # the controller silently cut the reuse cap).
-    kl = host_logs.get("player_learner_actor_forward_kl_own")
+    kl = host_logs.get("player_learner_actor_forward_kl")
     if kl is not None and np.isfinite(kl):
         run_state.replay_ctrl_kl_sum += float(kl)
         run_state.replay_ctrl_kl_count += 1

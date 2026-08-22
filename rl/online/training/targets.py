@@ -173,9 +173,7 @@ def compute_q_targets(
     off-policy — so delta_t itself carries no rho factor, and the
     recursion is E_t = delta_t + gamma_t * c_{t+1} * E_{t+1} with
     c = player_q_lambda * min(1, pi_target/mu). min(1, .) tolerates
-    arbitrary behaviour policies: replay reuse, and the exploration
-    ladder's epsilon-mixed games (config.explore_game_prob),
-    whose recorded mu IS the mixed distribution.
+    arbitrary behaviour policies (replay reuse, or any recorded mu).
 
     q_logits / target_log_policy come from the fast EMA target network —
     the same IMPACT reasoning as the v-trace reference policy. Everything

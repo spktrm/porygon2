@@ -123,10 +123,7 @@ def run_training_actor_pair(
             trajectory = future1.result()
             future2.result()
 
-            # Tempered games are excluded from the payoff table: PFSP
-            # weights, verification picks and promotion bars should read
-            # the base policy's strength, not a temp-2 explorer's.
-            if not is_trainable and not bool(np.asarray(trajectory.explore).item()):
+            if not is_trainable:
                 player.update_player_league_stats(
                     player_params, opponent_params, trajectory
                 )
@@ -390,13 +387,6 @@ def main(args: argparse.Namespace):
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
-    # No separate exploration Agents: head_params is a per-call traced
-    # argument of Agent.step_player now, so ladder actors share
-    # learning_agent and pass their per-game sampled epsilon themselves
-    # (see PlayerActor). They bypass the batched InferenceServer (which
-    # serves everyone at mix=0, i.e. pi itself) the same way eval actors
-    # do.
-
     # One batched-inference server for ALL training PlayerActors
     # (rl/online/inference.py). Same apply_fn and
     # default HeadParams as learning_agent — eval actors stay on
@@ -527,17 +517,6 @@ def main(args: argparse.Namespace):
                 )
 
         logger.info("Initializing %d player actors (self-play)...", num_player_actors)
-        # Exploration ladder: every actor independently draws a per-game
-        # explore coin (explore_game_prob) and, on explore games, a fresh
-        # log-uniform epsilon — no dedicated ladder slots. Dedicated
-        # slots bypassed the InferenceServer full-time and out-produced
-        # the server-queued base pairs ~4x (44% row share instead of the
-        # intended ~17%); a per-game coin makes the trajectory share equal
-        # the probability by construction, and explore play is spread
-        # across the whole matchmaking mix. The unmixed side of a
-        # mixed game still pushes ordinary PG/value rows — played against
-        # an exploring opponent, which is exactly the opponent-switch-
-        # pressure coverage mirror self-play stopped producing.
         for game_id in range(num_player_actors // 2):
             actors = []
             for player_id in range(2):
@@ -550,8 +529,6 @@ def main(args: argparse.Namespace):
                         learner=learner,
                         rng_seed=len(new_threads) + salt + slot,
                         inference_client=inference_server,
-                        explore_game_prob=learner_config.explore_game_prob,
-                        explore_eps_range=learner_config.explore_eps_range,
                     )
                 )
             new_threads.append(

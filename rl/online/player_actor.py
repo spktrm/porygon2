@@ -66,8 +66,6 @@ class PlayerActor:
         rng_seed: int = 42,
         is_eval: bool = False,
         inference_client: InferenceServer | None = None,
-        explore_game_prob: float = 0.0,
-        explore_eps_range: tuple[float, float] | None = None,
     ):
         self._agent = agent
         self._env = env
@@ -87,32 +85,6 @@ class PlayerActor:
         # Eval actors must never contribute to training data, nor consume the
         # builder replay buffer's reuse budget. This flag gates both.
         self._is_eval = is_eval
-        # Exploration ladder (config.explore_game_prob /
-        # explore_eps_range): each GAME this actor plays with its own
-        # live params is independently an explore game with this
-        # probability, sampling a fresh epsilon log-uniform over the
-        # range and playing mu = (1-eps).pi + eps.prior for that game —
-        # Ape-X/R2D2's epsilon ladder, assigned per game rather than per
-        # dedicated actor slot. Epsilon replaced TEMPERATURE 2026-08-21:
-        # a tempered collapsed policy is still collapsed, so the switch
-        # samples the ladder supplied shrank with the collapse it was
-        # meant to counter; the prior floor does not. Per-game draws make the explore share of produced
-        # trajectories equal the probability BY CONSTRUCTION: dedicated
-        # explore actors bypassed the InferenceServer full-time and
-        # out-produced the server-queued base pairs ~4x, inflating the
-        # intended ~17% row share to ~44%. Explore games are tagged (see
-        # Trajectory.explore) so the host-side signals a noisier policy
-        # would bias can exclude them; the recorded log_policy always
-        # reflects mu, so the ISRs are correct for free.
-        # Tempered games route via this actor's own batch-1 Agent for
-        # that game only (the batched InferenceServer has no per-request
-        # head_params); sides playing frozen opponents (do_push=False)
-        # and eval actors never temper.
-        self._explore_game_prob = explore_game_prob
-        self._explore_eps_range = explore_eps_range
-        if explore_game_prob > 0.0:
-            assert explore_eps_range is not None
-        self._temp_rng = np.random.default_rng(rng_seed)
 
     def clip_actor_history(self, timestep: PlayerActorInput, min_length: int = 64):
         return PlayerActorInput(
@@ -147,7 +119,6 @@ class PlayerActor:
         self,
         rng_key: jax.Array,
         player_params: Params | ParamsContainer,
-        head_params: HeadParams | None = None,
     ) -> list[Trajectory]:
         """Run one full game (up to unroll_length steps) and return it as a
         list of fixed-length chunks of player_chunk_length transitions each.
@@ -165,9 +136,7 @@ class PlayerActor:
 
         player_params is device-resident Params on the direct-Agent path,
         or the host ParamsContainer when routing through the batched
-        InferenceServer (which owns device transfer) — see unroll_and_push.
-        head_params is set iff this game is an explore game (per-game
-        epsilon mix); those games always take the direct-Agent path."""
+        InferenceServer (which owns device transfer) — see unroll_and_push."""
 
         player_subkeys = split_rng(rng_key, self._unroll_length)
         player_traj = []
@@ -232,7 +201,7 @@ class PlayerActor:
                 # game can still have hundreds of steps to run.
                 raise ActorStopped("training stopped mid-unroll")
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
-            if self._inference_client is not None and head_params is None:
+            if self._inference_client is not None:
                 # player_params is the host ParamsContainer on this path
                 # (see unroll_and_push) — the server owns device transfer.
                 player_agent_output = self._inference_client.step_player(
@@ -245,7 +214,6 @@ class PlayerActor:
                     player_subkeys[player_step_index],
                     player_params,
                     player_actor_input_clipped,
-                    head_params=head_params,
                 )
             player_transition = PlayerTransition(
                 env_output=player_actor_input_clipped.env,
@@ -287,7 +255,6 @@ class PlayerActor:
                 player_transitions=jax.tree.map(lambda *xs: np.stack(xs), *rows),
                 player_packed_history=packed_window,
                 player_history=history_window,
-                explore=np.array([head_params is not None]),
             )
 
         return [
@@ -315,23 +282,7 @@ class PlayerActor:
 
     def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
-        # Per-game, per-side independent explore coin. Only sides whose
-        # trajectory can enter training draw (do_push): a side playing a
-        # frozen opponent produces nothing trainable, and tempering it
-        # would just randomise the opponent main is graded against (and
-        # pollute the league payoff table — those games are skipped from
-        # stats updates in run_training_actor_pair regardless).
-        head_params = None
-        if (
-            do_push
-            and not self._is_eval
-            and self._temp_rng.random() < self._explore_game_prob
-        ):
-            lo, hi = self._explore_eps_range
-            head_params = HeadParams(
-                mix=float(np.exp(self._temp_rng.uniform(np.log(lo), np.log(hi))))
-            )
-        if self._inference_client is not None and head_params is None:
+        if self._inference_client is not None:
             # The server owns device transfer behind a versioned cache, so
             # every actor playing the same params version shares ONE device
             # copy — the per-actor device_put below made 12 separate copies
@@ -341,17 +292,15 @@ class PlayerActor:
             player_params = jax.device_put(params_container.player_params)
         subkey = self.split_rng()
 
-        chunks = self.unroll(
-            rng_key=subkey, player_params=player_params, head_params=head_params
-        )
+        chunks = self.unroll(rng_key=subkey, player_params=player_params)
         self.reset_game_id()
 
         if should_push_trajectory(self._is_eval, do_push, self._env.username):
             for chunk in chunks:
                 self._learner.enqueue_traj(chunk)
         # Callers consume whole-game facts off the return value
-        # (win_reward[-1] payoff, public_team[-1] mon differential, the
-        # explore flag): the last chunk's padding rows copy the terminal
+        # (win_reward[-1] payoff, public_team[-1] mon differential): the
+        # last chunk's padding rows copy the terminal
         # step, so it serves all of them.
         return chunks[-1]
 

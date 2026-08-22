@@ -377,55 +377,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per row, so unclipped logits diverge); other losses still move
     # cells outside the band. 2.0 = OpenSpiel's NeuRD default.
     player_neurd_logit_clip: float = 2.0
-    # Agent57/Ape-X-style exploration ladder (replaces stage 4's
-    # cross-population intake, removed 2026-08-15: it conflated another
-    # agent's policy evidence with main's own action values, and its
-    # frozen-between-blocks stock went stale — foreign-row Q R² 0.27 vs
-    # 0.84 own). Every player actor independently makes each game it
-    # plays with its own live params an explore game with this
-    # probability, drawing a fresh epsilon log-uniform from
-    # explore_eps_range (R2D2's geometrically-spaced epsilon ladder,
-    # assigned per game like Agent57's per-episode picks rather than
-    # per dedicated actor slot;
-    # base games sample at 1.0). Per-game draws make the explore share
-    # of trajectories equal this probability BY CONSTRUCTION — the prior
-    # dedicated-slot design's 2/12 actors bypassed the InferenceServer
-    # full-time (it has no per-request head_params, so explore games
-    # take the direct batch-1 path) and out-produced the server-queued
-    # base pairs ~4x, inflating the intended ~17% row share to ~44% and
-    # halving the PG/value effective batch. Sides draw INDEPENDENTLY:
-    # explore play is graded against the true unmixed policy it will
-    # actually face, and the unmixed side of a mixed game pushes
-    # ordinary PG/value rows played under opponent-switch pressure —
-    # coverage the old explorer-vs-explorer pairing kept locked inside
-    # Q-only rows. Frozen-opponent sides (nothing trainable, and league
-    # payoff reads would be polluted) and eval actors never explore;
-    # explore PFSP games are also skipped from payoff updates. Because
-    # the mix is applied BEFORE the policy metrics are computed, the
-    # recorded behaviour policy IS mu, so v-trace/Retrace ISRs are
-    # automatically correct. Explore rows train EVERY player loss since
-    # 2026-08-17 (the Q-CE-only masking was removed — their ISRs are
-    # exact, so nothing needs protecting from them); own_rows still gates
-    # the league cadence, the builder losses and the replay controller,
-    # where a deliberately noisier policy would bias the signal. 0
-    # disables. No parameter change, so the flip is checkpoint-safe.
-    # 2026-08-21: epsilon-mix with the hierarchical prior REPLACES the
-    # temperature draw (mu = (1-eps).pi + eps.prior per explore game;
-    # HeadParams.mix). Supply arithmetic: the prior puts ~1/2 of a
-    # real-choice row on switch cells, so forced-switch rows ~
-    # explore_game_prob x E[eps] x 1/2 ~ 1/3 x 0.28 x 1/2 ~ 4.7% on top
-    # of the ~3% the collapsed policy supplies itself -- the pre-collapse
-    # ~8-10% the critic needs to keep a switch belief. Why a ladder on a
-    # MINORITY of games rather than a small eps everywhere: v-trace's
-    # rho-bar truncation bites where pi/mu > 1, bounded by 1/(1-eps), so
-    # large eps belongs in games whose rows are few; and both sides of
-    # an explore game play mu, so every explore game is against a noisier
-    # opponent. ISR ESS (player_isr_ess) is the guard: below ~0.9, lower
-    # the top of the range. The magnet KL no longer has to double as the
-    # exploration crutch -- it can return to its regularisation-only
-    # value once coverage is confirmed.
-    explore_game_prob: float = 1.0 / 3.0
-    explore_eps_range: tuple[float, float] = (0.1, 0.6)
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

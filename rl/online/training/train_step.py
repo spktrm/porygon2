@@ -123,20 +123,6 @@ def train_step(
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
 
-    # Exploration-ladder rows (config.explore_game_prob; previously the
-    # stage-4 cross-population intake, removed 2026-08-15) train EVERY
-    # player loss since 2026-08-17: the heads record the TEMPERED
-    # distribution as the behaviour policy, so target_actor_ratio is the
-    # exact policy-over-tempered-behaviour ISR that v-trace/IMPACT/Retrace
-    # already truncate on — tempered rows are ordinary off-policy rows.
-    # own_rows survives only where tempered play would distort a signal
-    # that has no correction path: league add cadence (frame_count), the
-    # plasticity memorisation gap, the builder losses, and the replay
-    # controller's KL set-point.
-    own_rows = None
-    if not isinstance(batch.explore, tuple):
-        own_rows = jnp.logical_not(batch.explore[0].astype(bool))  # (B,)
-
     # Fraction of steps where the IMPACT clipped-target correction is
     # saturated at its cap — a second staleness signal alongside the actor
     # KL and ESS diagnostics.
@@ -159,11 +145,6 @@ def train_step(
         per_traj_err = (value_sq_err * vm).sum(axis=0) / (vm.sum(axis=0) + 1e-8)
         fresh = batch.reuse_count[0] == 0
         replayed = ~fresh
-        if own_rows is not None:
-            # Tempered-play value errors would contaminate the fresh/replay
-            # memorisation gap — grade it on standard-temperature play only.
-            fresh = fresh & own_rows
-            replayed = replayed & own_rows
         fresh_err = per_traj_err.mean(where=fresh)
         replay_err = per_traj_err.mean(where=replayed)
         training_logs.update(
@@ -196,13 +177,6 @@ def train_step(
     # forced single-option steps (policy_mask excludes those; the Q
     # regression must not) — but not on terminal rows.
     q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
-    if own_rows is not None:
-        training_logs["player_q_explore_frac"] = average(
-            jnp.logical_not(own_rows)[None, :].astype(jnp.float32)
-            * jnp.ones_like(q_mask, dtype=jnp.float32),
-            q_mask,
-        )
-
     # Both readouts estimate the same state value from the same target
     # params AND the same (privileged) information set, so their
     # absolute gap is pure calibration debt of the Q head to the V
@@ -264,10 +238,7 @@ def train_step(
     # Off-policy attenuation audit, split by the TAKEN modality. isr =
     # pi_target/mu_actor is what v-trace and Retrace multiply their TD
     # errors by (targets.py: rho_t = c_t = (1-alpha)*isr +
-    # alpha*min(1, isr)). The explore ladder records its TEMPERED
-    # log_prob, so mu carries MORE switch mass than pi on explore rows
-    # — exactly the rows whose evidence would contradict a switch
-    # collapse. As pi(switch) decays, isr on switch-taken rows falls
+    # alpha*min(1, isr)). As pi(switch) decays, isr on switch-taken rows falls
     # below 1 and those rows contribute proportionally less.
     #
     # NOTE this is the CORRECT importance correction, not a bug: the
@@ -334,19 +305,6 @@ def train_step(
     training_logs["player_q_pivotal_ret_stay"] = average(
         q_retrace_g, pivotal_mask & jnp.logical_not(taken_switch)
     )
-    if own_rows is not None:
-        # Explore-ladder rows play at flattened temperature, so switches
-        # taken there are far closer to randomised interventions than
-        # exploit-row switches — the least selection-biased empirical
-        # answer to "do voluntary switches lead to better outcomes"
-        # available without new machinery.
-        explore_cols = jnp.logical_not(own_rows)[None, :]
-        training_logs["player_q_explore_ret_vol_switch"] = average(
-            q_retrace_g, q_voluntary_switch_mask & explore_cols
-        )
-        training_logs["player_q_explore_ret_move"] = average(
-            q_retrace_g, q_move_mask & has_both & explore_cols
-        )
 
     # Loss-free critic-quality diagnostics, on permanently. Since
     # 2026-08-21 the policy's ONLY link to returns is NeuRD through
@@ -396,11 +354,6 @@ def train_step(
     if not isinstance(batch.reuse_count, tuple):
         fresh_cols = batch.reuse_count[0] == 0
         replay_cols = ~fresh_cols
-        if own_rows is not None:
-            # Same standard-temperature filter as the capacity
-            # gap: tempered rows would contaminate calibration.
-            fresh_cols = fresh_cols & own_rows
-            replay_cols = replay_cols & own_rows
 
         def q_calibration_r2(cols):
             m = q_mask & cols[None, :]
@@ -806,16 +759,6 @@ def train_step(
             player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
             player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
         )
-        if own_rows is not None:
-            # Does the Q head actually fit the explore-actor-generated
-            # returns it is digesting? Persistent gap vs the full-mask
-            # r2 = the tempered rows are too off-policy to learn from
-            # (Retrace cutting every trace) rather than free
-            # counterfactuals.
-            q_logs["player_q_r2_explore"] = q_context_r2(
-                q_mask & jnp.logical_not(own_rows)[None, :]
-            )
-
         # pg + (v + q) + kl + ent.
         loss = (
             # pg: all-action NeuRD is the ONLY term that moves the action
@@ -849,14 +792,11 @@ def train_step(
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
             # KL values
             player_learner_actor_forward_kl=loss_actor_forward_kl,
-            # Own-rows-only variant: the replay reuse-cap controller's
-            # set-point must not drift with the tempered explore rows now
-            # inside policy_mask (see _update_replay_controller).
             # Modality-resolved split of the SAME k3 estimator. The
             # global mean is an expectation over the policy, so drift
             # confined to a modality carrying ~0.2 mass is diluted to
             # near nothing — which is why the replay reuse controller
-            # (whose set-point is the _own variant) cannot fire on a
+            # (whose set-point is the global mean) cannot fire on a
             # collapsing switch modality even in principle. These two
             # de-average it by the taken modality.
             #
@@ -874,15 +814,6 @@ def train_step(
                 policy_ratio=learner_actor_ratio,
                 log_policy_ratio=learner_actor_log_ratio,
                 valid=policy_mask & jnp.logical_not(taken_switch),
-            ),
-            player_learner_actor_forward_kl_own=(
-                loss_actor_forward_kl
-                if own_rows is None
-                else forward_kl_loss(
-                    policy_ratio=learner_actor_ratio,
-                    log_policy_ratio=learner_actor_log_ratio,
-                    valid=policy_mask & own_rows[None, :],
-                )
             ),
             player_learner_actor_backward_kl=loss_actor_backward_kl,
             player_learner_target_forward_kl=loss_target_forward_kl,
@@ -908,14 +839,7 @@ def train_step(
     player_state = player_state.apply_gradients(grads=player_grads)
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
-        # Own frames only: explore intake rows must not advance the league
-        # add cadence (add_player_min_frames counts main's own play).
-        frame_count=player_state.frame_count
-        + (
-            player_valid.sum()
-            if own_rows is None
-            else (player_valid & own_rows[None, :]).sum()
-        ),
+        frame_count=player_state.frame_count + player_valid.sum(),
         target_params=optax.incremental_update(
             player_state.params,
             player_state.target_params,
@@ -1018,14 +942,6 @@ def train_step(
         builder_valid = builder_valid & player_transitions.env_output.done.any(
             axis=0
         )[None, :].astype(jnp.bool_)
-        if own_rows is not None:
-            # Explore rows stay out of the builder losses: builder targets
-            # are corrected only by the builder's own ISR — there is no
-            # correction path for the PLAYER's raised temperature, so a
-            # tempered game's outcome grades the team under deliberately
-            # noisy piloting.
-            builder_valid = builder_valid & own_rows[None, :]
-
         # Compute builder targets inside train_step (JAX/JIT compatible).
         builder_targets = compute_builder_targets(
             batch,

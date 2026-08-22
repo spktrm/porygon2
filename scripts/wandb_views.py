@@ -235,18 +235,6 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Exploration-ladder Q intake (replaced stage 4's
-                    # cross-population intake 2026-08-15). explore_frac
-                    # is the realised share of Q training data from the
-                    # raised-temperature actors (~their share of the
-                    # actor pool); r2_explore persistently below
-                    # player_q_r2 means the explore rows are too
-                    # off-policy to learn from (Retrace cutting every
-                    # trace) rather than free switching counterfactuals.
-                    "Exploration-ladder Q intake",
-                    ["player_q_explore_frac", "player_q_r2_explore"],
-                ),
-                lp(
                     "Q loss & head gradient",
                     ["player_loss_q", "player_q_macro_micro_gradient_norm"],
                 ),
@@ -432,16 +420,6 @@ def rl_sections():
                     [
                         "player_q_pivotal_ret_switch",
                         "player_q_pivotal_ret_stay",
-                    ],
-                ),
-                lp(
-                    # Explore-ladder rows play at flattened temperature —
-                    # the least selection-biased empirical answer to "do
-                    # voluntary switches lead to better outcomes".
-                    "Explore-row return split: vol switch vs move",
-                    [
-                        "player_q_explore_ret_vol_switch",
-                        "player_q_explore_ret_move",
                     ],
                 ),
             ],
