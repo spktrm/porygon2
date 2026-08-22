@@ -34,15 +34,6 @@ class HeadParams(NamedTuple):
     # 0 = off, bitwise (the mix is a traced per-call value, selected by
     # jnp.where, so the learner's default HeadParams() path is exact).
     mix: float = 0.0
-    # Optimistic behaviour policy (2026-08-22, UCB via the private Q
-    # ensemble): log mu = log pi + ucb_c * sigma_epi / (sigma_ale + eps)
-    # over legal cells, renormalised, KL(mu || pi) capped per state
-    # (cfg.q_ens.kl_max). Like mix: sampling and the recorded log_prob
-    # come from mu, log_policy / entropy / magnet stay pi's, the
-    # learner's default HeadParams() path (0) is bitwise pi. Unlike mix
-    # the tilt is DIRECTED -- it lifts exactly the cells the critic has
-    # not tested (OAC / Chen et al. 2017), not every rare cell.
-    ucb_c: float = 0.0
 
 
 class PolicyMetrics(NamedTuple):
@@ -523,56 +514,6 @@ class CategoricalValueLogitHead(nn.Module):
             expectation=expectation,
             l2_norm=l2_norm,
         )
-
-
-def ucb_tilt(
-    log_mu: jax.Array, bonus: jax.Array, valid_mask: jax.Array, kl_max: float
-) -> tuple[jax.Array, jax.Array]:
-    """Optimistic tilt of a legal log-policy: log mu' ~ log mu + bonus,
-    renormalised over legal cells, with the tilt scaled down so that
-    KL(mu' || mu) <= kl_max (two fixed-point passes on the small-tilt
-    KL ~ t^2 law; exact enough that the cap holds to a few percent).
-    Returns (log mu', KL). f32 throughout; invalid cells keep the dtype
-    min so the result feeds sample_categorical directly."""
-    log_mu = log_mu.astype(jnp.float32)
-    t = jnp.where(valid_mask, bonus.astype(jnp.float32), 0.0)
-
-    def tilted(t):
-        # legal_log_policy leaves invalid cells at 0 -- re-mask to the
-        # dtype min so the result is a sampler-ready log-policy.
-        lm = jnp.where(
-            valid_mask,
-            legal_log_policy(log_mu + t, valid_mask),
-            jnp.finfo(jnp.float32).min,
-        )
-        m = jnp.where(valid_mask, jnp.exp(lm), 0.0)
-        kl = jnp.sum(jnp.where(valid_mask, m * (lm - log_mu), 0.0), axis=-1)
-        return lm, kl
-
-    for _ in range(2):
-        _, kl = tilted(t)
-        scale = jnp.minimum(1.0, jnp.sqrt(kl_max / jnp.maximum(kl, 1e-12)))
-        t = t * scale[..., None]
-    return tilted(t)
-
-
-class EnsembleGridPrior(nn.Module):
-    """Frozen randomised prior over the flat action grid for the Q
-    ensemble: K * n_bins random pointer-logit heads over the adapted
-    action embeddings, (..., N*N, K*n_bins). Lives in params (EMA /
-    checkpoints carry it) but every caller wraps it in stop_gradient and
-    adamw's weight_decay is 0, so it never moves. Deliberately NOT under
-    the flat-at-init zero contract -- a zero prior is no prior."""
-
-    cfg: ConfigDict
-    num_outputs: int
-
-    @nn.compact
-    def __call__(self, action_embeddings: jax.Array) -> jax.Array:
-        grid = PointerLogits(
-            **self.cfg.to_dict(), num_heads=self.num_outputs, name="prior"
-        )(action_embeddings, action_embeddings)
-        return grid.reshape(*grid.shape[:-3], -1, grid.shape[-1])
 
 
 class EnsembleValueLogitHead(nn.Module):

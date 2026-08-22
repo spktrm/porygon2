@@ -202,31 +202,6 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # UCB decision panel: the private Q ensemble's epistemic
-                    # sigma on the best legal switch vs best legal move.
-                    # switch > move = optimism lifts switches (aimed right);
-                    # both -> 0 = heads converged (prior too weak).
-                    "Q-ensemble epistemic sigma: switch vs move",
-                    [
-                        "player_q_ens_epi_best_switch",
-                        "player_q_ens_epi_best_move",
-                        "player_q_ens_epi_taken_switch",
-                        "player_q_ens_epi_taken_move",
-                    ],
-                ),
-                lp(
-                    # Aleatoric (RNG) sigma by modality + the cost of
-                    # optimism actually paid (KL(mu||pi), capped at
-                    # cfg.q_ens.kl_max) -- KL pinned at the cap = c too hot.
-                    "Q-ensemble aleatoric sigma & UCB KL",
-                    [
-                        "player_q_ens_ale_taken_switch",
-                        "player_q_ens_ale_taken_move",
-                        "player_ucb_kl",
-                        "player_ucb_kl_switch",
-                    ],
-                ),
-                lp(
                     # Is the disagreement signal alive? ens std collapsing
                     # toward 0 = heads converged (prior too weak / bootstrap
                     # too mild); rms is the normaliser's scale.

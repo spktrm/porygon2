@@ -68,13 +68,8 @@ class PlayerActor:
         inference_client: InferenceServer | None = None,
         explore_game_prob: float = 0.0,
         explore_eps_range: tuple[float, float] | None = None,
-        ucb_c: float = 0.0,
     ):
         self._agent = agent
-        # Standing optimistic tilt (HeadParams.ucb_c) for this actor's own
-        # live games; explore games route through the batch-1 Agent and
-        # must carry it too, or the eps rung would silently drop it.
-        self._ucb_c = ucb_c
         self._env = env
         # The env polls this while blocked on the game server so a game
         # whose other side has already unwound can't pin this thread.
@@ -334,8 +329,7 @@ class PlayerActor:
         ):
             lo, hi = self._explore_eps_range
             head_params = HeadParams(
-                mix=float(np.exp(self._temp_rng.uniform(np.log(lo), np.log(hi)))),
-                ucb_c=self._ucb_c,
+                mix=float(np.exp(self._temp_rng.uniform(np.log(lo), np.log(hi))))
             )
         if self._inference_client is not None and head_params is None:
             # The server owns device transfer behind a versioned cache, so

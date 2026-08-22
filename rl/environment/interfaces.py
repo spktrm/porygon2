@@ -82,10 +82,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     # written against log_policy the logit-gap clip reintroduces a
     # pi(b).sum_a w(a) cross-term once clipped cells break zero-sum.
     logits: ArrayLike = ()
-    # KL(mu || pi) of the optimistic behaviour tilt at this step (0 when
-    # HeadParams.ucb_c is 0). Stored by actors: it is the per-state cost
-    # of optimism and the dial's natural unit.
-    ucb_kl: ArrayLike = ()
 
 
 @dataclass
@@ -117,11 +113,6 @@ class PlayerActorOutput:
     # reward's discounted return. Actors leave both empty.
     ens_value_logits: ArrayLike = ()
     int_value: ArrayLike = ()
-    # Learner-only (cfg.train), private rung: (T, A, K, n_bins) logits of
-    # the bootstrapped Q ensemble (+ frozen prior) whose epistemic /
-    # aleatoric spread drives the optimistic behaviour policy. Computed
-    # at act time too (the tilt needs it) but never stored.
-    q_ens_logits: ArrayLike = ()
 
 
 @dataclass

@@ -244,23 +244,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # plus a per-modality per-bin macro readout, the explicit
     # low-dimensional parameter path for "is switching better here" that
     # the flat grid made the head express cell-by-cell.
-    # Private-rung Q ensemble for the optimistic behaviour policy
-    # (2026-08-22; docs: plan i-want-a-principled, heads.HeadParams.ucb_c).
-    # K bootstrapped categorical Q readouts (one MacroMicroHead with
-    # K*n_bins logits per cell) plus a frozen random pointer prior
-    # (EnsembleGridPrior) on the SAME adapted action embeddings as the
-    # Q rungs. Clements et al. 2019 decomposition: sigma_epi = std_k
-    # E[Q_k], sigma_ale = sqrt(mean_k Var[Q_k]) -- both free from the
-    # categorical heads; the act-time bonus is sigma_epi / (sigma_ale +
-    # sigma_eps) so a thoroughly-tested coin-flip cell earns nothing.
-    # kl_max caps KL(mu || pi) per state so optimism stays a tilt of pi,
-    # never a different policy the IS ratios then truncate away.
-    cfg.q_ens = ConfigDict()
-    cfg.q_ens.num_heads = 5
-    cfg.q_ens.prior_scale = 1.0
-    cfg.q_ens.sigma_eps = 0.05
-    cfg.q_ens.kl_max = 0.1
-
     cfg.q_head = ConfigDict()
     cfg.q_head.adapter = ConfigDict()
     cfg.q_head.adapter.mlp = ConfigDict()
