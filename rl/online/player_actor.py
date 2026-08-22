@@ -2,7 +2,7 @@ import jax
 import numpy as np
 
 from rl.environment.data import CAT_VF_SUPPORT
-from rl.environment.env import SinglePlayerSyncEnvironment
+from rl.environment.env import ActorStopped, SinglePlayerSyncEnvironment
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerAgentOutput,
@@ -54,16 +54,6 @@ def chunk_spans(
     return spans
 
 
-class ActorStopped(Exception):
-    """Raised inside an unroll when training began shutting down —
-    unwinds the actor thread out of a blocking wait it would otherwise
-    never leave (e.g. the builder-replay sample wait, where no data is
-    coming once the producers have stopped). Handled as a
-    clean loop exit by main.py's actor runners, never as an error —
-    without it, Ctrl-C left actor threads stuck in these waits, tripping
-    the shutdown straggler check."""
-
-
 class PlayerActor:
     """Manages the state of a single agent/environment interaction loop."""
 
@@ -81,6 +71,9 @@ class PlayerActor:
     ):
         self._agent = agent
         self._env = env
+        # The env polls this while blocked on the game server so a game
+        # whose other side has already unwound can't pin this thread.
+        env.stop_check = self._stop_requested
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
@@ -233,6 +226,11 @@ class PlayerActor:
 
         # Rollout the player environment.
         for player_step_index in range(player_subkeys.shape[0]):
+            if self._stop_requested():
+                # Bail on the STEP boundary rather than playing the game
+                # out: at shutdown this trajectory is going nowhere, and a
+                # game can still have hundreds of steps to run.
+                raise ActorStopped("training stopped mid-unroll")
             player_actor_input_clipped = self.clip_actor_history(player_actor_input)
             if self._inference_client is not None and head_params is None:
                 # player_params is the host ParamsContainer on this path
@@ -299,6 +297,11 @@ class PlayerActor:
             )
             for start, end in chunk_spans(num_steps, chunk_length, game_done)
         ]
+
+    def _stop_requested(self) -> bool:
+        """True once training is shutting down. Reads run_state fresh
+        every call — the bundle object is replaced on a rebuild."""
+        return bool(self._learner.run_state.done)
 
     def split_rng(self) -> jax.Array:
         self._rng_key, subkey = split_rng(self._rng_key)

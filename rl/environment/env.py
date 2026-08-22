@@ -28,6 +28,25 @@ from rl.environment.utils import generate_order, process_state
 
 SERVER_URI = "ws://localhost:8080"
 
+# How long a blocking receive waits before checking stop_check. The
+# service answers a step in milliseconds, so this only ever fires when
+# no answer is coming.
+RECV_POLL_SECONDS = 1.0
+
+
+class ActorStopped(Exception):
+    """Raised inside an unroll when training began shutting down —
+    unwinds the actor thread out of a blocking wait it would otherwise
+    never leave: the builder-replay sample wait (no data is coming once
+    the producers have stopped) and, since 2026-08-21, the game
+    server receive. The latter is the one that made Ctrl-C take
+    minutes: both sides of a self-play game share one battle, so the
+    moment one side unwound, the other sat in websocket.recv()
+    forever waiting for a move nobody would ever send, and every such
+    thread then cost the shutdown its full join timeout twice over.
+    Handled as a clean loop exit by main.py's actor runners, never as
+    an error."""
+
 
 class SinglePlayerSyncEnvironment:
     def __init__(self, username: str, generation: int = 3, smogon_format: str = "ou"):
@@ -44,6 +63,10 @@ class SinglePlayerSyncEnvironment:
         self.generation = generation
         self.smogon_format = smogon_format
         self.metgame_token = None
+        # Set by PlayerActor: returns True once training is shutting
+        # down, so a receive that will never be answered raises instead
+        # of pinning this thread for the rest of the process's life.
+        self.stop_check = None
 
     def _set_game_id(self, game_id: str):
         self.game_id = game_id
@@ -52,7 +75,15 @@ class SinglePlayerSyncEnvironment:
         self.game_id = None
 
     def _recv(self):
-        recv_data = self.websocket.recv()
+        while True:
+            try:
+                recv_data = self.websocket.recv(timeout=RECV_POLL_SECONDS)
+                break
+            except TimeoutError:
+                if self.stop_check is not None and self.stop_check():
+                    raise ActorStopped(
+                        "training stopped while waiting on the game server"
+                    )
         worker_response = WorkerResponse.FromString(recv_data)
         environment_response = worker_response.environment_response
         self.rqid = environment_response.state.rqid

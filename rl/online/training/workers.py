@@ -10,6 +10,7 @@ import logging
 import queue
 import random
 import threading
+import time
 
 import jax
 import numpy as np
@@ -222,35 +223,46 @@ def stop_workers(run_state: RunState, strict: bool = True) -> None:
         with cond:
             cond.notify_all()
 
-    for t in run_state.worker_threads:
-        if t.name.startswith("transfer-"):
-            t.join(timeout=10)
+    # Every wait below is a SHARED wall-clock budget, not a per-thread
+    # timeout: threads that are hung are hung together (they were all
+    # signalled at the same instant), so charging each one its own
+    # timeout made a shutdown cost N x timeout of pure waiting.
+    def join_all(threads, budget: float) -> None:
+        deadline = time.monotonic() + budget
+        for t in threads:
+            t.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    def named(prefix: str) -> list:
+        # Names carry no run suffix ("transfer", not "transfer-main");
+        # matching on "transfer-" quietly joined nothing and dumped all
+        # three workers into the straggler path every single shutdown.
+        return [t for t in run_state.worker_threads if t.name == prefix]
+
+    join_all(named("transfer"), 10)
     run_state.log_q.put(None)
-    for t in run_state.worker_threads:
-        if t.name.startswith("log-"):
-            t.join(timeout=30)
+    join_all(named("log"), 30)
     run_state.ckpt_q.put(None)
-    for t in run_state.worker_threads:
-        if t.name.startswith("ckpt-"):
-            t.join(timeout=60)
+    # The ckpt worker may be mid-write of a full checkpoint — the one
+    # wait here that is genuinely about work in flight, not liveness.
+    join_all(named("ckpt"), 60)
     # External actor threads (main.py's PlayerActor/BuilderActor pool,
     # registered via register_actor_threads): already signalled via
-    # run_state.stop_signal[0] above — just wait for them here.
-    for t in run_state.actor_threads:
-        t.join(timeout=30)
+    # run_state.stop_signal[0] above — just wait for them here. They
+    # unwind on their next step or receive poll (~1s), so the budget is
+    # short.
+    join_all(run_state.actor_threads, 15)
 
     all_threads = run_state.worker_threads + run_state.actor_threads
     stragglers = [t for t in all_threads if t.is_alive()]
     if stragglers:
         logger.warning(
             "%d worker thread(s) did not stop within "
-            "their join timeout: %s — giving a 30s grace period before "
+            "their join timeout: %s — giving a 15s grace period before "
             "treating this as a hung shutdown.",
             len(stragglers),
             [t.name for t in stragglers],
         )
-        for t in stragglers:
-            t.join(timeout=30)
+        join_all(stragglers, 15)
         stragglers = [t for t in stragglers if t.is_alive()]
     if stragglers:
         if strict:
