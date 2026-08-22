@@ -48,6 +48,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from constants import NUM_HISTORY
+from rl.environment.env import ActorStopped
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -103,6 +104,9 @@ def _stack_axis0_to(target: int):
     return stack
 
 
+_STOP_POLL_SECONDS = 1.0
+
+
 class InferenceServer:
     """One dispatcher thread + one request queue serving batched
     step_player calls for every training PlayerActor. Constructed and
@@ -120,6 +124,15 @@ class InferenceServer:
         params_cache_size: int = 16,
     ):
         self._queue: "queue.SimpleQueue[_InferenceRequest]" = queue.SimpleQueue()
+        # Set by stop() at shutdown: step_player polls its result wait
+        # against it and unwinds the calling actor thread with
+        # ActorStopped, the same poll-against-stop the game-server
+        # receive got in f9401f8. Without it an actor whose request was
+        # queued behind a dispatcher that will never run again blocked in
+        # Event.wait() forever, and the executor's non-daemon worker
+        # threads then wedged the interpreter's exit-time join (the
+        # 2026-08-23 post-checkpoint hang).
+        self._stop = threading.Event()
         self._gpu_lock = gpu_lock or nullcontext()
         self._max_batch = max_batch
         # LRU of device-resident params, keyed by version — see module
@@ -153,6 +166,12 @@ class InferenceServer:
     def start(self) -> None:
         self._thread.start()
 
+    def stop(self) -> None:
+        """Unblocks every actor waiting in step_player (they raise
+        ActorStopped within one poll interval). The dispatcher thread is
+        a daemon and needs no join."""
+        self._stop.set()
+
     # --- actor-facing API -------------------------------------------------
 
     def step_player(
@@ -171,7 +190,9 @@ class InferenceServer:
             done=threading.Event(),
         )
         self._queue.put(request)
-        request.done.wait()
+        while not request.done.wait(timeout=_STOP_POLL_SECONDS):
+            if self._stop.is_set():
+                raise ActorStopped("training stopped while waiting on inference")
         if request.error is not None:
             raise RuntimeError(
                 "inference server forward failed for this request"

@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import argparse
 import concurrent.futures
+import faulthandler
 import functools
 import json
 import logging
@@ -53,7 +54,12 @@ class TqdmLoggingHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            tqdm.write(self.format(record))
+            # nolock: tqdm's write lock is not signal-safe — a Ctrl-C that
+            # lands inside a bar update leaves the main thread holding it
+            # forever, and every later log line (the shutdown path's
+            # included) then deadlocks behind the logging handler lock. The
+            # lock only guards cosmetic bar/line interleaving.
+            tqdm.write(self.format(record), nolock=True)
         except Exception:
             self.handleError(record)
 
@@ -628,14 +634,45 @@ def main(args: argparse.Namespace):
         )
         executor.shutdown(wait=False, cancel_futures=True)
         try:
-            wandb_run.finish(exit_code=1 if crashed else 0)
+            wandb_run.finish(exit_code=exit_code)
         except Exception:
             logger.warning("wandb_run.finish() failed during shutdown", exc_info=True)
 
-    if crashed:
-        logger.error("Training run crashed — see traceback above.")
-        sys.exit(1)
-    logger.info("Training run complete.")
+    t = threading.Thread(target=_finish, name="wandb-finish", daemon=True)
+    t.start()
+    t.join(timeout=budget)
+    if t.is_alive():
+        logger.warning(
+            "wandb_run.finish() did not return within %.0fs — exiting without it",
+            budget,
+        )
+
+
+def _hard_exit(code: int, budget: float = 30.0) -> None:
+    """Bounded join of every non-daemon thread, then os._exit. The
+    interpreter's own exit joins ThreadPoolExecutor workers (non-daemon)
+    with no timeout, so one actor thread parked on an un-timed wait held
+    the whole process hostage after its checkpoint had landed. Stragglers
+    are named in the log so the next such hang is diagnosable; SIGUSR1
+    (faulthandler, registered at startup) dumps every thread's stack."""
+    deadline = time.monotonic() + budget
+    stragglers = []
+    for t in threading.enumerate():
+        if t is threading.current_thread() or t.daemon:
+            continue
+        t.join(timeout=max(0.0, deadline - time.monotonic()))
+        if t.is_alive():
+            stragglers.append(t.name)
+    if stragglers:
+        logger.warning(
+            "%d non-daemon thread(s) still alive at exit: %s — hard-exiting",
+            len(stragglers),
+            stragglers,
+        )
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 if __name__ == "__main__":
@@ -652,3 +689,28 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(args)
+        inference_server.stop()
+        _finish_wandb_bounded(wandb_run, exit_code=1 if crashed else 0)
+
+    if crashed:
+        logger.error("Training run crashed — see traceback above.")
+    else:
+        logger.info("Training run complete.")
+    _hard_exit(1 if crashed else 0)
+
+
+def _finish_wandb_bounded(
+    wandb_run: wandb.wandb_run.Run, exit_code: int, budget: float = 120.0
+) -> None:
+    """wandb_run.finish() on a helper thread with a wall-clock budget.
+    finish() blocks on the wandb-core service's final sync; when that
+    service is gone (a terminal Ctrl-C hits the whole foreground process
+    group, core included) the wait has nothing to return to, and the
+    main thread sat on it indefinitely on 2026-08-23. A bounded wait
+    keeps the exit path reachable; the run then shows Crashed on W&B's
+    heartbeat timeout, which is accurate."""
+
+    def _finish() -> None:
+    # kill -USR1 <pid> prints every thread's stack to stderr — the only
+    # stack dump that works under yama ptrace_scope=1 without root.
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
