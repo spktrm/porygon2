@@ -186,6 +186,21 @@ def train_step(
             reg_log_policy=reg_log_policy,
         )
     )
+    # Second Retrace pass at the POLICY's lambda (player_pi_lambda): the
+    # taken cell of the NeuRD advantage reads this return instead of the
+    # critic's Q(s, a_t), while untaken cells keep Q_all — rnad.py's
+    # taken-cell-return / critic split without its 1/mu. Same regularised
+    # bootstraps, so it is consistent with q_all_target on every other
+    # cell. Labels for the Q head stay at player_q_lambda.
+    _, q_retrace_g_pi, _, _, _ = compute_q_targets(
+        batch,
+        q_logits=player_target_pred.q_logits,
+        target_log_policy=player_target_pred.action_head.log_policy,
+        isr=target_actor_ratio,
+        config=config,
+        reg_log_policy=reg_log_policy,
+        trace_lambda=config.player_pi_lambda,
+    )
     # KL(pi_target || pi_reg) per state — the expected per-step penalty
     # the Q critic's bootstrap carries. Drifts up as the policy moves
     # away from the lagged reference and back down as the EMA catches up;
@@ -604,8 +619,14 @@ def train_step(
         # without bound as pi(a) -> 0, with no pi prefactor, and it
         # vanishes only when pi == pi_reg — a moving reference, so the
         # fixed point is the regularised Nash, not a uniform prior.
+        taken_one_hot = jax.nn.one_hot(
+            player_actor_action_head.action_index, q_all_target.shape[-1], dtype=bool
+        )
+        q_for_policy = jnp.where(
+            taken_one_hot & q_mask[..., None], q_retrace_g_pi[..., None], q_all_target
+        )
         q_reg = rnad_transformed_q(
-            q_all_target,
+            q_for_policy,
             learner_log_policy,
             reg_log_policy,
             flat_action_mask,
@@ -616,7 +637,7 @@ def train_step(
             jnp.where(flat_action_mask, q_reg - v_cf[..., None], 0.0)
         )
         rnad_penalty = jax.lax.stop_gradient(
-            jnp.where(flat_action_mask, q_all_target - q_reg, 0.0)
+            jnp.where(flat_action_mask, q_for_policy - q_reg, 0.0)
         )
         # NeuRD prefactor (2026-08-21): the advantage lands on the
         # LOGITS with no pi factor, CENTRED over legal cells so the

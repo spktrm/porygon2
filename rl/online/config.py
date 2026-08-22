@@ -325,6 +325,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # in practice it sits between MC and one-step. player_lambda (V head,
     # not in the policy loop) stays 0.8.
     player_q_lambda: float = 1.0
+    # The policy's Retrace lambda (2026-08-22): a second trace at this
+    # lambda supplies the TAKEN cell of the NeuRD advantage (untaken cells
+    # read Q_all), so the critic can learn from outcome chains at 1.0
+    # while the policy's per-step signal keeps 0.8's variance.
+    player_pi_lambda: float = 0.8
     # THE policy gradient. All-action NeuRD (Hennes et al. 2020 eq. 10):
     # per legal cell of every real-choice row,
     # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')] (the COMA

@@ -192,6 +192,7 @@ def compute_q_targets(
     isr: jax.Array,
     config: Porygon2LearnerConfig,
     reg_log_policy: jax.Array | None = None,
+    trace_lambda: float | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """Retrace(lambda) targets for the Q critic (docs/q-critic-plan.md),
     computed from the privileged Q_all rung; the Q_private rung trains by
@@ -277,7 +278,8 @@ def compute_q_targets(
         jnp.where(dones.astype(bool), 0.0, r_t + discount_t * v_next - q_taken) * mask
     )
 
-    c_t = config.player_q_lambda * jnp.minimum(1.0, isr.astype(jnp.float32))
+    lam = config.player_q_lambda if trace_lambda is None else trace_lambda
+    c_t = lam * jnp.minimum(1.0, isr.astype(jnp.float32))
     # Shift left: the recursion's trace factor is c_{t+1} (Retrace), and
     # the final step has no continuation to correct.
     c_next = jnp.concatenate([c_t[1:], jnp.zeros_like(c_t[-1:])], axis=0)
