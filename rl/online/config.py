@@ -370,6 +370,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # 0.2/0.05 lineage was at 0.15-0.23 by 20k. NeuRD is the sole
     # improvement term now, so halving it halved the learning. Tests
     # whether magnet 0.1 holds 0.2 where 0.05 didn't; resumed @60k.
+    # 2026-08-22: the magnet is gone; the opposing force is now inside
+    # the advantage itself (player_rnad_eta), so this coef scales both
+    # the improvement and the regularisation together, as in rnad.py.
     player_neurd_coef: float = 0.2
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
@@ -377,6 +380,27 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per row, so unclipped logits diverge); other losses still move
     # cells outside the band. 2.0 = OpenSpiel's NeuRD default.
     player_neurd_logit_clip: float = 2.0
+    # R-NaD (Perolat et al. 2022, DeepNash; rnad.py in OpenSpiel <= 1.5),
+    # on Retrace targets instead of v-trace (2026-08-22). Reward transform
+    # r' = r - eta*log(pi/pi_reg) against a REFERENCE policy pi_reg that is
+    # a slow EMA of the target params (player_reg_ema_rate; rnad.py snaps
+    # two anchors every delta_m steps and interpolates — the EMA is the
+    # one-forward continuous equivalent). The penalty enters the policy
+    # update analytically per legal cell (targets.rnad_transformed_q) and
+    # the Q critic's bootstrap as the expected -eta*KL(pi||pi_reg)
+    # (compute_q_targets); the win-value head learns the untransformed
+    # game. Own-side term only: the opponent's +eta*KL_opp needs the other
+    # side's chunk (no game id in a Trajectory), so the regularised game is
+    # not exactly zero-sum — the refill force and the moving reference
+    # (what the 13k switch collapse needs) do not depend on it. Replaces
+    # the gradient-side magnet KL, whose pi-prefactored pull could never
+    # refill a starved modality. eta 0.2 = DeepNash; reward support is
+    # +-1 here as in Stratego. 0 disables (plain Retrace + NeuRD).
+    player_rnad_eta: float = 0.2
+    # 1e-4: ~10k-step reference lag, the rnad.py delta_m = 20k's nearest
+    # continuous equivalent given every lineage's collapse window is
+    # ~13k; the target EMA it tracks is 1e-3.
+    player_reg_ema_rate: float = 1e-4
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

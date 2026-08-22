@@ -116,6 +116,14 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    # R-NaD reference policy pi_reg (2026-08-22): a SLOW EMA of
+    # target_params (config.player_reg_ema_rate). The reward transform
+    # -eta*log(pi/pi_reg) is measured against it; it moves with the
+    # policy, which is what makes the regularised dynamics converge
+    # rather than pin the policy to a fixed prior. One param set instead
+    # of rnad.py's prev/prev_ pair with a fixed delta_m iteration — the
+    # EMA is the continuous equivalent at one forward per step.
+    reg_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     # Force these to be dynamic JAX arrays (PyTree nodes) instead of static Python scalars
     step_count: jax.Array = struct.field(
@@ -177,6 +185,7 @@ def create_train_state(
         # donating the train state to the jitted train step fails with a
         # duplicate-donation error on the first step.
         target_params=jax.tree.map(jnp.copy, initial_player_params),
+        reg_params=jax.tree.map(jnp.copy, initial_player_params),
         tx=player_optimizer,
     )
 
@@ -254,6 +263,7 @@ def save_state(
     player_components = dict(
         params=player_state.params,
         target_params=player_state.target_params,
+        reg_params=player_state.reg_params,
         opt_state=player_state.opt_state,
         scalars=dict(
             step_count=player_state.step_count,
@@ -454,6 +464,11 @@ def load_from_checkpoint(
     player_state = player_state.replace(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
+        # Checkpoints from before the reference policy existed seed it
+        # from the target (KL 0 at resume; the EMA takes over from there).
+        reg_params=ckpt_player_state.get(
+            "reg_params", jax.tree.map(jnp.copy, ckpt_player_state["target_params"])
+        ),
         opt_state=ckpt_player_state["opt_state"],
         step_count=player_scalars["step_count"],
         frame_count=player_scalars["frame_count"],
@@ -563,6 +578,7 @@ def load_from_params(
     player_state = player_state.replace(
         params=player_params,
         target_params=jax.tree.map(jnp.copy, player_params),
+        reg_params=jax.tree.map(jnp.copy, player_params),
     )
     builder_state = builder_state.replace(
         params=builder_params,

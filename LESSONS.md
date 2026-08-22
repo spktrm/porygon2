@@ -49,6 +49,23 @@ git revert <removing sha>                                      # undo one commit
 
 ---
 
+## Removal ledger — 2026-08-22 R-NaD pass
+
+Everything below existed at tag **`pre-rnad-2026-08-22`** (commit `6f845d2`). Same
+restore recipe as above. The through-line: three exploration mechanisms (magnet
+KL, epsilon ladder, critic-disagreement — as reward and as UCB selection) all
+collapsed switching at ~13k, and the critic diagnosis said why — it was correctly
+learning Q^π of a policy under which switching IS worse, so sampling switches more
+only confirmed it. What the search-free self-play successes (DeepNash) did instead
+is a reward transform against a MOVING reference policy that enters the values.
+
+| mechanism | paths / symbols deleted | removed in | why it went |
+|---|---|---|---|
+| Q-ensemble UCB behaviour policy | `EnsembleGridPrior`, `ucb_tilt`, `HeadParams.ucb_c`, `q_ens_*` heads/losses/panels, InferenceServer standing head_params, `tests/test_intrinsic_reward.py::ucb`, ladder contract test | `47719b6` | σ_epi on switches tracked σ_epi on moves step-for-step through a 49%→9% switching collapse; KL(μ‖π) never left 1.5% of its cap. Shared-trunk ensembles measure head-init noise, not coverage (Kirsch 2024) |
+| Critic-ensemble intrinsic reward | `EnsembleValueLogitHead`, `v_ens_head`/`v_int_head`, `compute_intrinsic_targets`, `IntrinsicTargets`, `int_rms` state leaf, 8 config fields, panels, `tests/test_intrinsic_reward.py` | `114ff5c` | int_reward switch/move pinned at 1.0 as an observer — disagreement never concentrated on post-switch states; Chen 2017 already rated disagreement-as-reward below UCB selection |
+| Magnet KL | `loss_magnet_kl`, `magnet_log_policy`, `player_magnet_kl_coef` (+ its 50-line tuning history), `player_loss_magnet_kl` panel | `4254a1f` | gradient-side KL(π‖prior) carries a π prefactor (docs/entropy-gradient-pressure.md) — cannot refill a dead modality; its 0.05→0.1→0.2→0.05→0.1 ladder was compensation for a supply problem it could not fix |
+| Epsilon explore ladder | `HeadParams.mix`, `behaviour_log_policy`, `Trajectory.explore`, `own_rows` gating (league cadence, builder, replay controller, the `_own` KL variant), `explore_game_prob`/`explore_eps_range`, per-game explore Agent path, `player_q_explore_*` panels, `tests/test_behaviour_mix.py` | `92b06c4` | random switches lose (explore-row post-switch return ~0.3 below post-move for the whole collapse), so behaviour-side coverage taught the critic switching is bad faster; R-NaD's penalty is the exploration mechanism and every game plays π |
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family

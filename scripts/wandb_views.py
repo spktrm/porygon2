@@ -188,12 +188,31 @@ def rl_sections():
                     ["player_q_switch_move_gap", "switch_ratio"],
                 ),
                 lp(
-                    # |sum(pi*E[Q]) - V|: the two heads' state-value
-                    # disagreement. Should shrink to a small stable
-                    # residual; growing while both R2s look fine points
-                    # at target construction, not capacity.
+                    # |sum(pi*E[Q]) - eta*KL - V|: since R-NaD the Q
+                    # critic carries the regularised game and V the
+                    # plain one, so this is calibration debt PLUS the
+                    # accumulated regularisation penalty — read with
+                    # player_rnad_kl_reg.
                     "Q-V state-value agreement",
                     ["player_q_ev_gap"],
+                ),
+                lp(
+                    # R-NaD: per-cell -eta*(log pi - log pi_reg) on legal
+                    # cells by modality (positive = pushed up relative to
+                    # Q). penalty_switch rising while switch_ratio falls
+                    # is the transform restoring the modality; both ~0 =
+                    # the reference has caught up with the policy.
+                    "R-NaD penalty by modality",
+                    ["player_rnad_penalty_switch", "player_rnad_penalty_move"],
+                ),
+                lp(
+                    # KL(pi_target || pi_reg) per state: the expected
+                    # per-step penalty inside the Q bootstrap. Rises as
+                    # the policy moves off its ~10k-step-lagged
+                    # reference, falls as the EMA catches up; a level
+                    # that only climbs is a runaway.
+                    "R-NaD reference KL",
+                    ["player_rnad_kl_reg"],
                 ),
                 lp(
                     # Gap discriminator 1/3 — calibration by context.

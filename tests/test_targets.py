@@ -263,3 +263,102 @@ class TestPlayerTargetsOnExTrajectory:
         np.testing.assert_allclose(float(logs["player_isr_ess"]), 1.0, atol=1e-3)
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
 
+
+
+class TestRNaDTransform:
+    """R-NaD on Retrace (2026-08-22): the reward transform against the
+    reference policy enters the Q critic's bootstrap as -eta*KL and the
+    policy advantage per legal cell as -eta*(log pi - log pi_reg)."""
+
+    def test_reference_kl_zero_at_reference_and_positive_off_it(self):
+        from rl.online.training.targets import reference_kl
+
+        legal = jnp.asarray([[True, True, True, False]])
+        log_pi = jnp.log(jnp.asarray([[0.7, 0.2, 0.1, 1.0]]))
+        np.testing.assert_allclose(
+            np.asarray(reference_kl(log_pi, log_pi, legal)), 0.0, atol=1e-6
+        )
+        log_ref = jnp.log(jnp.asarray([[1 / 3, 1 / 3, 1 / 3, 1.0]]))
+        kl = float(reference_kl(log_pi, log_ref, legal)[0])
+        expected = sum(p * np.log(p / (1 / 3)) for p in (0.7, 0.2, 0.1))
+        np.testing.assert_allclose(kl, expected, rtol=1e-5)
+        # The illegal cell's junk never leaks in.
+        log_ref_junk = log_ref.at[0, 3].set(-50.0)
+        np.testing.assert_allclose(
+            float(reference_kl(log_pi, log_ref_junk, legal)[0]), expected, rtol=1e-5
+        )
+
+    def test_starved_cell_gets_an_unbounded_upward_push(self):
+        """The property the transform is bought for: with Q flat, a cell
+        at pi ~ 1e-4 against a reference of 0.25 carries +eta*log(2500)
+        ~ +1.56 of advantage at eta 0.2 — no pi prefactor anywhere."""
+        from rl.online.training.targets import rnad_transformed_q
+
+        legal = jnp.ones((1, 4), dtype=bool)
+        pi = jnp.asarray([[0.9999 - 2e-4, 1e-4, 1e-4, 1e-4]])
+        pi = pi / pi.sum()
+        log_ref = jnp.log(jnp.full((1, 4), 0.25))
+        q = jnp.zeros((1, 4))
+        q_reg = rnad_transformed_q(q, jnp.log(pi), log_ref, legal, eta=0.2)
+        adv = q_reg - (pi * q_reg).sum(axis=-1, keepdims=True)
+        assert float(adv[0, 1]) > 1.5
+        # And the dominant cell's value is marked DOWN by
+        # eta*log(pi/pi_ref) ~ 0.28 (its advantage is ~0: the baseline is
+        # almost entirely that cell).
+        assert float(q_reg[0, 0]) < -0.25
+        # eta 0 is the identity.
+        np.testing.assert_allclose(
+            np.asarray(rnad_transformed_q(q, jnp.log(pi), log_ref, legal, eta=0.0)),
+            0.0,
+            atol=1e-7,
+        )
+
+    def test_retrace_bootstrap_carries_minus_eta_kl(self):
+        """compute_q_targets with a reference that differs from the target
+        policy lowers v_exp by exactly eta*KL; with reg == target (or eta
+        0) it is the plain Retrace critic bitwise."""
+        inputs = TestQTargetsHandExample()._inputs()
+        batch, q_logits, log_policy, isr, config_cls = inputs
+        n_cells = log_policy.shape[-1]
+        plain = compute_q_targets(
+            batch, q_logits, log_policy, isr, config_cls(player_rnad_eta=0.2)
+        )
+        same_ref = compute_q_targets(
+            batch,
+            q_logits,
+            log_policy,
+            isr,
+            config_cls(player_rnad_eta=0.2),
+            reg_log_policy=log_policy,
+        )
+        for a, b in zip(plain, same_ref):
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+        # Reference that halves the mass on cell 0 relative to the rest.
+        ref = np.full(log_policy.shape, 1.0)
+        ref[..., 0] = 0.5
+        ref = ref / ref.sum(axis=-1, keepdims=True)
+        reg_log_policy = jnp.log(jnp.asarray(ref, dtype=jnp.float32))
+        _, _, _, v_exp, _ = compute_q_targets(
+            batch,
+            q_logits,
+            log_policy,
+            isr,
+            config_cls(player_rnad_eta=0.2),
+            reg_log_policy=reg_log_policy,
+        )
+        pi = np.full(n_cells, 1.0 / n_cells)
+        kl = float((pi * np.log(pi / ref[0, 0])).sum())
+        # Uniform target policy over all cells, q_all zero: v_exp = -eta*KL
+        # wherever the mask is live (the test batch's legal set is the full
+        # grid).
+        np.testing.assert_allclose(np.asarray(v_exp[0, 0]), -0.2 * kl, rtol=1e-5)
+        off = compute_q_targets(
+            batch,
+            q_logits,
+            log_policy,
+            isr,
+            config_cls(player_rnad_eta=0.0),
+            reg_log_policy=reg_log_policy,
+        )
+        for a, b in zip(plain, off):
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))

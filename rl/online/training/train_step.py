@@ -40,6 +40,8 @@ from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     compute_q_targets,
+    reference_kl,
+    rnad_transformed_q,
 )
 from rl.online.training.telemetry import (
     calculate_r2,
@@ -91,6 +93,16 @@ def train_step(
         player_transitions.agent_output.actor_output,
         HeadParams(),
     )
+
+    # R-NaD reference policy: the slow-EMA reg_params' full-support
+    # log-policy on the same batch (one extra forward; stop-gradient by
+    # construction — reg_params are not the differentiated leaf).
+    reg_log_policy = player_state.apply_fn(
+        player_state.reg_params,
+        player_actor_input,
+        player_transitions.agent_output.actor_output,
+        HeadParams(),
+    ).action_head.log_policy
 
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
     player_actor_log_prob = player_actor_action_head.log_prob
@@ -171,7 +183,19 @@ def train_step(
             target_log_policy=player_target_pred.action_head.log_policy,
             isr=target_actor_ratio,
             config=config,
+            reg_log_policy=reg_log_policy,
         )
+    )
+    # KL(pi_target || pi_reg) per state — the expected per-step penalty
+    # the Q critic's bootstrap carries. Drifts up as the policy moves
+    # away from the lagged reference and back down as the EMA catches up;
+    # a level that keeps climbing is a policy running away from its own
+    # past faster than the reference follows.
+    training_logs["player_rnad_kl_reg"] = average(
+        reference_kl(
+            player_target_pred.action_head.log_policy, reg_log_policy, flat_action_mask
+        ),
+        player_targets.policy_mask,
     )
     # Q(s, a) exists wherever an action was actually taken — including
     # forced single-option steps (policy_mask excludes those; the Q
@@ -571,13 +595,28 @@ def train_step(
         pi_learner = pi_learner / jnp.maximum(
             pi_learner.sum(axis=-1, keepdims=True), 1e-8
         )
-        v_cf = jax.lax.stop_gradient(
-            (pi_learner * q_all_target).sum(axis=-1)
+        # R-NaD reward transform (2026-08-22), applied per legal cell:
+        # q'(a) = Q_all(a) - eta*(log pi(a) - log pi_reg(a)). The critic
+        # carries the transformed game from the next step on (its
+        # bootstrap is the regularised v_exp), so adding the own-step
+        # penalty here makes adv the full regularised advantage. The
+        # -eta*log pi(a) term is what refills a starved cell: it grows
+        # without bound as pi(a) -> 0, with no pi prefactor, and it
+        # vanishes only when pi == pi_reg — a moving reference, so the
+        # fixed point is the regularised Nash, not a uniform prior.
+        q_reg = rnad_transformed_q(
+            q_all_target,
+            learner_log_policy,
+            reg_log_policy,
+            flat_action_mask,
+            config.player_rnad_eta,
         )
+        v_cf = jax.lax.stop_gradient((pi_learner * q_reg).sum(axis=-1))
         neurd_adv = jax.lax.stop_gradient(
-            jnp.where(
-                flat_action_mask, q_all_target - v_cf[..., None], 0.0
-            )
+            jnp.where(flat_action_mask, q_reg - v_cf[..., None], 0.0)
+        )
+        rnad_penalty = jax.lax.stop_gradient(
+            jnp.where(flat_action_mask, q_all_target - q_reg, 0.0)
         )
         # NeuRD prefactor (2026-08-21): the advantage lands on the
         # LOGITS with no pi factor, CENTRED over legal cells so the
@@ -587,9 +626,8 @@ def train_step(
         # further push in the outward direction -- the sum of
         # advantages is not zero-mean in general, so unclipped
         # logits diverge; harmless at the policy level since beta
-        # still permits probabilities arbitrarily close to 0/1
-        # through the magnet, NeuRD simply stops contributing
-        # outside the band.
+        # still permits probabilities arbitrarily close to 0/1,
+        # NeuRD simply stops contributing outside the band.
         legal_count = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
         adv_centred = neurd_adv - (
             neurd_adv.sum(axis=-1) / legal_count
@@ -664,8 +702,19 @@ def train_step(
         def neurd_ratio(numerator, denominator):
             return numerator / jnp.maximum(denominator, 1e-8)
 
+        # R-NaD penalty -eta*(log pi - log pi_reg) by modality over
+        # legal cells of real-choice rows (the sign convention: POSITIVE
+        # = the cell is pushed UP relative to its Q, i.e. pi sits below
+        # the reference there). penalty_switch climbing while
+        # switch_ratio falls is the transform doing its job; both flat
+        # at zero is a reference that has caught up (KL 0).
+        rnad_penalty_switch = average(-rnad_penalty, neurd_switch_cells)
+        rnad_penalty_move = average(-rnad_penalty, neurd_move_cells)
+
         neurd_logs = dict(
             player_loss_neurd=loss_neurd,
+            player_rnad_penalty_switch=rnad_penalty_switch,
+            player_rnad_penalty_move=rnad_penalty_move,
             # Per-cell |d loss_neurd / d logit| on legal switch
             # cells vs legal non-switch cells of the same
             # real-choice rows, and the two factors it is the
@@ -840,6 +889,11 @@ def train_step(
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
+        reg_params=optax.incremental_update(
+            player_state.target_params,
+            player_state.reg_params,
+            config.player_reg_ema_rate,
+        ),
         target_params=optax.incremental_update(
             player_state.params,
             player_state.target_params,

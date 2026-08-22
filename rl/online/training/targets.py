@@ -153,16 +153,58 @@ def two_hot(scalar: jax.Array, support: jax.Array) -> jax.Array:
     )
 
 
+def reference_kl(
+    log_policy: jax.Array, reg_log_policy: jax.Array, legal_mask: jax.Array
+) -> jax.Array:
+    """KL(pi || pi_reg) per state over legal cells, f32 — the expected
+    R-NaD reward transform E_pi[log(pi/pi_reg)]. Both log-policies are
+    full-support learner-side readouts (illegal cells hold junk, masked)."""
+    lp = log_policy.astype(jnp.float32)
+    lr = reg_log_policy.astype(jnp.float32)
+    pi = jnp.exp(lp) * legal_mask
+    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
+    return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
+
+
+def rnad_transformed_q(
+    q_all: jax.Array,
+    log_policy: jax.Array,
+    reg_log_policy: jax.Array,
+    legal_mask: jax.Array,
+    eta: float,
+) -> jax.Array:
+    """Per-cell regularised action value q(a) - eta*(log pi(a) - log
+    pi_reg(a)) on legal cells (0 elsewhere) — rnad.py's learning_output,
+    with the critic's Q in place of the single-sample v-trace estimate.
+    The penalty is applied ANALYTICALLY to every legal cell: as pi(a) -> 0
+    the cell's value grows like -eta*log pi(a), unbounded, which is the
+    restoring force no pi-prefactored regulariser has."""
+    penalty = eta * (
+        log_policy.astype(jnp.float32) - reg_log_policy.astype(jnp.float32)
+    )
+    return jnp.where(legal_mask, q_all - penalty, 0.0)
+
+
 def compute_q_targets(
     batch: Batch,
     q_logits: jax.Array,
     target_log_policy: jax.Array,
     isr: jax.Array,
     config: Porygon2LearnerConfig,
+    reg_log_policy: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """Retrace(lambda) targets for the Q critic (docs/q-critic-plan.md),
     computed from the privileged Q_all rung; the Q_private rung trains by
     CE against the same labels learner-side.
+
+    R-NaD (2026-08-22): the bootstrap is the REGULARISED state value
+    v_exp(s) = sum_a pi(a) Q(s,a) - eta*KL(pi||pi_reg)(s), so Q learns the
+    value of the transformed game r' = r - eta*log(pi/pi_reg) from the NEXT
+    step on; the own-step penalty stays analytic in the NeuRD advantage
+    (rnad_transformed_q) rather than entering these labels. reg_log_policy
+    None (or eta 0) is the plain Retrace critic. The win-value head keeps
+    the untransformed game (it no longer feeds the policy), so its gap to
+    v_exp now carries the regularisation debt.
 
     Scalar-space recursion with a two-hot projection
     back onto CAT_VF_SUPPORT for the CE loss. Expectation bootstrap —
@@ -210,6 +252,10 @@ def compute_q_targets(
     pi = jnp.exp(target_log_policy.astype(jnp.float32)) * flat_action_mask
     pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
     v_exp = (pi * q_all).sum(axis=-1)  # (T, B)
+    if reg_log_policy is not None and config.player_rnad_eta > 0.0:
+        v_exp = v_exp - config.player_rnad_eta * reference_kl(
+            target_log_policy, reg_log_policy, flat_action_mask
+        )
 
     action_index = (
         batch.player_transitions.agent_output.actor_output.action_head.action_index

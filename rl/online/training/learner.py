@@ -515,6 +515,7 @@ class Learner:
         player_components = dict(
             params=host_player_state.params,
             target_params=host_player_state.target_params,
+            reg_params=host_player_state.reg_params,
             opt_state=host_player_state.opt_state,
             scalars=dict(
                 step_count=host_player_state.step_count,
