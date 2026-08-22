@@ -314,8 +314,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # integrated-critic era: a heavy auxiliary gradient globally clips
     # everything (LESSONS.md 5).
     player_q_coef: float = 0.5
-    # Retrace trace parameter; matches player_lambda's 0.8 default.
-    player_q_lambda: float = 0.8
+    # Retrace trace parameter. 1.0 (2026-08-22, from 0.8, with R-NaD): the
+    # policy reads Q_all directly, so this IS the policy's lambda. At 0.8
+    # a rare cell's label was mostly r + v_exp(s') — the critic's own prior
+    # about a state it has few samples of — which is how the Aug-15
+    # crossover (post-switch returns positive, gap stuck at -0.11) got
+    # missed. At 1.0 the label is the realised outcome chain within the
+    # chunk (MC inside 64 rows, bootstrap only at the cut), rnad.py's
+    # lambda; c = min(1, pi/mu) still cuts traces under replay reuse, so
+    # in practice it sits between MC and one-step. player_lambda (V head,
+    # not in the policy loop) stays 0.8.
+    player_q_lambda: float = 1.0
     # THE policy gradient. All-action NeuRD (Hennes et al. 2020 eq. 10):
     # per legal cell of every real-choice row,
     # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')] (the COMA
