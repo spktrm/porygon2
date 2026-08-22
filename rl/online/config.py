@@ -214,55 +214,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per-step fresh-vs-replayed value-error gap below stays: it is
     # computed from tensors train_step already has.
 
-    # Player magnet regularization (MMD-style). The policy is pulled toward a
-    # fixed hierarchical magnet over legal actions (uniform over valid
-    # modalities, uniform within each modality — the composed head's init
-    # policy), so the KL is per-state entropy regularization that is
-    # invariant to per-modality option counts. The
-    # magnet is deliberately stationary — a fixed anchor is what gives the
-    # regularized self-play dynamics a stable fixed point (QRE), whereas an
-    # EMA magnet chases the policy and degenerates into a short-horizon trust
-    # region. The EMA target is reserved for the v-trace/IMPACT reference and
-    # plays no regularization role. The coef sets the softness level.
-    # 0.05 (up from 0.01): the per-modality policy head removed the shared
-    # grid's accidental sharpness cap, and at 0.01 the magnet lost the
-    # arm-wrestle — chocolate-silence-1307 collapsed to normalised entropy
-    # 0.27 (modality 0.17) by 190k while magnet KL climbed to 1.44, and
-    # eval strength regressed from its 56k peak. 0.1 (up from 0.05,
-    # 2026-08-17): the entropy-regularisation timeline showed the longest
-    # stable lineages (Oct-Nov 2025, 400-580k steps, 2.0-2.9 nats whole
-    # lifetime) ran ~2.8-5.4x today's effective entropy pressure (mostly a
-    # 4x per-head structural factor), while the current 0.7-0.9 nat
-    # operating point is the lowest outside the collapse regimes and the
-    # switch-collapse pattern reads as under-regularisation. Judge by
-    # normalised entropy holding in the ~0.5-0.65 band through 100k
-    # (magnet KL level flat, not climbing); revert to 0.05 on overshoot.
-    # If a static coef can't hold the band, the proper fix is a PI
-    # controller on the coef with a target-entropy schedule (same pattern
-    # as the replay-KL controller).
-    # 0.2 (up from 0.1, 2026-08-19, user's call for the COMA relaunch):
-    # the q-boost lineage collapsed at ~3x the baseline speed (mod-entropy
-    # 0.87→0.27 by 18k, switch_ratio 0.45→0.02) with 0.1 holding nothing.
-    # Known limit (docs/entropy-gradient-pressure.md §3): reverse-KL force
-    # is π-weighted and cannot hold a floor once a modality is starved —
-    # 0.2 buys pressure in the healthy-mass formative window only; the
-    # per-state restoring channel is the COMA loss below.
-    # 0.05 (2026-08-21, user's call with the epsilon explore ladder):
-    # this term is entropy regularisation (uniform prior => KL = log|A|
-    # - H) and its climb 0.05 -> 0.1 -> 0.2 was entirely compensation
-    # for a SUPPLY problem -- rare-action coverage shrinking with the
-    # collapse -- that the behaviour-side epsilon floor now owns without
-    # touching pi. Back to regularisation-only: convergence of the
-    # zero-sum dynamics and keeping genuinely mixed spots mixed, not
-    # holding switch mass up against the critic. Watchdog escalation
-    # retired with it.
-    # 0.1 (2026-08-22, from 0.05): the neurd 0.2 launch collapsed
-    # switching by 12.6k and a 0.1 resume from that ckpt stalled there for
-    # 10k steps (switch_ratio ~0.1, clipped_switch 0.5-0.9, magnet KL flat
-    # 0.45) -- nothing restores a dead modality once it's gone, so the
-    # magnet is the only thing that can stop it going. Fresh lineage with
-    # neurd 0.1 + magnet 0.1 together; revert to 0.05 on overshoot.
-    player_magnet_kl_coef: float = 0.1
 
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
@@ -304,8 +255,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # instrument is gone with them (LESSONS.md ledger).
     player_lambda: float = 0.8
 
-    # No adaptivity/entropy controller fields anymore: the magnet KL
-    # coefficient is exactly player_magnet_kl_coef, always. The
+    # No adaptivity/entropy controller fields anymore. The
     # AdaptivityController was removed entirely 2026-08-13 (hard to tune,
     # harder to predict — see rl/online/controllers.py's module docstring
     # for the bug history). Its entropy sensors are still logged from

@@ -590,7 +590,6 @@ def rl_sections():
                     [
                         "player_loss_neurd",
                         "player_loss_kl",
-                        "player_loss_magnet_kl",
                         "player_loss_v_win",
                         "player_loss_q",
                     ],

@@ -23,7 +23,7 @@ from rl.environment.interfaces import (
     PlayerActorInput,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
-from rl.model.heads import HeadParams, calculate_hierarchical_prior
+from rl.model.heads import HeadParams
 from rl.model.utils import Params
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
@@ -175,20 +175,8 @@ def train_step(
         )
     player_targets = promote_map(player_targets, float_dtype)
 
-    # Magnet policy for the KL regularizer: the hierarchical prior — uniform
-    # over valid modalities, uniform within each modality — which is the init
-    # policy of the hierarchically composed action head, so the KL decomposes
-    # into a modality-level KL plus the expected within-modality KLs. The
-    # magnet is deliberately stationary — a fixed anchor gives the regularized
-    # self-play dynamics a stable fixed point, whereas an EMA magnet chases
-    # the policy and degenerates into a short-horizon trust region. The EMA
-    # target's only remaining role is the v-trace/IMPACT reference.
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
-    magnet_prior = calculate_hierarchical_prior(flat_action_mask).astype(float_dtype)
-    magnet_log_policy = jnp.where(
-        flat_action_mask, jnp.log(jnp.maximum(magnet_prior, 1e-9)), 0.0
-    )
 
     # Two-rung Q critic (docs/q-critic-plan.md): Retrace targets from the
     # fast EMA target's PRIVILEGED all-action Q readout (Q_all — value_all
@@ -501,16 +489,6 @@ def train_step(
             valid=policy_mask,
         )
 
-        # Full-support KL(pi_learner || pi_magnet), exact per state — no
-        # importance correction needed since no sampled action is involved.
-        learner_log_policy = learner_action_head.log_policy
-        magnet_kl = jnp.where(
-            flat_action_mask,
-            jnp.exp(learner_log_policy) * (learner_log_policy - magnet_log_policy),
-            0.0,
-        ).sum(axis=-1)
-        loss_magnet_kl = average(magnet_kl, valid=policy_mask)
-
         normalized_modality_entropy = average(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
@@ -632,6 +610,7 @@ def train_step(
         # v_head advantages, so the policy stays bitwise invariant
         # to opp_private_team. Weighted by the neurd_coef runtime
         # scalar.
+        learner_log_policy = learner_action_head.log_policy
         pi_learner = (
             jnp.exp(learner_log_policy.astype(jnp.float32))
             * flat_action_mask
@@ -852,10 +831,6 @@ def train_step(
             )
             # kl: trust region against the behaviour policy.
             + config.player_kl_loss_coef * loss_actor_backward_kl
-            # ent: the magnet KL is per-state entropy regularisation
-            # (uniform-over-legal hierarchical prior), and the only force
-            # opposing pg.
-            + config.player_magnet_kl_coef * loss_magnet_kl
         )
 
         return loss, dict(
@@ -865,7 +840,6 @@ def train_step(
             # Loss values
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
-            player_loss_magnet_kl=loss_magnet_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
