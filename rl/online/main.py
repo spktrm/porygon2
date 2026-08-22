@@ -658,6 +658,28 @@ def main(args: argparse.Namespace):
             "ignored — this takes a few seconds)..."
         )
         executor.shutdown(wait=False, cancel_futures=True)
+        inference_server.stop()
+        _finish_wandb_bounded(wandb_run, exit_code=1 if crashed else 0)
+
+    if crashed:
+        logger.error("Training run crashed — see traceback above.")
+    else:
+        logger.info("Training run complete.")
+    _hard_exit(1 if crashed else 0)
+
+
+def _finish_wandb_bounded(
+    wandb_run: wandb.wandb_run.Run, exit_code: int, budget: float = 120.0
+) -> None:
+    """wandb_run.finish() on a helper thread with a wall-clock budget.
+    finish() blocks on the wandb-core service's final sync; when that
+    service is gone (a terminal Ctrl-C hits the whole foreground process
+    group, core included) the wait has nothing to return to, and the
+    main thread sat on it indefinitely on 2026-08-23. A bounded wait
+    keeps the exit path reachable; the run then shows Crashed on W&B's
+    heartbeat timeout, which is accurate."""
+
+    def _finish() -> None:
         try:
             wandb_run.finish(exit_code=exit_code)
         except Exception:
@@ -701,6 +723,9 @@ def _hard_exit(code: int, budget: float = 30.0) -> None:
 
 
 if __name__ == "__main__":
+    # kill -USR1 <pid> prints every thread's stack to stderr — the only
+    # stack dump that works under yama ptrace_scope=1 without root.
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -714,28 +739,3 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(args)
-        inference_server.stop()
-        _finish_wandb_bounded(wandb_run, exit_code=1 if crashed else 0)
-
-    if crashed:
-        logger.error("Training run crashed — see traceback above.")
-    else:
-        logger.info("Training run complete.")
-    _hard_exit(1 if crashed else 0)
-
-
-def _finish_wandb_bounded(
-    wandb_run: wandb.wandb_run.Run, exit_code: int, budget: float = 120.0
-) -> None:
-    """wandb_run.finish() on a helper thread with a wall-clock budget.
-    finish() blocks on the wandb-core service's final sync; when that
-    service is gone (a terminal Ctrl-C hits the whole foreground process
-    group, core included) the wait has nothing to return to, and the
-    main thread sat on it indefinitely on 2026-08-23. A bounded wait
-    keeps the exit path reachable; the run then shows Crashed on W&B's
-    heartbeat timeout, which is accurate."""
-
-    def _finish() -> None:
-    # kill -USR1 <pid> prints every thread's stack to stderr — the only
-    # stack dump that works under yama ptrace_scope=1 without root.
-    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)

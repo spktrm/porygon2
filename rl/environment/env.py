@@ -1,4 +1,5 @@
 import functools
+import os
 
 import jax
 import jax.numpy as jnp
@@ -26,7 +27,9 @@ from rl.environment.protos.service_pb2 import (
 )
 from rl.environment.utils import generate_order, process_state
 
-SERVER_URI = "ws://localhost:8080"
+# Overridable so offline harnesses (rl/offline) can target a second
+# service instance instead of the training one's battles.
+SERVER_URI = os.environ.get("PS_SERVICE_URI", "ws://localhost:8080")
 
 # How long a blocking receive waits before checking stop_check. The
 # service answers a step in milliseconds, so this only ever fires when
@@ -34,9 +37,6 @@ SERVER_URI = "ws://localhost:8080"
 RECV_POLL_SECONDS = 1.0
 
 
-class ActorStopped(Exception):
-    """Raised inside an unroll when training began shutting down —
-    unwinds the actor thread out of a blocking wait it would otherwise
 class BattleError(Exception):
     """The game service reported a failure for this battle (an
     ErrorResponse frame: a server-side throw, or its step/reset watchdog
@@ -44,6 +44,9 @@ class BattleError(Exception):
     should abandon it and start another, never wait."""
 
 
+class ActorStopped(Exception):
+    """Raised inside an unroll when training began shutting down —
+    unwinds the actor thread out of a blocking wait it would otherwise
     never leave: the builder-replay sample wait (no data is coming once
     the producers have stopped) and, since 2026-08-21, the game
     server receive. The latter is the one that made Ctrl-C take
@@ -75,6 +78,15 @@ class SinglePlayerSyncEnvironment:
         # of pinning this thread for the rest of the process's life.
         self.stop_check = None
 
+    def close(self) -> None:
+        """Releases the websocket. Offline harnesses construct one env per
+        game; without this every game leaked a connection (600 open
+        sockets after the 2026-08-23 check)."""
+        try:
+            self.websocket.close()
+        except Exception:  # noqa: BLE001 — best effort on teardown
+            pass
+
     def _set_game_id(self, game_id: str):
         self.game_id = game_id
 
@@ -92,6 +104,8 @@ class SinglePlayerSyncEnvironment:
                         "training stopped while waiting on the game server"
                     )
         worker_response = WorkerResponse.FromString(recv_data)
+        if worker_response.HasField("error_response"):
+            raise BattleError(worker_response.error_response.trace)
         environment_response = worker_response.environment_response
         self.rqid = environment_response.state.rqid
 
@@ -104,8 +118,6 @@ class SinglePlayerSyncEnvironment:
             reset=ResetRequest(
                 username=self.username,
                 smogon_format=f"gen{self.generation}{self.smogon_format}",
-        if worker_response.HasField("error_response"):
-            raise BattleError(worker_response.error_response.trace)
                 game_id=self.game_id,
                 packed_teams=packed_team,
             )

@@ -20,6 +20,8 @@ kill:
 	-tmux kill-server 2>/dev/null
 	-killall -9 python 2>/dev/null
 	-killall -9 node 2>/dev/null
+	-pkill -9 -f "dist/server/index.js" 2>/dev/null
+	-for p in 8080 8081; do fuser -k -9 $$p/tcp 2>/dev/null; done
 
 attach:
 	tmux attach -t train

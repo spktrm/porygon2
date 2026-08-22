@@ -24,31 +24,37 @@ const WORKER_PATH = path.resolve(__dirname, "../server/worker.js");
 // the python process, so node RSS shows up next to diag_rss_mb without
 // giving this service a wandb dependency of its own.
 const MEMORY_STATS_DIR = path.resolve(__dirname, "../../../runtime");
-const MEMORY_STATS_PATH = path.join(MEMORY_STATS_DIR, "service_memory.json");
+// Every deployment knob below is overridable from the environment so a
+// second instance can be stood up beside the training one for offline
+// work (PORT=8081 MAX_WORKERS=1 MEMORY_STATS_PATH=/tmp/x.json node
+// dist/server/index.js) without editing or copying this file.
+const MEMORY_STATS_PATH =
+    process.env.MEMORY_STATS_PATH ??
+    path.join(MEMORY_STATS_DIR, "service_memory.json");
 const MEMORY_STATS_INTERVAL_MS = 10_000;
 
 interface WorkerInfo {
     worker: Worker;
     id: number;
+    // Task ids in flight on this worker — failed back to their clients
+    // as ErrorResponses if the worker dies (see spawnWorker).
+    pending: Set<number>;
 }
 
 export class WorkerPool {
     private tasks: TaskQueueSystem<WorkerResponse>;
     private readonly workerInfos: WorkerInfo[] = [];
     private rr = 0; // round-robin counter for training actors
-    // Task ids in flight on this worker — failed back to their clients
-    // as ErrorResponses if the worker dies (see spawnWorker).
-    pending: Set<number>;
     private er = 0; // round-robin counter for eval actors
 
     private readonly sessionToWorkerIndex = new Map<string, number>();
+    private closing = false;
 
     // Per-worker self-reported process.memoryUsage() (worker.ts's
     // reportMemoryStats) — the only way to see each isolate's own heap,
     // since the coordinator's own process.memoryUsage() can't see it.
     private readonly workerMemoryStats = new Map<
         number,
-    private closing = false;
         { heapUsedMb: number; heapTotalMb: number; externalMb: number }
     >();
 
@@ -112,6 +118,12 @@ export class WorkerPool {
                     `${info.pending.size} in-flight task(s)` +
                     (this.closing ? "" : " and respawning"),
             );
+            this.failPending(info, `worker ${i} exited with code ${code}`);
+            if (this.closing) return;
+            this.workerInfos[i] = this.spawnWorker(i);
+        });
+        return info;
+    }
 
     private failPending(info: WorkerInfo, reason: string): void {
         for (const taskId of info.pending) {
@@ -125,19 +137,13 @@ export class WorkerPool {
                 console.error("failed to fail pending task", taskId, err);
             }
         }
+        info.pending.clear();
     }
 
     /** Sum of the latest self-reported heap stats across all workers that
-            this.failPending(info, `worker ${i} exited with code ${code}`);
-            if (this.closing) return;
-            this.workerInfos[i] = this.spawnWorker(i);
-        });
-        return info;
-    }
      * have reported at least once — a fresher/live worker that hasn't hit
      * its first 10s tick yet is simply absent, not zero, so totals grow in
      * as workers report rather than under-counting from t=0. */
-        info.pending.clear();
     workerMemoryTotals(): {
         heap_used_mb: number;
         heap_total_mb: number;
@@ -312,13 +318,13 @@ export class WorkerPool {
 
     /** Graceful shutdown */
     shutdown(): void {
+        this.closing = true;
         for (const { worker } of this.workerInfos) worker.terminate();
     }
 
     workerCount(): number {
         return this.numWorkers;
     }
-        this.closing = true;
 
     /** Fire-and-forget cleanup: tell the worker this session was last routed
      * to drop any pendingGames entry for gameId. A no-op if that session was
@@ -508,16 +514,16 @@ export class GameServer {
 }
 
 // Initialize the server
-new GameServer(8080, {
-    maxGamesPerWorker: 50,
+new GameServer(Number(process.env.PORT ?? 8080), {
+    maxGamesPerWorker: Number(process.env.MAX_GAMES_PER_WORKER ?? 50),
     // Each worker is a full V8 isolate with its own dex/sim data
     // (~150MB baseline before any battles). Under the learner's
     // block-sequential actor gating at most ONE population's pool plays
     // at a time (~6 self-play games + 3 eval), and a worker steps many
     // concurrent battles fine — sim stepping is far cheaper than the
     // python side's inference. 6 halves the idle baseline vs the old 12.
-    maxWorkers: 6,
-    loggingLevel: "info", // Set to 'debug' for more verbose logging
+    maxWorkers: Number(process.env.MAX_WORKERS ?? 6),
+    loggingLevel: process.env.LOG_LEVEL ?? "info", // 'debug' for more
     logThroughput: false,
     throughputIntervalMs: 1000,
 });
