@@ -274,7 +274,14 @@ def masked_var(x: jax.Array, mask: jax.Array) -> jax.Array:
 
 
 def masked_r2(pred: jax.Array, target: jax.Array, mask: jax.Array) -> jax.Array:
-    return jnp.where(mask.sum() >= 2, calculate_r2(pred, target, mask), jnp.nan)
+    """R² that is NaN, not -1e8, when the target is (near-)constant on the
+    slice: a 4-chunk batch whose valid outcomes are all +1 has ss_total 0,
+    and calculate_r2's eps then produced -5e8 rows that dominated every
+    mean on the first Step-2 run."""
+    m = mask.sum() >= 2
+    mean_t = jnp.mean(target, where=mask)
+    ss_total = jnp.sum(jnp.square(target - mean_t), where=mask)
+    return jnp.where(m & (ss_total > 1e-4), calculate_r2(pred, target, mask), jnp.nan)
 
 
 def critic_outcome_telemetry(

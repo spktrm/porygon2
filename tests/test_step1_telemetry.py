@@ -94,9 +94,13 @@ def test_critic_outcome_telemetry_counts_and_splits():
     # the voluntary switch is in the won game (+1); the four real-choice
     # move rows split 2 won / 2 lost (mean 0) -> realised gap +1
     assert logs["player_mv_pooled_gap_realised"] == pytest.approx(1.0)
-    # phase split: chunk 0 rows 0-2 are early (0..2 of 9), chunk 1 rows are late (6..9 of 9)
-    assert not np.isnan(logs["player_v_outcome_r2_early"])
-    assert not np.isnan(logs["player_v_outcome_r2_late"])
+    # phase split: chunk 0 rows 0-2 are early (0..2 of 9), chunk 1 rows are
+    # late (6..9 of 9). Each phase holds ONE game's rows here, so its
+    # outcome is constant and R² is NaN by the constant-target guard; the
+    # all-rows R² spans both outcomes and is finite.
+    assert np.isnan(logs["player_v_outcome_r2_early"])
+    assert np.isnan(logs["player_v_outcome_r2_late"])
+    assert not np.isnan(logs["player_v_outcome_r2_all"])
     # previous-action split excludes row 0; the row after the voluntary
     # switch (chunk 0 row 2) is the only prev_switch row besides chunk 1
     # row 1 (after the forced switch) -> 2 rows, enough for a finite value
