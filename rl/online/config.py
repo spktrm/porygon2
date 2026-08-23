@@ -390,7 +390,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # panel set in the plan doc plus a >=5k-step hold at full coefficient.
     # 0 disables. Traced from step_count inside train_step, so a resumed
     # lineage never re-ramps.
-    player_neurd_warmup_steps: int = 11_000
+    player_neurd_warmup_steps: int = 20_000
     # 2026-08-23 13:xx: ON for the frozen-data arm. The coefficient ramp
     # alone changed nothing (support decayed at the control's rate with
     # NeuRD at <=0.09 — under Adam a coefficient on a head one loss owns
@@ -407,7 +407,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # the Retrace / NeuRD corrections already handle off-policy rows.
     # Trigger to flip it: player_q_voluntary_switch_target_frac < 0.2 or
     # player_ref_kl > 0.05 before the ramp ends.
-    player_warmup_frozen_behaviour: bool = False
+    player_warmup_frozen_behaviour: bool = True
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean
