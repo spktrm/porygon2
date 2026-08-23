@@ -723,9 +723,13 @@ def _hard_exit(code: int, budget: float = 30.0) -> None:
 
 
 if __name__ == "__main__":
-    # kill -USR1 <pid> prints every thread's stack to stderr — the only
-    # stack dump that works under yama ptrace_scope=1 without root.
-    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
+    # kill -USR1 <pid> prints every thread's stack — the only stack dump
+    # that works under yama ptrace_scope=1 without root. To a FILE, not
+    # stderr: the 2026-08-23 hangs were exactly the case where stderr's
+    # pipe had lost its reader, so a dump to stderr vanished.
+    os.makedirs("runtime", exist_ok=True)
+    _stacks = open(f"runtime/stacks_{os.getpid()}.log", "a")
+    faulthandler.register(signal.SIGUSR1, file=_stacks, all_threads=True, chain=False)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

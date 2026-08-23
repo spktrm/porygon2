@@ -91,6 +91,12 @@ tmux send-keys  -t "$SESSION":service.1 'unset LOAD_STATE_MODE; set -a; [ -f .en
 # exit code); mkdir is idempotent, runtime/ is already gitignored.
 mkdir -p runtime
 LOG_FILE="runtime/learner_$(date +%Y%m%d_%H%M%S).log"
-tmux send-keys  -t "$SESSION":service.1 "set -o pipefail; python -m rl.online.main $ARGS 2>&1 | tee $(printf '%q' "$LOG_FILE")" C-m
+# tee runs with SIGINT ignored: a Ctrl-C in the pane hits the whole
+# foreground process group, and a tee that dies with it leaves the
+# learner's stdout/stderr pipe with no reader — every later write fails
+# inside wandb's console-redirect lock and the shutdown wedges on that
+# futex before it can even log "Keyboard interrupt received" (2026-08-23,
+# twice). Only python should see the SIGINT.
+tmux send-keys  -t "$SESSION":service.1 "set -o pipefail; python -m rl.online.main $ARGS 2>&1 | (trap '' INT; exec tee $(printf '%q' "$LOG_FILE"))" C-m
 
 tmux attach -t "$SESSION"
