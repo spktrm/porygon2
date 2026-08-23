@@ -71,7 +71,7 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
     # Q_private is conditioned on the private value embedding — the
     # deployable information set — so it must be sheet-invariant too.
     np.testing.assert_array_equal(
-        np.asarray(base.private_q_logits), np.asarray(priv.private_q_logits)
+        np.asarray(base.private_q_adv), np.asarray(priv.private_q_adv)
     )
     # With gates open the privileged heads MUST differ under a populated
     # sheet — if they don't, the value_read mask is over-masking and the
@@ -83,7 +83,7 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
     )
     # Q_all reads the sheet through its value_all conditioning.
     assert not np.array_equal(
-        np.asarray(base.q_logits), np.asarray(priv.q_logits)
+        np.asarray(base.q_adv), np.asarray(priv.q_adv)
     )
 
 
@@ -109,6 +109,6 @@ def test_ladder_heads_present_and_shaped(real_model_and_trajectory):
     ).all()
     # Two-rung Q: same flat action grid and support for both rungs.
     A = int(np.prod(actor_input.env.action_mask.shape[-2:]))
-    assert np.asarray(out.q_logits).shape == (T, A, n_bins)
-    assert np.asarray(out.private_q_logits).shape == (T, A, n_bins)
-    assert np.isfinite(np.asarray(out.private_q_logits, dtype=np.float32)).all()
+    assert np.asarray(out.q_adv).shape == (T, A)
+    assert np.asarray(out.private_q_adv).shape == (T, A)
+    assert np.isfinite(np.asarray(out.private_q_adv, dtype=np.float32)).all()

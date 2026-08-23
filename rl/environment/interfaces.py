@@ -90,15 +90,16 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    # Learner-only (cfg.train; the Q critic is structural): (T, A, n_bins)
-    # categorical logits of the all-action Q critic over the flat src x tgt
-    # action grid (docs/q-critic-plan.md). q_logits is the privileged rung
-    # (conditioned on value_all — drives the Retrace recursion);
-    # private_q_logits shares every head param but is conditioned on the
-    # deployable information set, and trains by CE against the same Retrace
-    # labels. Actors leave both empty so replay transitions stay small.
-    q_logits: ArrayLike = ()
-    private_q_logits: ArrayLike = ()
+    # Learner-only (cfg.train; the Q critic is structural): (T, A) scalar
+    # RAW advantage logits of the residual Q critic over the flat src x tgt
+    # action grid — Q(s, a) = sg(V_target(s)) + A(s, a) - E_pi[A(s, .)],
+    # composed learner-side (targets.residual_q). q_adv is the privileged
+    # rung (conditioned on value_all, paired with the main v_head);
+    # private_q_adv shares every head param but is conditioned on the
+    # deployable information set (paired with the private value rung).
+    # Actors leave both empty so replay transitions stay small.
+    q_adv: ArrayLike = ()
+    private_q_adv: ArrayLike = ()
     # Learner-only (cfg.train): (T, n_bins) categorical logits of the
     # counterfactual value ladder — `private` sees the deployable information
     # set (no opponent team sheet), `public` sees the history context only.

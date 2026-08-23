@@ -220,9 +220,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # STRUCTURAL since 2026-08-20 (no enable flag) and the policy's exact
     # module stack: an owned ActionAdapter with the cond concatenated in
     # (the rung's information set reaches every cell) into the shared
-    # MacroMicroHead at num_logits = the categorical bin count, composed
-    # additively via compose_action_grid — the modality-centred micro grid
-    # plus a per-modality per-bin macro readout, the explicit
+    # MacroMicroHead at num_logits 1, composed additively via
+    # compose_action_grid — the modality-centred micro grid plus a
+    # per-modality macro readout, the explicit
     # low-dimensional parameter path for "is switching better here" that
     # the flat grid made the head express cell-by-cell.
     cfg.q_head = ConfigDict()
@@ -231,7 +231,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.q_head.adapter.mlp.layer_sizes = entity_size
     cfg.q_head.macro_micro = ConfigDict()
     cfg.q_head.macro_micro.micro_kind = "pointer"
-    cfg.q_head.macro_micro.num_logits = len(CAT_VF_SUPPORT)
+    # 1 (2026-08-23, Step 3 of docs/critic-weakness-analysis.md): a SCALAR
+    # advantage A(s, a) per cell; Q = sg(V_target(s)) + A centred under
+    # pi over legal cells, composed learner-side (targets.residual_q). The
+    # categorical per-cell readout (num_logits = bin count) let the head
+    # fit taken-cell labels through a state-only route (Step 6 probe:
+    # floor reached with the action variance collapsing 5x).
+    cfg.q_head.macro_micro.num_logits = 1
     cfg.q_head.macro_micro.micro_qk = ConfigDict()
     cfg.q_head.macro_micro.micro_qk.use_bias = True
     cfg.q_head.macro_micro.micro_qk.qk_layer_norm = True

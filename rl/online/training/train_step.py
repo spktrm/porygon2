@@ -40,8 +40,9 @@ from rl.online.training.loss import (
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
-    compute_q_targets,
+    compute_q_onestep_targets,
     reference_kl,
+    residual_q,
     rnad_transformed_q,
 )
 from rl.online.training.telemetry import (
@@ -185,36 +186,22 @@ def train_step(
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
 
-    # Two-rung Q critic (docs/q-critic-plan.md): Retrace targets from the
-    # fast EMA target's PRIVILEGED all-action Q readout (Q_all — value_all
-    # conditioning) and reference policy; the Q_private rung trains by CE
-    # against the same labels. Zero policy influence — the heads train,
-    # the diagnostics log, nothing reaches the actor loss.
-    q_target_probs, q_retrace_g, q_all_target, q_v_exp, q_taken_target = (
-        compute_q_targets(
-            batch,
-            q_logits=player_target_pred.q_logits,
-            target_log_policy=player_target_pred.action_head.log_policy,
-            isr=target_actor_ratio,
-            config=config,
-            reg_log_policy=reg_log_policy,
-        )
+    # Two-rung residual Q critic (Step 3, docs/critic-weakness-analysis.md,
+    # 2026-08-23): Q_all = sg(V_all_target) + A_all centred under the
+    # target policy (targets.residual_q), trained by Huber on the taken
+    # cell against the TD(0) label r + gamma*V_win_target(s') — plain
+    # Q^pi, no trace, no transformed bootstrap. Q_private is its
+    # deployable-information sibling on the private value rung. The
+    # policy reads the target net's Q_all as stop-gradient scalars.
+    target_log_policy = player_target_pred.action_head.log_policy
+    v_all_target = player_target_pred.value_head.expectation.astype(jnp.float32)
+    q_all_target = residual_q(
+        player_target_pred.q_adv, v_all_target, target_log_policy, flat_action_mask
     )
-    # Second Retrace pass at the POLICY's lambda (player_pi_lambda): the
-    # taken cell of the NeuRD advantage reads this return instead of the
-    # critic's Q(s, a_t), while untaken cells keep Q_all — rnad.py's
-    # taken-cell-return / critic split without its 1/mu. Same regularised
-    # bootstraps, so it is consistent with q_all_target on every other
-    # cell. Labels for the Q head stay at player_q_lambda.
-    _, q_retrace_g_pi, _, _, _ = compute_q_targets(
-        batch,
-        q_logits=player_target_pred.q_logits,
-        target_log_policy=player_target_pred.action_head.log_policy,
-        isr=target_actor_ratio,
-        config=config,
-        reg_log_policy=reg_log_policy,
-        trace_lambda=config.player_pi_lambda,
-    )
+    q_label = compute_q_onestep_targets(batch, v_all_target, config)
+    q_taken_target = jnp.take_along_axis(
+        q_all_target, player_actor_action_head.action_index[..., None], axis=-1
+    ).squeeze(-1)
     # KL(pi_target || pi_reg) per state — the expected per-step penalty
     # the Q critic's bootstrap carries. Drifts up as the policy moves
     # away from the lagged reference and back down as the EMA catches up;
@@ -230,15 +217,13 @@ def train_step(
     # forced single-option steps (policy_mask excludes those; the Q
     # regression must not) — but not on terminal rows.
     q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
-    # Both readouts estimate the same state value from the same target
-    # params AND the same (privileged) information set, so their
-    # absolute gap is pure calibration debt of the Q head to the V
-    # head (q-critic-plan.md stage-1 acceptance metric) — no
-    # information-deficit component since the value_all conditioning.
-    training_logs["player_q_ev_gap"] = average(
-        jnp.abs(
-            q_v_exp - player_target_pred.value_head.expectation.astype(jnp.float32)
-        ),
+    # Legal cells whose UNCLIPPED Q = V + A leaves the reward support —
+    # the residual composition has no bin bound, the policy clips; a
+    # rising fraction is the head inflating A beyond what V + outcome
+    # allow (Step 3 panel, expect ~0).
+    training_logs["player_q_saturation_frac"] = average(
+        (jnp.abs(q_all_target) > 1.0).astype(jnp.float32).sum(axis=-1)
+        / jnp.maximum(flat_action_mask.sum(axis=-1), 1),
         q_mask,
     )
     # The direct "what does the critic think switching is worth"
@@ -247,9 +232,15 @@ def train_step(
     # rung would answer the wrong one): best legal switch's E[Q] minus
     # best legal move's, over states offering both. The number the
     # switch-collapse investigation (Aug 2026) had no way to measure.
-    q_private_all_target = jax.nn.softmax(
-        player_target_pred.private_q_logits.astype(jnp.float32), axis=-1
+    v_private_target = jax.nn.softmax(
+        player_target_pred.private_value_logits.astype(jnp.float32), axis=-1
     ) @ cat_vf_support.astype(jnp.float32)
+    q_private_all_target = residual_q(
+        player_target_pred.private_q_adv,
+        v_private_target,
+        target_log_policy,
+        flat_action_mask,
+    )
     switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
     move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
     valid_switch = flat_action_mask & switch_cells
@@ -285,7 +276,7 @@ def train_step(
         (taken_switch & has_move).astype(jnp.float32), q_mask
     )
     training_logs["player_q_target_voluntary_switch"] = average(
-        q_retrace_g, q_voluntary_switch_mask
+        q_label, q_voluntary_switch_mask
     )
 
     # Off-policy attenuation audit, split by the TAKEN modality. isr =
@@ -316,7 +307,7 @@ def train_step(
         (isr_f32 < 1.0).astype(jnp.float32), q_move_mask
     )
     training_logs["player_q_target_move"] = average(
-        q_retrace_g, q_move_mask & has_both
+        q_label, q_move_mask & has_both
     )
 
     # Pivotal-state decision panel (2026-08-19). A negative MEAN gap is
@@ -338,24 +329,17 @@ def train_step(
         (best_switch > best_move).astype(jnp.float32), q_mask & has_both
     )
     if not isinstance(batch.game_outcome, tuple):
-        # Step-1 panels (docs/critic-weakness-analysis.md): the one-step
-        # label is the same bootstrap compute_q_targets would use at
-        # lambda 0 but on the TARGET V HEAD — r_t + gamma * V_boot(s_{t+1}),
-        # V_boot = r on the done row — i.e. the Step-3 candidate label,
-        # measured here before anything trains on it.
-        _dones = player_transitions.env_output.done.astype(bool)
-        _r = (player_transitions.env_output.win_reward @ cat_vf_support).astype(jnp.float32)
-        _v_tgt = player_target_pred.value_head.expectation.astype(jnp.float32)
-        _v_boot = jnp.where(_dones, _r, _v_tgt)
-        _v_next = jnp.concatenate([_v_boot[1:], _v_boot[-1:]], axis=0)
+        # Step-1 panels (docs/critic-weakness-analysis.md). Since Step 3
+        # the one-step label IS the Q label; the outcome/onestep split
+        # of the label-variance panels is kept as the record of why.
         training_logs.update(
             critic_outcome_telemetry(
                 game_outcome=batch.game_outcome,
                 game_length=batch.game_length,
                 game_step_offset=batch.game_step_offset,
-                v_target=_v_tgt,
-                onestep_label=_r + config.player_gamma * _v_next,
-                retrace_g=q_retrace_g,
+                v_target=v_all_target,
+                onestep_label=q_label,
+                q_label=q_label,
                 q_taken=q_taken_target,
                 q_all=q_all_target,
                 flat_action_mask=flat_action_mask,
@@ -369,6 +353,8 @@ def train_step(
         * flat_action_mask
     )
     pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
+    # == v_all_target by the pi-centring (kept as the variance baseline).
+    q_v_exp = (pi_target * q_all_target).sum(axis=-1)
     training_logs["player_q_pivotal_pi_switch_mass"] = average(
         (pi_target * valid_switch).sum(axis=-1), pivotal_mask
     )
@@ -380,10 +366,10 @@ def train_step(
     # better where they matter". Empty slices log 0 (average clips the
     # denominator), so read alongside pivotal_frac/taken_switch_frac.
     training_logs["player_q_pivotal_ret_switch"] = average(
-        q_retrace_g, pivotal_mask & taken_switch
+        q_label, pivotal_mask & taken_switch
     )
     training_logs["player_q_pivotal_ret_stay"] = average(
-        q_retrace_g, pivotal_mask & jnp.logical_not(taken_switch)
+        q_label, pivotal_mask & jnp.logical_not(taken_switch)
     )
 
     # Loss-free critic-quality diagnostics, on permanently. Since
@@ -444,7 +430,7 @@ def train_step(
                 m.sum() >= 2,
                 calculate_r2(
                     value_prediction=q_taken_target,
-                    value_target=q_retrace_g,
+                    value_target=q_label,
                     mask=m,
                 ),
                 jnp.nan,
@@ -591,50 +577,42 @@ def train_step(
             ),
         )
 
-        # Two-rung Q CE (docs/q-critic-plan.md): each rung's taken-action
-        # categorical logits against the SAME two-hot Retrace target
-        # (labels come from the privileged Q_all recursion; Q_private is
-        # its deployable-information sibling, all head params shared).
-        def q_taken(q_logits):
+        # Two-rung residual Q loss: each rung's learner A composed with
+        # its TARGET rung's V (stop-gradient by construction — target
+        # params are not the differentiated leaf) and centred under the
+        # target policy, Huber against the one-step label on the taken
+        # cell. The state route is closed: every state-level degree of
+        # freedom sits in V, which this loss cannot move.
+        def q_taken_of(adv, v_rung):
+            q = residual_q(adv, v_rung, target_log_policy, flat_action_mask)
             return jnp.take_along_axis(
-                q_logits.astype(jnp.float32),
-                player_actor_action_head.action_index[..., None, None],
-                axis=-2,
-            ).squeeze(-2)
+                q, player_actor_action_head.action_index[..., None], axis=-1
+            ).squeeze(-1)
 
-        learner_q_logits_taken = q_taken(learner_player_pred.q_logits)
-        learner_q_private_logits_taken = q_taken(
-            learner_player_pred.private_q_logits
+        q_taken_pred = q_taken_of(learner_player_pred.q_adv, v_all_target)
+        q_private_taken_pred = q_taken_of(
+            learner_player_pred.private_q_adv, v_private_target
         )
-        q_ce_rows = optax.softmax_cross_entropy(
-            logits=learner_q_logits_taken, labels=q_target_probs
-        )
-        loss_q = average(q_ce_rows, q_mask)
+        q_err_rows = optax.huber_loss(q_taken_pred, q_label, delta=1.0)
+        loss_q = average(q_err_rows, q_mask)
         # Optimisation-level support (Step 1): the share of the Q loss each
         # modality actually contributes — the acceptance measure for any
         # row weighting, where sampled-chunk counts are only a replay
         # diagnostic.
-        _q_ce_total = jnp.maximum(jnp.sum(q_ce_rows, where=q_mask), 1e-8)
+        _q_err_total = jnp.maximum(jnp.sum(q_err_rows, where=q_mask), 1e-8)
         q_loss_share = {
-            f"player_q_loss_share_{name}": jnp.sum(q_ce_rows, where=m) / _q_ce_total
+            f"player_q_loss_share_{name}": jnp.sum(q_err_rows, where=m) / _q_err_total
             for name, m in (
                 ("move", q_move_mask),
                 ("forced", q_forced_switch_mask),
                 ("voluntary", q_voluntary_switch_mask),
             )
         }
-        # Label-entropy floor: CE = H(label) + KL(label || pred), so the
-        # Q CE can never fall below this and "fit" is loss_q minus it
-        # (Step 6 overfit probe judges against this number).
-        q_loss_share["player_q_label_entropy"] = average(
-            -jnp.sum(q_target_probs * jnp.log(q_target_probs + 1e-8), axis=-1),
-            q_mask,
+        q_loss_share["player_q_mse"] = average(
+            jnp.square(q_taken_pred - q_label), q_mask
         )
         loss_q_private = average(
-            optax.softmax_cross_entropy(
-                logits=learner_q_private_logits_taken, labels=q_target_probs
-            ),
-            q_mask,
+            optax.huber_loss(q_private_taken_pred, q_label, delta=1.0), q_mask
         )
 
         # Real-choice rows on the stay/switch axis: both a switch and a
@@ -681,12 +659,9 @@ def train_step(
         # without bound as pi(a) -> 0, with no pi prefactor, and it
         # vanishes only when pi == pi_reg — a moving reference, so the
         # fixed point is the regularised Nash, not a uniform prior.
-        taken_one_hot = jax.nn.one_hot(
-            player_actor_action_head.action_index, q_all_target.shape[-1], dtype=bool
-        )
-        q_for_policy = jnp.where(
-            taken_one_hot & q_mask[..., None], q_retrace_g_pi[..., None], q_all_target
-        )
+        # The policy reads the target critic's Q_all clipped to the reward
+        # support (the Huber loss saw it unclipped).
+        q_for_policy = jnp.clip(q_all_target, -1.0, 1.0)
         q_reg = rnad_transformed_q(
             q_for_policy,
             learner_log_policy,
@@ -849,13 +824,6 @@ def train_step(
                 neurd_move_cells,
             ),
         )
-        q_taken_pred = jax.nn.softmax(
-            learner_q_logits_taken, axis=-1
-        ) @ cat_vf_support.astype(jnp.float32)
-        q_private_taken_pred = jax.nn.softmax(
-            learner_q_private_logits_taken, axis=-1
-        ) @ cat_vf_support.astype(jnp.float32)
-
         # Calibration by context, graded on Q_private (the contexts
         # exist to interpret the Q_private switch/move gap, so they
         # must grade the same rung). Forced switches stay data-rich
@@ -868,7 +836,7 @@ def train_step(
                 context_mask.any(),
                 calculate_r2(
                     value_prediction=q_private_taken_pred,
-                    value_target=q_retrace_g,
+                    value_target=q_label,
                     mask=context_mask,
                 ),
                 0.0,
@@ -879,12 +847,12 @@ def train_step(
             player_loss_q_private=loss_q_private,
             player_q_r2=calculate_r2(
                 value_prediction=q_taken_pred,
-                value_target=q_retrace_g,
+                value_target=q_label,
                 mask=q_mask,
             ),
             player_q_private_r2=calculate_r2(
                 value_prediction=q_private_taken_pred,
-                value_target=q_retrace_g,
+                value_target=q_label,
                 mask=q_mask,
             ),
             player_q_r2_move=q_context_r2(q_move_mask),

@@ -291,7 +291,7 @@ def critic_outcome_telemetry(
     game_step_offset: jax.Array,
     v_target: jax.Array,
     onestep_label: jax.Array,
-    retrace_g: jax.Array,
+    q_label: jax.Array,
     q_taken: jax.Array,
     q_all: jax.Array,
     flat_action_mask: jax.Array,
@@ -303,7 +303,7 @@ def critic_outcome_telemetry(
     JOINT statistics wandb's pooled means could not give, computed from
     the completed-game outcome carried on every chunk (Trajectory.
     game_outcome). Shapes: game_* (1, B); v_target / onestep_label /
-    retrace_g / q_taken / q_mask / value_mask / action_index (T, B);
+    q_label / q_taken / q_mask / value_mask / action_index (T, B);
     q_all / flat_action_mask (T, B, A). Every panel is NaN, not 0, when
     its slice is empty in this batch.
 
@@ -413,7 +413,7 @@ def critic_outcome_telemetry(
     logs["player_v_onestep_r2"] = masked_r2(v_target, onestep_label, q_mask)
 
     logs["player_q_target_edge_frac"] = masked_mean(
-        (jnp.abs(retrace_g.astype(f32)) >= 0.999).astype(f32), q_mask
+        (jnp.abs(q_label.astype(f32)) >= 0.999).astype(f32), q_mask
     )
     logs["player_q_support_chunk_vol_switch_frac"] = vol_mask.any(axis=0).astype(f32).mean()
     logs["player_q_support_vol_switch_rows"] = vol_mask.sum().astype(f32)

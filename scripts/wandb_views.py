@@ -497,12 +497,12 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # CE = H(label) + KL, so loss_q can never sit below the
-                    # label entropy; the gap is the critic's actual fit
-                    # (Step-6 overfit probe reached floor+0.002 on a fixed
-                    # batch, i.e. the head CAN fit the taken cells).
-                    "Q CE vs its label-entropy floor",
-                    ["player_loss_q", "player_q_label_entropy"],
+                    # Step 3 residual critic (2026-08-23): Huber on the
+                    # taken cell vs the one-step label; MSE alongside, and
+                    # the fraction of legal cells whose unclipped V + A
+                    # leaves the reward support (expect ~0).
+                    "Q Huber + MSE (residual critic) and saturation",
+                    ["player_loss_q", "player_q_mse", "player_q_saturation_frac"],
                 ),
                 lp(
                     "Q support: voluntary / forced switch rows per batch",

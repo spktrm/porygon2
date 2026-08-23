@@ -64,7 +64,7 @@ _MOVE_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__MOVE
 # The panels printed per eval; everything train_step logs is pickled.
 PRINT_KEYS = (
     "player_loss_q",
-    "player_q_label_entropy",
+    "player_q_mse",
     "player_q_r2",
     "player_q_r2_move",
     "player_q_r2_switch_forced",
@@ -144,11 +144,35 @@ def build_states(ckpt_dir: str, config):
         player_net, builder_net, jax.random.key(0), config
     )
     ck = checkpoint.load_full(ckpt_dir)["player_state"]
+
+    def merge(fresh, saved):
+        """Shape-tolerant load: leaves whose shape changed (the Q head's
+        3-bin -> scalar readout, Step 3) keep their fresh init — the
+        probe's question is whether the NEW head fits on a trained
+        trunk. Logs what was skipped."""
+        skipped = []
+
+        def pick(path, a, b):
+            if getattr(b, "shape", None) == getattr(a, "shape", None):
+                return b
+            skipped.append(jax.tree_util.keystr(path))
+            return a
+
+        out = jax.tree_util.tree_map_with_path(pick, fresh, saved)
+        if skipped:
+            logger.info("fresh-init (shape changed): %s", skipped)
+        return out, bool(skipped)
+
+    params, p_skip = merge(player_state.params, ck["params"])
+    target, _ = merge(player_state.target_params, ck["target_params"])
+    reg, _ = merge(player_state.reg_params, ck.get("reg_params", ck["target_params"]))
+    # Adam moments mirror the param tree; a shape change resets them.
+    opt_state = player_state.opt_state if p_skip else ck["opt_state"]
     player_state = player_state.replace(
-        params=ck["params"],
-        target_params=ck["target_params"],
-        reg_params=ck.get("reg_params", ck["target_params"]),
-        opt_state=ck["opt_state"],
+        params=params,
+        target_params=target,
+        reg_params=reg,
+        opt_state=opt_state,
         step_count=jnp.asarray(ck["scalars"]["step_count"]),
     )
     return player_net, player_state, builder_state
@@ -158,12 +182,11 @@ def make_learner_q_stats(player_net):
     """Action-axis panels read from the LEARNER params' Q_all — the logged
     q_action_var / pivotal_frac / switch_move_gap read the target net,
     which the `fixed` arm freezes by design."""
-    from rl.environment.data import CAT_VF_SUPPORT
     from rl.environment.interfaces import PlayerActorInput
     from rl.model.heads import HeadParams
+    from rl.online.training.targets import residual_q
 
     apply = jax.vmap(player_net.apply, in_axes=(None, 1, 1, None), out_axes=1)
-    support = jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
     switch_cells = jnp.asarray(_SWITCH_CELLS)
     move_cells = jnp.asarray(_MOVE_CELLS)
 
@@ -179,12 +202,14 @@ def make_learner_q_stats(player_net):
             pt.agent_output.actor_output,
             HeadParams(),
         )
-        q_all = jax.nn.softmax(pred.q_logits.astype(jnp.float32), -1) @ support  # (T,B,A)
         done = pt.env_output.done.astype(bool)
+        flat = pt.env_output.action_mask.reshape(*done.shape, -1).astype(bool)
+        q_all = residual_q(
+            pred.q_adv, pred.value_head.expectation, pred.action_head.log_policy, flat
+        )  # (T,B,A)
         before = (jnp.cumsum(done, axis=0) - done) == 0
         final = jnp.arange(done.shape[0])[:, None] == done.shape[0] - 1
         rows = before & (~final | done) & ~done
-        flat = pt.env_output.action_mask.reshape(*q_all.shape[:2], -1).astype(bool)
         vs, vm = flat & switch_cells, flat & move_cells
         best_s = jnp.max(jnp.where(vs, q_all, -jnp.inf), -1)
         best_m = jnp.max(jnp.where(vm, q_all, -jnp.inf), -1)

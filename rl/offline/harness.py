@@ -185,10 +185,10 @@ def forward(
     generation: int = 9,
 ) -> Iterator[tuple[PlayerActorOutput, object]]:
     """Yields (prediction, stacked batch) over `chunks` in batches, using
-    the learner-side model (train=True, so q_logits / private_q_logits /
+    the learner-side model (train=True, so q_adv / private_q_adv /
     private_value_logits / public_value_logits are populated). Batch axis
     is 1, matching the learner's apply_fn. Leaves are host numpy-able jax
-    arrays; decode Q as softmax(pred.q_logits) @ CAT_VF_SUPPORT and V as
+    arrays; decode Q_all with decode_q(pred, flat_action_mask) and V as
     pred.value_head.expectation."""
     net = get_player_model(get_player_model_config(generation, train=True))
     apply = jax.jit(jax.vmap(net.apply, in_axes=(None, 1, 1, None), out_axes=1))
@@ -204,9 +204,18 @@ def forward(
         yield apply(dev_params, actor_input, pt.agent_output.actor_output, HeadParams()), b
 
 
-def decode_q(q_logits) -> np.ndarray:
-    support = jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
-    return np.asarray(jax.nn.softmax(q_logits.astype(jnp.float32), -1) @ support)
+def decode_q(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
+    """Q_all = V_all + centred A_all (targets.residual_q), (T, B, A)."""
+    from rl.online.training.targets import residual_q
+
+    return np.asarray(
+        residual_q(
+            pred.q_adv,
+            pred.value_head.expectation,
+            pred.action_head.log_policy,
+            jnp.asarray(flat_action_mask, bool),
+        )
+    )
 
 
 def gpu_headroom_env(fraction: float = 0.12) -> None:

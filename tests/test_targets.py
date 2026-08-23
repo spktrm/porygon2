@@ -8,7 +8,8 @@ import pytest
 
 from rl.online.training.targets import (
     compute_player_targets,
-    compute_q_targets,
+    compute_q_onestep_targets,
+    residual_q,
     two_hot,
     vtrace,
 )
@@ -102,17 +103,29 @@ def _q_batch(done, win_reward, action_mask, action_index):
     )
 
 
-class TestQTargetsHandExample:
-    """T=3, B=1, 2x2 grid (A=4), terminal win on the last (done) row,
-    uniform Q logits (E[Q] = 0 everywhere) and uniform target policy.
+class TestResidualQ:
+    def test_centring_and_state_route(self):
+        """E_pi[Q] == V exactly, a constant shift of A is invisible (the
+        state route is closed), illegal cells read 0."""
+        legal = jnp.asarray([[True, True, False, True]])
+        log_pi = jnp.log(jnp.asarray([[0.5, 0.25, 0.0, 0.25]]) + 1e-12)
+        adv = jnp.asarray([[0.3, -0.1, 5.0, 0.2]])
+        v = jnp.asarray([0.4])
+        q = residual_q(adv, v, log_pi, legal)
+        pi = jnp.exp(log_pi) * legal
+        np.testing.assert_allclose(float((pi * q).sum(-1)[0]), 0.4, atol=1e-6)
+        assert float(q[0, 2]) == 0.0
+        shifted = residual_q(adv + 7.0, v, log_pi, legal)
+        np.testing.assert_allclose(np.asarray(shifted), np.asarray(q), atol=1e-5)
+        # the action axis survives: cell gaps equal the raw A gaps
+        np.testing.assert_allclose(float(q[0, 0] - q[0, 1]), 0.4, atol=1e-6)
 
-    delta = [0 + 1*v_exp(s1) - 0, 0 + 1*r - 0, 0 (done row zeroed)]
-          = [0, 1, 0]
-    E     = [lam * 1, 1, 0]   (c_{t+1} trace, on-policy isr)
-    G     = q_taken + E = [lam, 1, .]
-    """
 
-    def _inputs(self):
+class TestQOnestepHandExample:
+    """T=3, B=1, terminal win on the last (done) row, V_target = 0.2 on
+    every row: y = [0 + V(s1), 0 + r, 0 (done row)] = [0.2, 1, 0]."""
+
+    def test_label_matches_hand_computation(self):
         from rl.online.config import Porygon2LearnerConfig
 
         T, B, N = 3, 1, 2
@@ -123,82 +136,24 @@ class TestQTargetsHandExample:
         action_mask = jnp.ones((T, B, N, N), dtype=bool)
         action_index = jnp.zeros((T, B), dtype=jnp.int32)
         batch = _q_batch(done, win_reward, action_mask, action_index)
-        q_logits = jnp.zeros((T, B, N * N, 3), dtype=jnp.float32)
-        log_policy = jnp.full((T, B, N * N), -np.log(N * N), dtype=jnp.float32)
-        isr = jnp.ones((T, B), dtype=jnp.float32)
-        return batch, q_logits, log_policy, isr, Porygon2LearnerConfig
-
-    def test_retrace_matches_hand_computation(self):
-        batch, q_logits, log_policy, isr, config_cls = self._inputs()
-        lam = 0.8
-        config = config_cls(player_q_lambda=lam)
-        probs, g, q_all, v_exp, q_taken = compute_q_targets(
-            batch, q_logits, log_policy, isr, config
+        y = compute_q_onestep_targets(
+            batch, jnp.full((T, B), 0.2), Porygon2LearnerConfig(player_gamma=1.0)
         )
-        np.testing.assert_allclose(np.asarray(q_all), 0.0, atol=1e-6)
-        np.testing.assert_allclose(np.asarray(q_taken), 0.0, atol=1e-6)
-        np.testing.assert_allclose(np.asarray(v_exp), 0.0, atol=1e-6)
-        np.testing.assert_allclose(np.asarray(g[0, 0]), lam, atol=1e-6)
-        np.testing.assert_allclose(np.asarray(g[1, 0]), 1.0, atol=1e-6)
-        # Two-hot of lam over [-1, 0, 1]: (0, 1-lam, lam).
-        np.testing.assert_allclose(
-            np.asarray(probs[0, 0]), [0.0, 1.0 - lam, lam], atol=1e-6
+        np.testing.assert_allclose(np.asarray(y[:, 0]), [0.2, 1.0, 0.0], atol=1e-6)
+
+    def test_rows_past_the_first_done_read_zero(self):
+        from rl.online.config import Porygon2LearnerConfig
+
+        T, B, N = 4, 1, 2
+        done = jnp.array([[False], [True], [False], [False]])
+        win_reward = jnp.zeros((T, B, 3), dtype=jnp.float32).at[:, :, 1].set(1.0)
+        batch = _q_batch(
+            done, win_reward, jnp.ones((T, B, N, N), bool), jnp.zeros((T, B), jnp.int32)
         )
-        np.testing.assert_allclose(np.asarray(probs[1, 0]), [0.0, 0.0, 1.0], atol=1e-6)
-
-    def test_lambda_one_is_monte_carlo(self):
-        # lam=1, on-policy: every acted step's target is the final outcome.
-        batch, q_logits, log_policy, isr, config_cls = self._inputs()
-        config = config_cls(player_q_lambda=1.0)
-        _, g, _, _, _ = compute_q_targets(batch, q_logits, log_policy, isr, config)
-        np.testing.assert_allclose(np.asarray(g[:2, 0]), [1.0, 1.0], atol=1e-6)
-
-    def test_off_policy_ratio_truncates(self):
-        # isr >> 1 truncates to 1 (same as lam=1 on-policy); isr = 0 kills
-        # the correction, leaving the pure one-step bootstrap.
-        batch, q_logits, log_policy, _, config_cls = self._inputs()
-        config = config_cls(player_q_lambda=1.0)
-        big = jnp.full((3, 1), 10.0, dtype=jnp.float32)
-        _, g_big, _, _, _ = compute_q_targets(batch, q_logits, log_policy, big, config)
-        np.testing.assert_allclose(np.asarray(g_big[0, 0]), 1.0, atol=1e-6)
-        zero = jnp.zeros((3, 1), dtype=jnp.float32)
-        _, g_zero, _, _, _ = compute_q_targets(batch, q_logits, log_policy, zero, config)
-        # Bootstrap on v_exp(s1) = 0, no correction from the outcome.
-        np.testing.assert_allclose(np.asarray(g_zero[0, 0]), 0.0, atol=1e-6)
-        # The last acted step's outcome enters through the terminal-anchor
-        # bootstrap, not the trace, so it survives isr = 0.
-        np.testing.assert_allclose(np.asarray(g_zero[1, 0]), 1.0, atol=1e-6)
-
-
-class TestQTargetsOnExTrajectory:
-    def test_shapes_and_ranges(self, ex_target_inputs):
-        batch, _, isr, config = ex_target_inputs
-        env = batch.player_transitions.env_output
-        T, B = env.done.shape
-        flat_mask = np.asarray(env.action_mask).reshape(T, B, -1)
-        A = flat_mask.shape[-1]
-        full = _q_batch(
-            env.done,
-            env.win_reward,
-            env.action_mask,
-            jnp.argmax(jnp.asarray(flat_mask), axis=-1),
+        y = compute_q_onestep_targets(
+            batch, jnp.full((T, B), 0.5), Porygon2LearnerConfig(player_gamma=1.0)
         )
-        q_logits = jnp.zeros((T, B, A, 3), dtype=jnp.float32)
-        log_policy = jnp.full((T, B, A), -np.log(A), dtype=jnp.float32)
-        probs, g, q_all, v_exp, q_taken = compute_q_targets(
-            full, q_logits, log_policy, isr, config
-        )
-        assert probs.shape == (T, B, 3)
-        assert g.shape == (T, B)
-        assert q_all.shape == (T, B, A)
-        assert v_exp.shape == (T, B)
-        assert q_taken.shape == (T, B)
-        for leaf in (probs, g, q_all, v_exp, q_taken):
-            assert np.isfinite(np.asarray(leaf)).all()
-        # Retrace returns live on the reward support, and the CE labels
-        # are distributions everywhere.
-        assert (np.abs(np.asarray(g)) <= 1.0 + 1e-6).all()
-        np.testing.assert_allclose(np.asarray(probs).sum(-1), 1.0, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(y[:, 0]), [0.0, 0.0, 0.0, 0.0], atol=1e-6)
 
 
 @pytest.fixture(scope="module")
@@ -217,6 +172,31 @@ def ex_target_inputs():
     value_log_probs = jnp.full((T, B, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)
     isr = jnp.ones((T, B), dtype=jnp.float32)
     return batch, value_log_probs, isr, Porygon2LearnerConfig()
+
+
+class TestQOnestepOnExTrajectory:
+    def test_shapes_and_ranges(self, ex_target_inputs):
+        batch, _, isr, config = ex_target_inputs
+        env = batch.player_transitions.env_output
+        T, B = env.done.shape
+        flat_mask = np.asarray(env.action_mask).reshape(T, B, -1)
+        A = flat_mask.shape[-1]
+        full = _q_batch(
+            env.done,
+            env.win_reward,
+            env.action_mask,
+            jnp.argmax(jnp.asarray(flat_mask), axis=-1),
+        )
+        v = jnp.zeros((T, B), dtype=jnp.float32)
+        y = compute_q_onestep_targets(full, v, config)
+        assert y.shape == (T, B)
+        assert np.isfinite(np.asarray(y)).all()
+        assert (np.abs(np.asarray(y)) <= 1.0 + 1e-6).all()
+        q_all = residual_q(
+            jnp.zeros((T, B, A)), v, jnp.full((T, B, A), -np.log(A)), jnp.asarray(flat_mask)
+        )
+        assert q_all.shape == (T, B, A)
+        assert np.isfinite(np.asarray(q_all)).all()
 
 
 class TestPlayerTargetsOnExTrajectory:
@@ -312,53 +292,3 @@ class TestRNaDTransform:
             0.0,
             atol=1e-7,
         )
-
-    def test_retrace_bootstrap_carries_minus_eta_kl(self):
-        """compute_q_targets with a reference that differs from the target
-        policy lowers v_exp by exactly eta*KL; with reg == target (or eta
-        0) it is the plain Retrace critic bitwise."""
-        inputs = TestQTargetsHandExample()._inputs()
-        batch, q_logits, log_policy, isr, config_cls = inputs
-        n_cells = log_policy.shape[-1]
-        plain = compute_q_targets(
-            batch, q_logits, log_policy, isr, config_cls(player_rnad_eta=0.2)
-        )
-        same_ref = compute_q_targets(
-            batch,
-            q_logits,
-            log_policy,
-            isr,
-            config_cls(player_rnad_eta=0.2),
-            reg_log_policy=log_policy,
-        )
-        for a, b in zip(plain, same_ref):
-            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
-        # Reference that halves the mass on cell 0 relative to the rest.
-        ref = np.full(log_policy.shape, 1.0)
-        ref[..., 0] = 0.5
-        ref = ref / ref.sum(axis=-1, keepdims=True)
-        reg_log_policy = jnp.log(jnp.asarray(ref, dtype=jnp.float32))
-        _, _, _, v_exp, _ = compute_q_targets(
-            batch,
-            q_logits,
-            log_policy,
-            isr,
-            config_cls(player_rnad_eta=0.2),
-            reg_log_policy=reg_log_policy,
-        )
-        pi = np.full(n_cells, 1.0 / n_cells)
-        kl = float((pi * np.log(pi / ref[0, 0])).sum())
-        # Uniform target policy over all cells, q_all zero: v_exp = -eta*KL
-        # wherever the mask is live (the test batch's legal set is the full
-        # grid).
-        np.testing.assert_allclose(np.asarray(v_exp[0, 0]), -0.2 * kl, rtol=1e-5)
-        off = compute_q_targets(
-            batch,
-            q_logits,
-            log_policy,
-            isr,
-            config_cls(player_rnad_eta=0.0),
-            reg_log_policy=reg_log_policy,
-        )
-        for a, b in zip(plain, off):
-            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))

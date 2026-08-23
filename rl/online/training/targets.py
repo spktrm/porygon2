@@ -185,109 +185,56 @@ def rnad_transformed_q(
     return jnp.where(legal_mask, q_all - penalty, 0.0)
 
 
-def compute_q_targets(
-    batch: Batch,
-    q_logits: jax.Array,
-    target_log_policy: jax.Array,
-    isr: jax.Array,
-    config: Porygon2LearnerConfig,
-    reg_log_policy: jax.Array | None = None,
-    trace_lambda: float | None = None,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Retrace(lambda) targets for the Q critic (docs/q-critic-plan.md),
-    computed from the privileged Q_all rung; the Q_private rung trains by
-    CE against the same labels learner-side.
+def residual_q(
+    adv: jax.Array, v: jax.Array, log_policy: jax.Array, legal_mask: jax.Array
+) -> jax.Array:
+    """Residual Q composition (Step 3, docs/critic-weakness-analysis.md):
+    Q(s, a) = V(s) + A(s, a) - sum_a' pi(a'|s) A(s, a') over legal cells.
 
-    R-NaD (2026-08-22): the bootstrap is the REGULARISED state value
-    v_exp(s) = sum_a pi(a) Q(s,a) - eta*KL(pi||pi_reg)(s), so Q learns the
-    value of the transformed game r' = r - eta*log(pi/pi_reg) from the NEXT
-    step on; the own-step penalty stays analytic in the NeuRD advantage
-    (rnad_transformed_q) rather than entering these labels. reg_log_policy
-    None (or eta 0) is the plain Retrace critic. The win-value head keeps
-    the untransformed game (it no longer feeds the policy), so its gap to
-    v_exp now carries the regularisation debt.
+    V is the rung's state-value readout (the v_head's expectation for
+    Q_all, the private value rung's for Q_private) — stop-gradient at the
+    call site, so a state-level offset can live ONLY in V and the head's
+    per-cell output carries the action axis alone. The pi-centring keeps
+    the identity E_pi[Q] = V exactly (the NeuRD baseline is then V) and
+    conditions the head; it cannot remove a modality offset (a -0.1 on
+    switches at pi(switch) = 0.01 sums to ~0). Unclipped: the Huber loss
+    sees the raw sum, the policy clips to the reward support. Illegal
+    cells read 0. All f32.
+    """
+    adv = adv.astype(jnp.float32)
+    pi = jnp.exp(log_policy.astype(jnp.float32)) * legal_mask
+    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
+    baseline = (pi * jnp.where(legal_mask, adv, 0.0)).sum(axis=-1, keepdims=True)
+    q = v.astype(jnp.float32)[..., None] + adv - baseline
+    return jnp.where(legal_mask, q, 0.0)
 
-    Scalar-space recursion with a two-hot projection
-    back onto CAT_VF_SUPPORT for the CE loss. Expectation bootstrap —
-    delta_t uses V(s_{t+1}) = sum_a pi(a|s_{t+1}) E[Q(s_{t+1}, a)], never
-    a max — so the target stays sound against a mixed-strategy opponent
-    and free of argmax overestimation. The correction product starts at
-    t+1 (Retrace, vs v-trace's t): a_t is given, only the continuation is
-    off-policy — so delta_t itself carries no rho factor, and the
-    recursion is E_t = delta_t + gamma_t * c_{t+1} * E_{t+1} with
-    c = player_q_lambda * min(1, pi_target/mu). min(1, .) tolerates
-    arbitrary behaviour policies (replay reuse, or any recorded mu).
 
-    q_logits / target_log_policy come from the fast EMA target network —
-    the same IMPACT reasoning as the v-trace reference policy. Everything
-    runs in f32: value readouts are precision-critical under the bf16
-    training policy — a bf16 scan carry crashed the 2026-08-13 session
-    (LESSONS.md 2).
+def compute_q_onestep_targets(
+    batch: Batch, v_target: jax.Array, config: Porygon2LearnerConfig
+) -> jax.Array:
+    """TD(0) labels for the residual Q critic: y_t = r_t + gamma * V(s_{t+1})
+    from the TARGET net's win-value head (plain Q^pi — no Retrace trace,
+    no reference-policy transform; the reference penalty lives only in the
+    NeuRD advantage, targets.ref_penalised_q). Replaced the Retrace
+    recursion 2026-08-23: the one-step label has ~33x less variance than
+    the outcome chain for the action axis to be learnt against, and its
+    state component is exactly what V already carries, so the residual
+    A has only the action part left to fit.
 
-    Returns (q_target_probs, retrace_g, q_all, v_exp, q_taken):
-      q_target_probs (T, B, n_bins) — CE labels for the taken action;
-      retrace_g      (T, B)         — the scalar Retrace returns (R2 diag,
-                                      and the Q-boosting advantage's
-                                      multistep numerator);
-      q_all          (T, B, A)      — target net per-action E[Q];
-      v_exp          (T, B)         — its policy expectation (the
-                                      Q-boosting baseline), and
-      q_taken        (T, B)         — E[Q] of the taken action (the
-                                      onestep Q-boosting variant).
-    q_all also feeds player_q_switch_move_gap / player_q_ev_gap.
+    Terminal anchor as before: rewards land on the terminal OBSERVATION
+    row, so that row's bootstrap is exactly its stored reward and its own
+    label is 0 (never trained — q_mask excludes done rows). Rows past a
+    chunk's first done (terminal-copy padding) read 0. f32 throughout.
     """
     support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
-
-    dones = batch.player_transitions.env_output.done  # (T, B)
+    dones = batch.player_transitions.env_output.done
     mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
-    discount_t = (1 - dones) * config.player_gamma * mask
-    discount_t = discount_t.astype(jnp.float32)
-
-    q_probs = jax.nn.softmax(q_logits.astype(jnp.float32), axis=-1)
-    q_all = q_probs @ support  # (T, B, A)
-
-    action_mask = batch.player_transitions.env_output.action_mask
-    flat_action_mask = action_mask.reshape(*q_all.shape)
-    # Renormalised over legal cells: the policy head already zeroes
-    # illegal mass, this just guards E[Q] against numerical dust there.
-    pi = jnp.exp(target_log_policy.astype(jnp.float32)) * flat_action_mask
-    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
-    v_exp = (pi * q_all).sum(axis=-1)  # (T, B)
-    if reg_log_policy is not None and config.player_rnad_eta > 0.0:
-        v_exp = v_exp - config.player_rnad_eta * reference_kl(
-            target_log_policy, reg_log_policy, flat_action_mask
-        )
-
-    action_index = (
-        batch.player_transitions.agent_output.actor_output.action_head.action_index
-    )
-    q_taken = jnp.take_along_axis(q_all, action_index[..., None], axis=-1).squeeze(-1)
-
+    done_b = dones.astype(bool)
+    discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
     r_t = (batch.player_transitions.env_output.win_reward @ support).astype(jnp.float32)
-
-    # Terminal anchor: rewards land on the terminal OBSERVATION row (the
-    # done step, where no action is taken and the Q head never trains), so
-    # that row's state value is exactly its stored reward. Bootstrap the
-    # last acted step on r rather than on the Q readout's uncalibrated
-    # terminal estimate, and zero the terminal row's own delta — the
-    # outcome enters the recursion through the bootstrap, exactly once,
-    # with no reference to the terminal row's meaningless action_index.
-    v_boot = jnp.where(dones.astype(bool), r_t, v_exp)
+    v_boot = jnp.where(done_b, r_t, v_target.astype(jnp.float32))
     v_next = jnp.concatenate([v_boot[1:], v_boot[-1:]], axis=0)
-    td_errors = (
-        jnp.where(dones.astype(bool), 0.0, r_t + discount_t * v_next - q_taken) * mask
-    )
-
-    lam = config.player_q_lambda if trace_lambda is None else trace_lambda
-    c_t = lam * jnp.minimum(1.0, isr.astype(jnp.float32))
-    # Shift left: the recursion's trace factor is c_{t+1} (Retrace), and
-    # the final step has no continuation to correct.
-    c_next = jnp.concatenate([c_t[1:], jnp.zeros_like(c_t[-1:])], axis=0)
-    errors = vtrace(td_errors, discount_t, c_next)
-
-    retrace_g = jnp.clip(q_taken + errors, support[0], support[-1]) * mask
-    q_target_probs = two_hot(retrace_g, support)
-    return q_target_probs, retrace_g, q_all, v_exp, q_taken
+    return jnp.where(done_b, 0.0, r_t + discount_t * v_next) * mask
 
 
 def compute_builder_targets(

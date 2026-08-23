@@ -68,12 +68,12 @@ def test_q_head_forward_shapes(model_and_inputs):
     out = network.apply(params, actor_input, actor_output, HeadParams())
     T = actor_input.env.done.shape[0]
     A = int(np.prod(actor_input.env.action_mask.shape[-2:]))
-    q_logits = np.asarray(out.q_logits, dtype=np.float32)
-    assert q_logits.shape == (T, A, 3)
-    assert np.isfinite(q_logits).all()
-    private_q_logits = np.asarray(out.private_q_logits, dtype=np.float32)
-    assert private_q_logits.shape == (T, A, 3)
-    assert np.isfinite(private_q_logits).all()
+    q_adv = np.asarray(out.q_adv, dtype=np.float32)
+    assert q_adv.shape == (T, A)
+    assert np.isfinite(q_adv).all()
+    private_q_adv = np.asarray(out.private_q_adv, dtype=np.float32)
+    assert private_q_adv.shape == (T, A)
+    assert np.isfinite(private_q_adv).all()
     # The rungs share every head param but not their conditioning input.
     # At init both are identically ZERO (e00a388's flat-at-init contract
     # zero-inits every Q output path), so comparing them here would be
@@ -82,8 +82,8 @@ def test_q_head_forward_shapes(model_and_inputs):
     opened = open_zero_init_paths(params, ("q_adapter", "q_macro_micro"))
     out_open = network.apply(opened, actor_input, actor_output, HeadParams())
     assert not np.array_equal(
-        np.asarray(out_open.q_logits, dtype=np.float32),
-        np.asarray(out_open.private_q_logits, dtype=np.float32),
+        np.asarray(out_open.q_adv, dtype=np.float32),
+        np.asarray(out_open.private_q_adv, dtype=np.float32),
     )
     # Full-support log_policy is present in train mode — the Retrace
     # target's expectation bootstrap depends on it.

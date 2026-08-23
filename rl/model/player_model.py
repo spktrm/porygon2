@@ -395,8 +395,9 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_q_head(
         self, action_embeddings: jax.Array, cond: jax.Array, valid_mask: jax.Array
     ) -> jax.Array:
-        """One Q rung over the flat action grid: (..., N * N, n_bins)
-        categorical logits. cond is the rung's pooled value embedding —
+        """One Q rung over the flat action grid: (..., N * N) scalar
+        RAW advantage logits (uncentred — targets.residual_q composes
+        Q = V + A - E_pi[A]). cond is the rung's pooled value embedding —
         the information set (value_all = privileged Q_all, private value
         = deployable Q_private). Projection/norm in f32 (flax default),
         cast back so the bf16 grid tensors stay bf16.
@@ -406,6 +407,13 @@ class Porygon2PlayerModel(nn.Module):
         src_valid = valid_mask.any(axis=-1)
         macro, micro = self.q_macro_micro(adapted, src_valid, cond=c)
         flat_valid_mask = valid_mask.reshape(*valid_mask.shape[:-2], -1)
+        # num_logits 1: MacroHead already squeezes its single output; the
+        # pointer grid keeps its head axis — drop it so both ride the
+        # scalar composition path (the policy's own shape contract).
+        if micro.ndim == flat_valid_mask.ndim + 1:
+            micro = micro.squeeze(-1)
+        if macro.ndim == flat_valid_mask.ndim + 1:
+            macro = macro.squeeze(-1)
         return compose_action_grid(macro, micro, flat_valid_mask, reduce="mean")
 
     def get_head_outputs(
@@ -460,20 +468,21 @@ class Porygon2PlayerModel(nn.Module):
                 private_value_logits=self.v_head(private_value_embeddings).logits,
                 public_value_logits=self.public_v_head(public_value_embeddings).logits,
             )
-            # Two-rung all-action Q readout over the flat action grid —
-            # (T, N*N, n_bins) categorical logits per rung. Q_all is
-            # privileged via the value_all conditioning and drives the
-            # Retrace recursion; Q_private shares every param but sees
-            # only the policy's information set. Retrace targets and
-            # diagnostics live learner-side; nothing here feeds the
-            # policy (docs/q-critic-plan.md).
+            # Two-rung all-action residual readout over the flat action
+            # grid — (T, N*N) scalar raw advantages per rung. q_adv is
+            # privileged via the value_all conditioning (Q_all = v_head's
+            # V + centred A); private_q_adv shares every param but sees
+            # only the policy's information set. Labels and the
+            # composition live learner-side (targets.residual_q); the
+            # policy reads the TARGET net's Q_all as stop-gradient
+            # scalars only.
             outputs = outputs.replace(
-                q_logits=self._forward_q_head(
+                q_adv=self._forward_q_head(
                     action_embeddings,
                     value_embeddings,
                     actor_input.env.action_mask,
                 ),
-                private_q_logits=self._forward_q_head(
+                private_q_adv=self._forward_q_head(
                     action_embeddings,
                     private_value_embeddings,
                     actor_input.env.action_mask,
