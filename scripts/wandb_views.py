@@ -404,6 +404,107 @@ def rl_sections():
             ],
         ),
         ws.Section(
+            # Step 1 of docs/critic-weakness-analysis.md (2026-08-23): the
+            # per-row JOINT statistics that judge every later step, from
+            # the completed-game outcome now carried on every chunk. NaN
+            # where a batch has no rows in the slice (wandb skips them).
+            name="1.75 · Critic telemetry (Step 1: labels, matched-V, support)",
+            is_open=True,
+            panels=[
+                lp(
+                    # Offline reference 18.7x (34x on voluntary switches):
+                    # the variance a one-step label would remove.
+                    "Label variance around Q: outcome vs one-step, by modality",
+                    [
+                        "player_q_label_var_outcome_move",
+                        "player_q_label_var_onestep_move",
+                        "player_q_label_var_outcome_forced",
+                        "player_q_label_var_onestep_forced",
+                        "player_q_label_var_outcome_voluntary",
+                        "player_q_label_var_onestep_voluntary",
+                    ],
+                    log_y=True,
+                ),
+                lp(
+                    # Realised outcome of voluntary switches minus moves at
+                    # matched V(s). Offline: pooled -0.147 -> matched
+                    # -0.048±0.054. Per-batch n is tiny; read smoothed and
+                    # with the n panel beside it.
+                    "Matched-V realised gap (vol switch − move) per V bin",
+                    ["player_mv_bin0_gap_realised", "player_mv_bin1_gap_realised", "player_mv_bin2_gap_realised", "player_mv_bin3_gap_realised", "player_mv_bin4_gap_realised", "player_mv_pooled_gap_realised"],
+                    smooth=0.99,
+                ),
+                lp(
+                    # The critic's mean-over-legal-cells gap in the SAME
+                    # bins. Flat across bins = a modality offset (the
+                    # collapse signature); state-dependent = resolution.
+                    "Matched-V critic gap (Q_sw − Q_mv) per V bin",
+                    ["player_mv_bin0_gap_critic", "player_mv_bin1_gap_critic", "player_mv_bin2_gap_critic", "player_mv_bin3_gap_critic", "player_mv_bin4_gap_critic", "player_mv_pooled_gap_critic"],
+                    smooth=0.99,
+                ),
+                lp(
+                    "Matched-V support: voluntary switches per V bin",
+                    ["player_mv_bin0_n_vol", "player_mv_bin1_n_vol", "player_mv_bin2_n_vol", "player_mv_bin3_n_vol", "player_mv_bin4_n_vol"],
+                    smooth=0.99,
+                ),
+                lp(
+                    # Selection, directly: V at the states where switches
+                    # are taken vs where moves are (offline -0.04 vs +0.08).
+                    "V(s) at voluntary switches vs moves",
+                    ["player_mv_v_at_vol_switch", "player_mv_v_at_move"],
+                    smooth=0.99,
+                ),
+                lp(
+                    # Outcome calibration of the V head (offline 0.265 on
+                    # fresh on-policy games). prev_switch vs prev_move is
+                    # the post-switch pessimism read.
+                    "V outcome R²: all / phase / after switch vs move; V vs one-step",
+                    [
+                        "player_v_outcome_r2_all",
+                        "player_v_outcome_r2_early",
+                        "player_v_outcome_r2_mid",
+                        "player_v_outcome_r2_late",
+                        "player_v_outcome_r2_prev_switch",
+                        "player_v_outcome_r2_prev_move",
+                        "player_v_onestep_r2",
+                    ],
+                    smooth=0.99,
+                ),
+                lp(
+                    # Signed bias V − G after a switch vs after a move.
+                    # Negative after switches = the pessimism a V-bootstrap
+                    # label would inherit (Step 3 caveat).
+                    "V outcome bias (V − G) after switch vs after move",
+                    [
+                        "player_v_outcome_bias_prev_switch",
+                        "player_v_outcome_bias_prev_move",
+                    ],
+                    smooth=0.99,
+                ),
+                lp(
+                    # Storage-level (chunks holding a voluntary switch) and
+                    # optimisation-level (loss share) support — the
+                    # acceptance measure for the Step-2 ramp and any row
+                    # weighting.
+                    "Q support: loss share by modality, chunk frac, edge frac",
+                    [
+                        "player_q_loss_share_move",
+                        "player_q_loss_share_forced",
+                        "player_q_loss_share_voluntary",
+                        "player_q_support_chunk_vol_switch_frac",
+                        "player_q_target_edge_frac",
+                    ],
+                ),
+                lp(
+                    "Q support: voluntary / forced switch rows per batch",
+                    [
+                        "player_q_support_vol_switch_rows",
+                        "player_q_support_forced_switch_rows",
+                    ],
+                ),
+            ],
+        ),
+        ws.Section(
             # 2026-08-19 reframing: a negative MEAN switch/move gap is the
             # expected sign under correct play (switching spends a turn),
             # so collapse detection lives in the tail — states where the

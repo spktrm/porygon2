@@ -228,6 +228,17 @@ class Trajectory:
     # learner's sampling path.
     reuse_count: ArrayLike = ()
 
+    # Completed-game side data (2026-08-23), shape (1,) per chunk — (1, B)
+    # batched. game_outcome: the game's terminal reward in CAT_VF_SUPPORT
+    # units on EVERY chunk of a completed game (NaN for a truncated game);
+    # game_length: decision rows in the game; game_step_offset: index of
+    # this chunk's row 0 within the game. Telemetry and the offline harness
+    # ONLY — never a target recursion (win_reward keeps that role) and not
+    # part of the chunk contract. () where the actor did not attach them.
+    game_outcome: ArrayLike = ()
+    game_length: ArrayLike = ()
+    game_step_offset: ArrayLike = ()
+
 
 @dataclass
 class Batch(Trajectory):

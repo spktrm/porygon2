@@ -97,6 +97,14 @@ def _trim_to_lattice(
     ]
 
 
+def _or_empty(x):
+    """Trajectory side fields default to () (an empty pytree, so tree.map
+    stacks it to ()) when the actor did not attach them — keep that
+    sentinel rather than an empty array so consumers can test with
+    isinstance(x, tuple), as they do for reuse_count."""
+    return () if isinstance(x, tuple) else x
+
+
 def stack_batch(
     batch: list[Trajectory],
     rng_key: jax.Array = None,
@@ -136,5 +144,8 @@ def stack_batch(
             if isinstance(stacked_trajectory.reuse_count, tuple)
             else stacked_trajectory.reuse_count
         ),
+        game_outcome=_or_empty(stacked_trajectory.game_outcome),
+        game_length=_or_empty(stacked_trajectory.game_length),
+        game_step_offset=_or_empty(stacked_trajectory.game_step_offset),
         rng_key=rng_key,
     )

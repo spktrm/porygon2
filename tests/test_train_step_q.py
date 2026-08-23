@@ -69,6 +69,11 @@ def test_train_step_player_q_smoke():
             ),
             player_history=actor_input.history,
             player_packed_history=actor_input.packed_history,
+            # Completed-game side fields (Step-1 telemetry): present so the
+            # critic_outcome_telemetry branch is traced inside the jit.
+            game_outcome=jnp.ones((1, B), dtype=jnp.float32),
+            game_length=jnp.full((1, B), T, dtype=jnp.int32),
+            game_step_offset=jnp.zeros((1, B), dtype=jnp.int32),
         )
 
         new_player_state, _, logs = train_step(
@@ -139,6 +144,24 @@ def test_train_step_player_q_smoke():
         "player_q_action_var_p90",
     ):
         assert key in logs, key
+        assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
+    # Step-1 panels: present (NaN allowed where this one-game batch has no
+    # rows in a slice), support counts finite.
+    for key in (
+        "player_q_label_var_outcome_move",
+        "player_q_label_var_onestep_move",
+        "player_mv_bin0_gap_realised",
+        "player_mv_pooled_gap_critic",
+        "player_v_outcome_r2_all",
+        "player_v_onestep_r2",
+        "player_q_loss_share_move",
+    ):
+        assert key in logs, key
+    for key in (
+        "player_q_support_vol_switch_rows",
+        "player_q_support_chunk_vol_switch_frac",
+        "player_q_target_edge_frac",
+    ):
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_q_macro_micro_gradient_norm"]) > 0.0
 

@@ -19,7 +19,6 @@ from rl.environment.utils import (
     split_rng,
 )
 from rl.model.builder_model import get_packed_team_string
-from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
@@ -233,9 +232,18 @@ class PlayerActor:
         player_traj = jax.device_get(player_traj)
         num_steps = len(player_traj)
         game_done = bool(np.asarray(player_traj[-1].env_output.done).item())
+        # Completed-game side data for every chunk (Trajectory docstring):
+        # the outcome is only knowable here, after the whole game ran.
+        game_outcome = (
+            float(np.asarray(player_traj[-1].env_output.win_reward) @ CAT_VF_SUPPORT)
+            if game_done
+            else float("nan")
+        )
         final_window = self._snapshot_window(player_actor_input)
 
-        def make_chunk(rows: list[PlayerTransition], window) -> Trajectory:
+        def make_chunk(
+            rows: list[PlayerTransition], window, start: int
+        ) -> Trajectory:
             if len(rows) < chunk_length:
                 # Same padding convention as the pre-chunk whole-game path:
                 # copies of the terminal step with done zeroed — cumsum-done
@@ -255,12 +263,16 @@ class PlayerActor:
                 player_transitions=jax.tree.map(lambda *xs: np.stack(xs), *rows),
                 player_packed_history=packed_window,
                 player_history=history_window,
+                game_outcome=np.array([game_outcome], dtype=np.float32),
+                game_length=np.array([num_steps], dtype=np.int32),
+                game_step_offset=np.array([start], dtype=np.int32),
             )
 
         return [
             make_chunk(
                 player_traj[start : end + 1],
                 window_snapshots.get(end, final_window),
+                start,
             )
             for start, end in chunk_spans(num_steps, chunk_length, game_done)
         ]

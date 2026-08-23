@@ -10,6 +10,7 @@ import jax.numpy as jnp
 
 from rl.environment.data import (
     ALLY_SWITCH_INDICES,
+    FLAT_MODALITY_MASK,
     CAT_VF_SUPPORT,
     NUM_PACKED_SET_FEATURES,
     RESERVE_ENTITY_INDICES,
@@ -20,7 +21,7 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import ActionEnum
+from rl.environment.protos.service_pb2 import ActionEnum, ModalityEnum
 from rl.online.config import Porygon2LearnerConfig
 
 T = TypeVar("T")
@@ -251,3 +252,155 @@ def calculate_r2(
     ss_total = jnp.sum((value_target - mean_target) ** 2, where=mask)
 
     return 1 - (ss_residual / (ss_total + eps))
+
+
+# Matched-V bins for the critic-offset panels: FIXED edges (static shapes,
+# no data-derived quantiles inside the jit). Equal-width over the
+# CAT_VF_SUPPORT range; the offline reference used V-quantiles, whose
+# outer bins map onto these outer two at this checkpoint age.
+MATCHED_V_EDGES = (-1.0, -0.6, -0.2, 0.2, 0.6, 1.0 + 1e-6)
+
+
+def masked_mean(x: jax.Array, mask: jax.Array) -> jax.Array:
+    """Mean over mask, NaN when the mask is empty (wandb skips NaN points;
+    a 0.0 would read as a measurement — the player_q_calibration_r2_fresh
+    lesson of 2026-08-23)."""
+    return jnp.where(mask.any(), jnp.mean(x, where=mask), jnp.nan)
+
+
+def masked_var(x: jax.Array, mask: jax.Array) -> jax.Array:
+    m = jnp.mean(x, where=mask)
+    return jnp.where(mask.sum() >= 2, jnp.mean(jnp.square(x - m), where=mask), jnp.nan)
+
+
+def masked_r2(pred: jax.Array, target: jax.Array, mask: jax.Array) -> jax.Array:
+    return jnp.where(mask.sum() >= 2, calculate_r2(pred, target, mask), jnp.nan)
+
+
+def critic_outcome_telemetry(
+    *,
+    game_outcome: jax.Array,
+    game_length: jax.Array,
+    game_step_offset: jax.Array,
+    v_target: jax.Array,
+    onestep_label: jax.Array,
+    retrace_g: jax.Array,
+    q_taken: jax.Array,
+    q_all: jax.Array,
+    flat_action_mask: jax.Array,
+    action_index: jax.Array,
+    q_mask: jax.Array,
+    value_mask: jax.Array,
+) -> dict[str, jax.Array]:
+    """Step-1 panels of docs/critic-weakness-analysis.md — the per-row
+    JOINT statistics wandb's pooled means could not give, computed from
+    the completed-game outcome carried on every chunk (Trajectory.
+    game_outcome). Shapes: game_* (1, B); v_target / onestep_label /
+    retrace_g / q_taken / q_mask / value_mask / action_index (T, B);
+    q_all / flat_action_mask (T, B, A). Every panel is NaN, not 0, when
+    its slice is empty in this batch.
+
+    - q_label_var_{outcome,onestep}_{move,forced,voluntary}: residual
+      variance of the two candidate Q labels around the target Q —
+      the offline 18.7x ratio, live.
+    - mv_bin{i}_*: matched-V table on real-choice rows (a move and a
+      switch both legal), binned by the target V head's own V(s):
+      realised outcome of voluntary switches vs moves, the critic's
+      mean-over-legal-cells gap in the same bin, and counts (per-batch
+      n is small; SE comes from n summed over a window, not per step).
+    - v_outcome_r2_{all,early,mid,late,prev_switch,prev_move}: the V
+      head against the realised outcome (offline reference 0.265),
+      split by game phase and by whether the PREVIOUS row's action was
+      a switch (row 0 of a chunk has no local predecessor: excluded).
+    - v_onestep_r2: V(s) against r + V(s') — how much of the one-step
+      label V already knows (offline corr 0.95).
+    - q_target_edge_frac: Retrace labels at the support edge (proxy for
+      clipping, the unclipped value is not returned).
+    - q_support_*: storage- and row-level voluntary-switch support.
+    """
+    f32 = jnp.float32
+    T = v_target.shape[0]
+    G = jnp.broadcast_to(game_outcome.astype(f32), v_target.shape)
+    valid_g = jnp.isfinite(G)
+    G = jnp.where(valid_g, G, 0.0)
+    v_target = v_target.astype(f32)
+    onestep_label = onestep_label.astype(f32)
+    q_taken = q_taken.astype(f32)
+    q_all = q_all.astype(f32)
+
+    switch_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH)
+    move_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE)
+    valid_switch = flat_action_mask & switch_cells
+    valid_move = flat_action_mask & move_cells
+    has_move = valid_move.any(axis=-1)
+    has_switch = valid_switch.any(axis=-1)
+    has_both = has_move & has_switch
+    taken_switch = jnp.take(switch_cells, action_index)
+    vol_mask = q_mask & taken_switch & has_move
+    forced_mask = q_mask & taken_switch & jnp.logical_not(has_move)
+    move_mask = q_mask & jnp.logical_not(taken_switch)
+
+    logs: dict[str, jax.Array] = {}
+    for name, m in (("move", move_mask), ("forced", forced_mask), ("voluntary", vol_mask)):
+        logs[f"player_q_label_var_outcome_{name}"] = masked_var(G - q_taken, m & valid_g)
+        logs[f"player_q_label_var_onestep_{name}"] = masked_var(onestep_label - q_taken, m)
+    logs["player_q_label_var_ratio_voluntary"] = (
+        logs["player_q_label_var_outcome_voluntary"]
+        / logs["player_q_label_var_onestep_voluntary"]
+    )
+
+    # Critic gap as the OFFLINE check defined it: mean over legal switch
+    # cells minus mean over legal move cells (not best-vs-best).
+    def mean_over(cells):
+        w = cells.astype(f32)
+        return (q_all * w).sum(-1) / jnp.maximum(w.sum(-1), 1.0)
+
+    critic_gap = mean_over(valid_switch) - mean_over(valid_move)
+    rows = q_mask & valid_g & has_both
+    for i, (lo, hi) in enumerate(zip(MATCHED_V_EDGES[:-1], MATCHED_V_EDGES[1:])):
+        b = rows & (v_target >= lo) & (v_target < hi)
+        bv = b & taken_switch
+        bm = b & jnp.logical_not(taken_switch)
+        g_vol = masked_mean(G, bv)
+        g_move = masked_mean(G, bm)
+        logs[f"player_mv_bin{i}_n_vol"] = bv.sum().astype(f32)
+        logs[f"player_mv_bin{i}_n_move"] = bm.sum().astype(f32)
+        logs[f"player_mv_bin{i}_g_vol"] = g_vol
+        logs[f"player_mv_bin{i}_g_move"] = g_move
+        logs[f"player_mv_bin{i}_gap_realised"] = g_vol - g_move
+        logs[f"player_mv_bin{i}_gap_critic"] = masked_mean(critic_gap, b)
+    logs["player_mv_pooled_gap_realised"] = masked_mean(G, rows & taken_switch) - masked_mean(
+        G, rows & jnp.logical_not(taken_switch)
+    )
+    logs["player_mv_pooled_gap_critic"] = masked_mean(critic_gap, rows)
+    logs["player_mv_v_at_vol_switch"] = masked_mean(v_target, rows & taken_switch)
+    logs["player_mv_v_at_move"] = masked_mean(v_target, rows & jnp.logical_not(taken_switch))
+
+    vm = value_mask & valid_g
+    t_idx = jnp.arange(T, dtype=f32)[:, None]
+    phase = (game_step_offset.astype(f32) + t_idx) / jnp.maximum(game_length.astype(f32), 1.0)
+    logs["player_v_outcome_r2_all"] = masked_r2(v_target, G, vm)
+    logs["player_v_outcome_r2_early"] = masked_r2(v_target, G, vm & (phase < 1 / 3))
+    logs["player_v_outcome_r2_mid"] = masked_r2(v_target, G, vm & (phase >= 1 / 3) & (phase < 2 / 3))
+    logs["player_v_outcome_r2_late"] = masked_r2(v_target, G, vm & (phase >= 2 / 3))
+    prev_switch = jnp.concatenate([jnp.zeros_like(taken_switch[:1]), taken_switch[:-1]], axis=0)
+    known_prev = (t_idx >= 1) & jnp.ones_like(taken_switch)
+    logs["player_v_outcome_r2_prev_switch"] = masked_r2(v_target, G, vm & known_prev & prev_switch)
+    logs["player_v_outcome_r2_prev_move"] = masked_r2(
+        v_target, G, vm & known_prev & jnp.logical_not(prev_switch)
+    )
+    logs["player_v_outcome_bias_prev_switch"] = masked_mean(
+        v_target - G, vm & known_prev & prev_switch
+    )
+    logs["player_v_outcome_bias_prev_move"] = masked_mean(
+        v_target - G, vm & known_prev & jnp.logical_not(prev_switch)
+    )
+    logs["player_v_onestep_r2"] = masked_r2(v_target, onestep_label, q_mask)
+
+    logs["player_q_target_edge_frac"] = masked_mean(
+        (jnp.abs(retrace_g.astype(f32)) >= 0.999).astype(f32), q_mask
+    )
+    logs["player_q_support_chunk_vol_switch_frac"] = vol_mask.any(axis=0).astype(f32).mean()
+    logs["player_q_support_vol_switch_rows"] = vol_mask.sum().astype(f32)
+    logs["player_q_support_forced_switch_rows"] = forced_mask.sum().astype(f32)
+    return logs

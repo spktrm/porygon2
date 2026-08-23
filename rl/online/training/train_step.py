@@ -44,6 +44,7 @@ from rl.online.training.targets import (
     rnad_transformed_q,
 )
 from rl.online.training.telemetry import (
+    critic_outcome_telemetry,
     calculate_r2,
     collect_batch_telemetry_data,
     promote_map,
@@ -323,6 +324,33 @@ def train_step(
     training_logs["player_q_pivotal_frac"] = average(
         (best_switch > best_move).astype(jnp.float32), q_mask & has_both
     )
+    if not isinstance(batch.game_outcome, tuple):
+        # Step-1 panels (docs/critic-weakness-analysis.md): the one-step
+        # label is the same bootstrap compute_q_targets would use at
+        # lambda 0 but on the TARGET V HEAD — r_t + gamma * V_boot(s_{t+1}),
+        # V_boot = r on the done row — i.e. the Step-3 candidate label,
+        # measured here before anything trains on it.
+        _dones = player_transitions.env_output.done.astype(bool)
+        _r = (player_transitions.env_output.win_reward @ cat_vf_support).astype(jnp.float32)
+        _v_tgt = player_target_pred.value_head.expectation.astype(jnp.float32)
+        _v_boot = jnp.where(_dones, _r, _v_tgt)
+        _v_next = jnp.concatenate([_v_boot[1:], _v_boot[-1:]], axis=0)
+        training_logs.update(
+            critic_outcome_telemetry(
+                game_outcome=batch.game_outcome,
+                game_length=batch.game_length,
+                game_step_offset=batch.game_step_offset,
+                v_target=_v_tgt,
+                onestep_label=_r + config.player_gamma * _v_next,
+                retrace_g=q_retrace_g,
+                q_taken=q_taken_target,
+                q_all=q_all_target,
+                flat_action_mask=flat_action_mask,
+                action_index=player_actor_action_head.action_index,
+                q_mask=q_mask,
+                value_mask=value_mask,
+            )
+        )
     pi_target = (
         jnp.exp(player_target_pred.action_head.log_policy.astype(jnp.float32))
         * flat_action_mask
@@ -395,15 +423,18 @@ def train_step(
         replay_cols = ~fresh_cols
 
         def q_calibration_r2(cols):
+            # NaN (not 0.0) on an empty slice: under replay ratio 8 a
+            # batch rarely holds a fresh chunk, and the 0.0 read as a
+            # flat-zero panel for a whole run (2026-08-23).
             m = q_mask & cols[None, :]
             return jnp.where(
-                m.any(),
+                m.sum() >= 2,
                 calculate_r2(
                     value_prediction=q_taken_target,
                     value_target=q_retrace_g,
                     mask=m,
                 ),
-                0.0,
+                jnp.nan,
             )
 
         training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(
@@ -562,12 +593,23 @@ def train_step(
         learner_q_private_logits_taken = q_taken(
             learner_player_pred.private_q_logits
         )
-        loss_q = average(
-            optax.softmax_cross_entropy(
-                logits=learner_q_logits_taken, labels=q_target_probs
-            ),
-            q_mask,
+        q_ce_rows = optax.softmax_cross_entropy(
+            logits=learner_q_logits_taken, labels=q_target_probs
         )
+        loss_q = average(q_ce_rows, q_mask)
+        # Optimisation-level support (Step 1): the share of the Q loss each
+        # modality actually contributes — the acceptance measure for any
+        # row weighting, where sampled-chunk counts are only a replay
+        # diagnostic.
+        _q_ce_total = jnp.maximum(jnp.sum(q_ce_rows, where=q_mask), 1e-8)
+        q_loss_share = {
+            f"player_q_loss_share_{name}": jnp.sum(q_ce_rows, where=m) / _q_ce_total
+            for name, m in (
+                ("move", q_move_mask),
+                ("forced", q_forced_switch_mask),
+                ("voluntary", q_voluntary_switch_mask),
+            )
+        }
         loss_q_private = average(
             optax.softmax_cross_entropy(
                 logits=learner_q_private_logits_taken, labels=q_target_probs
@@ -828,6 +870,7 @@ def train_step(
             player_q_r2_move=q_context_r2(q_move_mask),
             player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
             player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
+            **q_loss_share,
         )
         # pg + (v + q) + kl + ent.
         loss = (
