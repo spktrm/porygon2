@@ -383,18 +383,26 @@ def critic_outcome_telemetry(
     logs["player_v_outcome_r2_early"] = masked_r2(v_target, G, vm & (phase < 1 / 3))
     logs["player_v_outcome_r2_mid"] = masked_r2(v_target, G, vm & (phase >= 1 / 3) & (phase < 2 / 3))
     logs["player_v_outcome_r2_late"] = masked_r2(v_target, G, vm & (phase >= 2 / 3))
-    prev_switch = jnp.concatenate([jnp.zeros_like(taken_switch[:1]), taken_switch[:-1]], axis=0)
+    # Previous-row action, split forced / voluntary: after a FORCED switch
+    # (a mon just fainted) V read +0.23 optimistic on the collapsed
+    # baseline, while the offline post-VOLUNTARY-switch read was
+    # pessimistic — two populations, two panels. Row 0 has no local
+    # predecessor and is excluded.
+    def shift(x):
+        return jnp.concatenate([jnp.zeros_like(x[:1]), x[:-1]], axis=0)
+
+    prev_switch = shift(taken_switch)
+    prev_forced = shift(taken_switch & jnp.logical_not(has_move))
+    prev_voluntary = shift(taken_switch & has_move)
     known_prev = (t_idx >= 1) & jnp.ones_like(taken_switch)
-    logs["player_v_outcome_r2_prev_switch"] = masked_r2(v_target, G, vm & known_prev & prev_switch)
-    logs["player_v_outcome_r2_prev_move"] = masked_r2(
-        v_target, G, vm & known_prev & jnp.logical_not(prev_switch)
-    )
-    logs["player_v_outcome_bias_prev_switch"] = masked_mean(
-        v_target - G, vm & known_prev & prev_switch
-    )
-    logs["player_v_outcome_bias_prev_move"] = masked_mean(
-        v_target - G, vm & known_prev & jnp.logical_not(prev_switch)
-    )
+    for name, m in (
+        ("prev_switch", prev_switch),
+        ("prev_forced", prev_forced),
+        ("prev_voluntary", prev_voluntary),
+        ("prev_move", jnp.logical_not(prev_switch)),
+    ):
+        logs[f"player_v_outcome_r2_{name}"] = masked_r2(v_target, G, vm & known_prev & m)
+        logs[f"player_v_outcome_bias_{name}"] = masked_mean(v_target - G, vm & known_prev & m)
     logs["player_v_onestep_r2"] = masked_r2(v_target, onestep_label, q_mask)
 
     logs["player_q_target_edge_frac"] = masked_mean(

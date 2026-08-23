@@ -476,7 +476,8 @@ def rl_sections():
                     # label would inherit (Step 3 caveat).
                     "V outcome bias (V − G) after switch vs after move",
                     [
-                        "player_v_outcome_bias_prev_switch",
+                        "player_v_outcome_bias_prev_voluntary",
+                        "player_v_outcome_bias_prev_forced",
                         "player_v_outcome_bias_prev_move",
                     ],
                     smooth=0.99,
