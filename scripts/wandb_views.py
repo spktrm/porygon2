@@ -502,6 +502,20 @@ def rl_sections():
                         "player_q_support_forced_switch_rows",
                     ],
                 ),
+                lp(
+                    # Step 2: the NeuRD warm-up ramp and what it must hold.
+                    # reg_params is frozen at launch while the coef < full,
+                    # so rnad_kl_reg = drift from the launch policy
+                    # (fallback trigger 0.05); voluntary-switch target
+                    # fraction must stay >= 0.2 through the ramp.
+                    "Step 2: NeuRD ramp, drift from launch, switch support",
+                    [
+                        "player_neurd_coef_effective",
+                        "player_rnad_kl_reg",
+                        "player_q_voluntary_switch_target_frac",
+                        "player_reg_ema_rate_effective",
+                    ],
+                ),
             ],
         ),
         ws.Section(

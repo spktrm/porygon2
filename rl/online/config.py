@@ -214,7 +214,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per-step fresh-vs-replayed value-error gap below stays: it is
     # computed from tensors train_step already has.
 
-
     # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
     # is already provided by the SPO trust region, the behaviour-KL penalty
     # and the replay-KL controller (which throttles reuse if actor-KL
@@ -388,6 +387,28 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # the advantage itself (player_rnad_eta), so this coef scales both
     # the improvement and the regularisation together, as in rnad.py.
     player_neurd_coef: float = 0.2
+    # Step-2 warm-up (docs/critic-weakness-analysis.md, 2026-08-23): NeuRD's
+    # coefficient ramps 0 -> player_neurd_coef linearly over the lineage's
+    # first N learner steps, and player_reg_ema_rate is 0 (reference
+    # policy frozen at the launch snapshot) until the ramp completes, so
+    # player_rnad_kl_reg reads KL(pi || pi_launch) = policy drift from
+    # launch. The Q routes are zero-initialised and NeuRD consumed an
+    # immature Q from step 0, reshaping the behaviour distribution before
+    # the critic had any action coverage — the support loss began at
+    # launch, not at 13k (run 3sc7wlgq). 11k = pre-registered first
+    # schedule only (the Q R2 plateau age on that run); acceptance is the
+    # panel set in the plan doc plus a >=5k-step hold at full coefficient.
+    # 0 disables. Traced from step_count inside train_step, so a resumed
+    # lineage never re-ramps.
+    player_neurd_warmup_steps: int = 11_000
+    # Pre-decided fallback for the ramp (OFF by default): while warming
+    # up, actors sample from the LAUNCH params container instead of the
+    # live one, since neurd_coef = 0 does not freeze behaviour (critic
+    # gradients reach the trunk through the adapters). mu is logged and
+    # the Retrace / NeuRD corrections already handle off-policy rows.
+    # Trigger to flip it: player_q_voluntary_switch_target_frac < 0.2 or
+    # player_rnad_kl_reg > 0.05 before the ramp ends.
+    player_warmup_frozen_behaviour: bool = False
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean

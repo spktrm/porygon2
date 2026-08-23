@@ -33,7 +33,9 @@ def test_train_step_player_q_smoke():
     from rl.online.training import train_step
 
     with jax.default_device(jax.devices("cpu")[0]):
-        config = Porygon2LearnerConfig()
+        # Warm-up off: at step_count 0 the Step-2 ramp would zero NeuRD and
+        # the policy-gradient assertions below would read 0 by design.
+        config = Porygon2LearnerConfig(player_neurd_warmup_steps=0)
         player_net = get_player_model(
             get_player_model_config(config.generation, train=True)
         )

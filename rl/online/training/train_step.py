@@ -31,6 +31,7 @@ from rl.online.artifact import (
 )
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
+    warmup_scale,
     backward_kl_loss,
     forward_kl_loss,
     mse_value_loss,
@@ -135,6 +136,18 @@ def train_step(
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
+    # Step-2 warm-up (docs/critic-weakness-analysis.md): NeuRD ramps in
+    # over the lineage's first player_neurd_warmup_steps so the critic
+    # gains coverage under the broad launch behaviour distribution before
+    # it steers that distribution; reg_params stays the launch snapshot
+    # meanwhile. Both are functions of the traced step_count — no static
+    # config variation, no second executable.
+    neurd_scale = warmup_scale(player_state.step_count, config.player_neurd_warmup_steps)
+    reg_ema_rate = jnp.where(
+        neurd_scale >= 1.0, jnp.float32(config.player_reg_ema_rate), jnp.float32(0.0)
+    )
+    training_logs["player_neurd_coef_effective"] = config.player_neurd_coef * neurd_scale
+    training_logs["player_reg_ema_rate_effective"] = reg_ema_rate
 
     # Fraction of steps where the IMPACT clipped-target correction is
     # saturated at its cap — a second staleness signal alongside the actor
@@ -876,7 +889,8 @@ def train_step(
         loss = (
             # pg: all-action NeuRD is the ONLY term that moves the action
             # logits toward return — the two below only regularise.
-            config.player_neurd_coef * loss_neurd
+            # neurd_scale: the Step-2 warm-up ramp (1 once warmed up / off).
+            config.player_neurd_coef * neurd_scale * loss_neurd
             # v + q: the critic stack. One coefficient for both Q rungs —
             # same estimator family on the same labels, mirroring the
             # value-ladder coef.
@@ -953,10 +967,12 @@ def train_step(
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
+        # Frozen at the launch snapshot while the NeuRD warm-up ramps
+        # (Step 2): the reference-KL panel then reads drift from launch.
         reg_params=optax.incremental_update(
             player_state.target_params,
             player_state.reg_params,
-            config.player_reg_ema_rate,
+            reg_ema_rate,
         ),
         target_params=optax.incremental_update(
             player_state.params,

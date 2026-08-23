@@ -282,6 +282,10 @@ class Learner:
         continuously and independently."""
         for run_state in (self.run_state,):
             start_workers(run_state, self.config)
+        # Launch snapshot for the Step-2 frozen-behaviour fallback
+        # (config.player_warmup_frozen_behaviour): the container actors
+        # sample from while NeuRD warms up, if the flag is on.
+        self._launch_container = self.league.get_live(MAIN_KEY)
 
         try:
             for _ in range(self.config.num_steps):
@@ -346,6 +350,20 @@ class Learner:
                 # clean Ctrl-C into a crash. Resets keep strict=True.
                 stop_workers(run_state, strict=False)
             tqdm.write("Training Finished.")
+
+    def warmup_behaviour_container(self):
+        """The params container actors should play while the NeuRD
+        warm-up ramps, or None for the live one. Non-None only under
+        config.player_warmup_frozen_behaviour and before the ramp ends
+        (host_step < player_neurd_warmup_steps)."""
+        if not self.config.player_warmup_frozen_behaviour:
+            return None
+        launch = getattr(self, "_launch_container", None)
+        if launch is None:
+            return None
+        if self.run_state.host_step >= self.config.player_neurd_warmup_steps:
+            return None
+        return launch
 
     def register_actor_threads(
         self, threads: list[threading.Thread]

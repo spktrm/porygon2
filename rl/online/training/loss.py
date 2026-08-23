@@ -80,3 +80,19 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
+
+
+def warmup_scale(step_count, warmup_steps: int):
+    """NeuRD warm-up ramp (Step 2, docs/critic-weakness-analysis.md):
+    0 -> 1 linearly over the lineage's first `warmup_steps` learner steps,
+    1 thereafter; warmup_steps <= 0 disables it. Computed from the train
+    state's own step_count INSIDE the jit (a traced leaf of fixed shape),
+    so there is no per-step static config and no extra executable —
+    the failure class that retired RuntimeScalars on 2026-08-21. Resumed
+    lineages carry their step_count, so a warm-up never re-fires on a
+    restart; only a fresh launch ramps."""
+    if warmup_steps <= 0:
+        return jnp.ones((), dtype=jnp.float32)
+    return jnp.clip(
+        step_count.astype(jnp.float32) / jnp.float32(warmup_steps), 0.0, 1.0
+    )
