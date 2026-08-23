@@ -497,6 +497,14 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # CE = H(label) + KL, so loss_q can never sit below the
+                    # label entropy; the gap is the critic's actual fit
+                    # (Step-6 overfit probe reached floor+0.002 on a fixed
+                    # batch, i.e. the head CAN fit the taken cells).
+                    "Q CE vs its label-entropy floor",
+                    ["player_loss_q", "player_q_label_entropy"],
+                ),
+                lp(
                     "Q support: voluntary / forced switch rows per batch",
                     [
                         "player_q_support_vol_switch_rows",

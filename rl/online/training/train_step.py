@@ -623,6 +623,13 @@ def train_step(
                 ("voluntary", q_voluntary_switch_mask),
             )
         }
+        # Label-entropy floor: CE = H(label) + KL(label || pred), so the
+        # Q CE can never fall below this and "fit" is loss_q minus it
+        # (Step 6 overfit probe judges against this number).
+        q_loss_share["player_q_label_entropy"] = average(
+            -jnp.sum(q_target_probs * jnp.log(q_target_probs + 1e-8), axis=-1),
+            q_mask,
+        )
         loss_q_private = average(
             optax.softmax_cross_entropy(
                 logits=learner_q_private_logits_taken, labels=q_target_probs
