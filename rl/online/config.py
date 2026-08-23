@@ -407,7 +407,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # the Retrace / NeuRD corrections already handle off-policy rows.
     # Trigger to flip it: player_q_voluntary_switch_target_frac < 0.2 or
     # player_ref_kl > 0.05 before the ramp ends.
-    player_warmup_frozen_behaviour: bool = True
+    player_warmup_frozen_behaviour: bool = False
     # NeuRD logit-gap clip beta: no outward push on a legal cell whose
     # log-policy sits more than beta from the row's legal-mean. Bounds
     # the logit spread NeuRD can build (advantages are not zero-mean
