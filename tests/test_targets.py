@@ -272,14 +272,14 @@ class TestRNaDTransform:
         """The property the transform is bought for: with Q flat, a cell
         at pi ~ 1e-4 against a reference of 0.25 carries +eta*log(2500)
         ~ +1.56 of advantage at eta 0.2 — no pi prefactor anywhere."""
-        from rl.online.training.targets import rnad_transformed_q
+        from rl.online.training.targets import ref_penalised_q
 
         legal = jnp.ones((1, 4), dtype=bool)
         pi = jnp.asarray([[0.9999 - 2e-4, 1e-4, 1e-4, 1e-4]])
         pi = pi / pi.sum()
         log_ref = jnp.log(jnp.full((1, 4), 0.25))
         q = jnp.zeros((1, 4))
-        q_reg = rnad_transformed_q(q, jnp.log(pi), log_ref, legal, eta=0.2)
+        q_reg = ref_penalised_q(q, jnp.log(pi), log_ref, legal, eta=0.2)
         adv = q_reg - (pi * q_reg).sum(axis=-1, keepdims=True)
         assert float(adv[0, 1]) > 1.5
         # And the dominant cell's value is marked DOWN by
@@ -288,7 +288,7 @@ class TestRNaDTransform:
         assert float(q_reg[0, 0]) < -0.25
         # eta 0 is the identity.
         np.testing.assert_allclose(
-            np.asarray(rnad_transformed_q(q, jnp.log(pi), log_ref, legal, eta=0.0)),
+            np.asarray(ref_penalised_q(q, jnp.log(pi), log_ref, legal, eta=0.0)),
             0.0,
             atol=1e-7,
         )

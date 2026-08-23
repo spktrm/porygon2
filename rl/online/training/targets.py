@@ -166,7 +166,7 @@ def reference_kl(
     return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
 
 
-def rnad_transformed_q(
+def ref_penalised_q(
     q_all: jax.Array,
     log_policy: jax.Array,
     reg_log_policy: jax.Array,

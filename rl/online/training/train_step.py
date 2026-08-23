@@ -43,7 +43,7 @@ from rl.online.training.targets import (
     compute_q_onestep_targets,
     reference_kl,
     residual_q,
-    rnad_transformed_q,
+    ref_penalised_q,
 )
 from rl.online.training.telemetry import (
     critic_outcome_telemetry,
@@ -202,12 +202,12 @@ def train_step(
     q_taken_target = jnp.take_along_axis(
         q_all_target, player_actor_action_head.action_index[..., None], axis=-1
     ).squeeze(-1)
-    # KL(pi_target || pi_reg) per state — the expected per-step penalty
-    # the Q critic's bootstrap carries. Drifts up as the policy moves
+    # KL(pi_target || pi_reg) per state — the expected per-step reference
+    # penalty the policy pays. Drifts up as the policy moves
     # away from the lagged reference and back down as the EMA catches up;
     # a level that keeps climbing is a policy running away from its own
     # past faster than the reference follows.
-    training_logs["player_rnad_kl_reg"] = average(
+    training_logs["player_ref_kl"] = average(
         reference_kl(
             player_target_pred.action_head.log_policy, reg_log_policy, flat_action_mask
         ),
@@ -651,10 +651,10 @@ def train_step(
             pi_learner.sum(axis=-1, keepdims=True), 1e-8
         )
         # R-NaD reward transform (2026-08-22), applied per legal cell:
-        # q'(a) = Q_all(a) - eta*(log pi(a) - log pi_reg(a)). The critic
-        # carries the transformed game from the next step on (its
-        # bootstrap is the regularised v_exp), so adding the own-step
-        # penalty here makes adv the full regularised advantage. The
+        # q'(a) = Q_all(a) - eta*(log pi(a) - log pi_reg(a)). Since Step 3
+        # the critic learns the PLAIN game (one-step label, no transformed
+        # bootstrap), so this own-step term is the whole reference
+        # penalty — a policy-objective term, not a label transform. The
         # -eta*log pi(a) term is what refills a starved cell: it grows
         # without bound as pi(a) -> 0, with no pi prefactor, and it
         # vanishes only when pi == pi_reg — a moving reference, so the
@@ -662,18 +662,18 @@ def train_step(
         # The policy reads the target critic's Q_all clipped to the reward
         # support (the Huber loss saw it unclipped).
         q_for_policy = jnp.clip(q_all_target, -1.0, 1.0)
-        q_reg = rnad_transformed_q(
+        q_reg = ref_penalised_q(
             q_for_policy,
             learner_log_policy,
             reg_log_policy,
             flat_action_mask,
-            config.player_rnad_eta,
+            config.player_ref_eta,
         )
         v_cf = jax.lax.stop_gradient((pi_learner * q_reg).sum(axis=-1))
         neurd_adv = jax.lax.stop_gradient(
             jnp.where(flat_action_mask, q_reg - v_cf[..., None], 0.0)
         )
-        rnad_penalty = jax.lax.stop_gradient(
+        ref_penalty = jax.lax.stop_gradient(
             jnp.where(flat_action_mask, q_for_policy - q_reg, 0.0)
         )
         # NeuRD prefactor (2026-08-21): the advantage lands on the
@@ -766,13 +766,13 @@ def train_step(
         # the reference there). penalty_switch climbing while
         # switch_ratio falls is the transform doing its job; both flat
         # at zero is a reference that has caught up (KL 0).
-        rnad_penalty_switch = average(-rnad_penalty, neurd_switch_cells)
-        rnad_penalty_move = average(-rnad_penalty, neurd_move_cells)
+        ref_penalty_switch = average(-ref_penalty, neurd_switch_cells)
+        ref_penalty_move = average(-ref_penalty, neurd_move_cells)
 
         neurd_logs = dict(
             player_loss_neurd=loss_neurd,
-            player_rnad_penalty_switch=rnad_penalty_switch,
-            player_rnad_penalty_move=rnad_penalty_move,
+            player_ref_penalty_switch=ref_penalty_switch,
+            player_ref_penalty_move=ref_penalty_move,
             # Per-cell |d loss_neurd / d logit| on legal switch
             # cells vs legal non-switch cells of the same
             # real-choice rows, and the two factors it is the

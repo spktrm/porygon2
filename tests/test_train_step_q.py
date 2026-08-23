@@ -90,9 +90,9 @@ def test_train_step_player_q_smoke():
         "player_q_private_r2",
         "player_q_saturation_frac",
         "player_q_mse",
-        "player_rnad_kl_reg",
-        "player_rnad_penalty_switch",
-        "player_rnad_penalty_move",
+        "player_ref_kl",
+        "player_ref_penalty_switch",
+        "player_ref_penalty_move",
         "player_q_switch_move_gap",
         # Gap discriminators: per-context calibration + data coverage +
         # head-independent conditional Retrace means.

@@ -130,7 +130,7 @@ def arm_config(arm: str):
             base,
             player_neurd_warmup_steps=0,
             player_neurd_coef=0.0,
-            player_rnad_eta=0.0,
+            player_ref_eta=0.0,
             player_ema_update_rate=0.0,
             player_reg_ema_rate=0.0,
         )

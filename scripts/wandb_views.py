@@ -192,7 +192,7 @@ def rl_sections():
                     # critic carries the regularised game and V the
                     # plain one, so this is calibration debt PLUS the
                     # accumulated regularisation penalty — read with
-                    # player_rnad_kl_reg.
+                    # player_ref_kl.
                     "Q-V state-value agreement",
                     ["player_q_ev_gap"],
                 ),
@@ -203,7 +203,7 @@ def rl_sections():
                     # is the transform restoring the modality; both ~0 =
                     # the reference has caught up with the policy.
                     "R-NaD penalty by modality",
-                    ["player_rnad_penalty_switch", "player_rnad_penalty_move"],
+                    ["player_ref_penalty_switch", "player_ref_penalty_move"],
                 ),
                 lp(
                     # KL(pi_target || pi_reg) per state: the expected
@@ -212,7 +212,7 @@ def rl_sections():
                     # reference, falls as the EMA catches up; a level
                     # that only climbs is a runaway.
                     "R-NaD reference KL",
-                    ["player_rnad_kl_reg"],
+                    ["player_ref_kl"],
                 ),
                 lp(
                     # Gap discriminator 1/3 — calibration by context.
@@ -514,13 +514,13 @@ def rl_sections():
                 lp(
                     # Step 2: the NeuRD warm-up ramp and what it must hold.
                     # reg_params is frozen at launch while the coef < full,
-                    # so rnad_kl_reg = drift from the launch policy
+                    # so ref_kl = drift from the launch policy
                     # (fallback trigger 0.05); voluntary-switch target
                     # fraction must stay >= 0.2 through the ramp.
                     "Step 2: NeuRD ramp, drift from launch, switch support",
                     [
                         "player_neurd_coef_effective",
-                        "player_rnad_kl_reg",
+                        "player_ref_kl",
                         "player_q_voluntary_switch_target_frac",
                         "player_reg_ema_rate_effective",
                     ],
