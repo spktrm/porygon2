@@ -39,13 +39,8 @@ from rl.environment.interfaces import PlayerActorInput  # noqa: E402
 from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.heads import HeadParams  # noqa: E402
 from rl.model.player_model import get_player_model  # noqa: E402
-from rl.offline.harness import (
-    dump,
-    flatten,
-    load,
-    load_params,  # noqa: E402
-    play_games,
-)
+from rl.offline.harness import load_params  # noqa: E402
+from rl.offline.harness import dump, flatten, load, play_games
 from rl.online.artifact import merge_params  # noqa: E402
 from rl.online.training.batching import stack_batch  # noqa: E402
 

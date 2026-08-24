@@ -26,6 +26,7 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     HeadParams,
     MacroMicroHead,
+    RegressionValueLogitHead,
     SlotConditioning,
     calculate_hierarchical_prior,
     compose_action_grid,
@@ -58,6 +59,7 @@ class Porygon2PlayerModel(nn.Module):
         self.macro_micro_head = MacroMicroHead(self.cfg.macro_micro)
         self.policy_adapter = ActionAdapter(self.cfg.policy_adapter)
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        self.reg_v_head = RegressionValueLogitHead(self.cfg.reg_v_head)
         # Counterfactual value ladder (2026-08-16): all/private/public are
         # independent estimators per information route (separate query
         # inits and residual gates in the trunk; shared read module). The
@@ -468,6 +470,9 @@ class Porygon2PlayerModel(nn.Module):
             outputs = outputs.replace(
                 private_value_logits=self.v_head(private_value_embeddings).logits,
                 public_value_logits=self.public_v_head(public_value_embeddings).logits,
+                # Scalar reg-stream value on the privileged rung's
+                # embedding (see interfaces.PlayerActorOutput.reg_value).
+                reg_value=self.reg_v_head(value_embeddings).logits,
             )
             # Two-rung all-action residual readout over the flat action
             # grid — (T, N*N) scalar raw advantages per rung. q_adv is

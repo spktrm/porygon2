@@ -35,6 +35,7 @@ from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     compute_q_onestep_targets,
+    compute_reg_returns,
     ref_penalised_q,
     reference_kl,
     residual_q,
@@ -182,10 +183,24 @@ def train_step(
                 "plasticity_value_err_reuse_gap": fresh_err - replay_err,
             }
         )
-    player_targets = promote_map(player_targets, float_dtype)
-
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
+
+    # R-NaD reg-value stream (2026-08-24): the reward is the EXPECTED
+    # penalty per state, -eta*KL(pi_target || pi_reg) (rnad.py's
+    # eta_reg_entropy), propagated by scalar v-trace into reg_returns for
+    # the scalar reg head. Future penalties then reach every cell's Q
+    # through the V_win + V_reg bootstrap below; the IMMEDIATE per-cell
+    # penalty stays analytic in ref_penalised_q, as in rnad.py.
+    reg_v_target = player_target_pred.reg_value.astype(jnp.float32)
+    reg_reward = -config.player_ref_eta * reference_kl(
+        player_target_pred.action_head.log_policy, reg_log_policy, flat_action_mask
+    )
+    reg_returns = compute_reg_returns(
+        batch, reg_v_target, reg_reward, target_actor_ratio, config
+    )
+    player_targets = player_targets.replace(reg_returns=reg_returns)
+    player_targets = promote_map(player_targets, float_dtype)
 
     # Two-rung residual Q critic (Step 3, docs/critic-weakness-analysis.md,
     # 2026-08-23): Q_all = sg(V_all_target) + A_all centred under the
@@ -196,10 +211,17 @@ def train_step(
     # policy reads the target net's Q_all as stop-gradient scalars.
     target_log_policy = player_target_pred.action_head.log_policy
     v_all_target = player_target_pred.value_head.expectation.astype(jnp.float32)
+    # Regularised-game total value: the Q label bootstraps on it and the
+    # residual bases carry it, so Q(s, a) = V_win + V_reg + A prices the
+    # FUTURE reference penalties per cell (the immediate one is analytic
+    # in the NeuRD advantage). The label reward stays the plain win
+    # reward: the taken action's own immediate penalty is deliberately
+    # NOT in the label — it would double-count the analytic term.
+    v_total_target = v_all_target + reg_v_target
     q_all_target = residual_q(
-        player_target_pred.q_adv, v_all_target, target_log_policy, flat_action_mask
+        player_target_pred.q_adv, v_total_target, target_log_policy, flat_action_mask
     )
-    q_label = compute_q_onestep_targets(batch, v_all_target, config)
+    q_label = compute_q_onestep_targets(batch, v_total_target, config)
     q_taken_target = jnp.take_along_axis(
         q_all_target, player_actor_action_head.action_index[..., None], axis=-1
     ).squeeze(-1)
@@ -227,7 +249,10 @@ def train_step(
     ) @ cat_vf_support.astype(jnp.float32)
     q_private_all_target = residual_q(
         player_target_pred.private_q_adv,
-        v_private_target,
+        # Same reg-value bootstrap as the privileged rung: the reg stream
+        # is a single (privileged) scalar shared by both bases, so the
+        # rungs still differ only by their win-value information set.
+        v_private_target + reg_v_target,
         target_log_policy,
         flat_action_mask,
     )
@@ -552,6 +577,13 @@ def train_step(
             ),
             value_mask,
         )
+        # Scalar MSE on the reg-value stream's v-trace returns (f32 both
+        # sides; the head casts its own output).
+        loss_v_reg = mse_value_loss(
+            pred=learner_player_pred.reg_value,
+            target=player_targets.reg_returns,
+            valid=value_mask,
+        )
         f32_support = cat_vf_support.astype(jnp.float32)
         private_expectation = jax.nn.softmax(private_logits, axis=-1) @ f32_support
         public_expectation = jax.nn.softmax(public_logits, axis=-1) @ f32_support
@@ -664,7 +696,12 @@ def train_step(
         # fixed point is the regularised Nash, not a uniform prior.
         # The policy reads the target critic's Q_all clipped to the reward
         # support (the Huber loss saw it unclipped).
-        q_for_policy = jnp.clip(q_all_target, -1.0, 1.0)
+        # +-2, not the +-1 reward support (2026-08-24): Q now carries
+        # V_reg's future-penalty stream on top of the win value, and a
+        # state whose whole row clips flat would hand NeuRD zeros.
+        # Centring removes the common shift; the clip only guards
+        # saturation.
+        q_for_policy = jnp.clip(q_all_target, -2.0, 2.0)
         q_reg = ref_penalised_q(
             q_for_policy,
             learner_log_policy,
@@ -840,6 +877,14 @@ def train_step(
                 reference_kl(learner_log_policy, reg_log_policy, flat_action_mask),
                 policy_mask,
             ),
+            # Reg-value stream (2026-08-24): the propagated future-penalty
+            # value, its per-step reward, and the head's MSE. reg_value
+            # trending with -eta*KL x remaining-length and reward_mean
+            # tracking -eta*player_ref_kl are the "wired correctly"
+            # checks.
+            player_loss_v_reg=loss_v_reg,
+            player_reg_value_mean=average(reg_v_target, value_mask),
+            player_reg_reward_mean=average(reg_reward, policy_mask),
         )
 
         # Calibration by context, graded on Q_private (the contexts
@@ -890,6 +935,7 @@ def train_step(
             + (
                 config.player_value_head_loss_coef * loss_v_win
                 + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
+                + config.player_reg_value_coef * loss_v_reg
                 + config.player_q_coef * (loss_q + loss_q_private)
             )
             # kl: trust region against the behaviour policy.

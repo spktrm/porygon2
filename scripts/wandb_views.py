@@ -565,6 +565,19 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # R-NaD reg-value stream (2026-08-24): V_reg = the
+                    # propagated future -eta*KL(pi||pi_reg); reward_mean
+                    # should track -eta*player_ref_kl, and value_mean
+                    # ~ reward x remaining game length. Q labels/bases
+                    # bootstrap on V_win + V_reg.
+                    "Reg-value stream: V_reg, reward, head MSE",
+                    [
+                        "player_reg_value_mean",
+                        "player_reg_reward_mean",
+                        "player_loss_v_reg",
+                    ],
+                ),
+                lp(
                     # Step 2: the NeuRD warm-up ramp and what it must hold.
                     # reg_params is frozen at launch while the coef < full,
                     # so ref_kl = drift from the launch policy

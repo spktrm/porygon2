@@ -536,7 +536,9 @@ class RegressionValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array):
-        x = MLP(**self.cfg.mlp.to_dict())(x)
+        # f32 out: scalar regression targets (reg value, builder ev /
+        # conditional entropy) are all f32-MSE consumers.
+        x = MLP(**self.cfg.mlp.to_dict())(x).astype(jnp.float32)
         if getattr(self.cfg, "output_activation", None) is not None:
             x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))

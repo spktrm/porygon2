@@ -433,10 +433,25 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # refill a starved modality. eta 0.2 = DeepNash; reward support is
     # +-1 here as in Stratego. 0 disables (plain NeuRD).
     player_ref_eta: float = 0.2
-    # 1e-4: ~10k-step reference lag, the rnad.py delta_m = 20k's nearest
-    # continuous equivalent given every lineage's collapse window is
-    # ~13k; the target EMA it tracks is 1e-3.
-    player_reg_ema_rate: float = 1e-4
+    # 5e-5 (2026-08-24, from 1e-4): ~20k-step reference lag = rnad.py's
+    # delta_m = 20000 as a single continuous EMA. Deliberate deviation
+    # from rnad.py's prev/prev_ snapshot pair + alpha crossfade (the user
+    # declined a 4th param set); the snap schedule hard-resets the
+    # log(pi/pi_reg) gap at boundaries and the EMA does not, so if the
+    # NeuRD gradient spikes of run pgaijs6l (~56k+: 22% of steps at the
+    # clip, p99 norm 1.6k) persist under the propagated reg value, the
+    # pre-decided fallback is clipping the per-cell log-ratio in
+    # ref_penalised_q, not more param sets.
+    player_reg_ema_rate: float = 5e-5
+    # MSE coefficient of the scalar reg-value head (2026-08-24): trains
+    # V_reg = E[sum of future -eta*KL(pi||pi_reg)] on scalar v-trace
+    # returns of the reg reward (targets.compute_reg_returns). Its ONLY
+    # consumers are the Q label / residual base, which bootstrap on
+    # V_win + V_reg so every cell's Q carries FUTURE reference penalties
+    # (OpenSpiel rnad.py folds the expected penalty into the value
+    # recursion; the immediate per-cell penalty stays analytic in
+    # ref_penalised_q as there).
+    player_reg_value_coef: float = 0.5
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

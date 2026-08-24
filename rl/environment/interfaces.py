@@ -112,6 +112,13 @@ class PlayerActorOutput:
     # readouts.
     private_value_logits: ArrayLike = ()
     public_value_logits: ArrayLike = ()
+    # Learner-only (cfg.train): (T,) scalar value of the R-NaD
+    # regularisation-reward stream — the discounted sum of future
+    # -eta*KL(pi || pi_reg) penalties (2026-08-24, OpenSpiel rnad.py's
+    # eta_reg_entropy folded into the value recursion; here a SEPARATE
+    # scalar head so the win/loss critic keeps its clean +-1 categorical
+    # support). Rides the privileged value_all embedding: never deployed.
+    reg_value: ArrayLike = ()
 
 
 @dataclass
@@ -203,6 +210,9 @@ class BuilderTransition:
 @dataclass
 class PlayerTargets:
     win_returns: ArrayLike = ()
+    # Scalar v-trace returns of the regularisation-reward stream
+    # r_reg = -eta*KL(pi_target || pi_reg) per decision row (f32).
+    reg_returns: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()
 
