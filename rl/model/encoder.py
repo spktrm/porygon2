@@ -450,12 +450,24 @@ class RoundBlock(nn.Module):
         action_valid = jnp.concatenate((move_valid, switch_valid, target_valid), axis=0)
 
         def gate(name: str) -> jax.Array:
-            return self.param(name, nn.initializers.zeros_init(), (1,)).astype(
-                state.dtype
-            )
+            # Constant init from cfg.round.init_gate (0.05), NOT zero
+            # (2026-08-24 gate-contribution read, ckpt_00074597): with
+            # alpha = 0 the block's own parameters get gradient
+            # alpha.(df/dtheta)'.delta = exactly 0 until the gate moves,
+            # and the gate's gradient <f_random(x), delta> has no
+            # consistent sign under RL noise once the parallel cross-
+            # stream reads have opened -- every FFW and the state
+            # self-attention sat at |g| ~ 1e-3 (a random walk) for 74.6k
+            # steps, contributing <= 5e-4 of their stream. Any non-zero
+            # constant gives f a direction-consistent gradient from step
+            # 0 (Adam normalises the magnitude); 0.05 keeps the init
+            # contribution at ~1% of the state/action streams.
+            return self.param(
+                name, nn.initializers.constant(rcfg.init_gate), (1,)
+            ).astype(state.dtype)
 
         def group_gate(parts, pattern: str) -> jax.Array:
-            """Per-substream zero-init scalars broadcast to a (rows, 1)
+            """Per-substream small-constant scalars broadcast to a (rows, 1)
             gate vector over the group concat."""
             return jnp.concatenate(
                 [

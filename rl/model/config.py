@@ -56,7 +56,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
     encoder_use_bias = True
     encoder_qk_layer_norm = True
-    encoder_init_residual_scale = 0.0
+    # 0.05, not 0.0 (2026-08-24): the entity pool's self-attention sat at
+    # mha_a -0.026 / ffn_a -0.003 after 74.6k steps -- a zero-init scalar
+    # times a random block is a product whose gate gradient has no
+    # consistent sign under RL noise and whose block gradient is exactly
+    # 0 until the gate moves. See cfg.encoder.round.init_gate.
+    encoder_init_residual_scale = 0.05
 
     decoder_num_layers = 1
     decoder_num_heads = num_heads
@@ -162,6 +167,22 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.round.hidden_size = encoder_hidden_size
     cfg.encoder.round.use_bias = encoder_use_bias
     cfg.encoder.round.qk_layer_norm = encoder_qk_layer_norm
+    # Init of every RoundBlock residual gate (2026-08-24; was a hard-coded
+    # zeros_init). Offline gate-contribution read on ckpt_00074597
+    # (rl/offline/gate_contribution.py): all six FFWs (48% of the params)
+    # and the state self-attention contributed <= 5e-4 of their stream in
+    # every round -- gates at |g| ~ 1e-3, a random walk -- while every
+    # ones-init scale and every cross-stream READ gate trained. ReZero's
+    # alpha = 0 needs <f_random(x), delta> to carry a consistent sign; it
+    # does not here (RL noise, and the reads open first and make the FFW's
+    # random features redundant), and the block's own gradient is exactly
+    # 0 until alpha moves. Any non-zero constant hands the block a
+    # direction-consistent gradient from step 0 under Adam; 0.05 keeps the
+    # init contribution at ~1% of the state/action streams (~5% of the
+    # tiny value streams). The head's flat-at-init contract is untouched
+    # (type_scale / micro_scale / zero out-layers live in the head).
+    # Acceptance: FFW contribution >= 0.01 at the 20k read.
+    cfg.encoder.round.init_gate = 0.05
 
     # Within-modality (micro) readout: NO config block — the head is a
     # parameter-less dot grid over the typed trunk streams (2026-08-17)
@@ -280,7 +301,9 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
     qkv_size = int(qkv_scale * entity_size)
     use_bias = False
     qk_layer_norm = True
-    init_residual_scale = 0.0
+    # 0.05 for the same reason as cfg.encoder.round.init_gate (dormant
+    # under randombattle; no live effect today).
+    init_residual_scale = 0.05
 
     transformer_kwargs = dict(
         num_layers=num_layers,
