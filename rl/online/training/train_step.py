@@ -144,13 +144,25 @@ def train_step(
     neurd_scale = warmup_scale(
         player_state.step_count, config.player_neurd_warmup_steps
     )
-    reg_ema_rate = jnp.where(
-        neurd_scale >= 1.0, jnp.float32(config.player_reg_ema_rate), jnp.float32(0.0)
+    # R-NaD reference SNAP (2026-08-25): reg_params <- target_params every
+    # player_reg_snap_steps once the warm-up is done — rnad.py's delta_m
+    # reset, in place, still three param sets. The continuous EMA (1e-4,
+    # then 5e-5) never reset, so the log(pi/pi_reg) gap compounded with
+    # policy speed: 2wvnlsz3 hit ref_kl 2.07 nats and grad-norm p90 62k
+    # by 98k (pgaijs6l: 22% of steps at the clip past 56k). The penalty
+    # is unbounded in the gap BY DESIGN (it is the restoring force), so
+    # the GAP is what must be bounded — structurally, not by clipping
+    # the penalty. The first snap lands exactly as the ramp completes
+    # (warmup_steps % snap_steps == 0), and a resume from a pre-runaway
+    # checkpoint at a snap multiple snaps immediately, repairing the
+    # accumulated gap at restart. Between snaps the reference is FROZEN.
+    reg_snap = (neurd_scale >= 1.0) & (
+        player_state.step_count % config.player_reg_snap_steps == 0
     )
     training_logs["player_neurd_coef_effective"] = (
         config.player_neurd_coef * neurd_scale
     )
-    training_logs["player_reg_ema_rate_effective"] = reg_ema_rate
+    training_logs["player_reg_snapped"] = reg_snap.astype(jnp.float32)
 
     # Fraction of steps where the IMPACT clipped-target correction is
     # saturated at its cap — a second staleness signal alongside the actor
@@ -1007,11 +1019,12 @@ def train_step(
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
         # Frozen at the launch snapshot while the NeuRD warm-up ramps
-        # (Step 2): the reference-KL panel then reads drift from launch.
-        reg_params=optax.incremental_update(
+        # (Step 2), then hard-snapped to the target net every
+        # player_reg_snap_steps (see reg_snap above).
+        reg_params=jax.tree.map(
+            lambda t, r: jnp.where(reg_snap, t, r),
             player_state.target_params,
             player_state.reg_params,
-            reg_ema_rate,
         ),
         target_params=optax.incremental_update(
             player_state.params,

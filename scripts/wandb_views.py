@@ -588,7 +588,7 @@ def rl_sections():
                         "player_neurd_coef_effective",
                         "player_ref_kl",
                         "player_q_voluntary_switch_target_frac",
-                        "player_reg_ema_rate_effective",
+                        "player_reg_snapped",
                     ],
                 ),
             ],

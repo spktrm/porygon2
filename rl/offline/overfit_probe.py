@@ -161,7 +161,7 @@ def arm_config(arm: str):
             player_neurd_coef=0.0,
             player_ref_eta=0.0,
             player_ema_update_rate=0.0,
-            player_reg_ema_rate=0.0,
+            player_reg_snap_steps=1_000_000_000,  # reference frozen in the probe
         )
     raise ValueError(arm)
 

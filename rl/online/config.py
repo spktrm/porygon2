@@ -379,7 +379,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_neurd_coef: float = 0.2
     # Step-2 warm-up (docs/critic-weakness-analysis.md, 2026-08-23): NeuRD's
     # coefficient ramps 0 -> player_neurd_coef linearly over the lineage's
-    # first N learner steps, and player_reg_ema_rate is 0 (reference
+    # first N learner steps, and the reference snap is gated off (reference
     # policy frozen at the launch snapshot) until the ramp completes, so
     # player_ref_kl reads KL(pi || pi_launch) = policy drift from
     # launch. The Q routes are zero-initialised and NeuRD consumed an
@@ -421,7 +421,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # is the plain game, so this is a policy-objective term, not a label
     # transform (hence ref_*, not rnad_*). Reward transform
     # r' = r - eta*log(pi/pi_reg) against a REFERENCE policy pi_reg that is
-    # a slow EMA of the target params (player_reg_ema_rate; rnad.py snaps
+    # a periodic SNAP of the target params (player_reg_snap_steps; rnad.py snaps
     # two anchors every delta_m steps and interpolates — the EMA is the
     # one-forward continuous equivalent). The penalty enters the policy
     # update analytically per legal cell (targets.ref_penalised_q); the
@@ -433,16 +433,18 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # refill a starved modality. eta 0.2 = DeepNash; reward support is
     # +-1 here as in Stratego. 0 disables (plain NeuRD).
     player_ref_eta: float = 0.2
-    # 5e-5 (2026-08-24, from 1e-4): ~20k-step reference lag = rnad.py's
-    # delta_m = 20000 as a single continuous EMA. Deliberate deviation
-    # from rnad.py's prev/prev_ snapshot pair + alpha crossfade (the user
-    # declined a 4th param set); the snap schedule hard-resets the
-    # log(pi/pi_reg) gap at boundaries and the EMA does not, so if the
-    # NeuRD gradient spikes of run pgaijs6l (~56k+: 22% of steps at the
-    # clip, p99 norm 1.6k) persist under the propagated reg value, the
-    # pre-decided fallback is clipping the per-cell log-ratio in
-    # ref_penalised_q, not more param sets.
-    player_reg_ema_rate: float = 5e-5
+    # Snap period of the reference (2026-08-25, replacing the continuous
+    # EMA — 1e-4, then 5e-5): reg_params <- target_params, in place,
+    # every N steps once the NeuRD warm-up is done (rnad.py's delta_m
+    # reset without the prev/prev_ crossfade pair — no 4th param set).
+    # The EMA never reset, so the log(pi/pi_reg) gap compounded with
+    # policy speed into the grad-norm runaways of pgaijs6l (56k) and
+    # 2wvnlsz3 (79.6k, ref_kl 2.07 nats, p90 62k by 98k): the penalty is
+    # unbounded in the gap by design, so the GAP is bounded structurally
+    # instead. 20k = rnad.py's delta_m; also divides the warm-up so the
+    # first snap lands exactly at ramp completion, and a 20k-multiple
+    # resume snaps at its first step.
+    player_reg_snap_steps: int = 20_000
     # MSE coefficient of the scalar reg-value head (2026-08-24): trains
     # V_reg = E[sum of future -eta*KL(pi||pi_reg)] on scalar v-trace
     # returns of the reg reward (targets.compute_reg_returns). Its ONLY
