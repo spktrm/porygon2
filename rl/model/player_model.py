@@ -180,7 +180,7 @@ class Porygon2PlayerModel(nn.Module):
         macro_logits, square_logits = self.macro_micro_head(
             action_embeddings, src_valid
         )
-        square_logits = square_logits / temp
+        square_logits = square_logits.astype(jnp.float32) / temp
 
         # Hierarchical composition (compose_action_grid, logsumexp reduce):
         # a macro softmax over modalities times a micro softmax within each
@@ -195,7 +195,7 @@ class Porygon2PlayerModel(nn.Module):
         modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
         modality_counts = (flat_valid_mask[:, None] & modality_oh).sum(axis=0)
 
-        macro_logits = macro_logits / temp
+        macro_logits = macro_logits.astype(jnp.float32) / temp
         log_macro_policy = legal_log_policy(macro_logits, modality_counts > 0)
 
         pi_logits = jnp.where(
@@ -235,7 +235,8 @@ class Porygon2PlayerModel(nn.Module):
             # Full support only in the learner: the magnet KL needs both
             # distributions; actors skip it so replay transitions stay small.
             log_policy=policy_metrics.log_policy if self.cfg.train else (),
-            logits=pi_logits if self.cfg.train else (),
+            macro_logits=macro_logits if self.cfg.train else (),
+            micro_logits=square_logits if self.cfg.train else (),
             src_index=src_index,
             tgt_index=tgt_index,
             entropy=policy_metrics.entropy,
@@ -262,12 +263,12 @@ class Porygon2PlayerModel(nn.Module):
         macro_logits, square_logits = self.macro_micro_head(
             action_embeddings, src_valid
         )
-        square_logits = square_logits / temp
+        square_logits = square_logits.astype(jnp.float32) / temp
 
         modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
         modality_counts = (flat_valid_mask[:, None] & modality_oh).sum(axis=0)
 
-        macro_logits = macro_logits / temp
+        macro_logits = macro_logits.astype(jnp.float32) / temp
         log_macro_policy = legal_log_policy(macro_logits, modality_counts > 0)
 
         pi_logits = jnp.where(

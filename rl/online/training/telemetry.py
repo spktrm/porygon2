@@ -30,7 +30,12 @@ T = TypeVar("T")
 
 
 def promote_map(tree: T, dtype) -> T:
-    return jax.tree.map(lambda x: x.astype(dtype), tree)
+    # Masks stay bool: a bf16 mask makes `average`'s denominator a bf16
+    # count, exact only up to 256 rows.
+    return jax.tree.map(
+        lambda x: x if jnp.issubdtype(x.dtype, jnp.bool_) else x.astype(dtype),
+        tree,
+    )
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:
@@ -263,11 +268,6 @@ def calculate_r2(
 MATCHED_V_EDGES = (-1.0, -0.6, -0.2, 0.2, 0.6, 1.0 + 1e-6)
 
 
-def masked_mean(x: jax.Array, mask: jax.Array) -> jax.Array:
-    """Mean over mask, NaN when the mask is empty (wandb skips NaN points;
-    a 0.0 would read as a measurement — the player_q_calibration_r2_fresh
-    lesson of 2026-08-23)."""
-    return jnp.where(mask.any(), jnp.mean(x, where=mask), jnp.nan)
 def modality_means(q: jax.Array, legal_mask: jax.Array) -> jax.Array:
     """Per-cell broadcast of the legal-cell mean of `q` within each
     action MODALITY (move / switch / wildcard / other, FLAT_MODALITY_MASK):
@@ -322,6 +322,11 @@ def q_head_param_telemetry(params, grads) -> dict[str, jax.Array]:
     return logs
 
 
+def masked_mean(x: jax.Array, mask: jax.Array) -> jax.Array:
+    """Mean over mask, NaN when the mask is empty (wandb skips NaN points;
+    a 0.0 would read as a measurement — the player_q_calibration_r2_fresh
+    lesson of 2026-08-23)."""
+    return jnp.where(mask.any(), jnp.mean(x, where=mask), jnp.nan)
 
 
 def masked_var(x: jax.Array, mask: jax.Array) -> jax.Array:

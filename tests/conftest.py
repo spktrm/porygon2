@@ -20,6 +20,14 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 logging.getLogger("jax._src.compiler").setLevel(logging.ERROR)
 logging.getLogger("jax._src.dispatch").setLevel(logging.ERROR)
 os.environ.setdefault("JAX_EXPLAIN_CACHE_MISSES", "false")
+# The learner's env sets JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=all (kernel +
+# autotune caches alongside the executable cache). Under that flag every new
+# executable rewrites the whole ~340 MB xla_gpu_kernel_cache_file: the four
+# tiny test_neurd_loss tests took 75 s with it and 6 s without (2026-08-24),
+# and the fast suite as a whole 264 s. Tests compile hundreds of small
+# programs, so the executable cache alone is the right setting here; the
+# learner keeps its own env. Explicit override (not setdefault) on purpose.
+os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
 
 import jax.numpy as jnp
 import pytest
@@ -67,5 +75,21 @@ def real_model_and_trajectory():
 
     network = get_player_model(get_player_model_config(generation=9, train=True))
     actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    params = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
+    # Jitted init (2026-08-24): eager init dispatches the forward op by op
+    # and compiles each nn.scan separately -- it was ~6 min of the slow
+    # suite, paid again inside create_train_state (also jitted now).
+    params = jax.jit(network.init)(
+        jax.random.key(0), actor_input, actor_output, HeadParams()
+    )
     return network, params, actor_input, actor_output
+
+
+@pytest.fixture(scope="session")
+def real_model_apply(real_model_and_trajectory):
+    """jax.jit(network.apply) for the session model: one compile, then
+    milliseconds per call. Eager apply re-traces the whole module and
+    dispatches op by op (the scans recompile per call) -- ~a minute each."""
+    import jax
+
+    network = real_model_and_trajectory[0]
+    return jax.jit(network.apply)

@@ -160,8 +160,12 @@ def create_train_state(
         lambda x: jnp.asarray(x[:, 0]), get_ex_builder_step()
     )
 
+    # Jitted init: eager flax init of the player model dispatches the
+    # whole forward op by op and compiles every nn.scan separately --
+    # ~6-10 min on the training box (2026-08-24 slow-suite timing); one
+    # compile is a fraction of that and persists in the compile cache.
     player_params_init_fn = functools.partial(
-        player_network.init,
+        jax.jit(player_network.init),
         head_params=HeadParams(),
         actor_input=ex_player_actor_inp,
         actor_output=ex_player_actor_out,
@@ -190,7 +194,7 @@ def create_train_state(
     )
 
     builder_params_init_fn = functools.partial(
-        builder_network.init,
+        jax.jit(builder_network.init),
         actor_input=ex_builder_actor_inp,
         actor_output=ex_builder_actor_out,
         head_params=HeadParams(),

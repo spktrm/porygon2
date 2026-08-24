@@ -14,34 +14,21 @@ import pytest
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-@pytest.fixture(scope="module")
-def model_and_inputs():
-    from rl.environment.utils import get_ex_player_step
-    from rl.model.config import get_player_model_config
-    from rl.model.heads import HeadParams
-    from rl.model.player_model import get_player_model
-
-    network = get_player_model(get_player_model_config(generation=9, train=True))
-    actor_input, actor_output = jax.device_put(
-        jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    )
-    params = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
-    return network, params, actor_input, actor_output
 
 
-def test_init_produces_finite_params(model_and_inputs):
-    _, params, _, _ = model_and_inputs
+def test_init_produces_finite_params(real_model_and_trajectory, real_model_apply):
+    _, params, _, _ = real_model_and_trajectory
     leaves = jax.tree.leaves(params)
     assert leaves
     for leaf in leaves:
         assert np.isfinite(np.asarray(leaf, dtype=np.float32)).all()
 
 
-def test_forward_outputs_finite_and_shaped(model_and_inputs):
-    network, params, actor_input, actor_output = model_and_inputs
+def test_forward_outputs_finite_and_shaped(real_model_and_trajectory, real_model_apply):
+    network, params, actor_input, actor_output = real_model_and_trajectory
     from rl.model.heads import HeadParams
 
-    out = network.apply(params, actor_input, actor_output, HeadParams())
+    out = real_model_apply(params, actor_input, actor_output, HeadParams())
     T = actor_input.env.done.shape[0]
 
     log_probs = np.asarray(out.value_head.log_probs, dtype=np.float32)
@@ -54,19 +41,19 @@ def test_forward_outputs_finite_and_shaped(model_and_inputs):
     assert np.isfinite(pi_lp).all()
 
 
-def test_q_head_forward_shapes(model_and_inputs):
+def test_q_head_forward_shapes(real_model_and_trajectory, real_model_apply):
     """The structural two-rung hierarchical Q readout (docs/
     q-critic-plan.md): owned adapter + shared MacroMicroHead params in the
     tree, (T, A, n_bins) logits per rung, rung conditioning alive."""
 
     from rl.model.heads import HeadParams
 
-    network, params, actor_input, actor_output = model_and_inputs
+    network, params, actor_input, actor_output = real_model_and_trajectory
     for subtree in ("q_adapter", "q_macro_micro", "q_cond_proj", "q_cond_norm"):
         assert subtree in params["params"]
     assert "macro_micro_head" in params["params"]
 
-    out = network.apply(params, actor_input, actor_output, HeadParams())
+    out = real_model_apply(params, actor_input, actor_output, HeadParams())
     T = actor_input.env.done.shape[0]
     A = int(np.prod(actor_input.env.action_mask.shape[-2:]))
     q_adv = np.asarray(out.q_adv, dtype=np.float32)
@@ -81,7 +68,7 @@ def test_q_head_forward_shapes(model_and_inputs):
     # vacuous — open the zero paths first, then a difference proves the
     # conditioning is actually WIRED rather than merely untrained.
     opened = open_zero_init_paths(params, ("q_adapter", "q_macro_micro"))
-    out_open = network.apply(opened, actor_input, actor_output, HeadParams())
+    out_open = real_model_apply(opened, actor_input, actor_output, HeadParams())
     assert not np.array_equal(
         np.asarray(out_open.q_adv, dtype=np.float32),
         np.asarray(out_open.private_q_adv, dtype=np.float32),
@@ -91,7 +78,7 @@ def test_q_head_forward_shapes(model_and_inputs):
     assert np.asarray(out.action_head.log_policy).shape[-1] == A
 
 
-def test_q_head_is_flat_at_init_and_local_routes_get_gradient(model_and_inputs):
+def test_q_head_is_flat_at_init_and_local_routes_get_gradient(real_model_and_trajectory, real_model_apply):
     """The flat-at-init contract (every Q cell exactly 0) AND the
     regression test for the 2026-08-24 finding: the within-modality
     route must be a single zero-init factor, so a within-modality
@@ -101,8 +88,8 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(model_and_inputs):
     from rl.environment.data import FLAT_MODALITY_MASK
     from rl.model.heads import HeadParams
 
-    network, params, actor_input, actor_output = model_and_inputs
-    out = network.apply(params, actor_input, actor_output, HeadParams())
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    out = real_model_apply(params, actor_input, actor_output, HeadParams())
     assert not np.asarray(out.q_adv, dtype=np.float32).any()
     assert not np.asarray(out.private_q_adv, dtype=np.float32).any()
 
@@ -114,7 +101,7 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(model_and_inputs):
     legal = np.asarray(actor_input.env.action_mask).reshape(-1, flat.shape[0])
 
     def loss(p):
-        o = network.apply(p, actor_input, actor_output, HeadParams())
+        o = real_model_apply(p, actor_input, actor_output, HeadParams())
         return jnp.sum(o.q_adv.astype(jnp.float32) * jnp.asarray(pattern) * jnp.asarray(legal))
 
     grads = jax.grad(loss)(params)["params"]["q_macro_micro"]
@@ -127,12 +114,12 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(model_and_inputs):
         assert not np.asarray(grads["micro"][name]["kernel"], dtype=np.float32).any(), name
 
 
-def test_forward_is_deterministic(model_and_inputs):
-    network, params, actor_input, actor_output = model_and_inputs
+def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):
+    network, params, actor_input, actor_output = real_model_and_trajectory
     from rl.model.heads import HeadParams
 
-    a = network.apply(params, actor_input, actor_output, HeadParams())
-    b = network.apply(params, actor_input, actor_output, HeadParams())
+    a = real_model_apply(params, actor_input, actor_output, HeadParams())
+    b = real_model_apply(params, actor_input, actor_output, HeadParams())
     np.testing.assert_array_equal(
         np.asarray(a.value_head.log_probs, dtype=np.float32),
         np.asarray(b.value_head.log_probs, dtype=np.float32),

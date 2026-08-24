@@ -50,7 +50,11 @@ def encode_one_hot(
 ) -> tuple[int, int]:
     chex.assert_rank(entity, 1)
     chex.assert_type(entity, jnp.int32)
-    return entity[feature_idx] + value_offset, max_values[feature_idx] + 1
+    width = max_values[feature_idx] + 1
+    # Clip like the sqrt/divided variants: one_hot_concat_jax lays the
+    # blocks end to end, so an out-of-range value would silently light a
+    # bit in the NEXT feature's block.
+    return jnp.clip(entity[feature_idx] + value_offset, 0, width - 1), width
 
 
 def encode_sqrt_one_hot(

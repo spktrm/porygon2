@@ -1,11 +1,13 @@
-"""Eager (unjitted) train_step smoke with the two-rung Q head enabled —
-the wiring test for docs/q-critic-plan.md: model Q_all/Q_private
-readouts -> Retrace targets -> CE losses -> gradients, end to end on the
-bundled ex.bin trajectory. CPU-pinned so it can run next to a live
-learner (randombattle config, so the builder branch self-skips).
+"""Jitted train_step smoke with the two-rung Q head enabled -- the wiring
+test for docs/q-critic-plan.md: model Q_all/Q_private readouts -> TD(0)
+labels -> Huber losses -> gradients, end to end on the bundled ex.bin
+trajectory (randombattle config, so the builder branch self-skips).
 
-Marked slow (~3 min eager): deselect with `-m "not slow"` for the quick
-suite."""
+Runs on the GPU like the rest of the slow suite (it was CPU-pinned to sit
+beside a live learner, but the slow suite already cannot: host-RAM
+guard). ONE static config = one compile of the full forward + backward.
+
+Marked slow: deselect with `-m "not slow"` for the quick suite."""
 
 import jax
 import jax.numpy as jnp
@@ -30,57 +32,58 @@ def test_train_step_player_q_smoke():
     from rl.model.player_model import get_player_model
     from rl.online.artifact import create_train_state
     from rl.online.config import Porygon2LearnerConfig
-    from rl.online.training import train_step
+    from rl.online.training.train_step import TRAIN_STEP_JIT
 
-    with jax.default_device(jax.devices("cpu")[0]):
-        # Warm-up off: at step_count 0 the Step-2 ramp would zero NeuRD and
-        # the policy-gradient assertions below would read 0 by design.
-        config = Porygon2LearnerConfig(player_neurd_warmup_steps=0)
-        player_net = get_player_model(
-            get_player_model_config(config.generation, train=True)
-        )
-        builder_net = get_builder_model(
-            get_builder_model_config(config.generation, train=True)
-        )
-        player_state, builder_state = create_train_state(
-            player_net, builder_net, jax.random.key(0), config
-        )
+    # Warm-up off: at step_count 0 the Step-2 ramp would zero NeuRD and
+    # the policy-gradient assertions below would read 0 by design.
+    config = Porygon2LearnerConfig(player_neurd_warmup_steps=0)
+    player_net = get_player_model(
+        get_player_model_config(config.generation, train=True)
+    )
+    builder_net = get_builder_model(
+        get_builder_model_config(config.generation, train=True)
+    )
+    player_state, builder_state = create_train_state(
+        player_net, builder_net, jax.random.key(0), config
+    )
 
-        actor_input, actor_output = get_ex_player_step()
-        env = actor_input.env  # (T, B=1, ...)
-        T, B = env.done.shape
-        mask_width = env.action_mask.shape[-1]
-        action_index = jnp.asarray(actor_output.action_head.action_index)
+    actor_input, actor_output = get_ex_player_step()
+    env = actor_input.env  # (T, B=1, ...)
+    T, B = env.done.shape
+    mask_width = env.action_mask.shape[-1]
+    action_index = jnp.asarray(actor_output.action_head.action_index)
 
-        batch = Batch(
-            player_transitions=PlayerTransition(
-                env_output=env,
-                agent_output=PlayerAgentOutput(
-                    actor_output=PlayerActorOutput(
-                        action_head=PlayerPolicyHeadOutput(
-                            action_index=action_index,
-                            log_prob=jnp.full((T, B), -1.0, dtype=jnp.float32),
-                            src_index=action_index // mask_width,
-                            tgt_index=action_index % mask_width,
-                        ),
-                        value_head=CategoricalValueHeadOutput(
-                            expectation=jnp.zeros((T, B), dtype=jnp.float32)
-                        ),
-                    )
-                ),
+    batch = Batch(
+        player_transitions=PlayerTransition(
+            env_output=env,
+            agent_output=PlayerAgentOutput(
+                actor_output=PlayerActorOutput(
+                    action_head=PlayerPolicyHeadOutput(
+                        action_index=action_index,
+                        log_prob=jnp.full((T, B), -1.0, dtype=jnp.float32),
+                        src_index=action_index // mask_width,
+                        tgt_index=action_index % mask_width,
+                    ),
+                    value_head=CategoricalValueHeadOutput(
+                        expectation=jnp.zeros((T, B), dtype=jnp.float32)
+                    ),
+                )
             ),
-            player_history=actor_input.history,
-            player_packed_history=actor_input.packed_history,
-            # Completed-game side fields (Step-1 telemetry): present so the
-            # critic_outcome_telemetry branch is traced inside the jit.
-            game_outcome=jnp.ones((1, B), dtype=jnp.float32),
-            game_length=jnp.full((1, B), T, dtype=jnp.int32),
-            game_step_offset=jnp.zeros((1, B), dtype=jnp.int32),
-        )
+        ),
+        player_history=actor_input.history,
+        player_packed_history=actor_input.packed_history,
+        # Completed-game side fields (Step-1 telemetry): present so the
+        # critic_outcome_telemetry branch is traced inside the jit.
+        game_outcome=jnp.ones((1, B), dtype=jnp.float32),
+        game_length=jnp.full((1, B), T, dtype=jnp.int32),
+        game_step_offset=jnp.zeros((1, B), dtype=jnp.int32),
+    )
 
-        new_player_state, _, logs = train_step(
-            player_state, builder_state, batch, config
-        )
+    # The learner's compiled train_step (donates the states; nothing below
+    # reads the pre-step ones). The eager function was ~25 min here.
+    new_player_state, _, logs = TRAIN_STEP_JIT(
+        player_state, builder_state, batch, config
+    )
 
     assert int(new_player_state.step_count) == 1
     for key in (
@@ -145,9 +148,6 @@ def test_train_step_player_q_smoke():
         # batch.)
         "player_q_action_var",
         "player_q_action_var_p90",
-    ):
-        assert key in logs, key
-        assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
         # Within/between-modality split + Q-head learning readouts
         # (2026-08-24): the within route is the pointer micro grid
         # behind a zero-init gate, so at init within == 0 exactly.
@@ -161,6 +161,9 @@ def test_train_step_player_q_smoke():
         "player_q_adapter_out_rms",
         "player_q_grad_norm_micro",
         "player_q_grad_norm_macro",
+    ):
+        assert key in logs, key
+        assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     # Step-1 panels: present (NaN allowed where this one-game batch has no
     # rows in a slice), support counts finite.
     for key in (
@@ -181,19 +184,8 @@ def test_train_step_player_q_smoke():
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_q_macro_micro_gradient_norm"]) > 0.0
 
-    # The policy's only gradient path stays finite at both ends of the
-    # coefficient. Varying it means a DIFFERENT static config now that
-    # RuntimeScalars is gone (2026-08-21) — in the jitted path that is a
-    # recompile, which is the whole tradeoff of the move.
-    for coef in (1.0, 0.0):
-        with jax.default_device(jax.devices("cpu")[0]):
-            _, _, logs_neurd = train_step(
-                player_state,
-                builder_state,
-                batch,
-                config.replace(player_neurd_coef=coef),
-            )
-        assert np.isfinite(
-            np.asarray(logs_neurd["player_loss_neurd"], dtype=np.float32)
-        )
+    # NeuRD term finite at the base coefficient; coef 0 is a scalar
+    # multiply (finiteness at that end is hierarchical_neurd's unit test),
+    # and a second static config would be a second full compile.
+    assert np.isfinite(np.asarray(logs["player_loss_neurd"], dtype=np.float32))
 

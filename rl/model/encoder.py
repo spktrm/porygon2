@@ -1169,13 +1169,19 @@ class Encoder(nn.Module):
             )
         ].astype(self.cfg.dtype)
 
-        stat_encoding = stat_features / np.array([714, 526, 658, 535, 658, 548])
-        freqs = 2.0 ** np.arange(num_stat_bands) * np.pi
-        stat_encoding = (stat_encoding[..., None] * freqs[None]).astype(self.cfg.dtype)
-        stat_encoding = jnp.concatenate(
-            (jnp.sin(stat_encoding), jnp.cos(stat_encoding)),
-            axis=-1,
-        ).reshape(-1)
+        stat_encoding = stat_features.astype(jnp.float32) / np.array(
+            [714, 526, 658, 535, 658, 548], dtype=np.float32
+        )
+        freqs = (2.0 ** np.arange(num_stat_bands) * np.pi).astype(np.float32)
+        # Phases reach 2^7.pi ~ 400 rad, where bf16 spacing is ~1 rad: cast
+        # before sin/cos and the top bands are quantisation noise. Bands
+        # in f32, cast after.
+        phase = stat_encoding[..., None] * freqs[None]
+        stat_encoding = (
+            jnp.concatenate((jnp.sin(phase), jnp.cos(phase)), axis=-1)
+            .reshape(-1)
+            .astype(self.cfg.dtype)
+        )
 
         tokens = jnp.concatenate(
             (
@@ -1560,7 +1566,6 @@ class Encoder(nn.Module):
         history_row_states: jax.Array,
         history_row_valid: jax.Array,
         history_field_state: jax.Array,
-        history_latents: jax.Array,
     ):
         # Attribute tokens of the current board (the latent read's keys)
         # and the entity-local pooled vectors that warm-start the typed
@@ -1665,8 +1670,9 @@ class Encoder(nn.Module):
         # RoundBlock). The attention-pooled history latents are no longer
         # an RL input (they summarised exactly these 13 tokens; the read
         # sees them directly) -- pool_history survives for the offline
-        # critic, which warm-starts from it by name.
-        del history_latents
+        # critic only, and is not called on the RL path so history_pool
+        # holds no RL params (265k dead leaves + their Adam state before
+        # 2026-08-24; merge_params drops them from older checkpoints).
         history_tokens = jnp.concatenate(
             (history_row_states, history_field_state[None]), axis=0
         ).astype(self.cfg.dtype)
@@ -1958,7 +1964,6 @@ class Encoder(nn.Module):
         slot_states, field_state, _ = self.encode_history(
             env_step, packed_history_step, history_step
         )
-        history_latents = self.pool_history(slot_states, field_state)
 
         # History-encoder slots are keyed by the stable entity index that
         # edges carry (revelation order across both sides), while public team
@@ -1984,7 +1989,7 @@ class Encoder(nn.Module):
             private_value_embeddings,
             public_value_embeddings,
         ) = _forward_vmap()(
-            self, env_step, row_states, order_valid, field_state, history_latents
+            self, env_step, row_states, order_valid, field_state
         )
 
         return (

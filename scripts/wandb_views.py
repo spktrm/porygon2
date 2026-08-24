@@ -330,8 +330,18 @@ def rl_sections():
                     # outward push is blocked (|gap| > beta). Switch
                     # climbing toward 1 = the clip, not the critic, now
                     # bounds switch mass -> raise player_neurd_logit_clip.
-                    "NeuRD clipped fraction (switch vs move)",
+                    "NeuRD macro clipped fraction (switch vs move modality)",
                     ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
+                ),
+                lp(
+                    # Within-modality level of the hierarchical NeuRD
+                    # (2026-08-24): legal switch / move CELLS whose
+                    # within-modality push is blocked.
+                    "NeuRD micro clipped fraction (switch vs move cells)",
+                    [
+                        "player_neurd_clipped_micro_switch",
+                        "player_neurd_clipped_micro_move",
+                    ],
                 ),
                 lp(
                     # Loss value ≈ 0 at the stopgrad point by
@@ -380,16 +390,6 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # The Q readout should calibrate at least as well as
-                    # the V head on fresh rows. q_fresh persistently below
-                    # value_fresh = the policy is steering off the worse
-                    # critic.
-                    "Calibration r2: Q fresh/replay vs V fresh",
-                    [
-                        "player_q_calibration_r2_fresh",
-                        "player_q_calibration_r2_replay",
-                        "player_value_r2_fresh",
-                lp(
                     # Uniform spread split by modality (2026-08-24): the
                     # head is macro[modality] + gated micro, so between =
                     # the switch-vs-move bit the macro carries and within
@@ -432,6 +432,16 @@ def rl_sections():
                         "player_q_adapter_gradient_norm",
                     ],
                 ),
+                lp(
+                    # The Q readout should calibrate at least as well as
+                    # the V head on fresh rows. q_fresh persistently below
+                    # value_fresh = the policy is steering off the worse
+                    # critic.
+                    "Calibration r2: Q fresh/replay vs V fresh",
+                    [
+                        "player_q_calibration_r2_fresh",
+                        "player_q_calibration_r2_replay",
+                        "player_value_r2_fresh",
                     ],
                 ),
                 lp(

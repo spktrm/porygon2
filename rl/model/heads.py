@@ -133,11 +133,15 @@ class MicroHead(nn.Module):
     @nn.compact
     def __call__(self, action_embeddings: jax.Array) -> jax.Array:
         inv_sqrt_d = action_embeddings.shape[-1] ** -0.5
-        logits = (action_embeddings @ action_embeddings.T) * inv_sqrt_d
+        logits = (
+            jnp.einsum("...id,...jd->...ij", action_embeddings, action_embeddings)
+            * inv_sqrt_d
+        )
         type_scale = self.param(
             "type_scale", nn.initializers.zeros_init(), (NUM_ACTION_SLOT_GROUPS,)
         ).astype(logits.dtype)
-        return logits.reshape(-1) * type_scale[FLAT_SRC_GROUP_MASK]
+        flat = logits.reshape(*logits.shape[:-2], -1)
+        return flat * type_scale[FLAT_SRC_GROUP_MASK]
 
 
 class ActionAdapter(nn.Module):
@@ -234,6 +238,9 @@ class MacroHead(nn.Module):
         attn = jax.nn.softmax(
             jnp.where(valid_src_per_modality, attn_logits, -1e9), axis=-1
         )
+        # A modality with no live src would otherwise softmax a uniform
+        # row over every slot (invalid ones included); pool nothing.
+        attn = jnp.where(valid_src_per_modality.any(axis=-1, keepdims=True), attn, 0.0)
         pooled = attn @ src_embeddings
 
         if cond is not None:
@@ -250,9 +257,9 @@ class MacroHead(nn.Module):
         logits = nn.Dense(
             self.out_features, kernel_init=nn.initializers.zeros, dtype=hidden.dtype
         )(hidden)
-        # Modalities with no live src pool an arbitrary mixture; callers
-        # must mask them out (legal_log_policy for the policy, the flat
-        # action mask for the Q grid).
+        # Modalities with no live src pool zeros and read the out bias;
+        # callers still mask them (legal_log_policy for the policy, the
+        # flat action mask for the Q grid).
         return logits.squeeze(-1) if self.out_features == 1 else logits
 
 
@@ -322,13 +329,6 @@ class MacroMicroHead(nn.Module):
                 (NUM_ACTION_SLOT_GROUPS,),
             ).astype(micro.dtype)
             micro = micro * micro_scale[FLAT_SRC_GROUP_MASK][..., None]
-        macro = MacroHead(self.cfg.macro, out_features=num_logits, name="macro")(
-            action_embeddings, src_valid, cond=cond
-        )
-        return macro, micro
-
-
-class SlotConditioning(nn.Module):
             # Single-factor within-modality routes (2026-08-24,
             # docs/critic-weakness-analysis.md Step 3 post-mortem). The
             # gated pointer is a scalar-gate x random-grid PRODUCT: the
@@ -354,6 +354,13 @@ class SlotConditioning(nn.Module):
             )(action_embeddings)
             local = local_src[..., :, None, :] + local_tgt[..., None, :, :]
             micro = micro + local.reshape(*local.shape[:-3], -1, local.shape[-1])
+        macro = MacroHead(self.cfg.macro, out_features=num_logits, name="macro")(
+            action_embeddings, src_valid, cond=cond
+        )
+        return macro, micro
+
+
+class SlotConditioning(nn.Module):
     """Injects slot 1's chosen action into the action embeddings for
     slot 2's head pass (doubles).
 
@@ -471,6 +478,10 @@ def compose_action_grid(
             jnp.where(valid_per_modality[..., None], m[..., :, None, :], -1e9),
             axis=-3,
         )
+        # An empty modality's stat is -1e9; subtracting it would leave
+        # +1e9 in cells the caller masks anyway -- keep the intermediate
+        # finite-small instead of one mask-drop from poisoning a softmax.
+        stat = jnp.where(valid_per_modality.any(axis=-2)[..., None], stat, 0.0)
     elif reduce == "mean":
         weights = valid_per_modality.astype(m.dtype)
         counts = jnp.maximum(weights.sum(axis=-2), 1.0)
@@ -491,7 +502,11 @@ class CategoricalValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, embedding: jax.Array):
-        logits = MLP(**self.cfg.mlp.to_dict())(embedding)
+        # f32 from the head outwards (2026-08-24): a handful of bins, and
+        # the main critic's CE, the v-trace bootstrap probs and the
+        # expectation all read them -- the 1.0-weighted head was the one
+        # rung still paying bf16 while the ladder heads were cast f32.
+        logits = MLP(**self.cfg.mlp.to_dict())(embedding).astype(jnp.float32)
 
         log_probs = nn.log_softmax(logits, axis=-1)
         probs = jnp.exp(log_probs)

@@ -15,6 +15,7 @@ import optax
 from rl.environment.data import (
     CAT_VF_SUPPORT,
     FLAT_MODALITY_MASK,
+    NUM_MODALITY_FEATURES,
     PackedSetFeature,
 )
 from rl.environment.interfaces import (
@@ -34,6 +35,7 @@ from rl.online.training.loss import (
     warmup_scale,
     backward_kl_loss,
     forward_kl_loss,
+    hierarchical_neurd,
     mse_value_loss,
     policy_gradient_loss,
 )
@@ -46,10 +48,10 @@ from rl.online.training.targets import (
     ref_penalised_q,
 )
 from rl.online.training.telemetry import (
-    critic_outcome_telemetry,
-    calculate_r2,
     modality_means,
     q_head_param_telemetry,
+    critic_outcome_telemetry,
+    calculate_r2,
     collect_batch_telemetry_data,
     promote_map,
 )
@@ -123,9 +125,9 @@ def train_step(
 
     target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
     target_actor_ratio = jnp.exp(target_actor_log_ratio)
-    # IMPACT clipped-target correction: recenters the surrogate on the
-    # slowly-moving fast target so the trust region stays stable across
-    # replay reuse instead of resetting to the per-sample behavior policy.
+    # mu/pi_target clipped at 2, telemetry only (player_impact_clip_frac):
+    # the IMPACT surrogate it once recentred is gone; the panel still
+    # reads how far behaviour has drifted from the fast target.
     actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
 
     # IMPACT-style targets: the fast target network supplies the v-trace
@@ -204,17 +206,6 @@ def train_step(
     q_taken_target = jnp.take_along_axis(
         q_all_target, player_actor_action_head.action_index[..., None], axis=-1
     ).squeeze(-1)
-    # KL(pi_target || pi_reg) per state — the expected per-step reference
-    # penalty the policy pays. Drifts up as the policy moves
-    # away from the lagged reference and back down as the EMA catches up;
-    # a level that keeps climbing is a policy running away from its own
-    # past faster than the reference follows.
-    training_logs["player_ref_kl"] = average(
-        reference_kl(
-            player_target_pred.action_head.log_policy, reg_log_policy, flat_action_mask
-        ),
-        player_targets.policy_mask,
-    )
     # Q(s, a) exists wherever an action was actually taken — including
     # forced single-option steps (policy_mask excludes those; the Q
     # regression must not) — but not on terminal rows.
@@ -410,6 +401,15 @@ def train_step(
             flat_action_mask,
             jnp.square(q_all_target - q_mean_uniform[..., None]),
             0.0,
+        ).sum(axis=-1)
+        / n_legal
+    )
+    training_logs["player_q_action_var_uniform"] = average(
+        qvar_uniform, q_mask
+    )
+    training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
+        jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
+    )
     # Within- vs between-MODALITY split of the uniform spread (2026-08-24,
     # docs/critic-weakness-analysis.md). The head composes per-cell Q as
     # macro[modality] + gated micro, so the uniform variance is exactly
@@ -438,15 +438,6 @@ def train_step(
     )
     training_logs["player_q_private_action_var_between_modality"] = average(
         qp_between, q_mask
-    )
-        ).sum(axis=-1)
-        / n_legal
-    )
-    training_logs["player_q_action_var_uniform"] = average(
-        qvar_uniform, q_mask
-    )
-    training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
-        jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
     )
     if not isinstance(batch.reuse_count, tuple):
         fresh_cols = batch.reuse_count[0] == 0
@@ -510,8 +501,8 @@ def train_step(
         # Softmax cross-entropy loss for value head
         loss_v_win = average(
             optax.softmax_cross_entropy(
-                logits=learner_value_head.logits,
-                labels=player_targets.win_returns,
+                logits=learner_value_head.logits.astype(jnp.float32),
+                labels=player_targets.win_returns.astype(jnp.float32),
             ),
             value_mask,
         )
@@ -707,45 +698,44 @@ def train_step(
         ref_penalty = jax.lax.stop_gradient(
             jnp.where(flat_action_mask, q_for_policy - q_reg, 0.0)
         )
-        # NeuRD prefactor (2026-08-21): the advantage lands on the
-        # LOGITS with no pi factor, CENTRED over legal cells so the
-        # softmax-invariant mean direction carries no push on its
-        # own. Logit-gap clip (NeuRD eq. 10): a cell already
-        # beyond +-beta of the row's legal-mean logit gets no
-        # further push in the outward direction -- the sum of
-        # advantages is not zero-mean in general, so unclipped
-        # logits diverge; harmless at the policy level since beta
-        # still permits probabilities arbitrarily close to 0/1,
-        # NeuRD simply stops contributing outside the band.
-        legal_count = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
-        adv_centred = neurd_adv - (
-            neurd_adv.sum(axis=-1) / legal_count
-        )[..., None]
-        raw_logits = jnp.where(
-            flat_action_mask,
-            learner_action_head.logits.astype(jnp.float32),
-            0.0,
+        # Hierarchical NeuRD on the head's FREE logits (2026-08-24,
+        # loss.hierarchical_neurd). The composed pi_logits this read
+        # before are a normalised log-policy (macro log-softmax +
+        # within-modality log-softmax), so the loss differentiated
+        # through two normalisations: modality m's logit received
+        # W_m - pi_M(m).sum_a w(a), each micro cell w(a) - pi(a|m).W_m.
+        # Exact NeuRD only while the weights are zero-sum, which the
+        # logit-gap clip breaks -- the leftover -pi(.).sum_a w(a) is a
+        # push ALONG pi, sharpening toward the cells that already hold
+        # mass whenever the open weights sum negative (the collapsed
+        # regime: starved switch cells clipped, dominant moves pushed
+        # down). Against each level's own logits d/dy_m = -W_m and
+        # d/dz_a = -w(a) exactly, open or clipped:
+        #   W_m  = sum_{a in m} pi(a|m).adv(a)  = Q(m) - V
+        #   w(a) = adv(a) - W_{m(a)}            = Q(a) - Q(m)
+        # each centred uniformly over its own legal set and clipped
+        # (eq. 10) against its level's centred free logit at +-beta.
+        # The band now bounds each LEVEL: with two live modalities the
+        # macro push stops at |y_sw - y_mv| = 2.beta, pi_M ~ 1.8% at
+        # beta 2 (the flat cell-level band floored a switch cell near
+        # 0.1%); nothing below it is restored, only no longer pushed.
+        modality_oh = jnp.asarray(
+            FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
         )
-        logit_gap = jax.lax.stop_gradient(
-            raw_logits
-            - (raw_logits.sum(axis=-1) / legal_count)[..., None]
+        neurd = hierarchical_neurd(
+            macro_logits=learner_action_head.macro_logits,
+            micro_logits=learner_action_head.micro_logits,
+            adv=neurd_adv,
+            legal=flat_action_mask,
+            modality_oh=modality_oh,
+            beta=config.player_neurd_logit_clip,
         )
-        beta = config.player_neurd_logit_clip
-        neurd_open = flat_action_mask & jnp.logical_not(
-            ((logit_gap > beta) & (adv_centred > 0))
-            | ((logit_gap < -beta) & (adv_centred < 0))
-        )
-        neurd_weight = jax.lax.stop_gradient(
-            jnp.where(neurd_open, adv_centred, 0.0)
-        )
-        # Against the RAW logits: d/dy_b = -w(b) exactly, open
-        # or clipped, with no softmax cross-term (the log_policy
-        # form only matches while the weights are zero-sum,
-        # which the clip breaks).
-        loss_neurd = -average(
-            (neurd_weight * raw_logits).sum(axis=-1), policy_mask
-        )
-        neurd_grad_prefactor = neurd_open.astype(jnp.float32)
+        loss_neurd = average(neurd.loss, policy_mask)
+        # Cell-level "open" for the per-cell readouts below is the
+        # micro clip; the modality contest has its own macro clip.
+        neurd_grad_prefactor = neurd.micro_open.astype(jnp.float32)
+        switch_modality = int(ModalityEnum.MODALITY_ENUM__SWITCH)
+        move_modality = int(ModalityEnum.MODALITY_ENUM__MOVE)
         # Gradient decomposition for the pi-prefactor question
         # (docs/rare-action-rl-literature.md). The COMA loss
         # -sum_a pi(a).sg(adv(a)) has exact per-logit gradient
@@ -766,12 +756,14 @@ def train_step(
         # suppression is the pi prefactor, and dropping it (NeuRD
         # -- advantage on the LOGITS, no pi) is the fix.
         # absadv_ratio ~ 0: the critic carries no switch belief to
-        # amplify, and NeuRD would amplify noise instead. NOTE
-        # loss_q supervises only the TAKEN cell, so untaken switch
-        # cells are extrapolation from the zero-init head rather
-        # than belief -- read absadv_ratio against
-        # player_q_switch_target_frac (the supervision coverage)
-        # before concluding the critic "means it".
+        # amplify, and NeuRD would amplify noise instead. NOTE the
+        # Q label lands on the TAKEN cell; the pi-centring in
+        # residual_q spreads its gradient as -err.pi_target(a) over
+        # the other legal cells (dueling identifiability, not
+        # belief), so untaken switch cells are extrapolation --
+        # read absadv_ratio against player_q_switch_target_frac
+        # (the supervision coverage) before concluding the critic
+        # "means it".
         neurd_row = switch_choice_mask[..., None]
         neurd_switch_cells = flat_action_mask & switch_actions & neurd_row
         neurd_move_cells = (
@@ -780,7 +772,10 @@ def train_step(
         neurd_abs_adv = jnp.abs(neurd_adv)
         # Per-cell |d loss / d logit|: pi.|adv| under COMA,
         # 1{clip open}.|adv| under NeuRD.
-        neurd_grad_mag = neurd_grad_prefactor * neurd_abs_adv
+        # Per-cell |d loss_neurd / d micro logit| = the open, centred
+        # within-modality regret |Q(a) - Q(m)|; absadv below stays the
+        # critic's cell advantage |Q(a) - V|.
+        neurd_grad_mag = jnp.abs(neurd.micro_weight)
         neurd_grad_switch = average(neurd_grad_mag, neurd_switch_cells)
         neurd_grad_move = average(neurd_grad_mag, neurd_move_cells)
         neurd_prob_switch = average(pi_learner, neurd_switch_cells)
@@ -826,33 +821,47 @@ def train_step(
             player_neurd_absadv_ratio=neurd_ratio(
                 neurd_absadv_switch, neurd_absadv_move
             ),
-            # Net signed gradient mass toward the switch modality
-            # per real-choice row (prefactor x adv summed over the
-            # row's switch cells): positive = the loss is currently
-            # pushing switch logits UP (the critic prefers more
-            # switching than the policy carries).
+            # Signed push on the SWITCH MODALITY's macro logit per
+            # real-choice row -- exactly -d loss_neurd / d y_switch:
+            # the open, centred Q(switch) - V. Positive = the loss is
+            # currently pushing the switch modality UP (the critic
+            # prefers more switching than the policy carries).
             player_neurd_switch_push=average(
-                (neurd_grad_prefactor * neurd_adv * switch_actions).sum(
-                    axis=-1
-                ),
-                switch_choice_mask,
+                neurd.macro_weight[..., switch_modality], switch_choice_mask
             ),
             player_neurd_adv_std=neurd_adv.std(
                 where=flat_action_mask & policy_mask[..., None]
             ),
-            # NeuRD clip occupancy: fraction of legal switch / move
-            # cells on real-choice rows whose outward push is
-            # currently blocked by the logit-gap clip. Under the
-            # COMA prefactor nothing is clipped (reads 0).
+            # Macro clip occupancy: fraction of real-choice rows where
+            # the switch / move modality's outward macro push is
+            # blocked by the logit-gap clip. This is the "clip rather
+            # than the critic is bounding switch mass" wire
+            # (config.player_neurd_coef).
             player_neurd_clipped_switch=1.0
             - average(
-                (neurd_grad_prefactor > 0).astype(jnp.float32),
-                neurd_switch_cells,
+                neurd.macro_open[..., switch_modality].astype(jnp.float32),
+                switch_choice_mask,
             ),
             player_neurd_clipped_move=1.0
             - average(
-                (neurd_grad_prefactor > 0).astype(jnp.float32),
-                neurd_move_cells,
+                neurd.macro_open[..., move_modality].astype(jnp.float32),
+                switch_choice_mask & neurd.modality_legal[..., move_modality],
+            ),
+            # Micro clip occupancy: legal switch / move CELLS on
+            # real-choice rows whose within-modality push is blocked.
+            player_neurd_clipped_micro_switch=1.0
+            - average(neurd_grad_prefactor, neurd_switch_cells),
+            player_neurd_clipped_micro_move=1.0
+            - average(neurd_grad_prefactor, neurd_move_cells),
+            # KL(pi_learner || pi_reg) per state -- the expected
+            # reference penalty the loss actually pays (same policy as
+            # ref_penalised_q). Drifts up as the policy moves away from
+            # the lagged reference and back down as the EMA catches
+            # up; a level that keeps climbing is a policy running away
+            # from its own past faster than the reference follows.
+            player_ref_kl=average(
+                reference_kl(learner_log_policy, reg_log_policy, flat_action_mask),
+                policy_mask,
             ),
         )
         # Calibration by context, graded on Q_private (the contexts
@@ -1005,6 +1014,12 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
+            # Q-head learning readouts: the three-scalar micro gate, the
+            # drift-from-init of the zero-init out layers and the pointer
+            # kernels, and per-subtree grad norms (pre-clip). A micro
+            # kernel rms sitting at its lecun init (0.0625 at fan-in 256)
+            # with a flat gate = the within-modality route never trained.
+            **q_head_param_telemetry(prev_player_state.params, player_grads),
             # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
@@ -1014,12 +1029,6 @@ def train_step(
             ),
             player_policy_mask_sum=policy_mask.sum(),
             player_value_mask_sum=value_mask.sum(),
-            # Q-head learning readouts: the three-scalar micro gate, the
-            # drift-from-init of the zero-init out layers and the pointer
-            # kernels, and per-subtree grad norms (pre-clip). A micro
-            # kernel rms sitting at its lecun init (0.0625 at fan-in 256)
-            # with a flat gate = the within-modality route never trained.
-            **q_head_param_telemetry(prev_player_state.params, player_grads),
             # Which lattice combo this variant was compiled for (static
             # per executable) — the retuning readout for
             # config.player_shape_lattice.

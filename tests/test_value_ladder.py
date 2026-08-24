@@ -30,6 +30,7 @@ def _open_all_gates(params):
 
 def test_policy_and_ladder_invariant_to_opp_private_team(
     real_model_and_trajectory,
+    real_model_apply,
 ):
     from rl.model.heads import HeadParams
 
@@ -52,8 +53,8 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
         )
     )
 
-    base = network.apply(params, actor_input, actor_output, HeadParams())
-    priv = network.apply(params, populated, actor_output, HeadParams())
+    base = real_model_apply(params, actor_input, actor_output, HeadParams())
+    priv = real_model_apply(params, populated, actor_output, HeadParams())
 
     # The policy pathway never touches the sheet: bitwise identical.
     np.testing.assert_array_equal(
@@ -94,11 +95,11 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
 # an estimator component alongside the information value.
 
 
-def test_ladder_heads_present_and_shaped(real_model_and_trajectory):
+def test_ladder_heads_present_and_shaped(real_model_and_trajectory, real_model_apply):
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
-    out = network.apply(params, actor_input, actor_output, HeadParams())
+    out = real_model_apply(params, actor_input, actor_output, HeadParams())
     T = actor_input.env.done.shape[0]
     n_bins = np.asarray(out.value_head.log_probs).shape[-1]
     assert np.asarray(out.private_value_logits).shape == (T, n_bins)
