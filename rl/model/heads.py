@@ -329,6 +329,31 @@ class MacroMicroHead(nn.Module):
 
 
 class SlotConditioning(nn.Module):
+            # Single-factor within-modality routes (2026-08-24,
+            # docs/critic-weakness-analysis.md Step 3 post-mortem). The
+            # gated pointer is a scalar-gate x random-grid PRODUCT: the
+            # gate's gradient is a random grid's correlation with the
+            # residual, the grid's is proportional to the gate, and on
+            # the live run neither moved in 60k steps (gate ~0.03-0.06,
+            # q/k kernels at lecun init). A zero-init Dense on the src
+            # token and one on the tgt token are each ONE zero-init
+            # factor over a live input, so their gradient is consistent
+            # from step 0. Singles: moves share a tgt column and resolve
+            # through local_src, switches share a src row and resolve
+            # through local_tgt; the pointer keeps interaction terms.
+            # Composed Q is still exactly 0 at init (flat-at-init
+            # contract); the modality centring in compose_action_grid
+            # removes any per-modality offset these add.
+            local_src = nn.Dense(
+                num_logits, use_bias=False, kernel_init=nn.initializers.zeros,
+                name="micro_local_src",
+            )(action_embeddings)
+            local_tgt = nn.Dense(
+                num_logits, use_bias=False, kernel_init=nn.initializers.zeros,
+                name="micro_local_tgt",
+            )(action_embeddings)
+            local = local_src[..., :, None, :] + local_tgt[..., None, :, :]
+            micro = micro + local.reshape(*local.shape[:-3], -1, local.shape[-1])
     """Injects slot 1's chosen action into the action embeddings for
     slot 2's head pass (doubles).
 

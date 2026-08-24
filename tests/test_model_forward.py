@@ -6,6 +6,7 @@ Marked slow (~1 min): deselect with `-m "not slow"` for the quick suite.
 """
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 from conftest import open_zero_init_paths
 import pytest
@@ -88,6 +89,42 @@ def test_q_head_forward_shapes(model_and_inputs):
     # Full-support log_policy is present in train mode — the Retrace
     # target's expectation bootstrap depends on it.
     assert np.asarray(out.action_head.log_policy).shape[-1] == A
+
+
+def test_q_head_is_flat_at_init_and_local_routes_get_gradient(model_and_inputs):
+    """The flat-at-init contract (every Q cell exactly 0) AND the
+    regression test for the 2026-08-24 finding: the within-modality
+    route must be a single zero-init factor, so a within-modality
+    signal reaches its kernels at init WITHOUT the pointer gate having
+    moved. Loss = sum over legal cells of q_adv * (+-1 pattern by rank
+    parity within each modality) — pure within-modality by construction."""
+    from rl.environment.data import FLAT_MODALITY_MASK
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = model_and_inputs
+    out = network.apply(params, actor_input, actor_output, HeadParams())
+    assert not np.asarray(out.q_adv, dtype=np.float32).any()
+    assert not np.asarray(out.private_q_adv, dtype=np.float32).any()
+
+    flat = np.asarray(FLAT_MODALITY_MASK)
+    pattern = np.zeros(flat.shape, np.float32)
+    for mod in np.unique(flat):
+        cells = np.flatnonzero(flat == mod)
+        pattern[cells] = np.where(np.arange(len(cells)) % 2 == 0, 1.0, -1.0)
+    legal = np.asarray(actor_input.env.action_mask).reshape(-1, flat.shape[0])
+
+    def loss(p):
+        o = network.apply(p, actor_input, actor_output, HeadParams())
+        return jnp.sum(o.q_adv.astype(jnp.float32) * jnp.asarray(pattern) * jnp.asarray(legal))
+
+    grads = jax.grad(loss)(params)["params"]["q_macro_micro"]
+    for name in ("micro_local_src", "micro_local_tgt"):
+        g = np.asarray(grads[name]["kernel"], dtype=np.float32)
+        assert np.isfinite(g).all() and np.abs(g).max() > 0.0, name
+    # The gated pointer's q/k projections get NOTHING at init — the
+    # product structure this test exists to document.
+    for name in ("Dense_0", "Dense_1"):
+        assert not np.asarray(grads["micro"][name]["kernel"], dtype=np.float32).any(), name
 
 
 def test_forward_is_deterministic(model_and_inputs):

@@ -48,6 +48,8 @@ from rl.online.training.targets import (
 from rl.online.training.telemetry import (
     critic_outcome_telemetry,
     calculate_r2,
+    modality_means,
+    q_head_param_telemetry,
     collect_batch_telemetry_data,
     promote_map,
 )
@@ -408,6 +410,35 @@ def train_step(
             flat_action_mask,
             jnp.square(q_all_target - q_mean_uniform[..., None]),
             0.0,
+    # Within- vs between-MODALITY split of the uniform spread (2026-08-24,
+    # docs/critic-weakness-analysis.md). The head composes per-cell Q as
+    # macro[modality] + gated micro, so the uniform variance is exactly
+    # between (what the per-modality macro can carry: switch-vs-move) +
+    # within (which move / which reserve — only the pointer micro grid
+    # can carry it). 70mhptdc read uniform ≈ p(1-p)·gap² for the whole
+    # run, i.e. the critic resolved one bit; this pair says so directly.
+    # Reported for both rungs (private = the deployable one).
+    def modality_var_split(q_all):
+        cell_mean = modality_means(q_all, flat_action_mask)
+        within = jnp.where(flat_action_mask, jnp.square(q_all - cell_mean), 0.0)
+        between = jnp.where(
+            flat_action_mask, jnp.square(cell_mean - q_mean_uniform[..., None]), 0.0
+        )
+        return within.sum(axis=-1) / n_legal, between.sum(axis=-1) / n_legal
+
+    q_within, q_between = modality_var_split(q_all_target)
+    training_logs["player_q_action_var_within_modality"] = average(q_within, q_mask)
+    training_logs["player_q_action_var_within_modality_p90"] = jnp.nanquantile(
+        jnp.where(q_mask, q_within, jnp.nan), 0.9
+    )
+    training_logs["player_q_action_var_between_modality"] = average(q_between, q_mask)
+    qp_within, qp_between = modality_var_split(q_private_all_target)
+    training_logs["player_q_private_action_var_within_modality"] = average(
+        qp_within, q_mask
+    )
+    training_logs["player_q_private_action_var_between_modality"] = average(
+        qp_between, q_mask
+    )
         ).sum(axis=-1)
         / n_legal
     )
@@ -983,6 +1014,12 @@ def train_step(
             ),
             player_policy_mask_sum=policy_mask.sum(),
             player_value_mask_sum=value_mask.sum(),
+            # Q-head learning readouts: the three-scalar micro gate, the
+            # drift-from-init of the zero-init out layers and the pointer
+            # kernels, and per-subtree grad norms (pre-clip). A micro
+            # kernel rms sitting at its lecun init (0.0625 at fan-in 256)
+            # with a flat gate = the within-modality route never trained.
+            **q_head_param_telemetry(prev_player_state.params, player_grads),
             # Which lattice combo this variant was compiled for (static
             # per executable) — the retuning readout for
             # config.player_shape_lattice.

@@ -6,7 +6,9 @@ from typing import Any, TypeVar
 
 import chex
 import jax
+import numpy as np
 import jax.numpy as jnp
+import optax
 
 from rl.environment.data import (
     ALLY_SWITCH_INDICES,
@@ -266,6 +268,60 @@ def masked_mean(x: jax.Array, mask: jax.Array) -> jax.Array:
     a 0.0 would read as a measurement — the player_q_calibration_r2_fresh
     lesson of 2026-08-23)."""
     return jnp.where(mask.any(), jnp.mean(x, where=mask), jnp.nan)
+def modality_means(q: jax.Array, legal_mask: jax.Array) -> jax.Array:
+    """Per-cell broadcast of the legal-cell mean of `q` within each
+    action MODALITY (move / switch / wildcard / other, FLAT_MODALITY_MASK):
+    (..., A) -> (..., A). Illegal cells read their modality's mean too
+    (callers mask). f32."""
+    mods = jnp.asarray(np.asarray(FLAT_MODALITY_MASK), jnp.int32)
+    onehot = jax.nn.one_hot(mods, int(np.max(FLAT_MODALITY_MASK)) + 1, dtype=jnp.float32)
+    legal = legal_mask.astype(jnp.float32)
+    counts = legal @ onehot
+    sums = (legal * q.astype(jnp.float32)) @ onehot
+    means = sums / jnp.maximum(counts, 1.0)
+    return means[..., mods]
+
+
+_Q_HEAD_LEAVES = {
+    "player_q_micro_kernel_rms": (
+        ("q_macro_micro", "micro", "Dense_0", "kernel"),
+        ("q_macro_micro", "micro", "Dense_1", "kernel"),
+    ),
+    "player_q_macro_out_rms": (("q_macro_micro", "macro", "Dense_0", "kernel"),),
+    "player_q_adapter_out_rms": (("q_adapter", "Dense_0", "kernel"),),
+}
+_Q_HEAD_GRAD_SUBTREES = {
+    "player_q_grad_norm_micro": ("q_macro_micro", "micro"),
+    "player_q_grad_norm_macro": ("q_macro_micro", "macro"),
+}
+
+
+def _get(tree, path):
+    for k in path:
+        tree = tree[k]
+    return tree
+
+
+def q_head_param_telemetry(params, grads) -> dict[str, jax.Array]:
+    """Learner-side readouts of the residual Q head's learning
+    (2026-08-24): the three-scalar zero-init micro gate (move / switch /
+    target slot groups), rms of the zero-init out layers and the pointer
+    q/k kernels (drift from init: 0 / 0 / 0.0625 lecun at fan-in 256),
+    and pre-clip grad norms per subtree. `params`/`grads` are the flax
+    variable dicts (top-level "params" collection)."""
+    p, g = params["params"], grads["params"]
+    logs = {}
+    gate = jnp.asarray(_get(p, ("q_macro_micro", "micro_scale")), jnp.float32)
+    for i, name in enumerate(("move", "switch", "target")):
+        logs[f"player_q_micro_scale_{name}"] = gate[i]
+    for key, paths in _Q_HEAD_LEAVES.items():
+        leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
+        logs[key] = jnp.mean(jnp.stack([jnp.sqrt(jnp.mean(jnp.square(x))) for x in leaves]))
+    for key, path in _Q_HEAD_GRAD_SUBTREES.items():
+        logs[key] = optax.global_norm(_get(g, path))
+    return logs
+
+
 
 
 def masked_var(x: jax.Array, mask: jax.Array) -> jax.Array:

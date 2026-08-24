@@ -16,6 +16,19 @@ Two arms, same batch, same checkpoint:
   live    — production config (EMA, NeuRD, R-NaD all on) so the labels
             move with the target net as they do in training. The gap to
             `fixed` is what the moving target costs.
+  synthetic — `fixed` config, but the one-step label is replaced by
+            V_target(s) + c * f(taken cell), f a fixed +-1 pattern over
+            each modality's cells (--synthetic c). The true within-
+            modality variance is then c^2 by construction, so the
+            learner-side `within` panel reads whether the head can carry
+            ANY within-modality signal that generalises (held-out), with
+            the label's content taken out of the question. Run it in its
+            own process: the jitted train_step captures the label function
+            at trace time. (2026-08-24, docs/critic-weakness-analysis.md)
+
+--pool P trains on P rotating batches (step i uses batch i mod P) instead
+of one fixed batch, so memorisation is off the table and act_var has to
+come from generalisable action structure. `train` evals read batch 0.
 
 Usage (learner down, the 8080 service up):
 
@@ -70,11 +83,18 @@ PRINT_KEYS = (
     "player_q_r2_switch_forced",
     "player_q_r2_switch_voluntary",
     "player_q_action_var",
+    "player_q_action_var_within_modality",
+    "player_q_action_var_between_modality",
+    "player_q_micro_scale_move",
+    "player_q_micro_scale_switch",
+    "player_q_micro_kernel_rms",
     "player_q_pivotal_frac",
     "player_q_switch_move_gap",
     "player_mv_pooled_gap_critic",
     "player_mv_pooled_gap_realised",
     "learner_q_action_var",
+    "learner_q_action_var_within",
+    "learner_q_action_var_between",
     "learner_q_switch_move_gap",
     "learner_q_pivotal_frac",
     "learner_q_taken_voluntary",
@@ -107,25 +127,30 @@ def voluntary_switch_rows(chunk: Trajectory) -> int:
     return int((rows & taken_switch & has_move).sum())
 
 
-def pick_batches(chunks: list[Trajectory], batch: int):
-    """Top-`batch` chunks by voluntary-switch rows for the fixed batch, the
-    next `batch` as the held-out batch (also switch-rich, so the held-out
-    voluntary panels have rows)."""
+def pick_batches(chunks: list[Trajectory], batch: int, pool: int = 1):
+    """Top `pool * batch` chunks by voluntary-switch rows, dealt round-robin
+    into `pool` training batches (so every batch is switch-rich), the next
+    `batch` as the held-out batch (also switch-rich, so the held-out
+    voluntary panels have rows). Returns (train_batches, held_batch)."""
     ranked = sorted(chunks, key=voluntary_switch_rows, reverse=True)
-    train, held = ranked[:batch], ranked[batch : 2 * batch]
+    if len(ranked) < (pool + 1) * batch:
+        raise ValueError(f"{len(ranked)} chunks < {(pool + 1) * batch} needed (pool {pool})")
+    train = [ranked[i : pool * batch : pool] for i in range(pool)]
+    held = ranked[pool * batch : (pool + 1) * batch]
     logger.info(
-        "fixed batch voluntary rows %s; held-out %s",
-        [voluntary_switch_rows(c) for c in train],
+        "pool %d: batch-0 voluntary rows %s; held-out %s",
+        pool,
+        [voluntary_switch_rows(c) for c in train[0]],
         [voluntary_switch_rows(c) for c in held],
     )
-    return stack_batch(train), stack_batch(held)
+    return [stack_batch(b) for b in train], stack_batch(held)
 
 
 def arm_config(arm: str):
     base = get_learner_config()
     if arm == "live":
         return base
-    if arm == "fixed":
+    if arm in ("fixed", "synthetic"):
         return dataclasses.replace(
             base,
             player_neurd_warmup_steps=0,
@@ -137,7 +162,69 @@ def arm_config(arm: str):
     raise ValueError(arm)
 
 
-def build_states(ckpt_dir: str, config):
+def synthetic_pattern() -> np.ndarray:
+    """+-1 by rank parity within each modality over the flat cell axis —
+    a fixed function of the cell's IDENTITY, orthogonal to the modality
+    offset the macro carries (each modality's cells split evenly)."""
+    pattern = np.zeros(_FLAT.shape, np.float32)
+    for mod in np.unique(_FLAT):
+        cells = np.flatnonzero(_FLAT == mod)
+        pattern[cells] = np.where(np.arange(len(cells)) % 2 == 0, 1.0, -1.0)
+    return pattern
+
+
+def install_synthetic_labels(c: float):
+    """Replace train_step's one-step label with V_target(s) + c * f(a_t):
+    same row masking as the real label (rows past the first done and done
+    rows read 0). Patches the module global the jitted train_step resolves
+    at trace time — must run before the first TRAIN_STEP_JIT call."""
+    # The package re-exports the train_step FUNCTION under the module's
+    # name, so `import ... as ts` would bind the function; go via
+    # sys.modules to reach the module whose globals the body resolves.
+    ts = sys.modules["rl.online.training.train_step"]
+    assert hasattr(ts, "compute_q_onestep_targets"), ts
+
+    pattern = jnp.asarray(synthetic_pattern())
+
+    def labels(batch, v_target, config):
+        dones = batch.player_transitions.env_output.done
+        mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
+        idx = batch.player_transitions.agent_output.actor_output.action_head.action_index
+        y = v_target.astype(jnp.float32) + c * pattern[idx]
+        return jnp.where(dones.astype(bool), 0.0, y) * mask
+
+    ts.compute_q_onestep_targets = labels
+    assert ts.train_step.__globals__["compute_q_onestep_targets"] is labels
+    logger.info("synthetic labels installed: V_target(s) + %.3f * f(taken cell)", c)
+
+
+def apply_override(params, override: str | None):
+    """Probe-only parameter surgery after the checkpoint merge, for
+    A/B-ing head fixes without a config field. `gate1_kzero`: the
+    pointer micro's `micro_scale` -> 1 and its key projection kernel ->
+    0, i.e. the zero-init factor becomes a MATRIX (single-factor route,
+    composed Q still exactly 0 at init) instead of a scalar gate on a
+    random grid (2026-08-24)."""
+    if not override:
+        return params
+    from flax.traverse_util import flatten_dict, unflatten_dict
+
+    flat = dict(flatten_dict(params))
+    if override == "gate1_kzero":
+        gate = ("params", "q_macro_micro", "micro_scale")
+        key = ("params", "q_macro_micro", "micro", "Dense_1", "kernel")
+        flat[gate] = jnp.ones_like(flat[gate])
+        flat[key] = jnp.zeros_like(flat[key])
+        for k in list(flat):
+            if "micro_local" in "/".join(map(str, k)):
+                flat[k] = jnp.zeros_like(flat[k])
+    else:
+        raise ValueError(override)
+    logger.info("override %s applied", override)
+    return unflatten_dict(flat)
+
+
+def build_states(ckpt_dir: str, config, override: str | None = None):
     player_net = get_player_model(get_player_model_config(config.generation, train=True))
     builder_net = get_builder_model(get_builder_model_config(config.generation, train=True))
     player_state, builder_state = create_train_state(
@@ -150,22 +237,25 @@ def build_states(ckpt_dir: str, config):
         3-bin -> scalar readout, Step 3) keep their fresh init — the
         probe's question is whether the NEW head fits on a trained
         trunk. Logs what was skipped."""
-        skipped = []
+        from flax.traverse_util import flatten_dict, unflatten_dict
 
-        def pick(path, a, b):
-            if getattr(b, "shape", None) == getattr(a, "shape", None):
-                return b
-            skipped.append(jax.tree_util.keystr(path))
-            return a
-
-        out = jax.tree_util.tree_map_with_path(pick, fresh, saved)
+        fresh_flat, saved_flat = flatten_dict(fresh), flatten_dict(saved)
+        skipped, out = [], {}
+        for k, a in fresh_flat.items():
+            b = saved_flat.get(k)
+            if b is not None and getattr(b, "shape", None) == getattr(a, "shape", None):
+                out[k] = b
+            else:
+                skipped.append("/".join(map(str, k)))
+                out[k] = a
         if skipped:
-            logger.info("fresh-init (shape changed): %s", skipped)
-        return out, bool(skipped)
+            logger.info("fresh-init (new or shape changed): %s", skipped)
+        return unflatten_dict(out), bool(skipped)
 
     params, p_skip = merge(player_state.params, ck["params"])
     target, _ = merge(player_state.target_params, ck["target_params"])
     reg, _ = merge(player_state.reg_params, ck.get("reg_params", ck["target_params"]))
+    params, target, reg = (apply_override(t, override) for t in (params, target, reg))
     # Adam moments mirror the param tree; a shape change resets them.
     opt_state = player_state.opt_state if p_skip else ck["opt_state"]
     player_state = player_state.replace(
@@ -185,6 +275,7 @@ def make_learner_q_stats(player_net):
     from rl.environment.interfaces import PlayerActorInput
     from rl.model.heads import HeadParams
     from rl.online.training.targets import residual_q
+    from rl.online.training.telemetry import modality_means
 
     apply = jax.vmap(player_net.apply, in_axes=(None, 1, 1, None), out_axes=1)
     switch_cells = jnp.asarray(_SWITCH_CELLS)
@@ -226,8 +317,16 @@ def make_learner_q_stats(player_net):
         def avg(x, m):
             return jnp.sum(jnp.where(m, x, 0.0)) / jnp.maximum(m.sum(), 1)
 
+        cell_mean = modality_means(q_all, flat)
+        within = jnp.sum(jnp.where(flat, (q_all - cell_mean) ** 2, 0.0), -1) / n_legal
+        between = jnp.sum(
+            jnp.where(flat, (cell_mean - mean_legal[..., None]) ** 2, 0.0), -1
+        ) / n_legal
+
         return {
             "learner_q_action_var": avg(var_legal, rows),
+            "learner_q_action_var_within": avg(within, rows),
+            "learner_q_action_var_between": avg(between, rows),
             "learner_q_switch_move_gap": avg(best_s - best_m, has_both),
             "learner_q_pivotal_frac": avg((best_s > best_m).astype(jnp.float32), has_both),
             "learner_q_taken_voluntary": avg(q_taken, vol),
@@ -243,9 +342,10 @@ def _floats(logs) -> dict:
     return {k: float(v) for k, v in logs.items() if jnp.ndim(v) == 0}
 
 
-def run_arm(arm: str, ckpt_dir: str, train_batch, held_batch, steps: int, every: int, out: str):
+def run_arm(arm: str, ckpt_dir: str, train_batches, held_batch, steps: int, every: int, out: str, override=None):
     config = arm_config(arm)
-    player_net, player_state, builder_state = build_states(ckpt_dir, config)
+    train_batch = train_batches[0]
+    player_net, player_state, builder_state = build_states(ckpt_dir, config, override)
     capacity = make_capacity_probe(player_net)
     learner_stats = make_learner_q_stats(player_net)
     records = []
@@ -271,7 +371,7 @@ def run_arm(arm: str, ckpt_dir: str, train_batch, held_batch, steps: int, every:
     evaluate(0)
     for step in range(1, steps + 1):
         player_state, builder_state, _ = TRAIN_STEP_JIT(
-            player_state, builder_state, train_batch, config
+            player_state, builder_state, train_batches[(step - 1) % len(train_batches)], config
         )
         if step % every == 0 or step == steps:
             evaluate(step)
@@ -290,8 +390,13 @@ def main(argv=None):
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--every", type=int, default=25)
     ap.add_argument("--arms", default="fixed,live")
+    ap.add_argument("--pool", type=int, default=1, help="rotating training batches")
+    ap.add_argument(
+        "--synthetic", type=float, default=0.1, help="c for the synthetic arm's label"
+    )
     ap.add_argument("--out", required=True)
     ap.add_argument("--games-pkl", default=None, help="reuse played sides")
+    ap.add_argument("--override", default=None, help="probe-only param surgery, e.g. gate1_kzero")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
     os.makedirs(a.out, exist_ok=True)
@@ -311,9 +416,13 @@ def main(argv=None):
         len(chunks),
         sum(voluntary_switch_rows(c) for c in chunks),
     )
-    train_batch, held_batch = pick_batches(chunks, a.batch)
-    for arm in a.arms.split(","):
-        run_arm(arm, a.ckpt, train_batch, held_batch, a.steps, a.every, a.out)
+    train_batches, held_batch = pick_batches(chunks, a.batch, a.pool)
+    arms = a.arms.split(",")
+    if "synthetic" in arms:
+        assert arms == ["synthetic"], "the synthetic arm patches the jitted label: own process"
+        install_synthetic_labels(a.synthetic)
+    for arm in arms:
+        run_arm(arm, a.ckpt, train_batches, held_batch, a.steps, a.every, a.out, a.override)
 
 
 if __name__ == "__main__":

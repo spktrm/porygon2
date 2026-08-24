@@ -389,6 +389,49 @@ def rl_sections():
                         "player_q_calibration_r2_fresh",
                         "player_q_calibration_r2_replay",
                         "player_value_r2_fresh",
+                lp(
+                    # Uniform spread split by modality (2026-08-24): the
+                    # head is macro[modality] + gated micro, so between =
+                    # the switch-vs-move bit the macro carries and within
+                    # = which move / which reserve, which ONLY the pointer
+                    # micro grid can carry. within ≈ 0 with between ≈
+                    # uniform = the critic resolves one bit (70mhptdc
+                    # read: uniform ≈ p(1-p)·gap² all run).
+                    "Action-value spread: within vs between modality",
+                    [
+                        "player_q_action_var_within_modality",
+                        "player_q_action_var_within_modality_p90",
+                        "player_q_action_var_between_modality",
+                        "player_q_private_action_var_within_modality",
+                        "player_q_private_action_var_between_modality",
+                    ],
+                ),
+                lp(
+                    # Is the within-modality route learning at all? The
+                    # zero-init micro gate (move/switch groups; target is
+                    # never legal in singles) and drift-from-init of the
+                    # out layers: pointer kernels at 0.0625 (lecun) with a
+                    # flat gate = the micro path is a random walk.
+                    "Q head: micro gate & drift from init",
+                    [
+                        "player_q_micro_scale_move",
+                        "player_q_micro_scale_switch",
+                        "player_q_micro_kernel_rms",
+                        "player_q_macro_out_rms",
+                        "player_q_adapter_out_rms",
+                    ],
+                ),
+                lp(
+                    # Pre-clip grad norm per Q-head subtree. micro ≪
+                    # macro = the loss is finding the modality offset
+                    # but not the cells.
+                    "Q head: grad norm by subtree",
+                    [
+                        "player_q_grad_norm_micro",
+                        "player_q_grad_norm_macro",
+                        "player_q_adapter_gradient_norm",
+                    ],
+                ),
                     ],
                 ),
                 lp(

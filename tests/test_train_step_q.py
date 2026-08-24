@@ -148,6 +148,19 @@ def test_train_step_player_q_smoke():
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
+        # Within/between-modality split + Q-head learning readouts
+        # (2026-08-24): the within route is the pointer micro grid
+        # behind a zero-init gate, so at init within == 0 exactly.
+        "player_q_action_var_within_modality",
+        "player_q_action_var_between_modality",
+        "player_q_private_action_var_within_modality",
+        "player_q_micro_scale_move",
+        "player_q_micro_scale_switch",
+        "player_q_micro_kernel_rms",
+        "player_q_macro_out_rms",
+        "player_q_adapter_out_rms",
+        "player_q_grad_norm_micro",
+        "player_q_grad_norm_macro",
     # Step-1 panels: present (NaN allowed where this one-game batch has no
     # rows in a slice), support counts finite.
     for key in (
