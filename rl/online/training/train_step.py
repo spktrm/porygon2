@@ -11,49 +11,41 @@ import jax
 import jax.numpy as jnp
 import optax
 
-
 from rl.environment.data import (
     CAT_VF_SUPPORT,
     FLAT_MODALITY_MASK,
     NUM_MODALITY_FEATURES,
     PackedSetFeature,
 )
-from rl.environment.interfaces import (
-    Batch,
-    BuilderActorInput,
-    PlayerActorInput,
-)
+from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.model.heads import HeadParams
 from rl.model.utils import Params
-from rl.online.artifact import (
-    Porygon2BuilderTrainState,
-    Porygon2PlayerTrainState,
-)
+from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
-    warmup_scale,
     backward_kl_loss,
     forward_kl_loss,
     hierarchical_neurd,
     mse_value_loss,
     policy_gradient_loss,
+    warmup_scale,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     compute_q_onestep_targets,
+    ref_penalised_q,
     reference_kl,
     residual_q,
-    ref_penalised_q,
 )
 from rl.online.training.telemetry import (
-    modality_means,
-    q_head_param_telemetry,
-    critic_outcome_telemetry,
     calculate_r2,
     collect_batch_telemetry_data,
+    critic_outcome_telemetry,
+    modality_means,
     promote_map,
+    q_head_param_telemetry,
 )
 from rl.utils import average
 
@@ -61,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 # Why a snapshot was added to the league. "dominant" is the healthy path
 # (the agent beat its own history); "overdue" means only the frame budget
+
 
 def train_step(
     player_state: Porygon2PlayerTrainState,
@@ -147,11 +140,15 @@ def train_step(
     # it steers that distribution; reg_params stays the launch snapshot
     # meanwhile. Both are functions of the traced step_count — no static
     # config variation, no second executable.
-    neurd_scale = warmup_scale(player_state.step_count, config.player_neurd_warmup_steps)
+    neurd_scale = warmup_scale(
+        player_state.step_count, config.player_neurd_warmup_steps
+    )
     reg_ema_rate = jnp.where(
         neurd_scale >= 1.0, jnp.float32(config.player_reg_ema_rate), jnp.float32(0.0)
     )
-    training_logs["player_neurd_coef_effective"] = config.player_neurd_coef * neurd_scale
+    training_logs["player_neurd_coef_effective"] = (
+        config.player_neurd_coef * neurd_scale
+    )
     training_logs["player_reg_ema_rate_effective"] = reg_ema_rate
 
     # Fraction of steps where the IMPACT clipped-target correction is
@@ -241,9 +238,7 @@ def train_step(
     best_switch = jnp.max(
         jnp.where(valid_switch, q_private_all_target, -jnp.inf), axis=-1
     )
-    best_move = jnp.max(
-        jnp.where(valid_move, q_private_all_target, -jnp.inf), axis=-1
-    )
+    best_move = jnp.max(jnp.where(valid_move, q_private_all_target, -jnp.inf), axis=-1)
     has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
     training_logs["player_q_switch_move_gap"] = average(
         jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
@@ -289,9 +284,7 @@ def train_step(
     training_logs["player_isr_switch_voluntary"] = average(
         isr_f32, q_voluntary_switch_mask
     )
-    training_logs["player_isr_switch_forced"] = average(
-        isr_f32, q_forced_switch_mask
-    )
+    training_logs["player_isr_switch_forced"] = average(isr_f32, q_forced_switch_mask)
     training_logs["player_isr_move"] = average(isr_f32, q_move_mask)
     training_logs["player_isr_below1_switch_voluntary"] = average(
         (isr_f32 < 1.0).astype(jnp.float32), q_voluntary_switch_mask
@@ -299,9 +292,7 @@ def train_step(
     training_logs["player_isr_below1_move"] = average(
         (isr_f32 < 1.0).astype(jnp.float32), q_move_mask
     )
-    training_logs["player_q_target_move"] = average(
-        q_label, q_move_mask & has_both
-    )
+    training_logs["player_q_target_move"] = average(q_label, q_move_mask & has_both)
 
     # Pivotal-state decision panel (2026-08-19). A negative MEAN gap is
     # the expected sign under correct play — switching spends a turn, so
@@ -375,9 +366,9 @@ def train_step(
     # undersells the spread by construction when action-value spread
     # concentrates in few high-leverage states (which is how this game
     # works) — the p90 is the honest readout.
-    qvar_state = (
-        pi_target * jnp.square(q_all_target - q_v_exp[..., None])
-    ).sum(axis=-1)
+    qvar_state = (pi_target * jnp.square(q_all_target - q_v_exp[..., None])).sum(
+        axis=-1
+    )
     training_logs["player_q_action_var"] = average(qvar_state, q_mask)
     training_logs["player_q_action_var_p90"] = jnp.nanquantile(
         jnp.where(q_mask, qvar_state, jnp.nan), 0.9
@@ -404,12 +395,11 @@ def train_step(
         ).sum(axis=-1)
         / n_legal
     )
-    training_logs["player_q_action_var_uniform"] = average(
-        qvar_uniform, q_mask
-    )
+    training_logs["player_q_action_var_uniform"] = average(qvar_uniform, q_mask)
     training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
         jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
     )
+
     # Within- vs between-MODALITY split of the uniform spread (2026-08-24,
     # docs/critic-weakness-analysis.md). The head composes per-cell Q as
     # macro[modality] + gated micro, so the uniform variance is exactly
@@ -458,12 +448,8 @@ def train_step(
                 jnp.nan,
             )
 
-        training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(
-            fresh_cols
-        )
-        training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(
-            replay_cols
-        )
+        training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(fresh_cols)
+        training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(replay_cols)
         vm_fresh = value_mask & fresh_cols[None, :]
         training_logs["player_value_r2_fresh"] = jnp.where(
             vm_fresh.any(),
@@ -471,9 +457,9 @@ def train_step(
                 value_prediction=player_target_pred.value_head.expectation.astype(
                     jnp.float32
                 ),
-                value_target=(
-                    player_targets.win_returns @ cat_vf_support
-                ).astype(jnp.float32),
+                value_target=(player_targets.win_returns @ cat_vf_support).astype(
+                    jnp.float32
+                ),
                 mask=vm_fresh,
             ),
             0.0,
@@ -644,9 +630,7 @@ def train_step(
             FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
         )
         has_switch = (flat_action_mask & switch_actions).any(axis=-1)
-        has_other = (
-            flat_action_mask & jnp.logical_not(switch_actions)
-        ).any(axis=-1)
+        has_other = (flat_action_mask & jnp.logical_not(switch_actions)).any(axis=-1)
         switch_choice_mask = policy_mask & has_switch & has_other
 
         # COMA-style all-action counterfactual policy loss (replaced
@@ -665,10 +649,7 @@ def train_step(
         # to opp_private_team. Weighted by the neurd_coef runtime
         # scalar.
         learner_log_policy = learner_action_head.log_policy
-        pi_learner = (
-            jnp.exp(learner_log_policy.astype(jnp.float32))
-            * flat_action_mask
-        )
+        pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
         pi_learner = pi_learner / jnp.maximum(
             pi_learner.sum(axis=-1, keepdims=True), 1e-8
         )
@@ -808,14 +789,10 @@ def train_step(
             # by the pi prefactor alone.
             player_neurd_grad_switch=neurd_grad_switch,
             player_neurd_grad_move=neurd_grad_move,
-            player_neurd_grad_ratio=neurd_ratio(
-                neurd_grad_switch, neurd_grad_move
-            ),
+            player_neurd_grad_ratio=neurd_ratio(neurd_grad_switch, neurd_grad_move),
             player_neurd_prob_switch=neurd_prob_switch,
             player_neurd_prob_move=neurd_prob_move,
-            player_neurd_prob_ratio=neurd_ratio(
-                neurd_prob_switch, neurd_prob_move
-            ),
+            player_neurd_prob_ratio=neurd_ratio(neurd_prob_switch, neurd_prob_move),
             player_neurd_absadv_switch=neurd_absadv_switch,
             player_neurd_absadv_move=neurd_absadv_move,
             player_neurd_absadv_ratio=neurd_ratio(
@@ -864,6 +841,7 @@ def train_step(
                 policy_mask,
             ),
         )
+
         # Calibration by context, graded on Q_private (the contexts
         # exist to interpret the Q_private switch/move gap, so they
         # must grade the same rung). Forced switches stay data-rich
@@ -1032,9 +1010,7 @@ def train_step(
             # Which lattice combo this variant was compiled for (static
             # per executable) — the retuning readout for
             # config.player_shape_lattice.
-            player_shape_T=float(
-                batch.player_transitions.env_output.done.shape[0]
-            ),
+            player_shape_T=float(batch.player_transitions.env_output.done.shape[0]),
             player_shape_H=float(batch.player_history.field.shape[0]),
             player_policy_value_mask_ratio=policy_mask.sum()
             / (value_mask.sum() + 1e-8),
@@ -1094,9 +1070,9 @@ def train_step(
         # against a zero payoff. average()-based builder losses are
         # empty-mask-safe (0, not NaN) if a batch happens to hold no
         # terminal chunk.
-        builder_valid = builder_valid & player_transitions.env_output.done.any(
-            axis=0
-        )[None, :].astype(jnp.bool_)
+        builder_valid = builder_valid & player_transitions.env_output.done.any(axis=0)[
+            None, :
+        ].astype(jnp.bool_)
         # Compute builder targets inside train_step (JAX/JIT compatible).
         builder_targets = compute_builder_targets(
             batch,

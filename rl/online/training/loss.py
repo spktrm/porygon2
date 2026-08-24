@@ -82,8 +82,6 @@ def forward_kl_loss(
     return average(loss, valid)
 
 
-
-
 def warmup_scale(step_count, warmup_steps: int):
     """NeuRD warm-up ramp (Step 2, docs/critic-weakness-analysis.md):
     0 -> 1 linearly over the lineage's first `warmup_steps` learner steps,
@@ -179,9 +177,7 @@ def hierarchical_neurd(
 
     y = jnp.where(modality_legal, y, 0.0)
     z = jnp.where(legal, z, 0.0)
-    y_gap = jax.lax.stop_gradient(
-        y - (y.sum(axis=-1) / count_modalities)[..., None]
-    )
+    y_gap = jax.lax.stop_gradient(y - (y.sum(axis=-1) / count_modalities)[..., None])
     z_gap = jax.lax.stop_gradient(z - ((z @ oh) / count_cells)[..., mod_index])
 
     def _open(valid, gap, w):

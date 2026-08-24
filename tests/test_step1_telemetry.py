@@ -4,8 +4,8 @@ pure panel function behaves on hand-built rows — NaN on empty slices,
 row 0 excluded from the previous-action split, matched-V counts that
 add up."""
 
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from rl.environment.data import FLAT_MODALITY_MASK
@@ -20,13 +20,21 @@ from rl.online.training.telemetry import (
 )
 
 A = int(np.asarray(FLAT_MODALITY_MASK).shape[0])
-SWITCH = int(np.argmax(np.asarray(FLAT_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__SWITCH))
-MOVE = int(np.argmax(np.asarray(FLAT_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__MOVE))
+SWITCH = int(
+    np.argmax(np.asarray(FLAT_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__SWITCH)
+)
+MOVE = int(
+    np.argmax(np.asarray(FLAT_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__MOVE)
+)
 
 
 def test_trajectory_side_fields_default_empty_and_or_empty_keeps_sentinel():
     traj = Trajectory()
-    assert traj.game_outcome == () and traj.game_length == () and traj.game_step_offset == ()
+    assert (
+        traj.game_outcome == ()
+        and traj.game_length == ()
+        and traj.game_step_offset == ()
+    )
     assert _or_empty(()) == ()
     arr = np.ones((1, 3), np.float32)
     assert _or_empty(arr) is arr
@@ -80,10 +88,16 @@ def test_critic_outcome_telemetry_counts_and_splits():
     assert logs["player_q_support_forced_switch_rows"] == 1.0
     assert logs["player_q_support_chunk_vol_switch_frac"] == 0.5
     # matched-V: every real-choice masked row lands in exactly one bin
-    n_vol = sum(logs[f"player_mv_bin{i}_n_vol"] for i in range(len(MATCHED_V_EDGES) - 1))
-    n_mv = sum(logs[f"player_mv_bin{i}_n_move"] for i in range(len(MATCHED_V_EDGES) - 1))
+    n_vol = sum(
+        logs[f"player_mv_bin{i}_n_vol"] for i in range(len(MATCHED_V_EDGES) - 1)
+    )
+    n_mv = sum(
+        logs[f"player_mv_bin{i}_n_move"] for i in range(len(MATCHED_V_EDGES) - 1)
+    )
     assert n_vol == 1.0
-    assert n_mv == 4.0  # chunk 0 rows 0,2 + chunk 1 rows 1,2 (row 0 there has no legal move)
+    assert (
+        n_mv == 4.0
+    )  # chunk 0 rows 0,2 + chunk 1 rows 1,2 (row 0 there has no legal move)
     # the critic's gap is the flat offset on every populated bin
     for i in range(len(MATCHED_V_EDGES) - 1):
         if logs[f"player_mv_bin{i}_n_vol"] + logs[f"player_mv_bin{i}_n_move"] > 0:

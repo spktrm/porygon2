@@ -97,4 +97,3 @@ class PILogController:
         """Hard set — recovery-to-ceiling, or a checkpoint restore.
         Re-clips, since bounds may not match whoever produced ``value``."""
         self.log = float(np.clip(value, self.log_min, self.log_max))
-

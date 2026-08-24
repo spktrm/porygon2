@@ -66,7 +66,9 @@ def gate(stub, run_state):
 
 
 def test_empty_league_waits_for_minimum_steps():
-    stub, run_state = make_learner(main_frames=MIN_FRAMES + 1, players=[], main_steps=100)
+    stub, run_state = make_learner(
+        main_frames=MIN_FRAMES + 1, players=[], main_steps=100
+    )
     assert gate(stub, run_state) is None
 
 
@@ -136,7 +138,9 @@ def test_dominance_is_judged_against_all_historicals():
     dominance."""
     main_ref = make_ref(100, frames=0)
     exp_ref = make_ref(FOREIGN_STEP, frames=0, origin=FOREIGN_ORIGIN)
-    stub, run_state = make_learner(main_frames=MIN_FRAMES + 1, players=[main_ref, exp_ref])
+    stub, run_state = make_learner(
+        main_frames=MIN_FRAMES + 1, players=[main_ref, exp_ref]
+    )
     main = stub.league.get_main_player()
     for _ in range(20):
         stub.league.update_payoff(main, main_ref, payoff=1.0)

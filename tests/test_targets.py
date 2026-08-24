@@ -193,7 +193,10 @@ class TestQOnestepOnExTrajectory:
         assert np.isfinite(np.asarray(y)).all()
         assert (np.abs(np.asarray(y)) <= 1.0 + 1e-6).all()
         q_all = residual_q(
-            jnp.zeros((T, B, A)), v, jnp.full((T, B, A), -np.log(A)), jnp.asarray(flat_mask)
+            jnp.zeros((T, B, A)),
+            v,
+            jnp.full((T, B, A), -np.log(A)),
+            jnp.asarray(flat_mask),
         )
         assert q_all.shape == (T, B, A)
         assert np.isfinite(np.asarray(q_all)).all()
@@ -242,7 +245,6 @@ class TestPlayerTargetsOnExTrajectory:
         # isr == 1 everywhere: full effective sample size, nothing clipped.
         np.testing.assert_allclose(float(logs["player_isr_ess"]), 1.0, atol=1e-3)
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
-
 
 
 class TestRNaDTransform:

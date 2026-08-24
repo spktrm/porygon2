@@ -188,4 +188,3 @@ def test_train_step_player_q_smoke():
     # multiply (finiteness at that end is hierarchical_neurd's unit test),
     # and a second static config would be a second full compile.
     assert np.isfinite(np.asarray(logs["player_loss_neurd"], dtype=np.float32))
-

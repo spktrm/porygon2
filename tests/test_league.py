@@ -3,13 +3,8 @@
 import numpy as np
 import pytest
 
-from rl.online.league import (
-    MAIN_KEY,
-    League,
-    PlayerRef,
-    pfsp,
-)
 from rl.model.utils import ParamsContainer
+from rl.online.league import MAIN_KEY, League, PlayerRef, pfsp
 
 # A ref written by an older revision: a foreign origin tag in a disjoint
 # (far higher) step_count range. The roster must still be able to answer
@@ -45,7 +40,13 @@ def league():
 
 class TestPfsp:
     def test_normalises_to_one(self):
-        for weighting in ("variance", "linear", "linear_capped", "squared", "inverse_squared"):
+        for weighting in (
+            "variance",
+            "linear",
+            "linear_capped",
+            "squared",
+            "inverse_squared",
+        ):
             probs = pfsp(np.array([0.1, 0.5, 0.9]), weighting=weighting)
             assert probs.shape == (3,)
             np.testing.assert_allclose(probs.sum(), 1.0, rtol=1e-6)
@@ -154,9 +155,7 @@ class TestEviction:
 class TestSerialization:
     def test_roundtrip_preserves_roster_and_stats(self, league):
         league.add_player(make_ref(100, frames=5_000, origin="main"))
-        league.add_player(
-            make_ref(FOREIGN_STEP, frames=42, origin=FOREIGN_ORIGIN)
-        )
+        league.add_player(make_ref(FOREIGN_STEP, frames=42, origin=FOREIGN_ORIGIN))
         main = league.get_main_player()
         for _ in range(5):
             league.update_payoff(main, league.players[100], payoff=1.0)

@@ -9,11 +9,7 @@ from typing import Literal
 import wandb.wandb_run
 
 import wandb
-
-from rl.online.artifact import (
-    Porygon2BuilderTrainState,
-    Porygon2PlayerTrainState,
-)
+from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.training.controllers import PILogController
 

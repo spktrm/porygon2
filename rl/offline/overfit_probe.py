@@ -120,7 +120,9 @@ def voluntary_switch_rows(chunk: Trajectory) -> int:
     env = chunk.player_transitions.env_output
     mask = np.asarray(env.action_mask)
     flat = mask.reshape(mask.shape[0], -1)
-    idx = np.asarray(chunk.player_transitions.agent_output.actor_output.action_head.action_index)
+    idx = np.asarray(
+        chunk.player_transitions.agent_output.actor_output.action_head.action_index
+    )
     rows = trainable_rows(np.asarray(env.done).astype(bool))
     taken_switch = _SWITCH_CELLS[idx]
     has_move = (flat & _MOVE_CELLS).any(-1)
@@ -134,7 +136,9 @@ def pick_batches(chunks: list[Trajectory], batch: int, pool: int = 1):
     voluntary panels have rows). Returns (train_batches, held_batch)."""
     ranked = sorted(chunks, key=voluntary_switch_rows, reverse=True)
     if len(ranked) < (pool + 1) * batch:
-        raise ValueError(f"{len(ranked)} chunks < {(pool + 1) * batch} needed (pool {pool})")
+        raise ValueError(
+            f"{len(ranked)} chunks < {(pool + 1) * batch} needed (pool {pool})"
+        )
     train = [ranked[i : pool * batch : pool] for i in range(pool)]
     held = ranked[pool * batch : (pool + 1) * batch]
     logger.info(
@@ -189,7 +193,9 @@ def install_synthetic_labels(c: float):
     def labels(batch, v_target, config):
         dones = batch.player_transitions.env_output.done
         mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
-        idx = batch.player_transitions.agent_output.actor_output.action_head.action_index
+        idx = (
+            batch.player_transitions.agent_output.actor_output.action_head.action_index
+        )
         y = v_target.astype(jnp.float32) + c * pattern[idx]
         return jnp.where(dones.astype(bool), 0.0, y) * mask
 
@@ -225,8 +231,12 @@ def apply_override(params, override: str | None):
 
 
 def build_states(ckpt_dir: str, config, override: str | None = None):
-    player_net = get_player_model(get_player_model_config(config.generation, train=True))
-    builder_net = get_builder_model(get_builder_model_config(config.generation, train=True))
+    player_net = get_player_model(
+        get_player_model_config(config.generation, train=True)
+    )
+    builder_net = get_builder_model(
+        get_builder_model_config(config.generation, train=True)
+    )
     player_state, builder_state = create_train_state(
         player_net, builder_net, jax.random.key(0), config
     )
@@ -307,7 +317,10 @@ def make_learner_q_stats(player_net):
         has_both = vs.any(-1) & vm.any(-1) & rows
         n_legal = jnp.maximum(flat.sum(-1), 1)
         mean_legal = jnp.sum(jnp.where(flat, q_all, 0.0), -1) / n_legal
-        var_legal = jnp.sum(jnp.where(flat, (q_all - mean_legal[..., None]) ** 2, 0.0), -1) / n_legal
+        var_legal = (
+            jnp.sum(jnp.where(flat, (q_all - mean_legal[..., None]) ** 2, 0.0), -1)
+            / n_legal
+        )
         idx = pt.agent_output.actor_output.action_head.action_index
         q_taken = jnp.take_along_axis(q_all, idx[..., None], -1)[..., 0]
         taken_switch = jnp.take(switch_cells, idx)
@@ -319,16 +332,19 @@ def make_learner_q_stats(player_net):
 
         cell_mean = modality_means(q_all, flat)
         within = jnp.sum(jnp.where(flat, (q_all - cell_mean) ** 2, 0.0), -1) / n_legal
-        between = jnp.sum(
-            jnp.where(flat, (cell_mean - mean_legal[..., None]) ** 2, 0.0), -1
-        ) / n_legal
+        between = (
+            jnp.sum(jnp.where(flat, (cell_mean - mean_legal[..., None]) ** 2, 0.0), -1)
+            / n_legal
+        )
 
         return {
             "learner_q_action_var": avg(var_legal, rows),
             "learner_q_action_var_within": avg(within, rows),
             "learner_q_action_var_between": avg(between, rows),
             "learner_q_switch_move_gap": avg(best_s - best_m, has_both),
-            "learner_q_pivotal_frac": avg((best_s > best_m).astype(jnp.float32), has_both),
+            "learner_q_pivotal_frac": avg(
+                (best_s > best_m).astype(jnp.float32), has_both
+            ),
             "learner_q_taken_voluntary": avg(q_taken, vol),
             "learner_q_taken_move": avg(q_taken, mov),
             "learner_n_voluntary": vol.sum().astype(jnp.float32),
@@ -342,7 +358,16 @@ def _floats(logs) -> dict:
     return {k: float(v) for k, v in logs.items() if jnp.ndim(v) == 0}
 
 
-def run_arm(arm: str, ckpt_dir: str, train_batches, held_batch, steps: int, every: int, out: str, override=None):
+def run_arm(
+    arm: str,
+    ckpt_dir: str,
+    train_batches,
+    held_batch,
+    steps: int,
+    every: int,
+    out: str,
+    override=None,
+):
     config = arm_config(arm)
     train_batch = train_batches[0]
     player_net, player_state, builder_state = build_states(ckpt_dir, config, override)
@@ -363,7 +388,10 @@ def run_arm(arm: str, ckpt_dir: str, train_batches, held_batch, steps: int, ever
             records.append(rec)
             print(
                 f"[{arm} {split} {step:5d}] "
-                + " ".join(f"{k.replace('player_', '').replace('learner_', 'L.')}={rec.get(k, float('nan')):.4f}" for k in PRINT_KEYS),
+                + " ".join(
+                    f"{k.replace('player_', '').replace('learner_', 'L.')}={rec.get(k, float('nan')):.4f}"
+                    for k in PRINT_KEYS
+                ),
                 flush=True,
             )
 
@@ -371,7 +399,10 @@ def run_arm(arm: str, ckpt_dir: str, train_batches, held_batch, steps: int, ever
     evaluate(0)
     for step in range(1, steps + 1):
         player_state, builder_state, _ = TRAIN_STEP_JIT(
-            player_state, builder_state, train_batches[(step - 1) % len(train_batches)], config
+            player_state,
+            builder_state,
+            train_batches[(step - 1) % len(train_batches)],
+            config,
         )
         if step % every == 0 or step == steps:
             evaluate(step)
@@ -396,9 +427,13 @@ def main(argv=None):
     )
     ap.add_argument("--out", required=True)
     ap.add_argument("--games-pkl", default=None, help="reuse played sides")
-    ap.add_argument("--override", default=None, help="probe-only param surgery, e.g. gate1_kzero")
+    ap.add_argument(
+        "--override", default=None, help="probe-only param surgery, e.g. gate1_kzero"
+    )
     a = ap.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(message)s", stream=sys.stdout
+    )
     os.makedirs(a.out, exist_ok=True)
 
     games_pkl = a.games_pkl or os.path.join(a.out, "games.pkl")
@@ -419,10 +454,14 @@ def main(argv=None):
     train_batches, held_batch = pick_batches(chunks, a.batch, a.pool)
     arms = a.arms.split(",")
     if "synthetic" in arms:
-        assert arms == ["synthetic"], "the synthetic arm patches the jitted label: own process"
+        assert arms == [
+            "synthetic"
+        ], "the synthetic arm patches the jitted label: own process"
         install_synthetic_labels(a.synthetic)
     for arm in arms:
-        run_arm(arm, a.ckpt, train_batches, held_batch, a.steps, a.every, a.out, a.override)
+        run_arm(
+            arm, a.ckpt, train_batches, held_batch, a.steps, a.every, a.out, a.override
+        )
 
 
 if __name__ == "__main__":

@@ -76,6 +76,7 @@ def host_to_device_worker(run_state: RunState, config: Porygon2LearnerConfig):
 
     logger.info("host_to_device_worker exiting.")
 
+
 def wandb_log_worker(run_state: RunState, config: Porygon2LearnerConfig):
     """Background thread: drains log dicts for the run,
     paying the device->host transfer and wandb serialization here so
@@ -93,6 +94,7 @@ def wandb_log_worker(run_state: RunState, config: Porygon2LearnerConfig):
             run_state.wandb_run.log(host_logs)
         except Exception:
             logger.exception("wandb logging failed")
+
 
 def checkpoint_writer_worker(run_state: RunState):
     """Background thread: does the actual checkpoint disk I/O so the
@@ -123,6 +125,8 @@ def checkpoint_writer_worker(run_state: RunState):
                 "again.",
                 payload.get("step_count"),
             )
+
+
 def update_replay_controller(
     run_state: RunState, config: Porygon2LearnerConfig, host_logs: dict
 ) -> None:
@@ -159,6 +163,8 @@ def update_replay_controller(
 
     host_logs["player_replay_max_reuses"] = float(run_state.player_replay.max_reuses)
     host_logs["player_replay_realised_ratio"] = run_state.replay_realised_ratio
+
+
 def start_workers(run_state: RunState, config: Porygon2LearnerConfig) -> None:
     transfer_thread = threading.Thread(
         target=host_to_device_worker,
@@ -182,6 +188,7 @@ def start_workers(run_state: RunState, config: Porygon2LearnerConfig) -> None:
     )
     ckpt_thread.start()
     run_state.worker_threads.extend([transfer_thread, log_thread, ckpt_thread])
+
 
 def stop_workers(run_state: RunState, strict: bool = True) -> None:
     run_state.done = True

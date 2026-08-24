@@ -17,14 +17,8 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
-
-from rl.environment.interfaces import (
-    Batch,
-    Trajectory,
-)
-from rl.environment.utils import (
-    next_tqdm_position,
-)
+from rl.environment.interfaces import Batch, Trajectory
+from rl.environment.utils import next_tqdm_position
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
@@ -32,11 +26,8 @@ from rl.online.artifact import (
 )
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.config import Porygon2LearnerConfig
+from rl.online.league import MAIN_KEY, League
 from rl.online.training.controllers import PILogController
-from rl.online.league import (
-    MAIN_KEY,
-    League,
-)
 from rl.online.training.diagnostics import (
     available_memory_fraction,
     log_memory_diagnostics,
@@ -195,7 +186,9 @@ class Learner:
         run_state = self.run_state
         add_cond = run_state.player_replay._add_cv
         with add_cond:
-            add_cond.wait_for(lambda: run_state.done or run_state.player_replay.ready_to_add())
+            add_cond.wait_for(
+                lambda: run_state.done or run_state.player_replay.ready_to_add()
+            )
             if run_state.done:
                 return
             run_state.player_replay.add(traj)
@@ -205,7 +198,6 @@ class Learner:
             sample_cond.notify_all()
 
     # --- background workers --------------------------------------------------
-
 
     # --- controller state ----------------------------------------------------
 
@@ -251,7 +243,6 @@ class Learner:
     # LambdaGapController (2026-08-14) — UPGO's per-step cut plus the
     # fixed player_lambda replaced it (see targets.py). The replay
     # reuse-cap controller below is the one remaining per-log-tick loop.
-
 
     # --- scheduler -----------------------------------------------------------
 
@@ -365,9 +356,7 @@ class Learner:
             return None
         return launch
 
-    def register_actor_threads(
-        self, threads: list[threading.Thread]
-    ) -> None:
+    def register_actor_threads(self, threads: list[threading.Thread]) -> None:
         """Called by main.py right after it constructs and starts a
         run's PlayerActor/BuilderActor pool (in response to the
         spawn_actor_pool callback, on creation, or after a reset) — Learner
@@ -376,8 +365,6 @@ class Learner:
         straggler-checks) them exactly like the 3 internal workers,
         instead of silently leaving them running against now-stale state."""
         self.run_state.actor_threads.extend(threads)
-
-
 
     def _precompile_lattice(self, run_state: RunState, batch: Batch) -> None:
         """Fail-fast compilation of EVERY lattice combo at the first
@@ -459,9 +446,7 @@ class Learner:
                 resized,
                 self.config,
             )
-            logger.info(
-                "Compiled (%d, %d) in %.1fs.", t_c, h_c, time.time() - start
-            )
+            logger.info("Compiled (%d, %d) in %.1fs.", t_c, h_c, time.time() - start)
 
     def _train_step(self, run_state: RunState, batch: Batch) -> dict:
         """Runs the JAX update, rebinding the result onto run_state."""
@@ -587,7 +572,6 @@ class Learner:
             add_player_to_league(run_state, self.league, self.config, step)
             run_state.player_replay.reset_usage_counts()
 
-
     def _check_oom_guard(self, run_state: RunState, step: int) -> None:
         """Self-monitoring safety valve, not a leak fix: if available RAM
         drops below config.oom_guard_min_available_fraction, save a
@@ -613,8 +597,5 @@ class Learner:
                 self.config.oom_guard_min_available_fraction,
                 step,
             )
-            save_path = self._write_checkpoint(
-                self.run_state, synchronous=True
-            )
+            save_path = self._write_checkpoint(self.run_state, synchronous=True)
             raise OOMGuardTriggered(save_path)
-

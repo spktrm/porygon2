@@ -241,9 +241,7 @@ class PlayerActor:
         )
         final_window = self._snapshot_window(player_actor_input)
 
-        def make_chunk(
-            rows: list[PlayerTransition], window, start: int
-        ) -> Trajectory:
+        def make_chunk(rows: list[PlayerTransition], window, start: int) -> Trajectory:
             if len(rows) < chunk_length:
                 # Same padding convention as the pre-chunk whole-game path:
                 # copies of the terminal step with done zeroed — cumsum-done

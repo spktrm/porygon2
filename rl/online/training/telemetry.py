@@ -6,14 +6,14 @@ from typing import Any, TypeVar
 
 import chex
 import jax
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 import optax
 
 from rl.environment.data import (
     ALLY_SWITCH_INDICES,
-    FLAT_MODALITY_MASK,
     CAT_VF_SUPPORT,
+    FLAT_MODALITY_MASK,
     NUM_PACKED_SET_FEATURES,
     RESERVE_ENTITY_INDICES,
 )
@@ -143,9 +143,7 @@ def collect_batch_telemetry_data(
     # have dropped tokens; a part-filled one covers the game from its
     # start. Sustained non-zero here means player_history_length is too
     # small for player_chunk_length.
-    field_valid = (
-        batch.player_history.field[..., FieldFeature.FIELD_FEATURE__VALID] > 0
-    )
+    field_valid = batch.player_history.field[..., FieldFeature.FIELD_FEATURE__VALID] > 0
     field_requests = batch.player_history.field[
         ..., FieldFeature.FIELD_FEATURE__REQUEST_COUNT
     ]
@@ -274,7 +272,9 @@ def modality_means(q: jax.Array, legal_mask: jax.Array) -> jax.Array:
     (..., A) -> (..., A). Illegal cells read their modality's mean too
     (callers mask). f32."""
     mods = jnp.asarray(np.asarray(FLAT_MODALITY_MASK), jnp.int32)
-    onehot = jax.nn.one_hot(mods, int(np.max(FLAT_MODALITY_MASK)) + 1, dtype=jnp.float32)
+    onehot = jax.nn.one_hot(
+        mods, int(np.max(FLAT_MODALITY_MASK)) + 1, dtype=jnp.float32
+    )
     legal = legal_mask.astype(jnp.float32)
     counts = legal @ onehot
     sums = (legal * q.astype(jnp.float32)) @ onehot
@@ -316,7 +316,9 @@ def q_head_param_telemetry(params, grads) -> dict[str, jax.Array]:
         logs[f"player_q_micro_scale_{name}"] = gate[i]
     for key, paths in _Q_HEAD_LEAVES.items():
         leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
-        logs[key] = jnp.mean(jnp.stack([jnp.sqrt(jnp.mean(jnp.square(x))) for x in leaves]))
+        logs[key] = jnp.mean(
+            jnp.stack([jnp.sqrt(jnp.mean(jnp.square(x))) for x in leaves])
+        )
     for key, path in _Q_HEAD_GRAD_SUBTREES.items():
         logs[key] = optax.global_norm(_get(g, path))
     return logs
@@ -409,9 +411,17 @@ def critic_outcome_telemetry(
     move_mask = q_mask & jnp.logical_not(taken_switch)
 
     logs: dict[str, jax.Array] = {}
-    for name, m in (("move", move_mask), ("forced", forced_mask), ("voluntary", vol_mask)):
-        logs[f"player_q_label_var_outcome_{name}"] = masked_var(G - q_taken, m & valid_g)
-        logs[f"player_q_label_var_onestep_{name}"] = masked_var(onestep_label - q_taken, m)
+    for name, m in (
+        ("move", move_mask),
+        ("forced", forced_mask),
+        ("voluntary", vol_mask),
+    ):
+        logs[f"player_q_label_var_outcome_{name}"] = masked_var(
+            G - q_taken, m & valid_g
+        )
+        logs[f"player_q_label_var_onestep_{name}"] = masked_var(
+            onestep_label - q_taken, m
+        )
     logs["player_q_label_var_ratio_voluntary"] = (
         logs["player_q_label_var_outcome_voluntary"]
         / logs["player_q_label_var_onestep_voluntary"]
@@ -437,20 +447,27 @@ def critic_outcome_telemetry(
         logs[f"player_mv_bin{i}_g_move"] = g_move
         logs[f"player_mv_bin{i}_gap_realised"] = g_vol - g_move
         logs[f"player_mv_bin{i}_gap_critic"] = masked_mean(critic_gap, b)
-    logs["player_mv_pooled_gap_realised"] = masked_mean(G, rows & taken_switch) - masked_mean(
-        G, rows & jnp.logical_not(taken_switch)
-    )
+    logs["player_mv_pooled_gap_realised"] = masked_mean(
+        G, rows & taken_switch
+    ) - masked_mean(G, rows & jnp.logical_not(taken_switch))
     logs["player_mv_pooled_gap_critic"] = masked_mean(critic_gap, rows)
     logs["player_mv_v_at_vol_switch"] = masked_mean(v_target, rows & taken_switch)
-    logs["player_mv_v_at_move"] = masked_mean(v_target, rows & jnp.logical_not(taken_switch))
+    logs["player_mv_v_at_move"] = masked_mean(
+        v_target, rows & jnp.logical_not(taken_switch)
+    )
 
     vm = value_mask & valid_g
     t_idx = jnp.arange(T, dtype=f32)[:, None]
-    phase = (game_step_offset.astype(f32) + t_idx) / jnp.maximum(game_length.astype(f32), 1.0)
+    phase = (game_step_offset.astype(f32) + t_idx) / jnp.maximum(
+        game_length.astype(f32), 1.0
+    )
     logs["player_v_outcome_r2_all"] = masked_r2(v_target, G, vm)
     logs["player_v_outcome_r2_early"] = masked_r2(v_target, G, vm & (phase < 1 / 3))
-    logs["player_v_outcome_r2_mid"] = masked_r2(v_target, G, vm & (phase >= 1 / 3) & (phase < 2 / 3))
+    logs["player_v_outcome_r2_mid"] = masked_r2(
+        v_target, G, vm & (phase >= 1 / 3) & (phase < 2 / 3)
+    )
     logs["player_v_outcome_r2_late"] = masked_r2(v_target, G, vm & (phase >= 2 / 3))
+
     # Previous-row action, split forced / voluntary: after a FORCED switch
     # (a mon just fainted) V read +0.23 optimistic on the collapsed
     # baseline, while the offline post-VOLUNTARY-switch read was
@@ -469,14 +486,20 @@ def critic_outcome_telemetry(
         ("prev_voluntary", prev_voluntary),
         ("prev_move", jnp.logical_not(prev_switch)),
     ):
-        logs[f"player_v_outcome_r2_{name}"] = masked_r2(v_target, G, vm & known_prev & m)
-        logs[f"player_v_outcome_bias_{name}"] = masked_mean(v_target - G, vm & known_prev & m)
+        logs[f"player_v_outcome_r2_{name}"] = masked_r2(
+            v_target, G, vm & known_prev & m
+        )
+        logs[f"player_v_outcome_bias_{name}"] = masked_mean(
+            v_target - G, vm & known_prev & m
+        )
     logs["player_v_onestep_r2"] = masked_r2(v_target, onestep_label, q_mask)
 
     logs["player_q_target_edge_frac"] = masked_mean(
         (jnp.abs(q_label.astype(f32)) >= 0.999).astype(f32), q_mask
     )
-    logs["player_q_support_chunk_vol_switch_frac"] = vol_mask.any(axis=0).astype(f32).mean()
+    logs["player_q_support_chunk_vol_switch_frac"] = (
+        vol_mask.any(axis=0).astype(f32).mean()
+    )
     logs["player_q_support_vol_switch_rows"] = vol_mask.sum().astype(f32)
     logs["player_q_support_forced_switch_rows"] = forced_mask.sum().astype(f32)
     return logs

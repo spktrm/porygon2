@@ -6,8 +6,8 @@ exist at deploy time."""
 
 import jax
 import numpy as np
-from conftest import open_zero_init_paths
 import pytest
+from conftest import open_zero_init_paths
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
@@ -48,9 +48,7 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
     # opp_private_team; the populated variant borrows the player's own
     # private team as a structurally valid sheet.
     populated = actor_input.replace(
-        env=actor_input.env.replace(
-            opp_private_team=actor_input.env.private_team
-        )
+        env=actor_input.env.replace(opp_private_team=actor_input.env.private_team)
     )
 
     base = real_model_apply(params, actor_input, actor_output, HeadParams())
@@ -83,9 +81,7 @@ def test_policy_and_ladder_invariant_to_opp_private_team(
         np.asarray(base.value_head.logits), np.asarray(priv.value_head.logits)
     )
     # Q_all reads the sheet through its value_all conditioning.
-    assert not np.array_equal(
-        np.asarray(base.q_adv), np.asarray(priv.q_adv)
-    )
+    assert not np.array_equal(np.asarray(base.q_adv), np.asarray(priv.q_adv))
 
 
 # NOTE (2026-08-16): the earlier empty-sheet all==private equality test was
@@ -105,9 +101,7 @@ def test_ladder_heads_present_and_shaped(real_model_and_trajectory, real_model_a
     assert np.asarray(out.private_value_logits).shape == (T, n_bins)
     assert np.asarray(out.public_value_logits).shape == (T, n_bins)
     assert np.isfinite(np.asarray(out.private_value_logits, dtype=np.float32)).all()
-    assert np.isfinite(
-        np.asarray(out.public_value_logits, dtype=np.float32)
-    ).all()
+    assert np.isfinite(np.asarray(out.public_value_logits, dtype=np.float32)).all()
     # Two-rung Q: same flat action grid and support for both rungs.
     A = int(np.prod(actor_input.env.action_mask.shape[-2:]))
     assert np.asarray(out.q_adv).shape == (T, A)

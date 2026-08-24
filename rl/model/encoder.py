@@ -1988,9 +1988,7 @@ class Encoder(nn.Module):
             value_embeddings,
             private_value_embeddings,
             public_value_embeddings,
-        ) = _forward_vmap()(
-            self, env_step, row_states, order_valid, field_state
-        )
+        ) = _forward_vmap()(self, env_step, row_states, order_valid, field_state)
 
         return (
             action_embeddings,

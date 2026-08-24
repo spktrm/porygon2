@@ -8,12 +8,10 @@ Marked slow (~1 min): deselect with `-m "not slow"` for the quick suite.
 import jax
 import jax.numpy as jnp
 import numpy as np
-from conftest import open_zero_init_paths
 import pytest
+from conftest import open_zero_init_paths
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
-
-
 
 
 def test_init_produces_finite_params(real_model_and_trajectory, real_model_apply):
@@ -78,7 +76,9 @@ def test_q_head_forward_shapes(real_model_and_trajectory, real_model_apply):
     assert np.asarray(out.action_head.log_policy).shape[-1] == A
 
 
-def test_q_head_is_flat_at_init_and_local_routes_get_gradient(real_model_and_trajectory, real_model_apply):
+def test_q_head_is_flat_at_init_and_local_routes_get_gradient(
+    real_model_and_trajectory, real_model_apply
+):
     """The flat-at-init contract (every Q cell exactly 0) AND the
     regression test for the 2026-08-24 finding: the within-modality
     route must be a single zero-init factor, so a within-modality
@@ -102,7 +102,9 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(real_model_and_tra
 
     def loss(p):
         o = real_model_apply(p, actor_input, actor_output, HeadParams())
-        return jnp.sum(o.q_adv.astype(jnp.float32) * jnp.asarray(pattern) * jnp.asarray(legal))
+        return jnp.sum(
+            o.q_adv.astype(jnp.float32) * jnp.asarray(pattern) * jnp.asarray(legal)
+        )
 
     grads = jax.grad(loss)(params)["params"]["q_macro_micro"]
     for name in ("micro_local_src", "micro_local_tgt"):
@@ -111,7 +113,9 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(real_model_and_tra
     # The gated pointer's q/k projections get NOTHING at init — the
     # product structure this test exists to document.
     for name in ("Dense_0", "Dense_1"):
-        assert not np.asarray(grads["micro"][name]["kernel"], dtype=np.float32).any(), name
+        assert not np.asarray(
+            grads["micro"][name]["kernel"], dtype=np.float32
+        ).any(), name
 
 
 def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):

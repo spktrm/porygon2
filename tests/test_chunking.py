@@ -9,10 +9,10 @@ import pytest
 from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerHistoryOutput,
-    Trajectory,
+    PlayerPackedHistoryOutput,
     PlayerTransition,
+    Trajectory,
 )
-from rl.environment.interfaces import PlayerPackedHistoryOutput
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.player_actor import chunk_spans
@@ -72,7 +72,6 @@ def _windows_fixture(valid_steps: int, rows_per_step: int, capacity: int = 512):
     RELEVANT_ENTITY_IDX columns — the contiguous-ascending layout the
     service's getHistory guarantees and clip_history_windows_tail relies
     on."""
-    from rl.environment.protos.enums_pb2 import SpeciesEnum
     from rl.environment.protos.features_pb2 import EntityRevealedNodeFeature
 
     num_features = len(FieldFeature.keys())
@@ -118,9 +117,7 @@ def test_joint_tail_clip_keeps_recent_rows_and_rebases_indices():
 
     # Steps 44..299 own packed rows 88..599 -> start_row 88, 512 rows kept.
     assert out_packed.edge_cache.shape[0] == 512
-    np.testing.assert_array_equal(
-        out_packed.edge_cache[:, 0], np.arange(88, 600)
-    )
+    np.testing.assert_array_equal(out_packed.edge_cache[:, 0], np.arange(88, 600))
     # Rebased references: each kept step's rows, shifted to the window.
     idx0 = field[:256, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0]
     np.testing.assert_array_equal(idx0, np.arange(256) * 2)
@@ -210,9 +207,7 @@ def test_untruncated_tail_window_forward_is_identical(real_model_and_trajectory)
     history_window, packed_window = clip_history_windows_tail(
         actor_input.history, actor_input.packed_history, window
     )
-    windowed = actor_input.replace(
-        history=history_window, packed_history=packed_window
-    )
+    windowed = actor_input.replace(history=history_window, packed_history=packed_window)
 
     full = network.apply(params, actor_input, actor_output, HeadParams())
     clipped = network.apply(params, windowed, actor_output, HeadParams())
@@ -245,9 +240,7 @@ def test_truncated_tail_window_forward_is_finite(real_model_and_trajectory):
     history_window, packed_window = clip_history_windows_tail(
         actor_input.history, actor_input.packed_history, 32
     )
-    windowed = actor_input.replace(
-        history=history_window, packed_history=packed_window
-    )
+    windowed = actor_input.replace(history=history_window, packed_history=packed_window)
     out = network.apply(params, windowed, actor_output, HeadParams())
     log_probs = np.asarray(out.value_head.log_probs, dtype=np.float32)
     assert np.isfinite(log_probs).all()
@@ -285,7 +278,9 @@ def test_final_row_is_bootstrap_only_unless_terminal():
     isr = jnp.ones((t_len, batch_size), dtype=jnp.float32)
 
     targets, _ = compute_player_targets(
-        batch, value_log_probs=value_log_probs, isr=isr,
+        batch,
+        value_log_probs=value_log_probs,
+        isr=isr,
         config=Porygon2LearnerConfig(),
     )
     value_mask = np.asarray(targets.value_mask)
@@ -306,10 +301,7 @@ def test_shape_lattice_trim_is_lossless():
     each chunk's real content and _trim_to_lattice slices to the first
     fitting combo — never dropping a valid history step, and preserving
     the [-1] outcome reads (padding rows are terminal-step copies)."""
-    from rl.online.training.batching import (
-        _chunk_required_shape,
-        _trim_to_lattice,
-    )
+    from rl.online.training.batching import _chunk_required_shape, _trim_to_lattice
 
     lattice = ((48, 128), (64, 192), (64, 256))
     history, packed = _windows_fixture(valid_steps=50, rows_per_step=2, capacity=256)

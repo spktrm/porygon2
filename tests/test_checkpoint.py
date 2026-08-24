@@ -20,7 +20,9 @@ def tree_equal(a, b):
 @pytest.fixture
 def params():
     rng = np.random.default_rng(0)
-    return {"params": {"encoder": rng.normal(size=(4, 4)), "v_head": rng.normal(size=(4,))}}
+    return {
+        "params": {"encoder": rng.normal(size=(4, 4)), "v_head": rng.normal(size=(4,))}
+    }
 
 
 def test_param_snapshot_roundtrip(tmp_path, params):

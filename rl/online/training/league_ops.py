@@ -11,8 +11,8 @@ import os
 
 import jax
 import numpy as np
-import wandb
 
+import wandb
 from rl import checkpoint
 from rl.environment.data import STOI
 from rl.model.utils import ParamsContainer
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # scale removed 2026-08-14 with the ExploitabilityController — the
 # worst-matchup win-rate signal still exists in _should_add_new_player's
 # "dominant" gate; it just doesn't actuate anything anymore.)
+
 
 def should_add_new_player(
     run_state: RunState, league: League, config: Porygon2LearnerConfig
@@ -48,9 +49,7 @@ def should_add_new_player(
     if frames_passed < config.add_player_min_frames:
         return None
 
-    historical_players = [
-        v for k, v in league.players.items() if k not in LIVE_KEYS
-    ]
+    historical_players = [v for k, v in league.players.items() if k not in LIVE_KEYS]
 
     if not historical_players:
         if (
@@ -68,6 +67,7 @@ def should_add_new_player(
         return "overdue"
     return None
 
+
 def create_params_container(run_state: RunState) -> ParamsContainer:
     return ParamsContainer(
         player_frame_count=jax.device_get(run_state.player_state.frame_count).item(),
@@ -76,6 +76,7 @@ def create_params_container(run_state: RunState) -> ParamsContainer:
         player_params=jax.device_get(run_state.player_state.params),
         builder_params=jax.device_get(run_state.builder_state.params),
     )
+
 
 def add_player_to_league(
     run_state: RunState,
@@ -106,7 +107,9 @@ def add_player_to_league(
         PlayerRef(
             step_count=league_step,
             snapshot_dir=snapshot_dir,
-            player_frame_count=jax.device_get(run_state.player_state.frame_count).item(),
+            player_frame_count=jax.device_get(
+                run_state.player_state.frame_count
+            ).item(),
             builder_frame_count=jax.device_get(
                 run_state.builder_state.frame_count
             ).item(),
@@ -115,6 +118,7 @@ def add_player_to_league(
             origin=origin,
         )
     )
+
 
 def get_usage_counts(run_state: RunState):
     result = {}
@@ -131,13 +135,16 @@ def get_usage_counts(run_state: RunState):
         result[f"{key}_usage"] = table
     return result
 
+
 def winrate_tracked_opponents(league: League) -> list[PlayerRef]:
     """Every historical league member."""
     return [v for k, v in league.players.items() if k not in LIVE_KEYS]
 
+
 def ref_label(ref: PlayerRef) -> str:
     """Payoff-table label: the snapshot's own step count."""
     return f"{ref.step_count}"
+
 
 def get_league_winrates(league: League) -> dict:
     current = league.get_live(MAIN_KEY)
@@ -152,6 +159,7 @@ def get_league_winrates(league: League) -> dict:
         f"league_main_v_{ref_label(others[i])}_winrate": wr
         for i, wr in enumerate(win_rates)
     }
+
 
 def get_league_winrate_heatmap(league: League) -> dict:
     """Full pairwise win-rate matrix over the whole shared payoff
@@ -207,8 +215,6 @@ def get_league_winrate_heatmap(league: League) -> dict:
             "col_idx": "col_idx",
             "winrate": "winrate",
         },
-        string_fields={
-            "title": "league payoff table (row beats column)"
-        },
+        string_fields={"title": "league payoff table (row beats column)"},
     )
     return {"league_winrate_heatmap": chart}

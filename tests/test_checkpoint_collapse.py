@@ -72,7 +72,9 @@ def _find_leaf(params, name: str) -> np.ndarray:
         for path, leaf in jax.tree_util.tree_leaves_with_path(params)
         if path and getattr(path[-1], "key", None) == name
     ]
-    assert len(matches) == 1, f"expected exactly one {name!r} leaf, found {len(matches)}"
+    assert (
+        len(matches) == 1
+    ), f"expected exactly one {name!r} leaf, found {len(matches)}"
     return matches[0]
 
 
@@ -92,14 +94,16 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
     streams (action, value-all)."""
     from rl.environment.interfaces import Batch, PlayerTransition
     from rl.environment.utils import get_ex_player_step
-    from rl.model.config import get_player_model_config
     from rl.model.capacity import make_capacity_probe
+    from rl.model.config import get_player_model_config
     from rl.model.player_model import get_player_model
 
     manifest = read_manifest(ckpt_dir) or {}
     generation = int(manifest.get("generation", 9))
 
-    network = get_player_model(get_player_model_config(generation=generation, train=True))
+    network = get_player_model(
+        get_player_model_config(generation=generation, train=True)
+    )
     actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
 
     # This probe reads a checkpoint through TODAY's model code, so it is only
@@ -136,9 +140,9 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
         dormant_frac = float(np.asarray(logs[f"capacity_{name}_emb_dormant_frac"]))
         srank_frac = float(np.asarray(logs[f"capacity_{name}_emb_srank_frac"]))
         assert np.isfinite(dormant_frac) and np.isfinite(srank_frac)
-        assert dormant_frac < 0.5, (
-            f"{name} stream: {dormant_frac:.1%} of units dormant — looks collapsed"
-        )
+        assert (
+            dormant_frac < 0.5
+        ), f"{name} stream: {dormant_frac:.1%} of units dormant — looks collapsed"
         assert srank_frac > 0.01, (
             f"{name} stream: srank@0.99 is only {srank_frac:.1%} of width — "
             "representation rank looks collapsed"

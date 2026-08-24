@@ -42,7 +42,8 @@ function withTimeout<T>(
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
-            () => reject(new Error(`${what()} did not complete within ${ms}ms`)),
+            () =>
+                reject(new Error(`${what()} did not complete within ${ms}ms`)),
             ms,
         );
     });

@@ -121,7 +121,9 @@ def play_games(
         try:
             with cf.ThreadPoolExecutor(2) as ex:
                 futs = [
-                    ex.submit(a.unroll, jax.random.key(seed * 7 + game_no * 2 + i), dev_params)
+                    ex.submit(
+                        a.unroll, jax.random.key(seed * 7 + game_no * 2 + i), dev_params
+                    )
                     for i, a in enumerate(actors)
                 ]
                 return [f.result() for f in futs]
@@ -165,7 +167,9 @@ def flatten(sides: list[list[Trajectory]]) -> list[Trajectory]:
 def outcome(chunks: list[Trajectory]) -> float:
     """A side's terminal result in CAT_VF_SUPPORT units (+1 win / -1 loss),
     read from its last chunk's final row (the chunk contract)."""
-    return float(chunks[-1].player_transitions.env_output.win_reward[-1] @ CAT_VF_SUPPORT)
+    return float(
+        chunks[-1].player_transitions.env_output.win_reward[-1] @ CAT_VF_SUPPORT
+    )
 
 
 def dump(sides, path: str) -> None:
@@ -201,7 +205,9 @@ def forward(
             packed_history=b.player_packed_history,
             history=b.player_history,
         )
-        yield apply(dev_params, actor_input, pt.agent_output.actor_output, HeadParams()), b
+        yield apply(
+            dev_params, actor_input, pt.agent_output.actor_output, HeadParams()
+        ), b
 
 
 def decode_q(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:

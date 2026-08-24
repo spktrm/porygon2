@@ -31,6 +31,7 @@ THREAD_NAME_BUCKETS = (
     "ThreadPoolExecutor",
 )
 
+
 def log_memory_diagnostics(run_state: RunState, league, logs: dict) -> None:
     """Process-wide RAM attribution, riding main's periodic wandb logs
     every memory_diag_interval steps.
@@ -116,6 +117,8 @@ def log_memory_diagnostics(run_state: RunState, league, logs: dict) -> None:
     entries, cache_bytes = league.cache_stats()
     logs["diag_league_cache_entries"] = entries
     logs["diag_league_cache_mb"] = cache_bytes / 2**20
+
+
 def available_memory_fraction() -> float | None:
     """Fraction of total system RAM currently available (reclaimable
     caches counted as available, matching what actually predicts an

@@ -345,11 +345,15 @@ class MacroMicroHead(nn.Module):
             # contract); the modality centring in compose_action_grid
             # removes any per-modality offset these add.
             local_src = nn.Dense(
-                num_logits, use_bias=False, kernel_init=nn.initializers.zeros,
+                num_logits,
+                use_bias=False,
+                kernel_init=nn.initializers.zeros,
                 name="micro_local_src",
             )(action_embeddings)
             local_tgt = nn.Dense(
-                num_logits, use_bias=False, kernel_init=nn.initializers.zeros,
+                num_logits,
+                use_bias=False,
+                kernel_init=nn.initializers.zeros,
                 name="micro_local_tgt",
             )(action_embeddings)
             local = local_src[..., :, None, :] + local_tgt[..., None, :, :]
