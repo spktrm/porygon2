@@ -761,6 +761,10 @@ def train_step(
             beta=config.player_neurd_logit_clip,
         )
         loss_neurd = average(neurd.loss, policy_mask)
+        # Proximal decay on the centred free logits (see loss.py) —
+        # averaged with the same mask so the w/decay fixed point holds
+        # row-wise.
+        loss_neurd_decay = average(neurd.logit_l2, policy_mask)
         # Cell-level "open" for the per-cell readouts below is the
         # micro clip; the modality contest has its own macro clip.
         neurd_grad_prefactor = neurd.micro_open.astype(jnp.float32)
@@ -827,6 +831,25 @@ def train_step(
 
         neurd_logs = dict(
             player_loss_neurd=loss_neurd,
+            # Logit-scale panel: the decay's own value plus per-level
+            # centred-gap rms. Healthy = rms plateauing at ~|w|/decay
+            # (band edge 2.0 at most); the runaway signature was these
+            # climbing without bound alongside the head grad norm.
+            player_neurd_logit_l2=loss_neurd_decay,
+            player_neurd_macro_gap_rms=jnp.sqrt(
+                average(
+                    (neurd.macro_gap**2).sum(-1)
+                    / jnp.maximum(neurd.modality_legal.sum(-1), 1),
+                    policy_mask,
+                )
+            ),
+            player_neurd_micro_gap_rms=jnp.sqrt(
+                average(
+                    (neurd.micro_gap**2).sum(-1)
+                    / jnp.maximum(flat_action_mask.sum(-1), 1),
+                    policy_mask,
+                )
+            ),
             player_ref_penalty_switch=ref_penalty_switch,
             player_ref_penalty_move=ref_penalty_move,
             # Per-cell |d loss_neurd / d logit| on legal switch
@@ -940,7 +963,9 @@ def train_step(
             # pg: all-action NeuRD is the ONLY term that moves the action
             # logits toward return — the two below only regularise.
             # neurd_scale: the Step-2 warm-up ramp (1 once warmed up / off).
-            config.player_neurd_coef * neurd_scale * loss_neurd
+            config.player_neurd_coef
+            * neurd_scale
+            * (loss_neurd + config.player_neurd_logit_decay * loss_neurd_decay)
             # v + q: the critic stack. One coefficient for both Q rungs —
             # same estimator family on the same labels, mirroring the
             # value-ladder coef.

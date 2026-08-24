@@ -148,3 +148,36 @@ def test_composed_log_policy_form_has_the_cross_term():
     assert bool((jnp.abs(w_macro.sum(-1)) > 1e-4).any())
     # ... and the composed form's macro gradient is then NOT -W_m.
     assert not np.allclose(np.asarray(gy), -np.asarray(w_macro), atol=1e-4)
+
+
+def test_logit_decay_gradient_is_centred_logit():
+    """d logit_l2 / dy_m = y_c_m and d/dz_a = z_c_a exactly (centring is
+    a symmetric idempotent projection), zero on illegal cells and on the
+    softmax-invariant direction — so the combined loss's per-cell fixed
+    point is |centred logit| = |w| / decay_coef."""
+    y, z, legal, adv, beta = _case(seed=3)
+    gy, gz = jax.grad(
+        lambda y_, z_: _loss(y_, z_, legal, adv, beta).logit_l2.sum(),
+        argnums=(0, 1),
+    )(y, z)
+    out = _loss(y, z, legal, adv, beta)
+    np.testing.assert_allclose(
+        np.asarray(gy), np.asarray(out.macro_gap), rtol=1e-5, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        np.asarray(gz), np.asarray(out.micro_gap), rtol=1e-5, atol=1e-6
+    )
+    # Illegal cells: no decay.
+    assert not np.asarray(gz)[~np.asarray(legal)].any()
+    # A uniform shift of all legal logits (softmax-invariant) is
+    # decay-free: the gradient is centred, so it sums to ~0 per level.
+    np.testing.assert_allclose(np.asarray(gy).sum(-1), 0.0, atol=1e-5)
+    legal_np = np.asarray(legal)
+    # Per-modality centring: each modality's gradients sum to ~0.
+    for m in range(3):
+        sel = legal_np & (MOD_INDEX == m)
+        for r in range(z.shape[0]):
+            if sel[r].any():
+                np.testing.assert_allclose(
+                    np.asarray(gz)[r][sel[r]].sum(), 0.0, atol=1e-5
+                )

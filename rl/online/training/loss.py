@@ -107,6 +107,9 @@ class HierarchicalNeurd(NamedTuple):
     macro_adv: jax.Array  # (..., M) Q(m) - V, uncentred, 0 off legal
     micro_adv: jax.Array  # (..., A) Q(a) - Q(m), uncentred, 0 off legal
     modality_legal: jax.Array  # (..., M) bool
+    logit_l2: jax.Array  # (...,) 0.5.(sum_m y_c^2 + sum_a z_c^2), carries grad
+    macro_gap: jax.Array  # (..., M) stop-grad centred macro logits, 0 off legal
+    micro_gap: jax.Array  # (..., A) stop-grad centred micro logits, 0 off legal
 
 
 def hierarchical_neurd(
@@ -177,8 +180,17 @@ def hierarchical_neurd(
 
     y = jnp.where(modality_legal, y, 0.0)
     z = jnp.where(legal, z, 0.0)
-    y_gap = jax.lax.stop_gradient(y - (y.sum(axis=-1) / count_modalities)[..., None])
-    z_gap = jax.lax.stop_gradient(z - ((z @ oh) / count_cells)[..., mod_index])
+    # Centred LIVE (no stop-gradient): the quadratic decay below reads
+    # these, so d logit_l2 / dy_m = y_c_m exactly (centring is a
+    # symmetric idempotent projection; the softmax-invariant direction
+    # carries no decay either). The clip comparisons use the stop-grad
+    # copies, as before.
+    y_c = jnp.where(
+        modality_legal, y - (y.sum(axis=-1) / count_modalities)[..., None], 0.0
+    )
+    z_c = jnp.where(legal, z - ((z @ oh) / count_cells)[..., mod_index], 0.0)
+    y_gap = jax.lax.stop_gradient(y_c)
+    z_gap = jax.lax.stop_gradient(z_c)
 
     def _open(valid, gap, w):
         return valid & jnp.logical_not(
@@ -191,6 +203,16 @@ def hierarchical_neurd(
     micro_weight = jax.lax.stop_gradient(jnp.where(micro_open, micro_c, 0.0))
 
     loss = -((macro_weight * y).sum(axis=-1) + (micro_weight * z).sum(axis=-1))
+    # Proximal restoring force (the smooth counterpart of the eq. 10
+    # band): the linear NeuRD loss has NO inward force anywhere inside
+    # +-beta, so a persistent same-sign advantage integrates into the
+    # logits without bound (the 2026-08-25 macro-head grad runaway).
+    # 0.5.|centred logit|^2 per level gives d/dy_m = +y_c_m, a
+    # mass-INDEPENDENT pull toward the legal-set mean (starved cells are
+    # pulled back up as surely as dominant ones are pulled down), with
+    # per-cell fixed point gap* = w / decay_coef — bounded rationality
+    # with the same geometry as Magnetic Mirror Descent's proximal term.
+    logit_l2 = 0.5 * ((y_c**2).sum(axis=-1) + (z_c**2).sum(axis=-1))
     return HierarchicalNeurd(
         loss=loss,
         macro_weight=macro_weight,
@@ -200,4 +222,7 @@ def hierarchical_neurd(
         macro_adv=macro_adv,
         micro_adv=micro_adv,
         modality_legal=modality_legal,
+        logit_l2=logit_l2,
+        macro_gap=y_gap,
+        micro_gap=z_gap,
     )

@@ -344,6 +344,18 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # Proximal logit decay (2026-08-25): centred-gap rms
+                    # per level. Healthy = plateau at ~|w|/decay_coef
+                    # (band edge 2.0 at most). Climbing without bound
+                    # alongside the macro-head grad norm was the runaway
+                    # signature the decay exists to remove.
+                    "NeuRD centred logit-gap rms (macro vs micro)",
+                    [
+                        "player_neurd_macro_gap_rms",
+                        "player_neurd_micro_gap_rms",
+                    ],
+                ),
+                lp(
                     # Loss value ≈ 0 at the stopgrad point by
                     # construction (baseline is the current policy's own
                     # expectation) — scale lives in adv_std; the loss

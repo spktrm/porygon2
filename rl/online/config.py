@@ -414,6 +414,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per row, so unclipped logits diverge); other losses still move
     # cells outside the band. 2.0 = OpenSpiel's NeuRD default.
     player_neurd_logit_clip: float = 2.0
+    # Quadratic decay on each level's centred free logits, inside the
+    # NeuRD bracket (shares neurd_coef and the warm-up ramp, so the
+    # per-cell fixed point |centred logit| = |w| / decay is coef- and
+    # ramp-invariant). The linear all-action loss has no inward force
+    # inside the +-beta band; a persistent same-sign modality advantage
+    # therefore integrates without bound — macro-head grad runaway at
+    # ~64k on three lineages (2026-08-25). 0.05 puts the fixed point at
+    # the band edge for |w| = 0.1 (the observed coherent macro push) and
+    # is mass-independent: starved cells are pulled back toward the
+    # legal-set mean, not just dominant ones pulled down.
+    player_neurd_logit_decay: float = 0.05
     # Reference-policy penalty in the NeuRD advantage (R-NaD's reward
     # transform, Perolat et al. 2022; rnad.py in OpenSpiel <= 1.5), landed
     # 2026-08-22 on Retrace; since Step 3 (2026-08-23) it is the ONLY
