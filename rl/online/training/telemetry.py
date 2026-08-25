@@ -314,6 +314,12 @@ def q_head_param_telemetry(params, grads) -> dict[str, jax.Array]:
     gate = jnp.asarray(_get(p, ("q_macro_micro", "micro_scale")), jnp.float32)
     for i, name in enumerate(("move", "switch", "target")):
         logs[f"player_q_micro_scale_{name}"] = gate[i]
+    # Policy micro type_scale (2026-08-25): with the gram rms-normalised
+    # this IS the micro logit scale — watch it regrow from the crushed
+    # 1e-4 without the gradient blowing up.
+    pol = jnp.asarray(_get(p, ("macro_micro_head", "micro", "type_scale")), jnp.float32)
+    for i, name in enumerate(("move", "switch", "target")):
+        logs[f"player_policy_type_scale_{name}"] = pol[i]
     for key, paths in _Q_HEAD_LEAVES.items():
         leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
         logs[key] = jnp.mean(

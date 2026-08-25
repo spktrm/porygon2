@@ -434,6 +434,18 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # Policy micro type_scale (2026-08-25): the gram is
+                    # rms-normalised per slot group, so this IS the micro
+                    # logit scale. Watch it regrow from ~0 smoothly;
+                    # collapse toward 0 with grads climbing was the
+                    # two-factor runaway the normalisation removes.
+                    "Policy micro type_scale (normalised gram)",
+                    [
+                        "player_policy_type_scale_move",
+                        "player_policy_type_scale_switch",
+                    ],
+                ),
+                lp(
                     # Pre-clip grad norm per Q-head subtree. micro ≪
                     # macro = the loss is finding the modality offset
                     # but not the cells.

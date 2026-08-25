@@ -116,17 +116,23 @@ class MicroHead(nn.Module):
     modality singletons whose within-modality softmax is degenerate, so
     the modality head alone decides them.
 
-    The readout is a scaled dot-product grid times a per-slot-group
-    ZERO-INIT scale. Zero init keeps every micro logit exactly 0 at model
-    init, preserving calculate_hierarchical_prior as the exact
-    init-policy anchor (the job the old modality_scale's ones-init did),
-    and each group owns its sharpness through its scalar plus its
-    stream's residual magnitudes — the per-modality logit-scale probe
-    showed distinct temperatures emerge when allowed (wildcard > move >
-    switch). Deliberately NO layer norm on either side: norming the dot
-    would freeze the logit scale the typed streams are supposed to own.
-    The downstream within-modality logsumexp removes per-modality shifts,
-    so these scales control sharpness only — the modality contest belongs
+    The readout is a dot-product grid, rms-NORMALISED per slot group
+    (stop-gradient), times a per-slot-group ZERO-INIT scale. Zero init
+    keeps every micro logit exactly 0 at model init, preserving
+    calculate_hierarchical_prior as the exact init-policy anchor, and
+    each group owns its sharpness through its scalar ALONE. The earlier
+    design left the raw dot un-normalised ("the typed streams own the
+    logit scale") — refuted 2026-08-25: the loss pins the PRODUCT
+    scale.gram at the band, so growing stream norms forced type_scale
+    0.026 -> 1e-4 while the raw gram grew to rms ~6e3, the gradient to
+    type_scale (= the gram) hit 7e7 in the Jacobian probe (THE macro-head
+    grad-runaway amplifier), and the upstream micro gradient (= the
+    scale) died — the micro-gate stall re-created dynamically, mid-run.
+    Dividing by the group's stop-grad rms gauges the stream scale away:
+    type_scale is the one live factor, its gradient is O(w), and
+    stream-norm drift can neither starve nor explode the route. The
+    downstream within-modality logsumexp removes per-modality shifts, so
+    these scales control sharpness only — the modality contest belongs
     to MacroHead.
     """
 
@@ -139,9 +145,21 @@ class MicroHead(nn.Module):
         )
         type_scale = self.param(
             "type_scale", nn.initializers.zeros_init(), (NUM_ACTION_SLOT_GROUPS,)
-        ).astype(logits.dtype)
+        ).astype(jnp.float32)
         flat = logits.reshape(*logits.shape[:-2], -1)
-        return flat * type_scale[FLAT_SRC_GROUP_MASK]
+        # Per-group rms over the grid cells (f32, eps-guarded, all cells:
+        # legality lives downstream), stop-grad so the normaliser is a
+        # gauge, not a trainable route.
+        group_oh = jax.nn.one_hot(
+            FLAT_SRC_GROUP_MASK, NUM_ACTION_SLOT_GROUPS, dtype=jnp.float32
+        )
+        sq = jnp.square(flat.astype(jnp.float32))
+        group_ms = (sq @ group_oh) / jnp.maximum(group_oh.sum(axis=0), 1.0)
+        group_rms = jax.lax.stop_gradient(
+            jnp.sqrt(group_ms + 1e-12)[..., FLAT_SRC_GROUP_MASK]
+        )
+        normed = flat.astype(jnp.float32) / group_rms
+        return (normed * type_scale[FLAT_SRC_GROUP_MASK]).astype(logits.dtype)
 
 
 class ActionAdapter(nn.Module):
