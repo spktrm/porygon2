@@ -97,12 +97,6 @@ message EnvironmentState {
     bytes field = 13;
     int32 rqid = 14;
     int32 history_packed_length = 15;
-    // Opponent's private team sheet, encoded once from the FIRST request
-    // the opponent received at match start (never updated afterwards, so
-    // no live hp/status/pp leaks beyond the team-sheet reveal). Training
-    // self-play only — empty at deploy time, where the opponent's private
-    // information does not exist.
-    bytes opp_private_team = 16;
 }
 
 message EnvironmentTrajectory {

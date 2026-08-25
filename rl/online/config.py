@@ -298,18 +298,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     ## Player
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
-    # Counterfactual value ladder (2026-08-16): shared coefficient for the
-    # own-info (no opponent sheet) and public-info (history-only) value
-    # heads' CE losses. Critic-only: the policy reads the main
-    # (privileged) head exclusively.
-    player_value_ladder_coef: float = 0.25
 
     # All-action Q critic (docs/q-critic-plan.md) — STRUCTURAL since
-    # 2026-08-20 (no enable flag): the two-rung hierarchical Q head is
-    # part of the model, its CE always trains, and every consumer (boost,
-    # COMA, diagnostics) assumes it exists. Singles only (asserted in
+    # 2026-08-20 (no enable flag): the hierarchical advantage head is
+    # part of the model, its loss always trains, and every consumer
+    # assumes it exists. Singles only (asserted in
     # get_player_model_config).
-    # Huber weight (both rungs) — deliberately modest, per the grad-norm
+    # Huber weight — deliberately modest, per the grad-norm
     # lesson from the integrated-critic era: a heavy auxiliary gradient globally clips
     # everything (LESSONS.md 5).
     player_q_coef: float = 0.5
@@ -327,10 +322,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # applied to the RAW LOGITS with no π prefactor. Zero sampling
     # variance, and counterfactual pressure lands on untaken actions —
     # which a sampled objective structurally cannot do (on a move row,
-    # retrace−v_exp says nothing about the switch not taken). Q̄_all is
-    # the PRIVILEGED rung (COMA's centralised critic): advantages enter
-    # as stop-gradient scalars, so the policy stays bitwise invariant to
-    # opp_private_team (value-ladder tests still bind).
+    # retrace−v_exp says nothing about the switch not taken). Advantages
+    # enter as stop-gradient scalars off the target net.
     #
     # Lineage: this was COMA proper (−π(b)·adv(b) per logit) until
     # 2026-08-21. NeuRD eq. 6's restoring force shrinks with the starved

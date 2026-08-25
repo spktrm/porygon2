@@ -1,6 +1,6 @@
-"""Jitted train_step smoke with the two-rung Q head enabled -- the wiring
-test for docs/q-critic-plan.md: model Q_all/Q_private readouts -> TD(0)
-labels -> Huber losses -> gradients, end to end on the bundled ex.bin
+"""Jitted train_step smoke for the single-rung advantage head -- the wiring
+test for docs/q-critic-plan.md: model advantage readout -> Q = V + A -> TD(0)
+labels -> Huber loss -> gradients, end to end on the bundled ex.bin
 trajectory (randombattle config, so the builder branch self-skips).
 
 Runs on the GPU like the rest of the slow suite (it was CPU-pinned to sit
@@ -88,9 +88,7 @@ def test_train_step_player_q_smoke():
     assert int(new_player_state.step_count) == 1
     for key in (
         "player_loss_q",
-        "player_loss_q_private",
         "player_q_r2",
-        "player_q_private_r2",
         "player_q_saturation_frac",
         "player_q_mse",
         "player_ref_kl",
@@ -155,7 +153,6 @@ def test_train_step_player_q_smoke():
         # behind a zero-init gate, so at init within == 0 exactly.
         "player_q_action_var_within_modality",
         "player_q_action_var_between_modality",
-        "player_q_private_action_var_within_modality",
         "player_q_micro_scale_move",
         "player_q_micro_scale_switch",
         "player_q_micro_kernel_rms",

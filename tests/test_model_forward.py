@@ -57,20 +57,15 @@ def test_q_head_forward_shapes(real_model_and_trajectory, real_model_apply):
     q_adv = np.asarray(out.q_adv, dtype=np.float32)
     assert q_adv.shape == (T, A)
     assert np.isfinite(q_adv).all()
-    private_q_adv = np.asarray(out.private_q_adv, dtype=np.float32)
-    assert private_q_adv.shape == (T, A)
-    assert np.isfinite(private_q_adv).all()
-    # The rungs share every head param but not their conditioning input.
-    # At init both are identically ZERO (e00a388's flat-at-init contract
-    # zero-inits every Q output path), so comparing them here would be
-    # vacuous — open the zero paths first, then a difference proves the
-    # conditioning is actually WIRED rather than merely untrained.
+    # At init the head is identically ZERO (e00a388's flat-at-init
+    # contract zero-inits every advantage output path), so any test of
+    # live geometry has to open the zero paths first — otherwise it
+    # passes vacuously.
     opened = open_zero_init_paths(params, ("q_adapter", "q_macro_micro"))
     out_open = real_model_apply(opened, actor_input, actor_output, HeadParams())
-    assert not np.array_equal(
-        np.asarray(out_open.q_adv, dtype=np.float32),
-        np.asarray(out_open.private_q_adv, dtype=np.float32),
-    )
+    q_adv_open = np.asarray(out_open.q_adv, dtype=np.float32)
+    assert np.isfinite(q_adv_open).all()
+    assert q_adv_open.any()
     # Full-support log_policy is present in train mode — the Retrace
     # target's expectation bootstrap depends on it.
     assert np.asarray(out.action_head.log_policy).shape[-1] == A
@@ -91,7 +86,6 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(
     network, params, actor_input, actor_output = real_model_and_trajectory
     out = real_model_apply(params, actor_input, actor_output, HeadParams())
     assert not np.asarray(out.q_adv, dtype=np.float32).any()
-    assert not np.asarray(out.private_q_adv, dtype=np.float32).any()
 
     flat = np.asarray(FLAT_MODALITY_MASK)
     pattern = np.zeros(flat.shape, np.float32)

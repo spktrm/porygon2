@@ -1190,8 +1190,7 @@ revealedTeam: msg.getRevealedTeam_asB64(),
 privateTeam: msg.getPrivateTeam_asB64(),
 field: msg.getField_asB64(),
 rqid: jspb.Message.getFieldWithDefault(msg, 14, 0),
-historyPackedLength: jspb.Message.getFieldWithDefault(msg, 15, 0),
-oppPrivateTeam: msg.getOppPrivateTeam_asB64()
+historyPackedLength: jspb.Message.getFieldWithDefault(msg, 15, 0)
   };
 
   if (includeInstance) {
@@ -1287,10 +1286,6 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
     case 15:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setHistoryPackedLength(value);
-      break;
-    case 16:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setOppPrivateTeam(value);
       break;
     default:
       reader.skipField();
@@ -1423,13 +1418,6 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
   if (f !== 0) {
     writer.writeInt32(
       15,
-      f
-    );
-  }
-  f = message.getOppPrivateTeam_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      16,
       f
     );
   }
@@ -1991,48 +1979,6 @@ proto.servicev2.EnvironmentState.prototype.getHistoryPackedLength = function() {
  */
 proto.servicev2.EnvironmentState.prototype.setHistoryPackedLength = function(value) {
   return jspb.Message.setProto3IntField(this, 15, value);
-};
-
-
-/**
- * optional bytes opp_private_team = 16;
- * @return {!(string|Uint8Array)}
- */
-proto.servicev2.EnvironmentState.prototype.getOppPrivateTeam = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 16, ""));
-};
-
-
-/**
- * optional bytes opp_private_team = 16;
- * This is a type-conversion wrapper around `getOppPrivateTeam()`
- * @return {string}
- */
-proto.servicev2.EnvironmentState.prototype.getOppPrivateTeam_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getOppPrivateTeam()));
-};
-
-
-/**
- * optional bytes opp_private_team = 16;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getOppPrivateTeam()`
- * @return {!Uint8Array}
- */
-proto.servicev2.EnvironmentState.prototype.getOppPrivateTeam_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getOppPrivateTeam()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.servicev2.EnvironmentState} returns this
- */
-proto.servicev2.EnvironmentState.prototype.setOppPrivateTeam = function(value) {
-  return jspb.Message.setProto3BytesField(this, 16, value);
 };
 
 

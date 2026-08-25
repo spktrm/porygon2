@@ -48,25 +48,19 @@ logger = logging.getLogger("gate_contribution")
 
 # (block intermediate, gate param pattern, stream index, row-group source)
 # Row groups: "state" = one group over all state rows; "action" = the
-# move/switch/target concat (sizes sown as action_part_sizes); "value_all"
-# / "value_private" = the two halves of the shared value_read output.
+# move/switch/target concat (sizes sown as action_part_sizes); "value" =
+# the single critic rung's rows.
 READS = [
     ("state_global_attn", "state_global_gate", 0, "state"),
-    ("opp_cross_attn", "opp_read_gate", 1, "opp"),
-    ("action_global_attn", "{}_global_gate", 2, "action"),
-    ("state_to_action", "state_to_{}_gate", 2, "action"),
+    ("action_global_attn", "{}_global_gate", 1, "action"),
+    ("state_to_action", "state_to_{}_gate", 1, "action"),
     ("action_to_state", "action_to_state_gate", 0, "state"),
-    ("value_read", "value_all_read_gate", 3, "value_all"),
-    ("value_read", "value_private_read_gate", 4, "value_private"),
-    ("history_to_value_public", "value_public_read_gate", 5, "value_public"),
+    ("value_read", "value_read_gate", 2, "value"),
     ("state_ffw", "state_ffw_gate", 0, "state"),
-    ("action_ffw", "{}_ffw_gate", 2, "action"),
-    ("opp_ffw", "opp_ffw_gate", 1, "opp"),
-    ("value_all_ffw", "value_all_ffw_gate", 3, "value_all"),
-    ("value_private_ffw", "value_private_ffw_gate", 4, "value_private"),
-    ("value_public_ffw", "value_public_ffw_gate", 5, "value_public"),
+    ("action_ffw", "{}_ffw_gate", 1, "action"),
+    ("value_ffw", "value_ffw_gate", 2, "value"),
 ]
-STREAM_NAMES = ["state", "opp", "action", "value_all", "value_private", "value_public"]
+STREAM_NAMES = ["state", "action", "value"]
 ACTION_GROUPS = ["move", "switch", "target"]
 
 
@@ -162,14 +156,11 @@ def collect(params, chunks, batch, num_rounds):
         bounds = np.concatenate([[0], np.cumsum(sizes)])
         groups = {
             "state": [("state", slice(None))],
-            "opp": [("opp", slice(None))],
             "action": [
                 (g, slice(int(bounds[j]), int(bounds[j + 1])))
                 for j, g in enumerate(ACTION_GROUPS)
             ],
-            "value_all": [("value_all", slice(None))],
-            "value_private": [("value_private", slice(None))],
-            "value_public": [("value_public", slice(None))],
+            "value": [("value", slice(None))],
         }
         for name, s in zip(STREAM_NAMES, streams):
             stream_final[name].append((s[:, :, -1], valid_bt))
@@ -177,9 +168,6 @@ def collect(params, chunks, batch, num_rounds):
 
         for block, gate_pat, si, grp in READS:
             f = _first(trunk[block]["__call__"])  # (B, T, R, rows, d)
-            if block == "value_read":
-                n_value = streams[3].shape[3]
-                f = f[..., :n_value, :] if grp == "value_all" else f[..., n_value:, :]
             stream = streams[si]
             for gname, rows in groups[grp]:
                 gate_name = gate_pat.format(gname)

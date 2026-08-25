@@ -92,29 +92,10 @@ function assertSlotAlignment(
     }
 }
 
-export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-    if (a.length !== b.length) {
-        return false;
-    }
-    for (let i = 0; i < a.length; i++) {
-        if (a[i] !== b[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
 export async function playerController(player: TrainablePlayerAI) {
     let historyLength = 0,
         packedHistoryLength = 0,
         stateCount = 0;
-    // opp_private_team invariants: the sheet may be empty for a prefix of
-    // states (the opponent's first request may not have landed yet), but
-    // once populated it must be FROZEN — byte-identical in every later
-    // state. Cross-player equality (my sheet of the opponent == the
-    // opponent's own first-state private team) is asserted in runBattle.
-    let firstPrivateTeam: Uint8Array | undefined;
-    let oppPrivateSheet: Uint8Array | undefined;
     while (true) {
         // Only the stream read is guarded: a closed stream ends the loop
         // cleanly, while invariant violations below THROW upward so the
@@ -134,22 +115,6 @@ export async function playerController(player: TrainablePlayerAI) {
                 break;
             }
             stateCount += 1;
-
-            if (firstPrivateTeam === undefined) {
-                firstPrivateTeam = state.getPrivateTeam_asU8().slice();
-            }
-            const oppSheet = state.getOppPrivateTeam_asU8();
-            const oppSheetEmpty = oppSheet.every((byte) => byte === 0);
-            if (oppPrivateSheet === undefined) {
-                if (!oppSheetEmpty) {
-                    oppPrivateSheet = oppSheet.slice();
-                }
-            } else if (!bytesEqual(oppSheet, oppPrivateSheet)) {
-                throw new Error(
-                    "opp_private_team changed mid-game — it must stay " +
-                        "frozen at the opponent's first-request team sheet",
-                );
-            }
 
             const readableHistory = EdgeBuffer.toReadableHistory({
                 historyEntityPublicCacheBuffer:
@@ -212,8 +177,6 @@ export async function playerController(player: TrainablePlayerAI) {
         historyLength,
         packedHistoryLength,
         stateCount,
-        firstPrivateTeam,
-        oppPrivateSheet,
     };
 }
 
@@ -286,43 +249,6 @@ export async function runBattle(
 
         // Wait for both player loops to complete. This happens when the battle ends.
         results = await Promise.all(promises);
-
-        // Privileged-critic invariants. A player that saw two or more
-        // states must have received a populated opponent sheet (a
-        // single-state game can legitimately end before the opponent's
-        // first request lands — observed at ~0.1% of soak battles); when
-        // both sides are controlled, each side's sheet must equal the
-        // other side's OWN first-state private team byte-for-byte (same
-        // encoder, same frozen first request).
-        for (const result of results) {
-            if (
-                result.oppPrivateSheet === undefined &&
-                result.stateCount >= 2
-            ) {
-                throw new Error(
-                    "opp_private_team never populated over a full battle",
-                );
-            }
-        }
-        if (results.length === 2) {
-            const [r1, r2] = results;
-            if (
-                r1.oppPrivateSheet !== undefined &&
-                !bytesEqual(r1.oppPrivateSheet, r2.firstPrivateTeam!)
-            ) {
-                throw new Error(
-                    "p1's opp_private_team != p2's first private_team",
-                );
-            }
-            if (
-                r2.oppPrivateSheet !== undefined &&
-                !bytesEqual(r2.oppPrivateSheet, r1.firstPrivateTeam!)
-            ) {
-                throw new Error(
-                    "p2's opp_private_team != p1's first private_team",
-                );
-            }
-        }
 
         console.log("\nBattle has concluded.");
     } finally {

@@ -123,16 +123,13 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # input MLPs on that path: the board no longer collapses to one
     # vector per entity before the trunk sees it, and substream identity
     # is carried by additive token-type / row / group / side biases on the
-    # tokens instead of by slice boundaries. A second, small instance is
-    # the PRIVILEGED read over [opp sheet tokens 48 | public latents K],
-    # consumed by the value-`all` rung only. Cost: probability matrix
+    # tokens instead of by slice boundaries. Cost: probability matrix
     # K x 186 at the trunk's head count (~9k) once per timestep vs the
     # 168^2 x 2 heads (~56k) cross-entity mix it replaces, so this should
     # land BELOW the pre-pool entity-local baseline (182.5MB at T=64);
     # measure before merge. The read's residual starts at 1.0: token
     # content reaches the latents only through it.
     cfg.encoder.num_latents = 48
-    cfg.encoder.num_priv_latents = 8
     cfg.encoder.latent_read = ConfigDict()
     set_attributes(cfg.encoder.latent_read, **transformer_decoder_kwargs)
     cfg.encoder.latent_read.need_pos = False
@@ -230,13 +227,11 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-    # Privileged two-rung all-action Q head (learner-only;
-    # docs/q-critic-plan.md): categorical logits over CAT_VF_SUPPORT per
-    # src x tgt cell, read off the same action embeddings as the policy
-    # heads and conditioned on a pooled value embedding — the one module
-    # is called twice, with the privileged value_all embedding (Q_all,
-    # drives Retrace) and the private value embedding (Q_private, the
-    # policy's information set), sharing every param across rungs.
+    # All-action advantage head (learner-only; docs/q-critic-plan.md):
+    # one scalar per src x tgt cell, read off the same action embeddings
+    # as the policy head and conditioned on the pooled value embedding.
+    # ONE rung since 2026-08-25 — the privileged Q_all rung is gone, so
+    # the head's information set is the policy's, full stop.
     # STRUCTURAL since 2026-08-20 (no enable flag) and the policy's exact
     # module stack: an owned ActionAdapter with the cond concatenated in
     # (the rung's information set reaches every cell) into the shared

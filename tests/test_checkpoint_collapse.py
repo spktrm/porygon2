@@ -30,9 +30,7 @@ pytestmark = [pytest.mark.slow]
 _DEFAULT_CKPT_ROOT = "./ckpts/gen{generation}/"
 
 _EMBEDDING_TABLE_NAMES = (
-    "all_value_embeddings",
-    "private_value_embeddings",
-    "public_value_embeddings",
+    "value_embeddings_table",
     "target_embeddings",
     "pass_embeddings",
 )
@@ -62,8 +60,26 @@ def ckpt_dir() -> str:
 def ckpt_target_params(ckpt_dir):
     """The EMA (target) params — same choice the league uses for opponents,
     since it's the smoothed, deployable snapshot rather than the noisier
-    live optimiser params."""
-    return checkpoint.load_component(ckpt_dir, "player", "target_params")
+    live optimiser params.
+
+    Skips on a checkpoint written by a superseded architecture: this probe
+    reads param tables by NAME, so a stale lineage fails on the name
+    rather than on the collapse it is meant to detect. `value_embeddings_table`
+    is the sentinel — it replaced the all/private/public ladder tables when
+    the privileged critic was deleted (2026-08-25)."""
+    params = checkpoint.load_component(ckpt_dir, "player", "target_params")
+    names = {
+        getattr(path[-1], "key", None)
+        for path, _ in jax.tree_util.tree_leaves_with_path(params)
+        if path
+    }
+    if "value_embeddings_table" not in names:
+        pytest.skip(
+            "checkpoint predates the current architecture (no "
+            "'value_embeddings_table') — probe it again after the fresh "
+            "lineage writes its first checkpoint"
+        )
+    return params
 
 
 def _find_leaf(params, name: str) -> np.ndarray:

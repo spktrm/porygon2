@@ -69,6 +69,23 @@ what survives here — see the ledger row below.
 | Epsilon explore ladder | `HeadParams.mix`, `behaviour_log_policy`, `Trajectory.explore`, `own_rows` gating (league cadence, builder, replay controller, the `_own` KL variant), `explore_game_prob`/`explore_eps_range`, per-game explore Agent path, `player_q_explore_*` panels, `tests/test_behaviour_mix.py` | `92b06c4` | random switches lose (explore-row post-switch return ~0.3 below post-move for the whole collapse), so behaviour-side coverage taught the critic switching is bad faster; R-NaD's penalty is the exploration mechanism and every game plays π |
 | R-NaD reward transform (reg-value stream) | `reg_v_head`, `PlayerActorOutput.reg_value`, `PlayerTargets.reg_returns`, `compute_reg_returns`, `reg_reward`/`reg_v_target`, the `V_win + V_reg` Q bootstrap on both rungs, `loss_v_reg`, `player_reg_value_coef`, panels `player_reg_value_mean`/`player_reg_reward_mean`/`player_loss_v_reg` | `27053a6` | NashPG (arXiv:2510.18183) matches R-NaD's exploitability with the own-side KL in the POLICY objective and NO reward transform, at α=0.2 and a comparable reference-reset period; V_reg shifted every cell of the Q base identically so it cancelled exactly in the NeuRD centring, and no panel could have shown an action-axis effect (reg_value_mean −0.042 against ±1). The reference's measured contribution is the immediate analytic term alone — switch tilt +0.030 = 0.55σ of the NeuRD advantage — and that is kept |
 
+## Removal ledger — 2026-08-25 privileged-critic pass
+
+Everything below existed at tag **`pre-qva-redesign-2026-08-25`** (commit `989e8af`).
+Same restore recipe as above. The through-line: the critic was conditioned on the
+opponent's team sheet, which the policy cannot see. Step-0 numbers off the live
+85k-step run settled it — the privileged rung was worth 0.005 value units against
+the deployable one and scored *worse* in R² on both V (0.6462 vs 0.6469) and Q
+(0.7751 vs 0.7825). It was not a variance reducer; it was a nuisance variable, and
+its advantage told the policy things it could not act on
+(`docs/qva-redesign-step0-reference.md`).
+
+| mechanism | paths / symbols deleted | removed in | why it went |
+|---|---|---|---|
+| Privileged critic (opponent team sheet) | proto `EnvironmentState.opp_private_team`, service `ensureFirstPrivateTeam`/`firstPrivateTeam`/the `getPrivateTeam` `requestOverride` arg + the frozen-sheet harness invariants, `PlayerEnvOutput.opp_private_team` and its decode, encoder `opp` stream (`priv_latent_read`, `num_priv_latents`, sheet tokens, `opp_cross_attn`, `opp_ffw`), `attend`'s `allowed` key-mask | see this pass | the sheet was worth 0.005 value units and the rung reading it scored worse than the one ignoring it; conditioning a critic on information the policy lacks makes its advantage an aliasing term, not a signal. **Keep `player.opponent` in the service** — `worker.ts` `describe()`/`abortBattle()` need it to tear down both sides of a wedged battle |
+| Value ladder (all/private/public rungs) | `all_value_embeddings`/`private_value_embeddings`/`public_value_embeddings` (→ one `value_embeddings_table`), `public_v_head`, `history_to_value_public` + the raw-history side channel, per-rung read/FFW gates, `private_value_logits`/`public_value_logits`, `loss_v_private`/`loss_v_public`, `player_value_ladder_coef`, `value_ladder_logs` (incl. the `player_value_info_gap_*` panels), `tests/test_value_ladder.py` | see this pass | with no privileged rung there is nothing left to be privileged *relative to*; the public rung's only consumer was the info-gap diagnostic. Its final reading is banked in the Step-0 doc before deletion |
+| Second Q rung | `private_q_adv`, `q_private_all_target`, `v_private_target`, `loss_q_private`, `q_taken_of`, `player_q_private_*` panels | see this pass | closes diagnosis #5 (Q_all/Q_private shared-parameter interference, `docs/critic-weakness-analysis.md`) structurally — the two rungs shared every head param and differed only by conditioning |
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family
@@ -313,28 +330,24 @@ dashboard, not auto-corrected.
   agent's policy evidence with main's own action values, and its frozen-between-
   blocks stock went stale — foreign-row Q R² 0.27 against 0.84 for own rows.
 
-## 7. Privileged information
+## 7. Information sets
 
-*(all live — these are contracts, not history)*
+*(the privileged critic was DELETED 2026-08-25 — see the removal ledger)*
 
-- `opp_private_team` is the opponent's match-start sheet, frozen at *their*
-  first request and all-zero at deploy time. It feeds only the everything-value
-  readout; state, action and policy-facing streams never see it.
-- The `public` value rung reads the raw pre-trunk history embeddings, not the
-  state stream's history slice, because its information set must stay purely
-  public-historical.
-- The cross-entity attribute pool covers both sides' public rows and my own
-  private sheet — exactly the player's own information set — and excludes the
-  opponent sheet.
+- **There is no privileged input.** Every stream — state, action, value —
+  sees exactly the agent's deploy-time information set. The contract is no
+  longer "route the sheet to one rung"; it is "there is no sheet".
 - **Two test traps, both learned the hard way.** Residual gates are zero-init,
   so a leak test at init multiplies any leaked contribution by zero and passes
   vacuously — open the gates first (`open_zero_init_paths` in `conftest.py`),
   and include a negative control proving the perturbed entity *does* respond.
   And invariance alone is one-sided: a Φ_ann that never reads the turn at all
-  passes an invariance check perfectly.
-- The `all == private` equality on an empty sheet no longer holds now that the
-  rungs have separate query inits and residual gates; that equality test was
-  removed deliberately, not lost.
+  passes an invariance check perfectly. These outlive the ladder: any future
+  "is it wired" test needs the same two halves.
+- A probe that reads checkpoint params BY NAME must skip, not fail, on a
+  checkpoint from a superseded architecture — otherwise it reports a
+  name mismatch as the collapse it was built to detect
+  (`tests/test_checkpoint_collapse.py`'s `value_embeddings_table` sentinel).
 
 ## 8. Checkpoints and resume
 

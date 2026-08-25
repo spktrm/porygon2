@@ -72,7 +72,7 @@ def make_capacity_probe(network):
         # Encoder returns the action stream plus the three value-ladder
         # readouts (all/private/public) since 2026-08-16; probe the action
         # stream and the main (all) value readout.
-        action_emb, value_emb, _, _ = encode(params, actor_input)
+        action_emb, value_emb = encode(params, actor_input)
         dones = batch.player_transitions.env_output.done
         valid = (jnp.cumsum(dones, axis=0) - dones) == 0
         logs = {}

@@ -18,11 +18,6 @@ class PlayerEnvOutput:
     # Private Info
     my_moveset: ArrayLike = ()
     private_team: ArrayLike = ()
-    # Privileged (training self-play only): the opponent's match-start team
-    # sheet, frozen at THEIR first request — all-zero at deploy time. Feeds
-    # ONLY the everything-value readout; the policy/state streams never see
-    # it (rl/model/encoder.py RoundBlock).
-    opp_private_team: ArrayLike = ()
 
     action_mask: ArrayLike = ()
 
@@ -94,24 +89,13 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    # Learner-only (cfg.train; the Q critic is structural): (T, A) scalar
-    # RAW advantage logits of the residual Q critic over the flat src x tgt
-    # action grid — Q(s, a) = sg(V_target(s)) + A(s, a) - E_pi[A(s, .)],
-    # composed learner-side (targets.residual_q). q_adv is the privileged
-    # rung (conditioned on value_all, paired with the main v_head);
-    # private_q_adv shares every head param but is conditioned on the
-    # deployable information set (paired with the private value rung).
-    # Actors leave both empty so replay transitions stay small.
+    # Learner-only (cfg.train; the advantage head is structural): (T, A)
+    # scalar RAW advantage logits over the flat src x tgt action grid —
+    # Q(s, a) = sg(V(s)) + A(s, a) - E_pi[A(s, .)], composed learner-side
+    # (targets.residual_q). One rung since 2026-08-25, on the same
+    # information set the policy acts from. Actors leave it empty so
+    # replay transitions stay small.
     q_adv: ArrayLike = ()
-    private_q_adv: ArrayLike = ()
-    # Learner-only (cfg.train): (T, n_bins) categorical logits of the
-    # counterfactual value ladder — `private` sees the deployable information
-    # set (no opponent team sheet), `public` sees the history context only.
-    # The main value_head reads the privileged everything-stream. Gaps
-    # between the three expectations are per-state value-of-information
-    # readouts.
-    private_value_logits: ArrayLike = ()
-    public_value_logits: ArrayLike = ()
 
 
 @dataclass

@@ -199,15 +199,16 @@ def train_step(
 
     player_targets = promote_map(player_targets, float_dtype)
 
-    # Two-rung residual Q critic (Step 3, docs/critic-weakness-analysis.md,
-    # 2026-08-23): Q_all = sg(V_all_target) + A_all centred under the
-    # target policy (targets.residual_q), trained by Huber on the taken
-    # cell against the TD(0) label r + gamma*V_win_target(s') — plain
-    # Q^pi, no trace, no transformed bootstrap. Q_private is its
-    # deployable-information sibling on the private value rung. The
-    # policy reads the target net's Q_all as stop-gradient scalars.
+    # Residual Q critic (Step 3, docs/critic-weakness-analysis.md,
+    # 2026-08-23): Q = sg(V_target) + A centred under the target policy
+    # (targets.residual_q), trained by Huber on the taken cell against
+    # the TD(0) label r + gamma*V_win_target(s') — plain Q^pi, no trace,
+    # no transformed bootstrap. ONE rung since 2026-08-25: the critic and
+    # the policy share an information set, so there is no privileged
+    # sibling to compare against. The policy reads the target net's
+    # advantage as stop-gradient scalars.
     target_log_policy = player_target_pred.action_head.log_policy
-    v_all_target = player_target_pred.value_head.expectation.astype(jnp.float32)
+    v_target = player_target_pred.value_head.expectation.astype(jnp.float32)
     # The critics learn the PLAIN game (2026-08-25): the reference is a
     # policy-objective term only, analytic per cell in ref_penalised_q.
     # The propagated-penalty bootstrap (V_win + V_reg) is gone — NashPG
@@ -215,12 +216,12 @@ def train_step(
     # the objective and NO reward transform, and the stream had no
     # measured action-axis effect here (it shifted every cell of the Q
     # base identically, so it cancelled in the NeuRD centring).
-    q_all_target = residual_q(
-        player_target_pred.q_adv, v_all_target, target_log_policy, flat_action_mask
+    q_target = residual_q(
+        player_target_pred.q_adv, v_target, target_log_policy, flat_action_mask
     )
-    q_label = compute_q_onestep_targets(batch, v_all_target, config)
+    q_label = compute_q_onestep_targets(batch, v_target, config)
     q_taken_target = jnp.take_along_axis(
-        q_all_target, player_actor_action_head.action_index[..., None], axis=-1
+        q_target, player_actor_action_head.action_index[..., None], axis=-1
     ).squeeze(-1)
     # Q(s, a) exists wherever an action was actually taken — including
     # forced single-option steps (policy_mask excludes those; the Q
@@ -231,33 +232,24 @@ def train_step(
     # rising fraction is the head inflating A beyond what V + outcome
     # allow (Step 3 panel, expect ~0).
     training_logs["player_q_saturation_frac"] = average(
-        (jnp.abs(q_all_target) > 1.0).astype(jnp.float32).sum(axis=-1)
+        (jnp.abs(q_target) > 1.0).astype(jnp.float32).sum(axis=-1)
         / jnp.maximum(flat_action_mask.sum(axis=-1), 1),
         q_mask,
     )
     # The direct "what does the critic think switching is worth"
-    # readout, graded on the POLICY'S information set (Q_private — the
-    # question is what a deployable critic believes, so the privileged
-    # rung would answer the wrong one): best legal switch's E[Q] minus
-    # best legal move's, over states offering both. The number the
-    # switch-collapse investigation (Aug 2026) had no way to measure.
-    v_private_target = jax.nn.softmax(
-        player_target_pred.private_value_logits.astype(jnp.float32), axis=-1
-    ) @ cat_vf_support.astype(jnp.float32)
-    q_private_all_target = residual_q(
-        player_target_pred.private_q_adv,
-        v_private_target,
-        target_log_policy,
-        flat_action_mask,
-    )
+    # readout: best legal switch's E[Q] minus best legal move's, over
+    # states offering both. The number the switch-collapse investigation
+    # (Aug 2026) had no way to measure. Since 2026-08-25 the critic's
+    # information set IS the policy's, so the old "grade this on the
+    # deployable rung" caveat is structural rather than a choice.
     switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
     move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
     valid_switch = flat_action_mask & switch_cells
     valid_move = flat_action_mask & move_cells
     best_switch = jnp.max(
-        jnp.where(valid_switch, q_private_all_target, -jnp.inf), axis=-1
+        jnp.where(valid_switch, q_target, -jnp.inf), axis=-1
     )
-    best_move = jnp.max(jnp.where(valid_move, q_private_all_target, -jnp.inf), axis=-1)
+    best_move = jnp.max(jnp.where(valid_move, q_target, -jnp.inf), axis=-1)
     has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
     training_logs["player_q_switch_move_gap"] = average(
         jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
@@ -340,11 +332,11 @@ def train_step(
                 game_outcome=batch.game_outcome,
                 game_length=batch.game_length,
                 game_step_offset=batch.game_step_offset,
-                v_target=v_all_target,
+                v_target=v_target,
                 onestep_label=q_label,
                 q_label=q_label,
                 q_taken=q_taken_target,
-                q_all=q_all_target,
+                q_all=q_target,
                 flat_action_mask=flat_action_mask,
                 action_index=player_actor_action_head.action_index,
                 q_mask=q_mask,
@@ -357,7 +349,7 @@ def train_step(
     )
     pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
     # == v_all_target by the pi-centring (kept as the variance baseline).
-    q_v_exp = (pi_target * q_all_target).sum(axis=-1)
+    q_v_exp = (pi_target * q_target).sum(axis=-1)
     training_logs["player_q_pivotal_pi_switch_mass"] = average(
         (pi_target * valid_switch).sum(axis=-1), pivotal_mask
     )
@@ -385,7 +377,7 @@ def train_step(
     # undersells the spread by construction when action-value spread
     # concentrates in few high-leverage states (which is how this game
     # works) — the p90 is the honest readout.
-    qvar_state = (pi_target * jnp.square(q_all_target - q_v_exp[..., None])).sum(
+    qvar_state = (pi_target * jnp.square(q_target - q_v_exp[..., None])).sum(
         axis=-1
     )
     training_logs["player_q_action_var"] = average(qvar_state, q_mask)
@@ -404,12 +396,12 @@ def train_step(
     # actions apart.
     n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
     q_mean_uniform = (
-        jnp.where(flat_action_mask, q_all_target, 0.0).sum(axis=-1) / n_legal
+        jnp.where(flat_action_mask, q_target, 0.0).sum(axis=-1) / n_legal
     )
     qvar_uniform = (
         jnp.where(
             flat_action_mask,
-            jnp.square(q_all_target - q_mean_uniform[..., None]),
+            jnp.square(q_target - q_mean_uniform[..., None]),
             0.0,
         ).sum(axis=-1)
         / n_legal
@@ -435,19 +427,12 @@ def train_step(
         )
         return within.sum(axis=-1) / n_legal, between.sum(axis=-1) / n_legal
 
-    q_within, q_between = modality_var_split(q_all_target)
+    q_within, q_between = modality_var_split(q_target)
     training_logs["player_q_action_var_within_modality"] = average(q_within, q_mask)
     training_logs["player_q_action_var_within_modality_p90"] = jnp.nanquantile(
         jnp.where(q_mask, q_within, jnp.nan), 0.9
     )
     training_logs["player_q_action_var_between_modality"] = average(q_between, q_mask)
-    qp_within, qp_between = modality_var_split(q_private_all_target)
-    training_logs["player_q_private_action_var_within_modality"] = average(
-        qp_within, q_mask
-    )
-    training_logs["player_q_private_action_var_between_modality"] = average(
-        qp_between, q_mask
-    )
     if not isinstance(batch.reuse_count, tuple):
         fresh_cols = batch.reuse_count[0] == 0
         replay_cols = ~fresh_cols
@@ -549,77 +534,22 @@ def train_step(
         # automated backstop — watch player_normalized_modality_entropy
         # on the dashboard; 1330 died at 0.08 on that axis.)
 
-        # Counterfactual value ladder: private (deployable information set —
-        # no opponent sheet) and public (history-context-only) heads, CE
-        # against the SAME win targets as the privileged main head. Each
-        # rung learns the best value estimate its information set
-        # supports, so the expectation gaps between rungs are per-state
-        # value-of-information readouts: |all − private| prices the
-        # opponent's hidden team, |private − public| prices the agent's own
-        # private information over the public game record.
-        private_logits = learner_player_pred.private_value_logits.astype(jnp.float32)
-        public_logits = learner_player_pred.public_value_logits.astype(jnp.float32)
-        loss_v_private = average(
-            optax.softmax_cross_entropy(
-                logits=private_logits, labels=player_targets.win_returns
+        # Residual Q loss: the learner's A composed with the TARGET net's
+        # V (stop-gradient by construction — target params are not the
+        # differentiated leaf) and centred under the target policy, Huber
+        # against the one-step label on the taken cell. The state route is
+        # closed: every state-level degree of freedom sits in V, which
+        # this loss cannot move.
+        q_taken_pred = jnp.take_along_axis(
+            residual_q(
+                learner_player_pred.q_adv,
+                v_target,
+                target_log_policy,
+                flat_action_mask,
             ),
-            value_mask,
-        )
-        loss_v_public = average(
-            optax.softmax_cross_entropy(
-                logits=public_logits, labels=player_targets.win_returns
-            ),
-            value_mask,
-        )
-        f32_support = cat_vf_support.astype(jnp.float32)
-        private_expectation = jax.nn.softmax(private_logits, axis=-1) @ f32_support
-        public_expectation = jax.nn.softmax(public_logits, axis=-1) @ f32_support
-        all_expectation = learner_value_head.expectation.astype(jnp.float32)
-        value_ladder_logs = dict(
-            player_loss_v_private=loss_v_private,
-            player_loss_v_public=loss_v_public,
-            player_value_private_r2=calculate_r2(
-                value_prediction=private_expectation,
-                value_target=player_targets.win_returns @ cat_vf_support,
-                mask=value_mask,
-            ),
-            player_value_public_r2=calculate_r2(
-                value_prediction=public_expectation,
-                value_target=player_targets.win_returns @ cat_vf_support,
-                mask=value_mask,
-            ),
-            # Signed means (bias of the richer estimate vs the poorer) and
-            # absolute means (the actual information value magnitude).
-            player_value_info_gap_opp=average(
-                all_expectation - private_expectation, value_mask
-            ),
-            player_value_info_gap_opp_abs=average(
-                jnp.abs(all_expectation - private_expectation), value_mask
-            ),
-            player_value_info_gap_private=average(
-                private_expectation - public_expectation, value_mask
-            ),
-            player_value_info_gap_private_abs=average(
-                jnp.abs(private_expectation - public_expectation), value_mask
-            ),
-        )
-
-        # Two-rung residual Q loss: each rung's learner A composed with
-        # its TARGET rung's V (stop-gradient by construction — target
-        # params are not the differentiated leaf) and centred under the
-        # target policy, Huber against the one-step label on the taken
-        # cell. The state route is closed: every state-level degree of
-        # freedom sits in V, which this loss cannot move.
-        def q_taken_of(adv, v_rung):
-            q = residual_q(adv, v_rung, target_log_policy, flat_action_mask)
-            return jnp.take_along_axis(
-                q, player_actor_action_head.action_index[..., None], axis=-1
-            ).squeeze(-1)
-
-        q_taken_pred = q_taken_of(learner_player_pred.q_adv, v_all_target)
-        q_private_taken_pred = q_taken_of(
-            learner_player_pred.private_q_adv, v_private_target
-        )
+            player_actor_action_head.action_index[..., None],
+            axis=-1,
+        ).squeeze(-1)
         q_err_rows = optax.huber_loss(q_taken_pred, q_label, delta=1.0)
         loss_q = average(q_err_rows, q_mask)
         # Optimisation-level support (Step 1): the share of the Q loss each
@@ -637,9 +567,6 @@ def train_step(
         }
         q_loss_share["player_q_mse"] = average(
             jnp.square(q_taken_pred - q_label), q_mask
-        )
-        loss_q_private = average(
-            optax.huber_loss(q_private_taken_pred, q_label, delta=1.0), q_mask
         )
 
         # Real-choice rows on the stay/switch axis: both a switch and a
@@ -661,12 +588,9 @@ def train_step(
         # the exact all-action policy gradient: zero sampling
         # variance, counterfactual pressure on every real-choice row
         # including untaken actions (the sampled boost advantage
-        # structurally carries none for those). Q̄_all is the
-        # PRIVILEGED rung (COMA's centralised critic); it enters as
-        # stop-gradient scalars only, exactly like the privileged
-        # v_head advantages, so the policy stays bitwise invariant
-        # to opp_private_team. Weighted by the neurd_coef runtime
-        # scalar.
+        # structurally carries none for those). Q enters as
+        # stop-gradient scalars off the target net. Weighted by the
+        # neurd_coef runtime scalar.
         learner_log_policy = learner_action_head.log_policy
         pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
         pi_learner = pi_learner / jnp.maximum(
@@ -688,7 +612,7 @@ def train_step(
         # state whose whole row clips flat would hand NeuRD zeros.
         # Centring removes the common shift; the clip only guards
         # saturation.
-        q_for_policy = jnp.clip(q_all_target, -2.0, 2.0)
+        q_for_policy = jnp.clip(q_target, -2.0, 2.0)
         q_reg = ref_penalised_q(
             q_for_policy,
             learner_log_policy,
@@ -900,7 +824,7 @@ def train_step(
             return jnp.where(
                 context_mask.any(),
                 calculate_r2(
-                    value_prediction=q_private_taken_pred,
+                    value_prediction=q_taken_pred,
                     value_target=q_label,
                     mask=context_mask,
                 ),
@@ -909,14 +833,8 @@ def train_step(
 
         q_logs = dict(
             player_loss_q=loss_q,
-            player_loss_q_private=loss_q_private,
             player_q_r2=calculate_r2(
                 value_prediction=q_taken_pred,
-                value_target=q_label,
-                mask=q_mask,
-            ),
-            player_q_private_r2=calculate_r2(
-                value_prediction=q_private_taken_pred,
                 value_target=q_label,
                 mask=q_mask,
             ),
@@ -933,13 +851,11 @@ def train_step(
             config.player_neurd_coef
             * neurd_scale
             * (loss_neurd + config.player_neurd_logit_decay * loss_neurd_decay)
-            # v + q: the critic stack. One coefficient for both Q rungs —
-            # same estimator family on the same labels, mirroring the
-            # value-ladder coef.
+            # v + q: the critic stack — one V on the deploy-time
+            # information set, one all-action advantage over it.
             + (
                 config.player_value_head_loss_coef * loss_v_win
-                + config.player_value_ladder_coef * (loss_v_private + loss_v_public)
-                + config.player_q_coef * (loss_q + loss_q_private)
+                + config.player_q_coef * loss_q
             )
             # kl: trust region against the behaviour policy.
             + config.player_kl_loss_coef * loss_actor_backward_kl
@@ -948,7 +864,6 @@ def train_step(
         return loss, dict(
             **q_logs,
             **neurd_logs,
-            **value_ladder_logs,
             # Loss values
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,

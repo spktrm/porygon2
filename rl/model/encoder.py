@@ -339,8 +339,8 @@ class RoundBlock(nn.Module):
     produced by LatentInputRead over the flat input token set, 2026-08-21
     -- before that, the concat [private | public | field | prev_action |
     history] of pooled per-entity vectors with per-substream gates), the
-    privileged latents (opp), the concatenated ACTION stream
-    [move | switch | target] and the value ladder. Action substream
+    concatenated ACTION stream [move | switch | target] and the value
+    stream. Action substream
     identity survives via per-substream input norms, static slice
     boundaries (derived from the typed valid masks) and PER-SUBSTREAM GATE
     VECTORS — each write to the action stream is scaled by its type's own
@@ -351,32 +351,22 @@ class RoundBlock(nn.Module):
            per-substream gate vector. Within-type pairs are a subset of
            this all-pairs attention, so there are no intra self-attn
            modules
-        2. opp cross-read: the privileged latents read [state | opp]
-           (one module) so the opponent sheet is CONTEXTUALISED against
-           the live game each round. Nothing that feeds the policy ever reads opp (the one
-           leak-critical rule — opp is consumed only by the value-`all`
-           read in step 4)
-        3. action self-attention: one module over the action concat,
+        2. action self-attention: one module over the action concat,
            per-type gate vector — option comparison, within- and
            cross-type, in one all-pairs attention; then the EXCHANGE:
-           state -> action decode (q = action, kv = state rows only,
-           never opp), per-type gate vector, followed by action -> state
-           decode (q = state, kv = the updated action), per-substream
-           gate vector
-        4. value-ladder reads. `all` and `private` share one fused read
-           module with per-rung key masks (`all` sees [state | opp],
-           `private` sees state only) but are otherwise INDEPENDENT
-           estimators — separate query inits and separate residual gates
-           (user decision 2026-08-16). `public` reads the RAW history
-           inputs (raw_history / raw_history_valid, the pre-trunk
-           recurrent embeddings) — NOT the state stream's history slice,
-           which mixes with private tokens in the state self-attention;
-           reading raw keeps the public rung's information set purely
-           public-historical
-        5. group-level FFWs: one state FFW, one action FFW (per-token,
+           state -> action decode (q = action, kv = state rows),
+           per-type gate vector, followed by action -> state decode
+           (q = state, kv = the updated action), per-substream gate
+           vector
+        3. value read: the value rows read the state stream. ONE rung
+           (2026-08-25): the privileged `all` rung and its opponent-sheet
+           latents are gone, and so is the raw-history `public` rung —
+           every stream now sees exactly the deploy-time information set,
+           so there is no ladder left to mask
+        4. group-level FFWs: one state FFW, one action FFW (per-token,
            applied to the group stream under its per-substream gate
-           vector); opp and the value rungs sit outside both groups and
-           keep their own FFWs
+           vector); the value stream sits outside both groups and keeps
+           its own FFW
 
     Every residual write stays behind a zero-init gate so a round starts
     as a no-op; nn.scan-ned num_rounds times with stacked params so every
@@ -391,23 +381,13 @@ class RoundBlock(nn.Module):
     @nn.compact
     def __call__(
         self,
-        streams: tuple[
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-            jax.Array,
-        ],
+        streams: tuple[jax.Array, jax.Array, jax.Array],
         state_valid: jax.Array,
-        opp_valid: jax.Array,
         move_valid: jax.Array,
         switch_valid: jax.Array,
         target_valid: jax.Array,
-        raw_history: jax.Array,
-        raw_history_valid: jax.Array,
     ):
-        state, opp, action, value_all, value_private, value_public = streams
+        state, action, value = streams
         rcfg = self.cfg.round
         mha_kwargs = dict(
             num_heads=rcfg.num_heads,
@@ -419,9 +399,7 @@ class RoundBlock(nn.Module):
             dtype=state.dtype,
             collect_intermediates=COLLECT_INTERMEDIATES,
         )
-        n_state = state.shape[0]
-        n_opp = opp.shape[0]
-        n_value = value_all.shape[0]
+        n_value = value.shape[0]
         value_valid = jnp.ones(n_value, dtype=jnp.bool_)
 
         # Substream boundaries come from the (static) valid-mask shapes;
@@ -476,10 +454,8 @@ class RoundBlock(nn.Module):
                 ]
             )[:, None]
 
-        def attend(name: str, q, q_valid, kv, kv_valid, allowed=None):
+        def attend(name: str, q, q_valid, kv, kv_valid):
             mask = create_attention_mask(q_valid, kv_valid)
-            if allowed is not None:
-                mask = mask & allowed[None]
             return MultiHeadAttention(name=name, **mha_kwargs)(
                 q=layer_norm(q), kv=layer_norm(kv), mask=mask
             )
@@ -490,20 +466,9 @@ class RoundBlock(nn.Module):
             "state_global_attn", state, state_valid, state, state_valid
         )
 
-        # 2. Opp cross-read over [state | opp]; opp is never read by
-        # anything policy-facing.
-        opp = opp + gate("opp_read_gate") * attend(
-            "opp_cross_attn",
-            opp,
-            opp_valid,
-            jnp.concatenate((state, opp), axis=0),
-            jnp.concatenate((state_valid, opp_valid), axis=0),
-        )
-
-        # 3. Action self-attention over the group concat (per-type gate
+        # 2. Action self-attention over the group concat (per-type gate
         # vector), then the state<->action exchange: state -> action
-        # decode (kv = state rows only, never opp), action -> state
-        # decode reading the updated options back.
+        # decode, action -> state decode reading the updated options back.
         action = action + group_gate(action_parts, "{}_global_gate") * attend(
             "action_global_attn", action, action_valid, action, action_valid
         )
@@ -514,41 +479,13 @@ class RoundBlock(nn.Module):
             "action_to_state", state, state_valid, action, action_valid
         )
 
-        # 4. Fused value-ladder read: one shared module, per-rung key
-        # masks — `all` rows may read [state | opp]; `private` rows read
-        # the state slice only. Separate residual gates per rung
-        # (independent estimators, matching their separate query inits).
-        state_opp = jnp.concatenate((state, opp), axis=0)
-        state_opp_valid = jnp.concatenate((state_valid, opp_valid), axis=0)
-        value_allowed = np.zeros((2 * n_value, n_state + n_opp), dtype=bool)
-        value_allowed[:n_value, :] = True
-        value_allowed[n_value:, :n_state] = True
-        value_read = attend(
-            "value_read",
-            jnp.concatenate((value_all, value_private), axis=0),
-            jnp.ones(2 * n_value, dtype=jnp.bool_),
-            state_opp,
-            state_opp_valid,
-            allowed=value_allowed,
-        )
-        value_all = value_all + gate("value_all_read_gate") * value_read[:n_value]
-        value_private = (
-            value_private + gate("value_private_read_gate") * value_read[n_value:]
-        )
-        # `public` rung reads the RAW pre-trunk history embeddings, not
-        # the state stream's history slice (which mixes with private
-        # tokens in the state self-attention) — its information set must
-        # stay purely public-historical.
-        value_public = value_public + gate("value_public_read_gate") * attend(
-            "history_to_value_public",
-            value_public,
-            value_valid,
-            raw_history,
-            raw_history_valid,
+        # 3. Value read over the state stream — one rung, one key set.
+        value = value + gate("value_read_gate") * attend(
+            "value_read", value, value_valid, state, state_valid
         )
 
-        # 5. Group-level FFWs with per-substream gate vectors; opp and
-        # the value rungs keep their own FFWs and scalar gates.
+        # 4. Group-level FFWs with per-substream gate vectors; the value
+        # stream keeps its own FFW and scalar gate.
         def ffw(name: str):
             return FFWMLP(
                 hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias, name=name
@@ -560,29 +497,12 @@ class RoundBlock(nn.Module):
         action = action + group_gate(action_parts, "{}_ffw_gate") * ffw("action_ffw")(
             layer_norm(action)
         )
-        opp = opp + gate("opp_ffw_gate") * ffw("opp_ffw")(layer_norm(opp))
-        value_all = value_all + gate("value_all_ffw_gate") * ffw("value_all_ffw")(
-            layer_norm(value_all)
-        )
-        value_private = value_private + gate("value_private_ffw_gate") * ffw(
-            "value_private_ffw"
-        )(layer_norm(value_private))
-        value_public = value_public + gate("value_public_ffw_gate") * ffw(
-            "value_public_ffw"
-        )(layer_norm(value_public))
+        value = value + gate("value_ffw_gate") * ffw("value_ffw")(layer_norm(value))
 
         # Hard-zero invalid rows so padded tokens never accumulate content.
         state = jnp.where(state_valid[..., None], state, 0)
-        opp = jnp.where(opp_valid[..., None], opp, 0)
         action = jnp.where(action_valid[..., None], action, 0)
-        return (
-            state,
-            opp,
-            action,
-            value_all,
-            value_private,
-            value_public,
-        ), None
+        return (state, action, value), None
 
 
 class GroupNorm(nn.Module):
@@ -675,24 +595,12 @@ class Encoder(nn.Module):
             "enemy_target_bias", bias_init, (1, entity_size)
         )
 
-        # Value-query groups, an information ladder (2026-08-16): `all`
-        # reads state + the opponent's privileged team sheet, `private`
-        # reads state only (the deployable baseline), `public` reads the
-        # history context only. Each rung has its OWN query init (user
-        # decision 2026-08-16, replacing the earlier shared-init variant):
-        # rungs are independent estimators specialised to their
-        # information route. The trade: the all-vs-private gap now
-        # includes an estimator component and the empty-sheet all==private
-        # equality no longer holds — read the ladder telemetry
-        # accordingly.
-        self.all_value_embeddings = self.param(
-            "all_value_embeddings", embedding_init, (4, entity_size)
-        )
-        self.private_value_embeddings = self.param(
-            "private_value_embeddings", embedding_init, (4, entity_size)
-        )
-        self.public_value_embeddings = self.param(
-            "public_value_embeddings", embedding_init, (4, entity_size)
+        # Value queries: 4 rows read by the single critic (2026-08-25 —
+        # the all/private/public ladder is gone; every stream now sees
+        # exactly the deploy-time information set, so there is nothing
+        # left to be privileged relative to).
+        self.value_embeddings_table = self.param(
+            "value_embeddings_table", embedding_init, (4, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -750,9 +658,6 @@ class Encoder(nn.Module):
         )
         self.latent_input_read = latent_read(
             self.cfg, self.cfg.num_latents, name="latent_input_read"
-        )
-        self.priv_latent_read = latent_read(
-            self.cfg, self.cfg.num_priv_latents, name="priv_latent_read"
         )
         self.public_persistent_linear = nn.Dense(
             name="public_persistent_linear", use_bias=False, **dense_kwargs
@@ -1499,7 +1404,7 @@ class Encoder(nn.Module):
         entity-local pooled vectors that warm-start the typed action slots
         (a switch option must still be "this mon" as a query; the latents
         are not per-entity). The token set is exactly the player's own
-        legal information set; `opp_private_team` is deliberately absent."""
+        legal information set."""
         public_tokens, public_token_mask, public_mask, public_bias = (
             _lifted_entity_vmap(Encoder._public_entity_tokens)(
                 self, env_step.public_team, env_step.revealed_team
@@ -1595,20 +1500,6 @@ class Encoder(nn.Module):
         # below and reach the value ladder via the action->state readbacks.
         my_move_embeddings, _ = self._embed_moves(env_step.my_moveset)
 
-        # Opponent's privileged match-start team sheet (training self-play
-        # only; all-unspecified rows at deploy, masked out here) as
-        # attribute TOKENS with the "theirs" side bias -- keys of the
-        # privileged latent read only; they never join the public read.
-        opp_private_tokens, opp_private_token_mask, _ = _lifted_entity_vmap(
-            Encoder._private_entity_tokens
-        )(self, env_step.opp_private_team)
-        opp_private_bias = jnp.broadcast_to(
-            self.side_bias(jnp.ones((), dtype=jnp.int32)).astype(
-                opp_private_tokens.dtype
-            ),
-            opp_private_tokens.shape[:1] + opp_private_tokens.shape[-1:],
-        )
-
         output_state_sequence = jnp.zeros(
             (NUM_ACTION_FEATURES, self.entity_size), dtype=self.cfg.dtype
         )
@@ -1696,9 +1587,7 @@ class Encoder(nn.Module):
             output_state_mask[slot_indices]
             for _, slot_indices in ACTION_DECODER_SLOT_GROUPS
         )
-        value_all_tokens = self.all_value_embeddings.astype(self.cfg.dtype)
-        value_private_tokens = self.private_value_embeddings.astype(self.cfg.dtype)
-        value_public_tokens = self.public_value_embeddings.astype(self.cfg.dtype)
+        value_tokens = self.value_embeddings_table.astype(self.cfg.dtype)
 
         # The public read: K latents over the flat token set of my own
         # information set -- 168 entity attribute tokens + field 3 +
@@ -1727,22 +1616,7 @@ class Encoder(nn.Module):
             ),
             (public_bias, private_bias, None, None, None),
         )
-        # The privileged read: a few latents over [sheet tokens | public
-        # latents]; the trunk's opp stream, read by value-`all` only.
-        priv_latents = self.priv_latent_read(
-            (opp_private_tokens, public_latents[None]),
-            (
-                opp_private_token_mask,
-                jnp.ones(public_latents.shape[:1], dtype=jnp.bool_)[None],
-            ),
-            (
-                _PRIVATE_TOKEN_TYPES,
-                np.full(public_latents.shape[0], _TOKEN_LATENT),
-            ),
-            (opp_private_bias, None),
-        )
         state_valid = jnp.ones(public_latents.shape[0], dtype=jnp.bool_)
-        opp_valid = jnp.ones(priv_latents.shape[0], dtype=jnp.bool_)
 
         # The action stream is built as before: per-type norm+MLP
         # projections over the typed slices gathered from the warm-started
@@ -1756,30 +1630,10 @@ class Encoder(nn.Module):
                 )
             )
         )
-        (
-            (
-                _,
-                _,
-                action_queries,
-                value_all_queries,
-                value_private_queries,
-                value_public_queries,
-            ),
-            _,
-        ) = self.round_trunk(
-            (
-                public_latents,
-                priv_latents,
-                action_tokens,
-                value_all_tokens,
-                value_private_tokens,
-                value_public_tokens,
-            ),
+        ((_, action_queries, value_queries), _) = self.round_trunk(
+            (public_latents, action_tokens, value_tokens),
             state_valid,
-            opp_valid,
             *typed_action_valids,
-            history_tokens,
-            history_valid,
         )
 
         # Head-facing embeddings from the final round's raw action
@@ -1796,20 +1650,12 @@ class Encoder(nn.Module):
                 )
             )
         )
-        value_embeddings = value_all_queries.reshape(-1)
-        private_value_embeddings = value_private_queries.reshape(-1)
-        public_value_embeddings = value_public_queries.reshape(-1)
+        value_embeddings = value_queries.reshape(-1)
 
-        # (NUM_ACTION_FEATURES, entity_size) and three (4 * entity_size,)
-        # value readouts; the final round drives the acting policy and
-        # value estimates. `value_embeddings` (the `all` ladder rung) feeds
-        # the main critic; own/public feed the counterfactual aux heads.
-        return (
-            action_embeddings,
-            value_embeddings,
-            private_value_embeddings,
-            public_value_embeddings,
-        )
+        # (NUM_ACTION_FEATURES, entity_size) and one (4 * entity_size,)
+        # value readout off the final round — the critic's state vector,
+        # on the same information set the policy acts from.
+        return action_embeddings, value_embeddings
 
     def _run_history_encoder(
         self,
@@ -1995,16 +1841,8 @@ class Encoder(nn.Module):
             axis=1,
         )
 
-        (
-            action_embeddings,
-            value_embeddings,
-            private_value_embeddings,
-            public_value_embeddings,
-        ) = _forward_vmap()(self, env_step, row_states, order_valid, field_state)
-
-        return (
-            action_embeddings,
-            value_embeddings,
-            private_value_embeddings,
-            public_value_embeddings,
+        action_embeddings, value_embeddings = _forward_vmap()(
+            self, env_step, row_states, order_valid, field_state
         )
+
+        return action_embeddings, value_embeddings

@@ -57,34 +57,24 @@ class Porygon2PlayerModel(nn.Module):
         # directly on embeddings the Q head's CE is also shaping.
         self.macro_micro_head = MacroMicroHead(self.cfg.macro_micro)
         self.policy_adapter = ActionAdapter(self.cfg.policy_adapter)
+        # The one critic (2026-08-25): the all/private/public ladder is
+        # gone with the opponent sheet, so there is a single V on the
+        # deploy-time information set — the same one the policy acts from.
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
-        # Counterfactual value ladder (2026-08-16): all/private/public are
-        # independent estimators per information route (separate query
-        # inits and residual gates in the trunk; shared read module). The
-        # private rung (deployable information set — no opponent sheet)
-        # still reads through the SAME v_head as the privileged main
-        # readout — a deliberate remaining coupling that keeps the two
-        # rungs' output calibration comparable; public (history-context-
-        # only) gets its own head.
-        self.public_v_head = CategoricalValueLogitHead(self.cfg.v_head)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected; a future
             # doubles resume via load-mode "params" fresh-inits this.
             self.slot_conditioning = SlotConditioning()
-        # Privileged two-rung Q critic (docs/q-critic-plan.md), STRUCTURAL
-        # since 2026-08-20 — no enable flag, every consumer (Retrace,
-        # boost, COMA, diagnostics) assumes it exists. Same module stack
-        # as the policy on the critic side: an owned ActionAdapter (the
-        # projected value conditioning concatenated in, so the rung's
-        # information set reaches every CELL, not just the macro level)
-        # into the shared MacroMicroHead at num_logits = bin count,
-        # composed via compose_action_grid. The one module pair serves
-        # both rungs — called with the privileged value_all embedding
-        # (Q_all, drives Retrace) and the private value embedding
-        # (Q_private, the policy's information set) — sharing every
-        # param, the same calibration coupling as v_head's private
-        # readout. Learner-only (train gate in __call__); never sampled
+        # All-action advantage head (docs/q-critic-plan.md), STRUCTURAL
+        # since 2026-08-20 — no enable flag, every consumer assumes it
+        # exists. Same module stack as the policy on the critic side: an
+        # owned ActionAdapter (the projected value conditioning
+        # concatenated in, so the information set reaches every CELL, not
+        # just the macro level) into a MacroMicroHead, composed via
+        # compose_action_grid. ONE rung since 2026-08-25 — the privileged
+        # Q_all rung is gone, so this head's information set is the
+        # policy's. Learner-only (train gate in __call__); never sampled
         # from.
         self.q_cond_proj = nn.Dense(self.cfg.entity_size)
         self.q_cond_norm = nn.LayerNorm()
@@ -396,12 +386,12 @@ class Porygon2PlayerModel(nn.Module):
     def _forward_q_head(
         self, action_embeddings: jax.Array, cond: jax.Array, valid_mask: jax.Array
     ) -> jax.Array:
-        """One Q rung over the flat action grid: (..., N * N) scalar
-        RAW advantage logits (uncentred — targets.residual_q composes
-        Q = V + A - E_pi[A]). cond is the rung's pooled value embedding —
-        the information set (value_all = privileged Q_all, private value
-        = deployable Q_private). Projection/norm in f32 (flax default),
-        cast back so the bf16 grid tensors stay bf16.
+        """The all-action readout over the flat action grid: (..., N * N)
+        scalar RAW advantage logits (uncentred — targets.residual_q
+        composes Q = V + A - E_pi[A]). cond is the pooled value embedding,
+        i.e. the critic's — and the policy's — information set.
+        Projection/norm in f32 (flax default), cast back so the bf16 grid
+        tensors stay bf16.
         """
         c = self.q_cond_norm(self.q_cond_proj(cond)).astype(action_embeddings.dtype)
         adapted = self.q_adapter(action_embeddings, cond=c)
@@ -448,12 +438,7 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        (
-            action_embeddings,
-            value_embeddings,
-            private_value_embeddings,
-            public_value_embeddings,
-        ) = self.encoder(
+        action_embeddings, value_embeddings = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
@@ -462,30 +447,15 @@ class Porygon2PlayerModel(nn.Module):
         )(action_embeddings, value_embeddings, actor_input.env, actor_output)
 
         if self.cfg.train:
-            # Counterfactual value ladder, learner-only so replay
-            # transitions stay small. private reads the SHARED v_head —
-            # see setup.
-            outputs = outputs.replace(
-                private_value_logits=self.v_head(private_value_embeddings).logits,
-                public_value_logits=self.public_v_head(public_value_embeddings).logits,
-            )
-            # Two-rung all-action residual readout over the flat action
-            # grid — (T, N*N) scalar raw advantages per rung. q_adv is
-            # privileged via the value_all conditioning (Q_all = v_head's
-            # V + centred A); private_q_adv shares every param but sees
-            # only the policy's information set. Labels and the
-            # composition live learner-side (targets.residual_q); the
-            # policy reads the TARGET net's Q_all as stop-gradient
-            # scalars only.
+            # All-action residual readout over the flat action grid —
+            # (T, N*N) scalar raw advantages, learner-only so replay
+            # transitions stay small. Labels and the Q composition live
+            # learner-side; the policy reads the TARGET net's advantage as
+            # stop-gradient scalars only.
             outputs = outputs.replace(
                 q_adv=self._forward_q_head(
                     action_embeddings,
                     value_embeddings,
-                    actor_input.env.action_mask,
-                ),
-                private_q_adv=self._forward_q_head(
-                    action_embeddings,
-                    private_value_embeddings,
                     actor_input.env.action_mask,
                 ),
             )

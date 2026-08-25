@@ -1,8 +1,6 @@
 // Bounded battle-invariant suite (vitest): real battles with random
 // actions, one per format plus mirror (both-sides-controlled) runs, all
-// asserting the harness invariants — slot alignment every state, and the
-// privileged opp_private_team contract (frozen at the opponent's first
-// request; byte-equal to the opponent's own first-state private team).
+// asserting the harness invariants — slot alignment every state.
 // The endless soak variant lives in main.ts (`npm run test-soak`).
 import { describe, expect, test } from "vitest";
 
@@ -45,7 +43,7 @@ describe("battle invariants", () => {
     );
 
     test.each(singlesFormats)(
-        "mirror (both controlled, cross-player sheet check): %s",
+        "mirror (both controlled): %s",
         { retry: 2 },
         async (smogonFormat) => {
             const results = await runBattle({
@@ -55,12 +53,6 @@ describe("battle invariants", () => {
             expect(results.length).toBe(2);
             for (const result of results) {
                 expect(result.stateCount).toBeGreaterThan(0);
-                // runBattle already cross-checks the sheets byte-for-byte;
-                // here just require they actually populated so the check
-                // wasn't vacuous.
-                if (result.stateCount >= 2) {
-                    expect(result.oppPrivateSheet).toBeDefined();
-                }
             }
         },
     );

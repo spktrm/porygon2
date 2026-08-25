@@ -187,11 +187,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // have no opponent object, so everything reading this must tolerate
     // undefined (the opponent's private info simply does not exist there).
     opponent: TrainablePlayerAI | undefined;
-    // This player's private team sheet as of its FIRST request, encoded
-    // lazily on first use and frozen — the opponent's state ships it as
-    // opp_private_team (privileged critic input).
-    firstPrivateTeam: Int16Array | undefined;
-
     constructor(
         userName: string,
         playerStream: ObjectReadWriteStream<string>,
@@ -223,7 +218,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.rqid = -1;
         this.firstRequest = undefined;
         this.opponent = undefined;
-        this.firstPrivateTeam = undefined;
 
         const isBaseline = isBaselineUser(userName);
         this.isBaseline = isBaseline;
@@ -284,31 +278,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     createGameState(includeHistory: boolean = true): EnvironmentState {
         const stateHandler = new StateHandler(this);
         return stateHandler.build(includeHistory);
-    }
-
-    ensureFirstPrivateTeam(): Int16Array | undefined {
-        // Lazily encode this player's team sheet from its FROZEN first
-        // request (captured in getRequest at the actual first |request|
-        // line, independent of when anyone asks), so a late first call
-        // still yields match-start info — never the live battle state.
-        if (this.firstPrivateTeam === undefined) {
-            if (!this.getRequest() || this.firstRequest === undefined) {
-                return undefined;
-            }
-            try {
-                const handler = new StateHandler(this);
-                this.firstPrivateTeam = handler.getPrivateTeam(
-                    this.getPlayerIndex() as number,
-                    this.firstRequest,
-                );
-            } catch {
-                // Battle objects not fully ingested yet (first protocol
-                // chunks still streaming) — stay unset and retry on the
-                // opponent's next state build.
-                return undefined;
-            }
-        }
-        return this.firstPrivateTeam;
     }
 
     getRequest(): AnyObject {

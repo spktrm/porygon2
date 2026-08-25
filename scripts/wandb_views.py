@@ -143,14 +143,9 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    # Main gamma=1 head vs the counterfactual ladder
-                    # rungs (private/public).
-                    "Value losses (main + ladder)",
-                    [
-                        "player_loss_v_win",
-                        "player_loss_v_private",
-                        "player_loss_v_public",
-                    ],
+                    # The one critic's CE against the v-trace win targets.
+                    "Value loss",
+                    ["player_loss_v_win"],
                 ),
                 lp(
                     # R2 of expectations vs v-trace targets.
@@ -413,8 +408,6 @@ def rl_sections():
                         "player_q_action_var_within_modality",
                         "player_q_action_var_within_modality_p90",
                         "player_q_action_var_between_modality",
-                        "player_q_private_action_var_within_modality",
-                        "player_q_private_action_var_between_modality",
                     ],
                 ),
                 lp(
@@ -827,33 +820,13 @@ def rl_sections():
                     ["player_win_returns_sum", "player_win_returns_min"],
                 ),
                 lp(
-                    # Counterfactual value ladder (2026-08-16): all
-                    # (privileged, the main head) vs private (deployable) vs
-                    # public (history-only) — R2 per rung.
-                    "Value ladder R2",
-                    [
-                        "player_value_head_r2",
-                        "player_value_private_r2",
-                        "player_value_public_r2",
-                    ],
+                    # The one critic's R2 against the v-trace win targets.
+                    # The all/private/public ladder went with the
+                    # privileged rung (2026-08-25) — its final readings are
+                    # in docs/qva-redesign-step0-reference.md.
+                    "Value R2",
+                    ["player_value_head_r2"],
                     range_y=(-1, 1),
-                ),
-                lp(
-                    # |all−private| prices the opponent's hidden team;
-                    # |private−public| prices private info over the public
-                    # record. Signed variants read systematic bias between
-                    # rungs. CAVEAT (2026-08-16): rungs are independent
-                    # estimators (separate query inits/gates), so gaps
-                    # include an estimator component on top of the
-                    # information value — judge trends, not absolute
-                    # levels, and read them alongside the ladder R2 panel.
-                    "Value of information",
-                    [
-                        "player_value_info_gap_opp_abs",
-                        "player_value_info_gap_private_abs",
-                        "player_value_info_gap_opp",
-                        "player_value_info_gap_private",
-                    ],
                 ),
             ],
         ),
@@ -918,7 +891,6 @@ def rl_sections():
                         "player_macro_micro_head_gradient_norm",
                         "player_policy_adapter_gradient_norm",
                         "player_v_head_gradient_norm",
-                        "player_public_v_head_gradient_norm",
                         "player_q_macro_micro_gradient_norm",
                     ],
                     log_y=True,

@@ -189,8 +189,7 @@ def forward(
     generation: int = 9,
 ) -> Iterator[tuple[PlayerActorOutput, object]]:
     """Yields (prediction, stacked batch) over `chunks` in batches, using
-    the learner-side model (train=True, so q_adv / private_q_adv /
-    private_value_logits / public_value_logits are populated). Batch axis
+    the learner-side model (train=True, so q_adv is populated). Batch axis
     is 1, matching the learner's apply_fn. Leaves are host numpy-able jax
     arrays; decode Q_all with decode_q(pred, flat_action_mask) and V as
     pred.value_head.expectation."""
