@@ -92,6 +92,37 @@ function assertSlotAlignment(
     }
 }
 
+/**
+ * The private-side shape contract. Until 2026-08-25 these two buffers were
+ * decoded here only to feed the frozen-opponent-sheet invariants; when those
+ * were deleted with the privileged critic the decodes stayed behind an
+ * eslint-disable, i.e. a decode-does-not-throw smoke test wearing the costume
+ * of an assertion. This is the replacement: the encoder's own shape contract,
+ * which is what the python decoder (`rl/environment/utils.process_state`)
+ * reshapes against and will throw on if it ever drifts.
+ *
+ * Deliberately NOT cross-checked against the action mask here: the moveset ->
+ * legal-action correspondence runs straight through the doubles slot-alignment
+ * surface, which is a known-open defect, so that assertion would fail for
+ * reasons unrelated to what it claims to test.
+ */
+function assertPrivateSideShape(
+    privateTeam: ReturnType<typeof StateHandler.toReadablePrivate>,
+    moveset: ReturnType<typeof StateHandler.toReadableMoveset>,
+) {
+    if (privateTeam.length !== 6) {
+        throw new Error(
+            `private_team decoded to ${privateTeam.length} rows, expected 6`,
+        );
+    }
+    if (moveset.length === 0 || moveset.length % 4 !== 0) {
+        throw new Error(
+            `my_moveset decoded to ${moveset.length} moves, expected a ` +
+                `non-zero multiple of 4 (one 4-move block per active slot)`,
+        );
+    }
+}
+
 export async function playerController(player: TrainablePlayerAI) {
     let historyLength = 0,
         packedHistoryLength = 0,
@@ -132,7 +163,6 @@ export async function playerController(player: TrainablePlayerAI) {
                 state.getHistoryPackedLength(),
             );
 
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readablePrivateTeam = StateHandler.toReadablePrivate(
                 state.getPrivateTeam_asU8(),
             );
@@ -153,10 +183,10 @@ export async function playerController(player: TrainablePlayerAI) {
                 readablePublicTeam,
                 readableRevealedTeam,
             );
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const readableMoveset = StateHandler.toReadableMoveset(
                 state.getMyMoveset_asU8(),
             );
+            assertPrivateSideShape(readablePrivateTeam, readableMoveset);
 
             const request = player.getRequest();
             if (!request) {

@@ -175,14 +175,15 @@ _TOKEN_ACTIVE_STATE = 6
 _TOKEN_PRIVATE_STATE = 7
 # Non-entity tokens of the flat input set the latent read consumes
 # (2026-08-21): field / side conditions, the two prev-action slots, the
-# per-slot recurrent history states and the field history state, and the
-# public latents themselves when the privileged read re-reads them.
+# per-slot recurrent history states and the field history state.
+# (_TOKEN_LATENT went with the privileged read on 2026-08-25 -- it typed
+# the public latents when that read re-read them, and nothing re-reads
+# them now, so its row of the type table was never indexed again.)
 _TOKEN_FIELD = 8
 _TOKEN_PREV_ACTION = 9
 _TOKEN_HISTORY_SLOT = 10
 _TOKEN_HISTORY_FIELD = 11
-_TOKEN_LATENT = 12
-_NUM_TOKEN_TYPES = 13
+_NUM_TOKEN_TYPES = 12
 
 _PUBLIC_TOKEN_TYPES = np.array(
     [_TOKEN_SPECIES, _TOKEN_ABILITY, _TOKEN_ITEM]
@@ -266,11 +267,10 @@ class LatentInputRead(nn.Module):
     absent keys, so a masked entity is inert. The read's residual starts at
     1.0 (cfg.latent_read.init_residual_scale): token content can only reach
     the latents through it, so it must not start as a no-op -- which also
-    means the value-ladder leak tests exercise this path without gate
-    opening. Privileged routing is STRUCTURAL: the caller builds two
-    instances -- the public read over the player's own information set, and
-    a small privileged read over [sheet tokens | public latents] whose output
-    only the value-`all` rung ever reads.
+    means a leak test exercises this path without gate opening. ONE
+    instance since 2026-08-25: the read over the player's own information
+    set, which is the whole information set there is (the privileged
+    second instance went with the opponent sheet).
     """
 
     cfg: ConfigDict
@@ -643,11 +643,7 @@ class Encoder(nn.Module):
         # tokens, my private sheet's, the field, the prev-action slots and
         # the raw recurrent history states -- and become the trunk's state
         # rows; no per-entity pooling and no per-substream input MLPs on
-        # this path any more. The PRIVILEGED read: a few latents over
-        # [opp sheet tokens | public latents], consumed ONLY by the
-        # value-`all` rung (RoundBlock's opp stream) -- the sheet never
-        # enters the public read, so the policy's invariance to it is
-        # structural. The entity-local pool above survives for the
+        # this path any more. The entity-local pool above survives for the
         # history cache (~2 orders of magnitude more rows) and for the
         # per-entity vectors that warm-start the typed action slots.
         # Rematted like its neighbours; the read's probability matrix is
@@ -709,11 +705,10 @@ class Encoder(nn.Module):
         )
 
         # Round trunk: one RoundBlock over the public latents (state), the
-        # privileged latents (opp), the concatenated action stream
-        # [move | switch | target], and the
-        # value ladder, scanned num_rounds times with stacked params, so
-        # every round has its own weights and rounds can specialize
-        # instead of iterating one shared refinement operator.
+        # concatenated action stream [move | switch | target] and the value
+        # stream, scanned num_rounds times with stacked params, so every
+        # round has its own weights and rounds can specialize instead of
+        # iterating one shared refinement operator.
         # All residual gates are zero-init, so each round starts as a no-op.
         # Rematted with nothing_saveable — checkpoint_dots would save the
         # very matmul outputs (the wide FFW hiddens) that dominate trunk
@@ -1145,9 +1140,9 @@ class Encoder(nn.Module):
         return tokens, token_mask, mask
 
     def _embed_private_entity(self, private: jax.Array, num_stat_bands: int = 8):
-        """Entity-LOCAL pooling -- see `_embed_public_entity`. Still the path
-        for the opponent's privileged sheet, which must stay out of any
-        policy-facing token set."""
+        """Entity-LOCAL pooling -- see `_embed_public_entity`. The path for
+        MY OWN private team rows (the opponent's sheet, which this once also
+        served, was deleted 2026-08-25)."""
         tokens, token_mask, mask = self._private_entity_tokens(private, num_stat_bands)
         private_embedding = self.entity_attention_pool(
             tokens, token_mask, _PRIVATE_TOKEN_TYPES
