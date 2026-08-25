@@ -251,7 +251,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # lambda=1.0 MC-anchor row of the aux spectrum used to keep a live
     # bootstrap-bias readout (player_bootstrap_gap) on this
     # bootstrap-heavy target; the aux heads went 2026-08-21, so that
-    # instrument is gone with them (LESSONS.md ledger).
+    # instrument is gone with them (CLAUDE.md ledger).
     player_lambda: float = 0.8
 
     # No adaptivity/entropy controller fields anymore. The
@@ -290,7 +290,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Builder policy objective: ratio-based surrogate with a trust region.
     # The player has no ratio-surrogate term anymore — the single-action PG
-    # and UPGO losses were removed 2026-08-21 (LESSONS.md 3).
+    # and UPGO losses were removed 2026-08-21 (CLAUDE.md 3).
     builder_policy_objective: PolicyObjectiveT = "spo"
     builder_ppo_clip_threshold: float = 0.3
 
@@ -306,7 +306,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # get_player_model_config).
     # Huber weight — deliberately modest, per the grad-norm
     # lesson from the integrated-critic era: a heavy auxiliary gradient globally clips
-    # everything (LESSONS.md 5).
+    # everything (CLAUDE.md 5).
     player_q_coef: float = 0.5
     # No trace parameter since 2026-08-23 (Step 3): the residual critic
     # regresses on the TD(0) label r + gamma*V_win_target(s'), and the
@@ -330,7 +330,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # cell's own mass, and the 157k-step 2026-08-20 run measured
     # absadv_ratio ~4 against prob_ratio ~0.075 — the critic preferred
     # switch cells MORE than move cells and π alone throttled the update
-    # (LESSONS.md 3). The single-action PG and UPGO terms went the same
+    # (CLAUDE.md 3). The single-action PG and UPGO terms went the same
     # day, leaving this as the only loss that moves the action logits
     # toward return.
     #

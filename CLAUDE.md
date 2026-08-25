@@ -1,22 +1,194 @@
-# Lessons
+# porygon2
 
-Paid-for knowledge from this project: what was tried, what was measured, what
-the verdict was. Most of it was previously recorded only in comments attached to
-the code that produced it, which made it invisible the moment that code was
-deleted.
+Self-play RL for Pokemon Showdown (gen9): JAX learner + actors in python,
+TypeScript game service speaking protobuf over websockets.
 
-Two things live here:
+## Commands
 
-- **The removal ledger** — every mechanism deleted in the 2026-08-21 cleanup
-  pass, with the command that brings it back.
-- **The lessons themselves**, grouped by topic. Entries marked *(live)* describe
-  code still in the tree; the rest describe code that is gone.
+- Python is ALWAYS the repo venv: `env/bin/python` (JAX + CUDA, sees the GPU).
+- Fast tests: `env/bin/python -m pytest tests/ -m "not slow"` (~10s, safe anytime).
+- Slow tests (`gpu`/`slow` marked, real model forwards + train_step): run on the
+  GPU (never `JAX_PLATFORMS=cpu` — separate compile cache, bf16 tolerance
+  artifacts) and only when no training run is live (host-RAM OOM-guard risk).
+- Service tests: `cd service && npm test` (bounded vitest battle-invariant
+  suite; `npm run test-soak` = endless fuzz loop). `npx tsc --noEmit` to typecheck.
+- Proto changes: edit `proto/*.proto`, then `bash scripts/compile_protos.sh`
+  (regenerates `service/protos/` AND `rl/environment/protos/`).
+- Dashboards: `env/bin/python scripts/wandb_views.py` — RERUN after every edit
+  to it; it saves fresh views and auto-prunes superseded same-name views.
+- wandb queries: venv + `wandb.Api()`, project `pokemon-rl` (entity jtwin).
+- Offline checks (no learner): second service `PORT=8081 MAX_WORKERS=2
+  MEMORY_STATS_PATH=/tmp/x.json node service/dist/server/index.js`, then
+  `PS_SERVICE_URI=ws://localhost:8081` + `rl/offline/harness.py`
+  (`play_games` / `forward`). Usernames must be unique per LIVE game.
+- Stuck learner: `kill -USR1 <pid>` dumps every thread's stack (faulthandler).
+- Launch training: `bash start.sh` → tmux session `train` (pane 0 service,
+  pane 1 learner). Graceful stop = Ctrl-C the learner pane (writes a full
+  synchronous checkpoint).
+
+## Map
+
+- `proto/` — source of truth for all message schemas.
+- `service/src/server/` — battle service. `runner.ts`: `TrainablePlayerAI`,
+  `createBattle` (opponent cross-refs — `player.opponent` is load-bearing
+  for `worker.ts`'s wedged-battle teardown). `state.ts`:
+  `StateHandler.build` assembles `EnvironmentState`; `getHistory` windows
+  history to NUM_HISTORY and REBASES the `RELEVANT_ENTITY_IDX*` columns.
+  `service/src/tests/harness.ts` holds the battle invariants shared by the
+  vitest suite (`battle.test.ts`) and the soak (`main.ts`).
+- `rl/environment/` — `interfaces.py` (all pytree dataclasses),
+  `utils.py` (`process_state` proto→numpy decode, geometric buckets for the
+  inference path, `clip_history_windows_tail` joint tail-windowing).
+- `rl/model/` — `encoder.py`: `Encoder` + `RoundBlock` (residual streams:
+  state, action, value; attention block masks ARE the information routing).
+  `history_encoder.py`: per-slot GRU scan over history, aligned to requests
+  by REQUEST_COUNT VALUE (trailing windows are therefore safe).
+  `player_model.py`: four modules — `policy_head` and `advantage_head` are
+  both `ActionScoreHead` over the same action grid (differing only in
+  `reduce`), `v_head` is the one critic, plus the encoder. `heads.py`:
+  `compose_q` owns the `Q = sg(V) + A - E_sg(pi)[A]` identity; micro params
+  are keyed by slot group and macro params by modality, none shared.
+  `modules.py`: generic primitives only — architecture lives next to its wiring.
+- `rl/online/training/` — the learner, split by what each piece needs to
+  run. `train_step.py`: the jitted update (losses, EMA target, non-finite
+  gate) — ONE function by necessity, it is jitted on a static `config` and
+  donates the train states. `batching.py`: the static shape lattice and
+  `stack_batch`. `run_state.py`: `RunState`, the run's mutable bundle.
+  `workers.py`: the three background threads + the replay-reuse PI
+  controller. `league_ops.py`: checkpoint-pacing gate, snapshot
+  publication, payoff readouts. `diagnostics.py`: RAM attribution.
+  `targets.py`: v-trace/Retrace (f32 recursions). `loss.py`,
+  `controllers.py`, `telemetry.py`. `learner.py`: construction, the loop,
+  the periodic schedule. Free functions over `RunState` where possible —
+  that is what lets the tests drive them with plain stubs.
+- `rl/offline/` — `harness.py`: play games with plain params + re-run the
+  train=True heads over the chunks; the per-row joint stats wandb can't give.
+- `rl/online/` — what the ACTORS also touch, so it stays flat:
+  `player_actor.py` plays whole games and emits fixed-length chunks
+  (`chunk_spans`); `inference.py` zero-wait batched actor inference with a
+  device-params LRU; `buffer.py` replay stores (capacity counts CHUNKS);
+  `guards.py` the eval-leak gate; `agent.py`; `league.py` PFSP/league
+  bookkeeping; `config.py` one config dataclass, comments are
+  documentation.
+
+## Invariants (paid-for lessons — do not regress)
+
+- BOUNDED `train_step` shapes: learner batches are trimmed to a static,
+  enumerated shape lattice (`player_shape_lattice` — a chain ascending in
+  both dims, last entry the full stored (64, 256), every combo precompiled
+  fail-fast at the first batch). Trimming must stay LOSSLESS (T: trailing
+  terminal-copy padding only; H: only when every chunk's valid steps and
+  packed rows fit). Never reintroduce DATA-DERIVED shape families — the
+  geometric bucket family compiled a variant per shape, and its surprise
+  late compiles OOM'd three runs.
+- Chunk contract: chunks overlap by one row; a chunk's final row is
+  bootstrap-only unless it is the game's done row; outcome-derived stats and
+  builder losses gate on terminal chunks (`win_reward[-1]` is only real there).
+- NO privileged info (2026-08-25, inverting the old value-ladder rule):
+  every stream sees exactly what the agent sees at deploy time. There is one
+  V and one advantage head, both on that set. Do not reintroduce an
+  opponent-sheet input or a privileged critic rung — measured worth on the
+  85k-step run was 0.005 value units with the privileged rung scoring
+  *worse* in R² than the deployable one (`docs/qva-redesign-step0-reference.md`),
+  and its advantage conditions on information the policy cannot act on.
+- History windows: field steps name packed-cache rows by ABSOLUTE index —
+  never slice the field and packed axes independently; use
+  `clip_history_windows_tail` (mirrors the service's `getHistory`).
+- bf16 only where it saves real memory; losses and value recursions in f32
+  (see `upgo_returns` docstring for the crash this prevents).
+- All training/exploration signals derive from self-play — no scripted
+  heuristics, no human-derived shaping.
+- Checkpoint writes are atomic; a step>0 checkpoint with no league file
+  refuses to load.
+
+## Design principles (binding — worked example: the 2026-08-25 head redesign)
+
+- **One thing, parameterised — not N copies that drift.** If a sequence is
+  written more than once the copies have ALREADY diverged; make it one
+  callable whose variants differ by an argument, so the asymmetries are
+  visible as arguments rather than buried in prose.
+- **Write an identity once, where it belongs.** Anything assembled at several
+  call sites — especially anything undone again downstream — belongs in one
+  named function beside the thing it describes. A comment enforcing an
+  invariant ("must mirror X exactly") IS that invariant not being written once.
+- **Delete what you cannot measure the worth of.** Measure first, then delete,
+  and record the number in the ledger.
+- **No flag without a meaningful off.** Config that only ever takes one value
+  is a comment with a runtime cost.
+- **Contracts get tests with positive controls.** Zero-init gates and masked
+  paths make invariance tests pass vacuously — always include the control that
+  proves the test could fail.
+- **Structure-only changes must be bit-identical**; anything that moves a
+  number is a separate commit carrying its reasoning.
+
+## Conventions
+
+- Australian English in code/comments/filenames (-ise, -isation).
+- Commit style: terse, `topic: dense one-liner — mechanism/consequence
+  clauses joined with em-dashes`. No AI attribution of any kind.
+- `docs/` is gitignored and local to this box — never commit or cite as public.
+- Implementation plans follow `docs/plan-template.md` (problem → diagnosis
+  with evidence → principles → steps, each change/panels/acceptance/
+  fallback → declined → reference numbers). A TELEMETRY STEP COMES FIRST
+  ONLY when the verdict needs a run-time signal that does not exist yet
+  (mechanism and init experiments): the panels that will judge it land
+  first, verified against reference numbers on the current run, so no
+  experiment has to be rerun to be read. Correctness fixes, precision fixes
+  and cleanup go straight in. Acceptance is pre-registered, with a hold
+  period.
+- Test markers: `gpu`, `slow`. `tests/conftest.py` owns env setup and the
+  session-scoped `real_model_and_trajectory` fixture (model init dominates
+  slow-suite runtime — share it, never re-init per module).
+
+## Token discipline (standing instructions)
+
+- Filter tool output at the source: `| grep -E '...' | tail -N` on every
+  potentially chatty command; `run_in_background` for anything long so only
+  the filtered tail enters context. Never dump raw test logs or tmux panes.
+- Grep-first navigation; read narrow line windows, not whole files. Delegate
+  broad multi-file surveys to an Explore subagent — only conclusions return.
+- No verification re-reads after edits; the harness tracks file state.
+- pytest on the GPU, never `JAX_PLATFORMS=cpu` (a PreToolUse hook enforces
+  this) — CPU runs pay a separate compile cache and bf16 tolerance artifacts.
+- wandb checks go through `env/bin/python scripts/wb.py` (latest / summary
+  / metric / compare — terse by design; defaults to the main run). For
+  anything it can't answer, ad-hoc `wandb.Api()` scripts with server-side
+  filtering — compact summaries only, never raw run dumps, no
+  entity/project enumeration.
+- Keep the USER in line too (their explicit request): if their ask is
+  token-greedy — full test reruns for a one-seam change, whole-file/log
+  dumps, unscoped repo-wide sweeps, re-deriving recorded knowledge — flag
+  the cost in one sentence and offer the cheaper form before executing.
+- At a natural feature boundary (landed, committed, pushed), suggest the
+  user `/compact` or start a fresh session; memory files carry the durable
+  knowledge forward.
+
+## Known-open
+
+- Doubles slot-alignment defect (~75% of doubles battles violate the
+  invariant; vitest skips them, labelled). Doubles plumbing generally
+  incomplete behind `num_decision_slots`.
+- Singles slot-alignment has a ~1% Illusion/Zoroark false-positive class
+  (vitest `retry: 2`).
+
+---
+
+# Lessons — paid-for knowledge
+
+What was tried, what was measured, what the verdict was. Most of this was once
+recorded only in comments attached to the code that produced it, which made it
+invisible the moment that code was deleted. Merged into this file 2026-08-25 so
+there is ONE place; CLAUDE.md was un-excluded from git in the same commit, since
+the ledgers below carry the revert handles and are worthless without history.
+
+Two things live here: the **removal ledgers** — every mechanism deleted in a
+cleanup pass, with the command that brings it back — and the **lessons
+themselves**, grouped by topic. Entries marked *(live)* describe code still in
+the tree; the rest describe code that is gone.
 
 `docs/` holds the long-form design documents. It is gitignored and local to the
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
-
----
 
 ## Removal ledger — 2026-08-21 cleanup pass
 
@@ -45,7 +217,7 @@ git revert <removing sha>                                      # undo one commit
 | Multi-lambda aux value heads | `aux_v_head` + `MultiLambdaValueLogitHead`, `compute_aux_value_targets`, `loss_v_aux`, `player_aux_lambdas`/`player_aux_value_coef`, the per-lambda R2 panels, and `player_bootstrap_gap` (it read the λ=1.0 MC-anchor row) | `98f0873` | representation shaping the critic stack no longer needs; **note it takes the bootstrap-bias instrument with it** — nothing now measures the main head against a Monte Carlo anchor |
 | BT-rating telemetry | `rl/online/ratings.py`, `bandit_window_steps`/`bandit_min_games_per_opponent`/`bandit_min_rated_opponents`, the BT-fit auditor panels | `98f0873` | a rating needs hundreds of games per point, so it was never fast enough to act on — an auditor that outlived the controllers it audited |
 | Always-true feature flags | `player_neurd_enabled`, `player_q_diagnostic_enabled` | `98f0873` | neither had a meaningful "off": one gated the sole policy gradient, the other gated loss-free logging |
-| `RuntimeScalars` pytree | the class, the `scalars` arg on `train_step`, both construction sites | `1fd210c` | it carried `magnet_coef`/`neurd_coef` as traced leaves so a host controller could vary them without recompiling; nothing varied them any more. **Reintroduce it — do not widen static config — the moment a coefficient changes during a run** (LESSONS.md 1) |
+| `RuntimeScalars` pytree | the class, the `scalars` arg on `train_step`, both construction sites | `1fd210c` | it carried `magnet_coef`/`neurd_coef` as traced leaves so a host controller could vary them without recompiling; nothing varied them any more. **Reintroduce it — do not widen static config — the moment a coefficient changes during a run** (CLAUDE.md 1) |
 
 ---
 

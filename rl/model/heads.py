@@ -118,7 +118,7 @@ class MicroHead(nn.Module):
     scalar. That scalar was the group's entire parameterisation, and on the
     2026-08-25 read of the 84.9k-step run the target group's scalar was still
     BITWISE ZERO on both families — the group had no trained readout at all
-    (docs/qva-redesign-step0-reference.md). LESSONS.md section 13 already
+    (docs/qva-redesign-step0-reference.md). CLAUDE.md section 13 already
     recorded that the Nov-2025 per-modality head beat the flat gram head and
     that flattening it was a known regression; this restores the separation.
 
@@ -498,7 +498,7 @@ class ActionScores(NamedTuple):
     per-level logits before composition — NeuRD differentiates against these,
     because the composed grid is already a normalised log-policy and
     differentiating through the normalisations adds a pi-prefactored
-    cross-term (LESSONS.md section 3, tests/test_neurd_loss.py pins it).
+    cross-term (CLAUDE.md section 3, tests/test_neurd_loss.py pins it).
     """
 
     logits: jax.Array

@@ -4,7 +4,7 @@ Dormant-unit fraction and srank@0.99 over the trunk's embedding streams.
 These measure capacity loss directly (dead units, rank collapse), and are
 what caught the 1e-4 learning-rate collapse: action-embedding srank fell to
 0.27 by 13k steps while actor-KL sat quietly at 0.002, so KL headroom was
-never evidence the LR could rise (LESSONS.md 5).
+never evidence the LR could rise (CLAUDE.md 5).
 
 Deliberately NOT wired into the training loop. Everything here is a pure
 function of (params, batch), so it can be run against any saved checkpoint

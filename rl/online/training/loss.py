@@ -27,7 +27,7 @@ def policy_gradient_loss(
     objective: str = "spo",
 ):
     """Ratio-surrogate PG loss. Builder-only since 2026-08-21 — the player
-    policy is trained by all-action NeuRD alone (LESSONS.md 3)."""
+    policy is trained by all-action NeuRD alone (CLAUDE.md 3)."""
     objective_fn = {"spo": spo_objective}[objective]
     pg_loss = objective_fn(
         policy_ratios=policy_ratios,

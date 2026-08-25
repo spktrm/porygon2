@@ -41,10 +41,10 @@ thing they controlled:
   genuinely-useful behaviour, forcing pure Monte Carlo while a
   freshly-perturbed critic is untrustworthy, survived as "upgo_coef=0
   during plasticity recovery" — and both of those went in the
-  2026-08-21 pass (LESSONS.md 3 and 10).
+  2026-08-21 pass (CLAUDE.md 3 and 10).
 - PlasticityController (shrink-and-perturb on league stagnation; removed
   2026-08-21): rarely-fired machinery with a large blast radius. See
-  LESSONS.md 10 — the evidence pulls both ways and is recorded there.
+  CLAUDE.md 10 — the evidence pulls both ways and is recorded there.
 - ExploitabilityController (caution scale; removed 2026-08-14): built to
   scale three other controllers' targets, it outlived all three — by the
   end its only action was a bounded nudge on the replay KL target,

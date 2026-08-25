@@ -2,7 +2,7 @@
 
 Kept out of the learner because these are pure functions over trajectories
 — the shape arithmetic is the part worth testing on its own, and the OOM
-history that produced it (LESSONS.md 1) makes it the part worth reading
+history that produced it (CLAUDE.md 1) makes it the part worth reading
 without 2,000 lines of orchestration around it.
 """
 

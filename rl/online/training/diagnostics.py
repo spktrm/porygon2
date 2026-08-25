@@ -2,7 +2,7 @@
 
 Free functions: these describe the PROCESS, not the Learner. Added after
 session 1786537634's RSS climbed 5.9->17GB (threads 478->775) with no way
-to attribute it from wandb alone (LESSONS.md 1).
+to attribute it from wandb alone (CLAUDE.md 1).
 """
 
 import collections

@@ -67,7 +67,7 @@ class OOMGuardTriggered(Exception):
 class Learner:
     """Owns the League, the gpu_lock, the compiled train_step and the one
     live RunState. The MainExploiter/LeagueExploiter populations were
-    removed 2026-08-21 — see LESSONS.md 9 for the design and why it never
+    removed 2026-08-21 — see CLAUDE.md 9 for the design and why it never
     ran on this box."""
 
     def __init__(
@@ -100,7 +100,7 @@ class Learner:
         # value that DOES vary during a run must not live in it at all; it
         # needs its own traced pytree argument, because retained
         # executables per distinct static value OOM-killed run 1326
-        # (LESSONS.md 1).
+        # (CLAUDE.md 1).
 
         self._train_step_jit = train_step if debug else TRAIN_STEP_JIT
         # Shape-lattice fail-fast: every combo compiles at the FIRST batch
@@ -203,7 +203,7 @@ class Learner:
 
     def controller_state_bytes(self, run_state: RunState) -> bytes:
         """Host-side training dynamics for the checkpoint. Every adaptive
-        controller this project built has since been removed (LESSONS.md
+        controller this project built has since been removed (CLAUDE.md
         §10), so what is left is the monotonic x-axis counter — but the
         section-wise shape is kept: it is what lets a checkpoint written by
         a superseded revision resume without failing."""

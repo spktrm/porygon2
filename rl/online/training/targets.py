@@ -45,7 +45,7 @@ def compute_player_targets(
     """Computes v-trace VALUE targets on the win/loss channel.
 
     Policy advantages are gone: the single-action PG and UPGO terms were
-    removed 2026-08-21 (LESSONS.md 3), so nothing consumes them. What is
+    removed 2026-08-21 (CLAUDE.md 3), so nothing consumes them. What is
     left here feeds the value head and the off-policyness diagnostics.
 
     PBRS/potential shaping retired (Aug 2026): the shaped-advantage era's

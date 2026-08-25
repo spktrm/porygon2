@@ -22,7 +22,7 @@ is a standalone research program.
 > (overfit-one-batch + martingale audit) and `baseline.py` (hand-rule
 > lower bound) — were deleted in the feature-bloat pass. None was
 > imported by anything; each was a standalone `__main__`. The verdict
-> rules they encoded are preserved in `LESSONS.md` 12, and the code is
+> rules they encoded are preserved in `CLAUDE.md` 12, and the code is
 > one command away: `git checkout pre-cleanup-2026-08-21 -- rl/offline/`.
 > The trainer, model, dataset, config and artifact boundary are untouched.
 
