@@ -207,18 +207,22 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # docs/critic-weakness-analysis.md) let the head fit taken-cell labels
     # through a state-only route (Step 6 probe: label floor reached with
     # within-state action variance collapsing 5x).
-    def _action_score_head(micro_kind: str) -> ConfigDict:
+    def _action_score_head() -> ConfigDict:
         head = ConfigDict()
         head.adapter = ConfigDict()
         head.adapter.mlp = ConfigDict()
         head.adapter.mlp.layer_sizes = entity_size
         head.macro_micro = ConfigDict()
-        head.macro_micro.micro_kind = micro_kind
         head.macro_micro.num_logits = 1
-        if micro_kind == "pointer":
-            head.macro_micro.micro_qk = ConfigDict()
-            head.macro_micro.micro_qk.use_bias = True
-            head.macro_micro.micro_qk.qk_layer_norm = True
+        # Per-slot-group micro projections (2026-08-25): qk_size is the
+        # width EACH group gets, so the Dense is entity_size x (3 * qk_size)
+        # and the three groups own disjoint coordinates. Set explicitly —
+        # the num_heads default would have silently split entity_size three
+        # ways and shrunk every group to 85.
+        head.macro_micro.micro_qk = ConfigDict()
+        head.macro_micro.micro_qk.qk_size = entity_size
+        head.macro_micro.micro_qk.use_bias = True
+        head.macro_micro.micro_qk.qk_layer_norm = True
         # Modality-level head: per-modality attention pooling over src-slot
         # embeddings, MLP, zero-init output layer (keeps the init policy
         # anchored to calculate_hierarchical_prior).
@@ -231,8 +235,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
         head.macro_micro.macro.mlp.layer_sizes = entity_size
         return head
 
-    cfg.policy_head = _action_score_head("dot")
-    cfg.advantage_head = _action_score_head("pointer")
+    cfg.policy_head = _action_score_head()
+    cfg.advantage_head = _action_score_head()
 
     # Deep value readout (Aug 2026): the previous single linear layer made
     # the value head the thinnest module in the model while the action

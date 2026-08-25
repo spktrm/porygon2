@@ -100,15 +100,95 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(
         )
 
     grads = jax.grad(loss)(params)["params"]["advantage_head"]["macro_micro"]
+    micro_grads = grads["micro"]
     for name in ("micro_local_src", "micro_local_tgt"):
-        g = np.asarray(grads[name]["kernel"], dtype=np.float32)
+        g = np.asarray(micro_grads[name]["kernel"], dtype=np.float32)
         assert np.isfinite(g).all() and np.abs(g).max() > 0.0, name
-    # The gated pointer's q/k projections get NOTHING at init — the
-    # product structure this test exists to document.
+    # The gated grid's q/k projections get NOTHING at init — the two-factor
+    # product structure this test exists to document. The local routes above
+    # are what carry the early gradient.
     for name in ("Dense_0", "Dense_1"):
         assert not np.asarray(
-            grads["micro"][name]["kernel"], dtype=np.float32
+            micro_grads["micro_qk"][name]["kernel"], dtype=np.float32
         ).any(), name
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_micro_params_are_not_shared_between_slot_groups(
+    real_model_and_trajectory, real_model_apply
+):
+    """The separation contract (2026-08-25).
+
+    A loss that touches ONLY one slot group's cells must leave every other
+    group's parameters bitwise untouched. Before this change the three groups
+    shared one projection and one pair of local kernels, distinguished only
+    by a scalar — and on the 84.9k-step run the target group's scalar was
+    still exactly zero, i.e. that group had no trained readout at all.
+
+    The per-group blocks live in disjoint COLUMN ranges of the shared Dense
+    kernels (attention heads own disjoint output coordinates), so the
+    assertion is per-column-block, not per-leaf.
+    """
+    from rl.environment.data import (
+        FLAT_SRC_GROUP_MASK,
+        NUM_ACTION_SLOT_GROUPS,
+    )
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    flat_group = np.asarray(FLAT_SRC_GROUP_MASK)
+    legal = np.asarray(actor_input.env.action_mask).reshape(-1, flat_group.shape[0])
+
+    def grads_for_group(g):
+        # +-1 by rank parity WITHIN the group, not a uniform +1: micro is
+        # mean-centred over each modality's legal cells (compose_action_grid,
+        # reduce="mean") and A is pi-centred over the row, so a uniform
+        # weight lands exactly in the null space of both and the loss is
+        # identically zero. This is the same trick the flat-at-init test
+        # above uses, and forgetting it makes the test pass vacuously.
+        cells = np.flatnonzero(flat_group == g)
+        sel = np.zeros(flat_group.shape, np.float32)
+        sel[cells] = np.where(np.arange(len(cells)) % 2 == 0, 1.0, -1.0)
+
+        def loss(p):
+            o = real_model_apply(p, actor_input, actor_output, HeadParams())
+            return jnp.sum(
+                o.advantage.astype(jnp.float32)
+                * jnp.asarray(sel)
+                * jnp.asarray(legal)
+            )
+
+        return jax.grad(loss)(params)["params"]["advantage_head"]["macro_micro"][
+            "micro"
+        ]
+
+    target_group = 1  # switch
+    g = grads_for_group(target_group)
+
+    # Local routes: kernel is (d, G) — exactly one column may be non-zero.
+    for name in ("micro_local_src", "micro_local_tgt"):
+        k = np.asarray(g[name]["kernel"], dtype=np.float32)
+        assert k.shape[-1] == NUM_ACTION_SLOT_GROUPS, name
+        for other in range(NUM_ACTION_SLOT_GROUPS):
+            if other == target_group:
+                continue
+            assert not k[..., other].any(), f"{name}: group {other} leaked"
+
+    # type_scale is (G, K) — same story, one row.
+    ts = np.asarray(g["type_scale"], dtype=np.float32)
+    for other in range(NUM_ACTION_SLOT_GROUPS):
+        if other == target_group:
+            continue
+        assert not ts[other].any(), f"type_scale: group {other} leaked"
+
+    # Positive control: the group we DID touch must receive gradient
+    # somewhere, or the whole test passes vacuously.
+    touched = any(
+        np.asarray(g[name]["kernel"], dtype=np.float32)[..., target_group].any()
+        for name in ("micro_local_src", "micro_local_tgt")
+    )
+    assert touched, "positive control: the touched group got no gradient"
 
 
 def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):

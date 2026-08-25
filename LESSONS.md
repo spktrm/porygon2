@@ -86,6 +86,21 @@ its advantage told the policy things it could not act on
 | Value ladder (all/private/public rungs) | `all_value_embeddings`/`private_value_embeddings`/`public_value_embeddings` (→ one `value_embeddings_table`), `public_v_head`, `history_to_value_public` + the raw-history side channel, per-rung read/FFW gates, `private_value_logits`/`public_value_logits`, `loss_v_private`/`loss_v_public`, `player_value_ladder_coef`, `value_ladder_logs` (incl. the `player_value_info_gap_*` panels), `tests/test_value_ladder.py` | see this pass | with no privileged rung there is nothing left to be privileged *relative to*; the public rung's only consumer was the info-gap diagnostic. Its final reading is banked in the Step-0 doc before deletion |
 | Second Q rung | `private_q_adv`, `q_private_all_target`, `v_private_target`, `loss_q_private`, `q_taken_of`, `player_q_private_*` panels | see this pass | closes diagnosis #5 (Q_all/Q_private shared-parameter interference, `docs/critic-weakness-analysis.md`) structurally — the two rungs shared every head param and differed only by conditioning |
 
+## Restoration ledger — 2026-08-25 head redesign
+
+Not a removal pass: this one put things BACK. Tag **`pre-qva-redesign-2026-08-25`**
+(commit `989e8af`) is still the revert handle. Net effect on the model is
+39.11M -> 27.26M parameters (-30%): the encoder shed 12.65M with the privileged
+streams, and the modality separation cost only +0.8M on the heads.
+
+| change | what it restores / collapses | why |
+|---|---|---|
+| `ActionScoreHead` | the singles policy, the doubles per-stage scorer and the Q head were three hand-written copies of adapter -> src_valid -> macro/micro -> compose, and had drifted | one readout, two compositions (`reduce`); `Porygon2PlayerModel.setup` 9 module attributes -> 4 |
+| `heads.compose_q` | `Q = sg(V) + A - E_sg(pi)[A]` was assembled at 4 learner call sites and undone at 2 more | the identity is written once, in the model, beside `compose_action_grid`; `targets.residual_q` deleted |
+| per-slot-group micro params | the Nov-2025 per-modality decoder, flattened in `0e23621` | three groups shared one projection and differed by ONE scalar; the target group's scalar was still bitwise zero at 84.9k, so it had no readout at all |
+| per-modality macro MLP | modality-level parameters | the MLP and out layer were shared across all five modalities; only the pooling query differed |
+| NeuRD reads A, clip on A | — | V is a per-row constant the centring already cancelled; on Q the +-2 clip was scale-dependent (V=0.9 clipped upside 10x harder than V=-0.9) |
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family
@@ -502,7 +517,27 @@ value cannot work.
 ## 13. Architecture notes worth keeping *(live)*
 
 - **Deep, modality-separated action decoders are empirically necessary.** Make
-  that depth cheaper; do not remove it.
+  that depth cheaper; do not remove it. RESTORED 2026-08-25 after a
+  three-week regression: every micro parameter is now keyed by slot group
+  (`SRC_GROUP_MASK`) and every macro parameter by modality, with no sharing.
+  The flattened version distinguished the three groups by a single scalar
+  each, and the 84.9k-step read found the target group's scalar still
+  BITWISE ZERO on both the policy and the advantage head — under that
+  parameterisation the scalar *was* the group's entire readout, so the group
+  had never trained at all (`docs/qva-redesign-step0-reference.md`).
+- **G disjoint projections are one Dense with G*qk outputs.** Attention heads
+  own disjoint output coordinates, so `PointerLogits(num_heads=G)` gives
+  genuinely unshared per-group projections with no vmap and no loop; the
+  per-group select is a one-hot contraction over the group axis. A cell's
+  group is a function of its SRC half alone, and `micro_local_tgt` is read
+  under the CELL's group — the same target token scores differently
+  depending on which modality is choosing it, which is the point.
+- **A learned grid behind a zero-init scale is a two-factor product and it
+  stalls.** Whenever per-group or per-modality parameters go behind a
+  zero-init gate, pair them with a zero-init SINGLE-factor route over a live
+  input (`micro_local_src`/`micro_local_tgt`), or the gate's gradient is a
+  random grid's correlation with the residual and neither factor moves —
+  measured: 60k steps, gate 0.03-0.06, q/k kernels still at lecun init.
 - **Flat-at-init contract.** Every micro/macro/adapter output path is zero-init,
   so the policy starts at its hierarchical prior and Q at uniform bins — no
   lecun noise posing as action preferences for CE to unlearn or for NeuRD to
@@ -523,9 +558,17 @@ value cannot work.
   any wait stalls actors at game boundaries when no further requests are coming.
 - Separate adder/sampler locks would only serialise adders against adders; the
   shared RLock is what keeps notify-while-holding-the-sibling-condition legal.
-- **Nov 2025 hierarchical policy head beat the current flat gram head** in
-  competition and was removed in 0e23621 — a known regression, not an
-  improvement.
+- **Nov 2025 hierarchical policy head beat the flat gram head** in competition
+  and was removed in 0e23621 — a known regression. Addressed 2026-08-25 by
+  the per-group/per-modality restoration above; judge it on
+  `player_adv_rms_{move,switch,target}` all moving separately and on the
+  three `type_scale` entries leaving zero.
+- **One readout, two compositions.** The policy and the advantage score the
+  SAME src x tgt grid and differ only in `reduce` — `ActionScoreHead`. Before
+  2026-08-25 the sequence (adapter -> src_valid -> macro/micro -> compose)
+  was open-coded three times (singles policy, doubles stage, Q head) and had
+  drifted between the copies. If a fourth consumer of the action axis
+  appears, it is a third `reduce`, not a fourth copy.
 
 ## 14. Tooling
 

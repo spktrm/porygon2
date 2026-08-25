@@ -10,6 +10,7 @@ from rl.environment.data import (
     FLAT_SRC_GROUP_MASK,
     NUM_ACTION_SLOT_GROUPS,
     NUM_MODALITY_FEATURES,
+    SRC_GROUP_MASK,
     SRC_MODALITY_MASK,
 )
 from rl.environment.interfaces import (
@@ -101,65 +102,133 @@ def sample_categorical(logits: jax.Array, rng_key: jax.Array):
 
 
 class MicroHead(nn.Module):
-    """Parameter-less within-modality (micro) readout over the typed
-    trunk streams (2026-08-17, replacing PerModalityPolicyHead).
+    """Within-modality (micro) readout over the flat src x tgt grid, with
+    NO parameter shared between slot groups (2026-08-25).
 
-    The role and modality depth that previously lived in per-modality
-    src/tgt MLP stacks now lives in the round trunk: move / switch /
-    target slots travel every round as separate residual streams with
-    their own gates and out-norms, so by the time embeddings reach this
-    head the src and tgt halves of a grid cell are (structural diagonal
-    cells aside) vectors from different typed spaces — no slot does query
-    and key duty through one shared projection, the pathology that
-    retired the original parameter-free gram head. Diagonal cells (pass /
-    default) score a squared norm, which is harmless: they are OTHER-
-    modality singletons whose within-modality softmax is degenerate, so
-    the modality head alone decides them.
+    Every parameter here is indexed by the SRC slot's group (move / switch /
+    target — SRC_GROUP_MASK, the same partition the encoder's typed residual
+    streams use). A cell's group is a function of its src half alone, so
+    "this cell's group" is always well defined, and `local_tgt` is read under
+    the CELL's group: the same target token scores differently depending on
+    which modality is choosing it ("how good is this target for a move" vs
+    "for a switch"), which is the point of separating them.
 
-    The readout is a dot-product grid, rms-NORMALISED per slot group
-    (stop-gradient), times a per-slot-group ZERO-INIT scale. Zero init
-    keeps every micro logit exactly 0 at model init, preserving
-    calculate_hierarchical_prior as the exact init-policy anchor, and
-    each group owns its sharpness through its scalar ALONE. The earlier
-    design left the raw dot un-normalised ("the typed streams own the
-    logit scale") — refuted 2026-08-25: the loss pins the PRODUCT
-    scale.gram at the band, so growing stream norms forced type_scale
-    0.026 -> 1e-4 while the raw gram grew to rms ~6e3, the gradient to
-    type_scale (= the gram) hit 7e7 in the Jacobian probe (THE macro-head
-    grad-runaway amplifier), and the upstream micro gradient (= the
-    scale) died — the micro-gate stall re-created dynamically, mid-run.
-    Dividing by the group's stop-grad rms gauges the stream scale away:
-    type_scale is the one live factor, its gradient is O(w), and
-    stream-norm drift can neither starve nor explode the route. The
-    downstream within-modality logsumexp removes per-modality shifts, so
-    these scales control sharpness only — the modality contest belongs
-    to MacroHead.
+    What this replaces: one parameter-free dot grid (policy) or one shared
+    PointerLogits (advantage), with the three groups distinguished ONLY by a
+    scalar. That scalar was the group's entire parameterisation, and on the
+    2026-08-25 read of the 84.9k-step run the target group's scalar was still
+    BITWISE ZERO on both families — the group had no trained readout at all
+    (docs/qva-redesign-step0-reference.md). LESSONS.md section 13 already
+    recorded that the Nov-2025 per-modality head beat the flat gram head and
+    that flattening it was a known regression; this restores the separation.
+
+    Implementation note: G disjoint projections are one Dense with G*qk
+    outputs — attention heads own disjoint output coordinates, so there is
+    genuinely no weight sharing between groups, and the per-group select is
+    a one-hot contraction over the group axis.
+
+    Two structural properties are preserved exactly:
+
+    FLAT-AT-INIT. `type_scale` is zero-init, so every micro logit is exactly
+    0 at init and calculate_hierarchical_prior stays the exact init-policy
+    anchor.
+
+    SINGLE-FACTOR GRADIENT. A learned grid behind a zero-init scale is a
+    gate x grid PRODUCT, and that product is what stalled: the gate's
+    gradient is a random grid's correlation with the residual, the grid's is
+    proportional to the gate, and neither moved in 60k steps (gate 0.03-0.06,
+    q/k kernels still at lecun init — docs/critic-weakness-analysis.md Step-3
+    post-mortem). So each group also carries zero-init `micro_local_src` /
+    `micro_local_tgt` routes: ONE zero-init factor over a LIVE input, whose
+    gradient is consistent from step 0. The grid supplies interaction terms
+    behind the scale; the local routes carry the early signal.
+
+    The per-group rms normalisation (2026-08-25, 473ba77) stays and matters
+    MORE with learned kernels, not less: without it the loss pins the PRODUCT
+    scale.grid at the band, so growing kernel norms crush the scale (0.026 ->
+    1e-4 was measured) while the raw grid grows, the gradient to the scale
+    (= the grid) explodes, and the micro route dies mid-run. Dividing by the
+    group's stop-grad rms gauges that away, leaving type_scale as the one
+    live factor with an O(w) gradient.
     """
+
+    num_logits: int = 1
+    qk_size: int = None
+    use_bias: bool = True
+    qk_layer_norm: bool = True
 
     @nn.compact
     def __call__(self, action_embeddings: jax.Array) -> jax.Array:
-        inv_sqrt_d = action_embeddings.shape[-1] ** -0.5
-        logits = (
-            jnp.einsum("...id,...jd->...ij", action_embeddings, action_embeddings)
-            * inv_sqrt_d
+        g = NUM_ACTION_SLOT_GROUPS
+        k = self.num_logits
+        lead = action_embeddings.shape[:-2]
+        n = action_embeddings.shape[-2]
+        # (N, G) one-hot of each SRC slot's group: the per-group select.
+        group_oh = jax.nn.one_hot(
+            jnp.asarray(SRC_GROUP_MASK), g, dtype=jnp.float32
         )
-        type_scale = self.param(
-            "type_scale", nn.initializers.zeros_init(), (NUM_ACTION_SLOT_GROUPS,)
-        ).astype(jnp.float32)
-        flat = logits.reshape(*logits.shape[:-2], -1)
+
+        # Per-group q/k projections -> (..., N, N, G * K) -> (..., N, N, G, K)
+        grid = PointerLogits(
+            qk_size=self.qk_size,
+            num_heads=g * k,
+            use_bias=self.use_bias,
+            qk_layer_norm=self.qk_layer_norm,
+            name="micro_qk",
+        )(action_embeddings, action_embeddings)
+        grid = grid.reshape(*lead, n, n, g, k).astype(jnp.float32)
+        # Select each cell's group by its SRC slot.
+        flat = jnp.einsum("...ijgk,ig->...ijk", grid, group_oh)
+        flat = flat.reshape(*lead, n * n, k)
+
         # Per-group rms over the grid cells (f32, eps-guarded, all cells:
         # legality lives downstream), stop-grad so the normaliser is a
         # gauge, not a trainable route.
-        group_oh = jax.nn.one_hot(
-            FLAT_SRC_GROUP_MASK, NUM_ACTION_SLOT_GROUPS, dtype=jnp.float32
+        flat_group_oh = jax.nn.one_hot(
+            jnp.asarray(FLAT_SRC_GROUP_MASK), g, dtype=jnp.float32
         )
-        sq = jnp.square(flat.astype(jnp.float32))
-        group_ms = (sq @ group_oh) / jnp.maximum(group_oh.sum(axis=0), 1.0)
+        sq = jnp.square(flat)
+        group_ms = jnp.einsum("...ck,cg->...gk", sq, flat_group_oh) / jnp.maximum(
+            flat_group_oh.sum(axis=0), 1.0
+        )[:, None]
         group_rms = jax.lax.stop_gradient(
-            jnp.sqrt(group_ms + 1e-12)[..., FLAT_SRC_GROUP_MASK]
+            jnp.sqrt(group_ms + 1e-12)[..., FLAT_SRC_GROUP_MASK, :]
         )
-        normed = flat.astype(jnp.float32) / group_rms
-        return (normed * type_scale[FLAT_SRC_GROUP_MASK]).astype(logits.dtype)
+        normed = flat / group_rms
+
+        type_scale = self.param(
+            "type_scale", nn.initializers.zeros_init(), (g, k)
+        ).astype(jnp.float32)
+        out = normed * type_scale[FLAT_SRC_GROUP_MASK, :]
+
+        # Single-factor per-group local routes over live inputs.
+        local_src = (
+            nn.Dense(
+                g * k,
+                use_bias=False,
+                kernel_init=nn.initializers.zeros,
+                name="micro_local_src",
+            )(action_embeddings)
+            .reshape(*lead, n, g, k)
+            .astype(jnp.float32)
+        )
+        local_tgt = (
+            nn.Dense(
+                g * k,
+                use_bias=False,
+                kernel_init=nn.initializers.zeros,
+                name="micro_local_tgt",
+            )(action_embeddings)
+            .reshape(*lead, n, g, k)
+            .astype(jnp.float32)
+        )
+        src_term = jnp.einsum("...igk,ig->...ik", local_src, group_oh)
+        # The TGT token read under the CELL's group, i.e. the src's.
+        tgt_term = jnp.einsum("...jgk,ig->...ijk", local_tgt, group_oh)
+        local = (src_term[..., :, None, :] + tgt_term).reshape(*lead, n * n, k)
+
+        out = out + local
+        return out.squeeze(-1) if k == 1 else out
 
 
 class ActionAdapter(nn.Module):
@@ -209,10 +278,13 @@ class MacroHead(nn.Module):
     One learned query per modality attention-pools that modality's live
     src-slot embeddings — each modality's srcs live in exactly one typed
     trunk stream (move+wildcard → move, switch → switch, other → target),
-    so the pools read typed spaces — then a shared MLP with a
-    zero-initialised output layer maps each pooled vector to out_features
-    outputs (default 1: the policy's modality logits, squeezed; the Q
-    instantiation passes the categorical bin count).
+    so the pools read typed spaces — then that modality's OWN MLP and OWN
+    zero-initialised output layer map the pooled vector to out_features
+    outputs (default 1: the modality logits, squeezed).
+
+    No parameter is shared between modalities (2026-08-25). Before that the
+    MLP and out layer were shared and only the pooling query differed, so
+    every modality's level was read by one function of a pooled vector.
     Owning the modality contest with dedicated parameters keeps the
     (per-modality shift-invariant) micro gradient from moving the macro
     decision through dot-logit magnitude. Zero output init keeps macro
@@ -271,10 +343,21 @@ class MacroHead(nn.Module):
                 ],
                 axis=-1,
             )
-        hidden = MLP(**self.cfg.mlp.to_dict())(pooled)
-        logits = nn.Dense(
-            self.out_features, kernel_init=nn.initializers.zeros, dtype=hidden.dtype
-        )(hidden)
+        # PER-MODALITY MLP and output layer (2026-08-25): each modality gets
+        # its own parameters, not a shared MLP distinguished only by the
+        # learned query above. M is 5, so an explicit loop is clearer than a
+        # vmap over a size-5 axis and costs the same FLOPs (each MLP now runs
+        # on one row instead of one MLP running on five).
+        per_modality = [
+            nn.Dense(
+                self.out_features,
+                kernel_init=nn.initializers.zeros,
+                dtype=pooled.dtype,
+                name=f"out_{m}",
+            )(MLP(**self.cfg.mlp.to_dict(), name=f"mlp_{m}")(pooled[..., m, :]))
+            for m in range(NUM_MODALITY_FEATURES)
+        ]
+        logits = jnp.stack(per_modality, axis=-2)
         # Modalities with no live src pool zeros and read the out bias;
         # callers still mask them (legal_log_policy for the policy, the
         # flat action mask for the Q grid).
@@ -290,20 +373,15 @@ class MacroMicroHead(nn.Module):
 
     cfg.num_logits is the output width PER CELL/MODALITY (1 = the
     policy's scalar logits; the Q critic passes the categorical bin
-    count). micro scores every grid cell; cfg.micro_kind picks the
-    readout: 'dot' is the policy's parameter-free scaled dot grid
-    (MicroHead — the typed trunk streams plus the caller's ActionAdapter
-    own the geometry, per-group zero-init scales keep the init anchor;
-    scalar-only); 'pointer' is a PointerLogits grid with num_logits
-    heads, returned flat as (..., N*N, num_logits) matching the policy's
-    flat action indexing, behind its own per-group zero-init scale. Both
-    kinds therefore obey one contract: every output is EXACTLY 0 at
-    init, so each instantiation starts flat/unbiased (the policy at its
-    hierarchical prior, the Q readout at uniform bins => E[Q] = 0
-    everywhere). macro scores each modality via MacroHead over
-    per-modality pooled src slots at the same width (zero-init out, same
-    contract); optional cond threads to its MLP (the Q rungs'
-    information set).
+    count). micro scores every grid cell through MicroHead — per-slot-group
+    q/k projections, per-group zero-init scale and per-group zero-init
+    local routes (2026-08-25: the 'dot' / 'pointer' split is gone, both
+    families use the one readout). macro scores each modality via
+    MacroHead over per-modality pooled src slots at the same width, with
+    that modality's own MLP and zero-init out layer; optional cond threads
+    to those MLPs (the critic's information set). Every output is EXACTLY
+    0 at init, so each instantiation starts flat — the policy at its
+    hierarchical prior, the advantage at 0 everywhere.
 
     Returns the (macro, micro) pair RAW — composition belongs to the
     caller, because that is where the two families genuinely differ: the
@@ -323,59 +401,11 @@ class MacroMicroHead(nn.Module):
         cond: jax.Array | None = None,
     ):
         num_logits = self.cfg.get("num_logits", 1)
-        if self.cfg.micro_kind == "dot":
-            assert num_logits == 1, "the dot micro grid is scalar per cell"
-            micro = MicroHead(name="micro")(action_embeddings)
-        else:
-            grid = PointerLogits(
-                **self.cfg.micro_qk.to_dict(), num_heads=num_logits, name="micro"
-            )(action_embeddings, action_embeddings)
-            micro = grid.reshape(*grid.shape[:-3], -1, grid.shape[-1])
-            # Per-slot-group ZERO-INIT scale — the exact trick MicroHead's
-            # type_scale plays for the dot grid, so both micro kinds obey
-            # the same contract: every micro output is exactly 0 at init.
-            # With the macro out layer and the caller's adapter also
-            # zero-init, the whole composed readout starts perfectly flat
-            # (uniform bins => E[Q] = 0 for every cell) — no lecun noise
-            # posing as action preferences for the CE to unlearn or for
-            # downstream consumers (COMA/boost read Q̄ from step 0) to
-            # mistake for signal. Gradient reaches the scale immediately
-            # (the grid behind it is live), unfreezing the pointer.
-            micro_scale = self.param(
-                "micro_scale",
-                nn.initializers.zeros_init(),
-                (NUM_ACTION_SLOT_GROUPS,),
-            ).astype(micro.dtype)
-            micro = micro * micro_scale[FLAT_SRC_GROUP_MASK][..., None]
-            # Single-factor within-modality routes (2026-08-24,
-            # docs/critic-weakness-analysis.md Step 3 post-mortem). The
-            # gated pointer is a scalar-gate x random-grid PRODUCT: the
-            # gate's gradient is a random grid's correlation with the
-            # residual, the grid's is proportional to the gate, and on
-            # the live run neither moved in 60k steps (gate ~0.03-0.06,
-            # q/k kernels at lecun init). A zero-init Dense on the src
-            # token and one on the tgt token are each ONE zero-init
-            # factor over a live input, so their gradient is consistent
-            # from step 0. Singles: moves share a tgt column and resolve
-            # through local_src, switches share a src row and resolve
-            # through local_tgt; the pointer keeps interaction terms.
-            # Composed Q is still exactly 0 at init (flat-at-init
-            # contract); the modality centring in compose_action_grid
-            # removes any per-modality offset these add.
-            local_src = nn.Dense(
-                num_logits,
-                use_bias=False,
-                kernel_init=nn.initializers.zeros,
-                name="micro_local_src",
-            )(action_embeddings)
-            local_tgt = nn.Dense(
-                num_logits,
-                use_bias=False,
-                kernel_init=nn.initializers.zeros,
-                name="micro_local_tgt",
-            )(action_embeddings)
-            local = local_src[..., :, None, :] + local_tgt[..., None, :, :]
-            micro = micro + local.reshape(*local.shape[:-3], -1, local.shape[-1])
+        micro = MicroHead(
+            num_logits=num_logits,
+            **self.cfg.get("micro_qk", ConfigDict()).to_dict(),
+            name="micro",
+        )(action_embeddings)
         macro = MacroHead(self.cfg.macro, out_features=num_logits, name="macro")(
             action_embeddings, src_valid, cond=cond
         )

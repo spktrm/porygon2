@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import optax
 
 from rl.environment.data import (
+    FLAT_SRC_GROUP_MASK,
     CAT_VF_SUPPORT,
     FLAT_MODALITY_MASK,
     NUM_MODALITY_FEATURES,
@@ -431,6 +432,35 @@ def train_step(
         jnp.where(q_mask, q_within, jnp.nan), 0.9
     )
     training_logs["player_q_action_var_between_modality"] = average(q_between, q_mask)
+
+    # Advantage-axis scale, read off A directly (2026-08-25). Every panel
+    # above is a Q spread and therefore V-invariant already; these name the
+    # quantity honestly and, crucially, SPLIT IT BY SLOT GROUP — the readout
+    # that says whether each group's now-separate parameters are carrying
+    # signal. Before the separation the three groups shared one projection
+    # and the target group's only parameter was still bitwise zero at 84.9k.
+    #
+    # There is deliberately no "centring term" panel: A is pi-centred inside
+    # the model (heads.compose_q), so E_pi[A] = 0 by construction and the
+    # old "is the head leaking state level into A" question is answered
+    # structurally rather than measured (tests/test_q_identity.py pins it).
+    adv_sq = jnp.square(adv_target)
+    n_legal_f = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
+    training_logs["player_adv_rms"] = average(
+        jnp.sqrt(jnp.where(flat_action_mask, adv_sq, 0.0).sum(axis=-1) / n_legal_f),
+        q_mask,
+    )
+    for gid, gname in enumerate(("move", "switch", "target")):
+        in_group = flat_action_mask & (
+            jnp.asarray(FLAT_SRC_GROUP_MASK) == gid
+        )
+        cnt = in_group.sum(axis=-1)
+        training_logs[f"player_adv_rms_{gname}"] = average(
+            jnp.sqrt(
+                jnp.where(in_group, adv_sq, 0.0).sum(axis=-1) / jnp.maximum(cnt, 1)
+            ),
+            q_mask & (cnt > 0),
+        )
     if not isinstance(batch.reuse_count, tuple):
         fresh_cols = batch.reuse_count[0] == 0
         replay_cols = ~fresh_cols

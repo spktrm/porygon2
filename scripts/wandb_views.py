@@ -411,6 +411,20 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # Advantage scale per SLOT GROUP (2026-08-25). Each
+                    # group now owns its micro parameters, so one group
+                    # pinned near zero while the others move = that group's
+                    # readout is not training. The target group's scalar was
+                    # bitwise zero for the whole of the previous lineage.
+                    "Advantage rms by slot group",
+                    [
+                        "player_adv_rms",
+                        "player_adv_rms_move",
+                        "player_adv_rms_switch",
+                        "player_adv_rms_target",
+                    ],
+                ),
+                lp(
                     # Is the within-modality route learning at all? The
                     # zero-init micro gate (move/switch groups; target is
                     # never legal in singles) and drift-from-init of the
@@ -418,9 +432,10 @@ def rl_sections():
                     # flat gate = the micro path is a random walk.
                     "Q head: micro gate & drift from init",
                     [
-                        "player_q_micro_scale_move",
-                        "player_q_micro_scale_switch",
+                        "player_adv_type_scale_move",
+                        "player_adv_type_scale_switch",
                         "player_q_micro_kernel_rms",
+                        "player_q_micro_local_rms",
                         "player_q_macro_out_rms",
                         "player_q_adapter_out_rms",
                     ],
