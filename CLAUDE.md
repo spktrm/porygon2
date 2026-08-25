@@ -170,6 +170,16 @@ TypeScript game service speaking protobuf over websockets.
   incomplete behind `num_decision_slots`.
 - Singles slot-alignment has a ~1% Illusion/Zoroark false-positive class
   (vitest `retry: 2`).
+- **`packed_valid` is inferred from a species sentinel, not counted.**
+  `rl/environment/utils.py:220-227` derives the occupied packed-row count from
+  `revealed_cache[..., SPECIES] != UNSPECIFIED`. On the bundled fixture the
+  heuristic is exact (289 == `sum(NUM_RELEVANT)` == `max(idx)+1`), but any live
+  edge whose entity has an unknown species would undercount and silently DROP
+  live rows from the window. The correct derivation is `sum(NUM_RELEVANT)` over
+  valid steps, or `max(RELEVANT_ENTITY_IDX)+1`; the service uses the real
+  `entityPublicData.size()`. Deferred deliberately 2026-08-25 — it changes what
+  the model is fed, so it wants its own commit and its own test rather than
+  riding along with a cleanup pass.
 
 ---
 
@@ -350,7 +360,23 @@ the wrong path.
   session (fixed in 15b6a3f). The recursion must run *and return* f32.
   `tests/test_targets.py` keeps the regression.
 - **bf16 log_softmax normalisation holds only to ~3e-3** — size test tolerances
-  accordingly.
+  accordingly. That figure is for a SINGLE softmax; carried through a recurrent
+  scan it compounds (see the next entry).
+- **bf16 GEMM results depend on the INPUT SHAPE, so "same content, different
+  padding" is not bit-identical** *(live, 2026-08-25)*. XLA autotunes a kernel
+  per shape, so `A[:m] @ W` and `(A @ W)[:m]` differ by ~1 ULP — measured
+  directly: for `A(2048,1026) @ W(1026,256)` in bf16, `m=708` gives maxdiff 0.5
+  over 81 rows while `m=2048` is exact, and the effect is NON-MONOTONE in `m`
+  (f32 same case: 1.9e-4, rel 1.3e-6). This bit
+  `test_untruncated_tail_window_forward_is_identical`, which demanded
+  `atol=1e-5` across a history clip that changes `message_projection`'s leading
+  dim 2048 -> 708: one ULP (0.0078125) amplified by the 177-step GRU scan into
+  0.023 on the value logits. **Never assert bitwise or tight equality between
+  two forwards whose tensors have different shapes**, however semantically
+  identical the content — assert content equality on the ARRAYS, where it is
+  exactly checkable, and give the forward a precision-realistic tolerance. The
+  non-monotone-in-padding signature is how you tell kernel selection from real
+  data loss.
 - **`-inf * 0` poisons a vjp.** Padded steps carry all-zero targets and zero
   weight; use a finite floor (`-1e9`) for masked logits, never `-inf`. *(live)*
 - **One NaN batch poisons an EMA forever.** `mean`/`std` with `where=` go NaN on
