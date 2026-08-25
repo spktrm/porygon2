@@ -69,9 +69,8 @@ def make_capacity_probe(network):
             packed_history=batch.player_packed_history,
             history=batch.player_history,
         )
-        # Encoder returns the action stream plus the three value-ladder
-        # readouts (all/private/public) since 2026-08-16; probe the action
-        # stream and the main (all) value readout.
+        # Encoder returns the action stream and the single critic's
+        # (4 * entity_size,) value vector; probe both.
         action_emb, value_emb = encode(params, actor_input)
         dones = batch.player_transitions.env_output.done
         valid = (jnp.cumsum(dones, axis=0) - dones) == 0

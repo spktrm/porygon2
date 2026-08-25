@@ -47,8 +47,8 @@ class Agent:
         dummy_func = lambda *args, **kwargs: None
         # head_params is a per-CALL argument of the jitted steps (a traced
         # pytree of scalars, one trace regardless of value), not baked in
-        # via functools.partial: the exploration ladder samples a fresh
-        # continuous epsilon every game (see PlayerActor), which a
+        # via functools.partial: eval actors run at temp 0.5 and training
+        # actors at 1.0 (main.py), which a
         # baked-in python float would turn into one recompile per value.
         self._player_apply_fn = player_apply_fn or dummy_func
         self._builder_apply_fn = builder_apply_fn or dummy_func

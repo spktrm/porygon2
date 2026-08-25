@@ -294,7 +294,7 @@ class PlayerTrajectoryStore:
         )
 
     def add(self, traj: Trajectory):
-        """Adds a trajectory, replacing the oldest over-used entry if the store is full."""
+        """Adds a trajectory, replacing a RANDOM over-used entry (reuses >= max_reuses) if the store is full."""
         if self.need_tracking:
             self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
 

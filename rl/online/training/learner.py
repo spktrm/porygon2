@@ -237,11 +237,10 @@ class Learner:
         # 2026-08-13; lambda_ctrl/exploit_ctrl 2026-08-14) carry those
         # sections — simply never read, same as any other extra section.
 
-    # No _update_hyper_controllers anymore: the magnet KL coef became a
-    # fixed config scalar when the AdaptivityController was removed
-    # (2026-08-13), and the advantage lambda went with the
-    # LambdaGapController (2026-08-14) — UPGO's per-step cut plus the
-    # fixed player_lambda replaced it (see targets.py). The replay
+    # No _update_hyper_controllers anymore: every coefficient a controller
+    # actuated has since been deleted outright — the magnet KL
+    # (2026-08-22) and UPGO with the single-action PG (2026-08-21) — see
+    # CLAUDE.md 10 and the removal ledgers. The replay
     # reuse-cap controller below is the one remaining per-log-tick loop.
 
     # --- scheduler -----------------------------------------------------------

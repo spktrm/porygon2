@@ -490,8 +490,11 @@ def critic_outcome_telemetry(
       a switch (row 0 of a chunk has no local predecessor: excluded).
     - v_onestep_r2: V(s) against r + V(s') — how much of the one-step
       label V already knows (offline corr 0.95).
-    - q_target_edge_frac: Retrace labels at the support edge (proxy for
-      clipping, the unclipped value is not returned).
+    - q_target_edge_frac: one-step TD labels at the support edge, i.e.
+      |r + gamma*V(s')| ~ 1 — the fraction of rows whose label sits at a
+      decided outcome. A decidedness readout, not a clipping proxy:
+      nothing clips this label (gamma = 1 with terminal-only reward
+      bounds it by construction).
     - q_support_*: storage- and row-level voluntary-switch support.
     """
     f32 = jnp.float32

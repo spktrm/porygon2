@@ -137,9 +137,12 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.latent_read.init_residual_scale = 1.0
 
     # Round trunk over the unified [state | action | value] sequence: each
-    # round is masked self-attention, a gated cross-read of the world-model
-    # history states, then one wide FFW (attention sublayers are
-    # attention-only, canonical decoder-layer shape). nn.scan-ned
+    # round is masked self-attention over the state latents, the action
+    # self-attention plus the state<->action exchange, the value rows'
+    # read of the state stream, then group-level FFWs (attention sublayers
+    # are attention-only, canonical decoder-layer shape). History reaches
+    # the trunk only through the latent input read, not through a
+    # per-round cross-read. nn.scan-ned
     # num_rounds times with stacked params, so every round has its own
     # weights and rounds can specialize instead of iterating one shared
     # refinement operator. All residual gates are zero-init, so extra
@@ -177,7 +180,8 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # direction-consistent gradient from step 0 under Adam; 0.05 keeps the
     # init contribution at ~1% of the state/action streams (~5% of the
     # tiny value streams). The head's flat-at-init contract is untouched
-    # (type_scale / micro_scale / zero out-layers live in the head).
+    # (type_scale, the zero-init micro_local_src/tgt routes and the
+    # zero-init macro out layers all live in the head).
     # Acceptance: FFW contribution >= 0.01 at the 20k read.
     cfg.encoder.round.init_gate = 0.05
 
@@ -243,7 +247,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # decoder kept the depth the November experiments proved necessary —
     # forcing the trunk itself to linearise win probability, in direct
     # competition with policy features. Two hidden layers on the pooled
-    # 4*entity_size value embedding mirror the pi_head's per-modality
+    # 4*entity_size value embedding mirror the policy head's per-modality
     # block depth.
     cfg.v_head = ConfigDict()
     cfg.v_head.mlp = ConfigDict()
@@ -251,7 +255,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
-        # stacks per-stage log_policy/action_index, which the Retrace
+        # stacks per-stage log_policy/action_index, which the one-step
         # target code does not yet consume. Fail loudly rather than train
         # a silently-wrong Q.
         raise ValueError("q_head requires num_decision_slots == 1 (singles)")

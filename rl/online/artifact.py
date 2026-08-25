@@ -57,16 +57,27 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         smogon_format=learner_config.smogon_format,
         entity_size=int(model_cfg.entity_size),
         num_decision_slots=int(model_cfg.num_decision_slots),
-        pi_head="typed_streams_dot",
-        # Q head (docs/q-critic-plan.md): structural since 2026-08-20 —
-        # always present, so the manifest records the ARCHITECTURE
-        # variant, and a checkpoint whose variant string differs must go
-        # through load-mode "params" (fresh-inits the q modules, carries
-        # everything else). "hierarchical_two_rung" = owned ActionAdapter
-        # + shared MacroMicroHead, macro added onto the legality-centred
-        # micro; predecessor "privileged_two_rung" was the flat cond-MLP
-        # bilinear grid (2026-08-17).
-        q_head="hierarchical_two_rung",
+        pi_head="action_score_grouped_micro",
+        # The advantage head is structural — always present, so the
+        # manifest records the ARCHITECTURE variant, and a checkpoint whose
+        # variant string differs must go through load-mode "params"
+        # (fresh-inits the head, carries everything else).
+        #
+        # "action_score_grouped_micro" (2026-08-25) = ActionScoreHead —
+        # per-slot-group micro q/k + per-group zero-init type_scale and
+        # local src/tgt routes, per-MODALITY macro MLP and out layer, ONE
+        # rung, Q composed in heads.compose_q. Predecessors:
+        # "hierarchical_two_rung" (2026-08-20, owned ActionAdapter +
+        # shared flat MacroMicroHead, plus a second privileged rung) and
+        # "privileged_two_rung" (2026-08-17, flat cond-MLP bilinear grid).
+        #
+        # BUMPING THESE IS NOT COSMETIC: both literals were left stale
+        # through the 2026-08-25 redesign, so a pre-redesign checkpoint
+        # passed check_manifest STRICT and would have been restored onto a
+        # structurally different param tree. The manifest exists precisely
+        # to stop that, and it only works if the literal moves with the
+        # head class.
+        q_head="advantage_grouped_micro",
     )
 
 
@@ -119,7 +130,8 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     # R-NaD reference policy pi_reg (2026-08-22; snap semantics
     # 2026-08-25): a periodic hard SNAP of target_params, in place, every
     # config.player_reg_snap_steps (frozen between snaps; launch snapshot
-    # through the NeuRD warm-up). The reward transform -eta*log(pi/pi_reg)
+    # through the NeuRD warm-up). The reference penalty
+    # -eta*(log pi - log pi_reg) in the policy objective
     # is measured against it; the snap bounds the log-ratio gap
     # structurally — the continuous EMA it replaces (1e-4, then 5e-5)
     # never reset, and the compounding gap drove the pgaijs6l/2wvnlsz3
@@ -471,7 +483,7 @@ def load_from_checkpoint(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
         # Checkpoints from before the reference policy existed seed it
-        # from the target (KL 0 at resume; the EMA takes over from there).
+        # from the target (KL 0 at resume; the next snap takes over from there).
         reg_params=ckpt_player_state.get(
             "reg_params", jax.tree.map(jnp.copy, ckpt_player_state["target_params"])
         ),

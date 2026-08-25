@@ -235,16 +235,14 @@ class ActionAdapter(nn.Module):
     """Owned residual MLP between the trunk's action embeddings and one
     head family's MacroMicroHead (2026-08-20).
 
-    The policy's micro readout is a parameter-free dot grid straight off
-    the typed trunk streams, so before this adapter existed any OTHER
-    head training on the same embeddings (the advantage head's loss) reshaped the
-    live policy geometry directly. Each head family now reads the trunk
-    through its own instance — the policy's plain, the Q head's with the
-    projected value conditioning concatenated in (the rung's information
-    set has to reach every CELL, not just the macro level, or Q_all and
-    Q_private could only differ per modality) — so the trunk still
-    receives every head's gradient but the head-specific geometry is
-    decoupled.
+    Both families' micro readouts train on the same trunk embeddings, so
+    without an owned adapter the advantage head's loss would reshape the
+    live policy geometry directly. Each ActionScoreHead reads the trunk
+    through its own instance — the policy's plain, the advantage's with
+    the projected value conditioning concatenated in, so the critic's
+    state information reaches every CELL and not just the modality level
+    — and the trunk still receives both gradients while the head-specific
+    geometry stays decoupled.
 
     ZERO-INIT output layer: the adapter is an exact identity at init, so
     calculate_hierarchical_prior stays the exact init-policy anchor and a
@@ -293,10 +291,10 @@ class MacroHead(nn.Module):
     pure level-free micro readout).
 
     Optional cond: a pooled per-state conditioning vector, broadcast and
-    concatenated into the MLP input (the Q rungs' information set); the
+    concatenated into the MLP input (the advantage head's state conditioning); the
     policy instantiation passes none, so its param tree and math are
     unchanged. Handles arbitrary leading batch dims — the policy calls it
-    per timestep under vmap, the Q head calls it with T leading.
+    per timestep under vmap, the advantage head calls it with T leading.
     """
 
     cfg: ConfigDict
@@ -366,8 +364,9 @@ class MacroHead(nn.Module):
 
 class MacroMicroHead(nn.Module):
     """The shared two-level action-grid readout (2026-08-20): one module
-    owns the macro/micro scoring of the flat src x tgt grid for BOTH the
-    policy and the Q critic — the composition the Nov-2025 competition
+    owns the macro/micro scoring of the flat src x tgt grid for BOTH
+    ActionScoreHead instantiations, the policy and the advantage — the
+    composition the Nov-2025 competition
     result and the 2026-08-17 policy head paid for, now applied to any
     head family that scores actions.
 
@@ -389,9 +388,9 @@ class MacroMicroHead(nn.Module):
     Returns the (macro, micro) pair RAW — composition belongs to the
     caller, because that is where the two families genuinely differ: the
     policy multiplies softmaxes in log space (macro owns the modality
-    contest, micro is per-modality shift-invariant), the Q readout adds
+    contest, micro is per-modality shift-invariant), the advantage readout adds
     macro onto the legality-centred micro (compose_action_grid: dueling
-    identifiability, absolute magnitudes).
+    identifiability), and Q is formed later by compose_q.
     """
 
     cfg: ConfigDict
@@ -628,8 +627,9 @@ def compose_q(
 
     Note what the centring can and cannot do: it conditions the head and pins
     the level, but it cannot remove a MODALITY offset (a -0.1 on switches at
-    pi(switch) = 0.01 sums to ~0). Unclipped — the Huber loss sees the raw
-    sum, the policy clips to the reward support.
+    pi(switch) = 0.01 sums to ~0). Unclipped — the Huber loss sees the raw sum;
+    the policy clips the ADVANTAGE to +-2 (train_step's adv_for_policy), a
+    symmetric saturation guard, not the reward support.
     """
     adv = advantage_raw.astype(jnp.float32)
     pi = jax.lax.stop_gradient(jnp.exp(log_policy.astype(jnp.float32))) * legal_mask
@@ -655,7 +655,7 @@ def compose_action_grid(
     log-softmax over modalities, micro pre-divided by temp — owns the
     modality contest. Callers mask invalid cells afterwards.
 
-    reduce="mean" is the value composition (per output bin): centring
+    reduce="mean" is the advantage composition: centring
     micro over each modality's LEGAL cells makes the decomposition
     identifiable (dueling-style) — micro carries only within-modality
     shape, so the modality's level must flow through the macro readout, a

@@ -89,7 +89,7 @@ def compute_player_targets(
 
     value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
     # Chunked unrolls: a chunk's final row is bootstrap-only — it anchors
-    # the recursions above (v_t / UPGO's init carry read its value) but
+    # the recursions above (v_t reads its value) but
     # takes no loss here, because chunks overlap by one row and that same
     # step trains as row 0 of the NEXT chunk. Exception: a done row on the
     # final position is the game's own terminal row (no next chunk) and
@@ -155,7 +155,8 @@ def reference_kl(
     log_policy: jax.Array, reg_log_policy: jax.Array, legal_mask: jax.Array
 ) -> jax.Array:
     """KL(pi || pi_reg) per state over legal cells, f32 — the expected
-    R-NaD reward transform E_pi[log(pi/pi_reg)]. Both log-policies are
+    reference penalty E_pi[log(pi/pi_reg)] the policy objective pays. Both
+    log-policies are
     full-support learner-side readouts (illegal cells hold junk, masked)."""
     lp = log_policy.astype(jnp.float32)
     lr = reg_log_policy.astype(jnp.float32)
@@ -165,7 +166,7 @@ def reference_kl(
 
 
 def ref_penalised_q(
-    q_all: jax.Array,
+    scores: jax.Array,
     log_policy: jax.Array,
     reg_log_policy: jax.Array,
     legal_mask: jax.Array,
@@ -173,14 +174,15 @@ def ref_penalised_q(
 ) -> jax.Array:
     """Per-cell regularised action value q(a) - eta*(log pi(a) - log
     pi_reg(a)) on legal cells (0 elsewhere) — rnad.py's learning_output,
-    with the critic's Q in place of the single-sample v-trace estimate.
+    with the critic's ADVANTAGE in place of the single-sample v-trace estimate
+    (V is a per-row constant the NeuRD centring removes exactly).
     The penalty is applied ANALYTICALLY to every legal cell: as pi(a) -> 0
     the cell's value grows like -eta*log pi(a), unbounded, which is the
     restoring force no pi-prefactored regulariser has."""
     penalty = eta * (
         log_policy.astype(jnp.float32) - reg_log_policy.astype(jnp.float32)
     )
-    return jnp.where(legal_mask, q_all - penalty, 0.0)
+    return jnp.where(legal_mask, scores - penalty, 0.0)
 
 
 def compute_q_onestep_targets(

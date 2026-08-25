@@ -253,7 +253,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # No adaptivity/entropy controller fields anymore. The
     # AdaptivityController was removed entirely 2026-08-13 (hard to tune,
-    # harder to predict — see rl/online/controllers.py's module docstring
+    # harder to predict — see CLAUDE.md 10
     # for the bug history). Its entropy sensors are still logged from
     # train_step (player_action_normalized_entropy,
     # player_normalized_modality_entropy); modality collapse (1330 died
@@ -375,7 +375,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # launch. The Q routes are zero-initialised and NeuRD consumed an
     # immature Q from step 0, reshaping the behaviour distribution before
     # the critic had any action coverage — the support loss began at
-    # launch, not at 13k (run 3sc7wlgq). 11k = pre-registered first
+    # launch, not at 13k (run 3sc7wlgq). 20k since the 2026-08-22
+    # relaunch (up from the pre-registered 11k, and an exact divisor of
+    # player_reg_snap_steps so the first snap lands as the ramp
+    # completes). 11k was the pre-registered first
     # schedule only (the Q R2 plateau age on that run); acceptance is the
     # panel set in the plan doc plus a >=5k-step hold at full coefficient.
     # 0 disables. Traced from step_count inside train_step, so a resumed
@@ -401,8 +404,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Reference-policy penalty in the NeuRD advantage: the ONLY place the
     # reference enters since the reg-value stream was deleted
     # (2026-08-25). Per legal cell, analytically, -eta*(log pi - log
-    # pi_reg) is added to Q before centring (targets.ref_penalised_q);
-    # both critics learn the PLAIN game — no reward transform, no
+    # pi_reg) is added to the ADVANTAGE before re-centring
+    # (targets.ref_penalised_q);
+    # the critic learns the PLAIN game — no reward transform, no
     # transformed bootstrap. pi_reg is a periodic SNAP of the target
     # params (player_reg_snap_steps).
     # This is NashPG (arXiv:2510.18183, Oct 2025): own-side KL to an

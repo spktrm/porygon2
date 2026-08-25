@@ -93,7 +93,7 @@ def train_step(
         HeadParams(),
     )
 
-    # R-NaD reference policy: the slow-EMA reg_params' full-support
+    # R-NaD reference policy: the FROZEN reg_params' full-support
     # log-policy on the same batch (one extra forward; stop-gradient by
     # construction — reg_params are not the differentiated leaf).
     reg_log_policy = player_state.apply_fn(
@@ -260,7 +260,7 @@ def train_step(
     # so a collapsing switch_ratio starves voluntary-switch cells of
     # gradient while forced replacements (post-faint, no legal move)
     # keep flowing regardless of policy. Coverage says how bad the
-    # starvation is; the conditional Retrace means are the
+    # starvation is; the conditional one-step-label means are the
     # head-independent answer to "do voluntary switches actually lead
     # to worse outcomes than moves from the same kind of state?".
     taken_switch = axis.taken_switch
@@ -279,9 +279,10 @@ def train_step(
     )
 
     # Off-policy attenuation audit, split by the TAKEN modality. isr =
-    # pi_target/mu_actor is what v-trace and Retrace multiply their TD
-    # errors by (targets.py: rho_t = c_t = (1-alpha)*isr +
-    # alpha*min(1, isr)). As pi(switch) decays, isr on switch-taken rows falls
+    # pi_target/mu_actor is what v-trace multiplies its TD errors by
+    # (targets.py: rho_t = c_t = min(1, isr) — Retrace went 2026-08-23
+    # and the alpha blend 2026-08-21). As pi(switch) decays, isr on
+    # switch-taken rows falls
     # below 1 and those rows contribute proportionally less.
     #
     # NOTE this is the CORRECT importance correction, not a bug: the
@@ -348,7 +349,7 @@ def train_step(
         * flat_action_mask
     )
     pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
-    # == v_all_target by the pi-centring (kept as the variance baseline).
+    # == v_target by the pi-centring in heads.compose_q (kept as the variance baseline).
     q_v_exp = (pi_target * q_target).sum(axis=-1)
     training_logs["player_q_pivotal_pi_switch_mass"] = average(
         (pi_target * valid_switch).sum(axis=-1), pivotal_mask
@@ -368,10 +369,10 @@ def train_step(
     )
 
     # Loss-free critic-quality diagnostics, on permanently. Since
-    # 2026-08-21 the policy's ONLY link to returns is NeuRD through
-    # Q_all, so these stopped being nice-to-have: action-value spread
-    # (is there anything to prefer?) and calibration of the taken-cell
-    # readout against its own realised Retrace targets.
+    # 2026-08-21 the policy's ONLY link to returns is NeuRD through the
+    # target net's ADVANTAGE, so these stopped being nice-to-have:
+    # action-value spread (is there anything to prefer?) and calibration
+    # of the taken-cell readout against its own realised one-step labels.
     #
     # pi_target computed above (pivotal-state panel). The MEAN
     # undersells the spread by construction when action-value spread
@@ -418,7 +419,7 @@ def train_step(
     # within (which move / which reserve — only the pointer micro grid
     # can carry it). 70mhptdc read uniform ≈ p(1-p)·gap² for the whole
     # run, i.e. the critic resolved one bit; this pair says so directly.
-    # Reported for both rungs (private = the deployable one).
+    # One rung since 2026-08-25.
     def modality_var_split(q_all):
         cell_mean = modality_means(q_all, flat_action_mask)
         within = jnp.where(flat_action_mask, jnp.square(q_all - cell_mean), 0.0)
@@ -626,8 +627,10 @@ def train_step(
         pi_learner = pi_learner / jnp.maximum(
             pi_learner.sum(axis=-1, keepdims=True), 1e-8
         )
-        # R-NaD reward transform (2026-08-22), applied per legal cell:
-        # q'(a) = Q_all(a) - eta*(log pi(a) - log pi_reg(a)). Since Step 3
+        # R-NaD reference PENALTY (2026-08-22), applied analytically per
+        # legal cell to the ADVANTAGE:
+        # a'(a) = A(a) - eta*(log pi(a) - log pi_reg(a)). It is not a
+        # reward transform — that was deleted in 27053a6. Since Step 3
         # the critic learns the PLAIN game (one-step label, no transformed
         # bootstrap), so this own-step term is the whole reference
         # penalty — a policy-objective term, not a label transform. The
@@ -835,18 +838,18 @@ def train_step(
             # KL(pi_learner || pi_reg) per state -- the expected
             # reference penalty the loss actually pays (same policy as
             # ref_penalised_q). Drifts up as the policy moves away from
-            # the lagged reference and back down as the EMA catches
-            # up; a level that keeps climbing is a policy running away
-            # from its own past faster than the reference follows.
+            # the FROZEN reference and drops to ~0 at each snap; a level
+            # that keeps climbing ACROSS snaps is a policy running away
+            # faster than the snap period can repair.
             player_ref_kl=average(
                 reference_kl(learner_log_policy, reg_log_policy, flat_action_mask),
                 policy_mask,
             ),
         )
 
-        # Calibration by context, graded on Q_private (the contexts
-        # exist to interpret the Q_private switch/move gap, so they
-        # must grade the same rung). Forced switches stay data-rich
+        # Calibration by context. The contexts exist to interpret the
+        # switch/move gap, so they grade the same Q — there has been one
+        # rung since 2026-08-25. Forced switches stay data-rich
         # through a switch collapse; voluntary ones starve. Calibrated
         # forced + degraded voluntary = starvation artefact; both
         # calibrated with the gap still negative = the critic means it
@@ -874,7 +877,7 @@ def train_step(
             player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
             **q_fit_logs,
         )
-        # pg + (v + q) + kl + ent.
+        # neurd (+ logit decay) + (v + q) + kl.
         loss = (
             # pg: all-action NeuRD is the ONLY term that moves the action
             # logits toward return — the two below only regularise.

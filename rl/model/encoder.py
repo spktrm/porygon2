@@ -368,8 +368,11 @@ class RoundBlock(nn.Module):
            vector); the value stream sits outside both groups and keeps
            its own FFW
 
-    Every residual write stays behind a zero-init gate so a round starts
-    as a no-op; nn.scan-ned num_rounds times with stacked params so every
+    Every residual write stays behind a SMALL-CONSTANT gate
+    (cfg.round.init_gate = 0.05, deliberately NOT zero — see gate() below
+    for the 2026-08-24 read that found zero-init gates never train), so a
+    round starts near-identity rather than as an exact no-op;
+    nn.scan-ned num_rounds times with stacked params so every
     round has its own weights. A query row whose key set is entirely
     invalid (e.g. a terminal row, where no action slot is legal) receives
     a ZERO attention output, not NaN: MultiHeadAttention masks the
@@ -509,8 +512,7 @@ class GroupNorm(nn.Module):
     """Per-substream norm+MLP projections at a trunk-group boundary:
     each named substream gets its own MLP, and the results are
     concatenated in order into (or back out of) the group stream
-    RoundBlock carries. One class serves every boundary — the state and
-    action INPUT norms (each substream comes from a different generative
+    RoundBlock carries. One class serves both action-stream boundaries — the action INPUT norms (each substream comes from a different generative
     process, so each needs its own projection into trunk space) and the
     action OUTPUT norms (the head-facing per-group spaces over the final
     round's slices) — so all group-boundary projections are built
@@ -681,8 +683,9 @@ class Encoder(nn.Module):
 
         # Recurrent history encoder over history edges. Twelve GRU states
         # (one per public slot) scanned along the history axis; per request we
-        # read the state as of that request and let every trunk round
-        # cross-attend to it.
+        # read the state as of that request and hand it to the latent
+        # input read as 13 raw key tokens (12 slots + field); the trunk
+        # rounds see it only through the state latents.
         self.history_encoder = PerSlotHistoryEncoder(self.cfg, name="history_encoder")
         self.history_pool = HistoryAttentionPool(self.cfg, name="history_pool")
         self.history_node_read = NodeHistoryRead(self.cfg, name="history_node_read")
@@ -709,7 +712,9 @@ class Encoder(nn.Module):
         # stream, scanned num_rounds times with stacked params, so every
         # round has its own weights and rounds can specialize instead of
         # iterating one shared refinement operator.
-        # All residual gates are zero-init, so each round starts as a no-op.
+        # Every residual gate inits at cfg.round.init_gate (0.05, NOT zero
+        # — see gate() above): each round starts at ~1% of the state and
+        # action streams, not as a no-op. Zero-init was measured dead.
         # Rematted with nothing_saveable — checkpoint_dots would save the
         # very matmul outputs (the wide FFW hiddens) that dominate trunk
         # activation memory, while recomputing a round on the backward pass
@@ -1492,7 +1497,7 @@ class Encoder(nn.Module):
 
         # My moveset embeddings carry per-move battle state (pp, disabled,
         # wildcard availability); they warm-start the move action stream
-        # below and reach the value ladder via the action->state readbacks.
+        # below and reach the value stream via the action->state readbacks.
         my_move_embeddings, _ = self._embed_moves(env_step.my_moveset)
 
         output_state_sequence = jnp.zeros(
@@ -1563,9 +1568,9 @@ class Encoder(nn.Module):
 
         # Per-entity recurrent history (12 rows, PUBLIC_ORDER-aligned with
         # the public team, masked to mapped rows) and the field history
-        # state: RAW keys of the latent read, and the SAME raw rows the
-        # public value rung reads (public-information-set purity -- see
-        # RoundBlock). The attention-pooled history latents are no longer
+        # state: RAW keys of the latent read. (The public value rung that
+        # once read these same raw rows for information-set purity went
+        # with the ladder, 2026-08-25.) The attention-pooled history latents are no longer
         # an RL input (they summarised exactly these 13 tokens; the read
         # sees them directly) -- pool_history survives for the offline
         # critic only, and is not called on the RL path so history_pool
