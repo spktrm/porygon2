@@ -97,7 +97,7 @@ def warmup_scale(step_count, warmup_steps: int):
 
 
 class HierarchicalNeurd(NamedTuple):
-    loss: jax.Array  # (...,) per row: -sum_m w_m.y_m - sum_a w_a.z_a
+    loss: jax.Array  # (...,) per row: -sum_m w_m.y_c_m - sum_a w_a.z_c_a
     macro_weight: jax.Array  # (..., M) open, centred Q(m) - V
     micro_weight: jax.Array  # (..., A) open, centred Q(a) - Q(m)
     macro_open: jax.Array  # (..., M) bool
@@ -134,8 +134,12 @@ def hierarchical_neurd(
     d/dz_a = w_a - pi(a|m).W_m. That equals NeuRD on y, z only while the
     weights are zero-sum; the clip zeroes cells, and the leftover
     -pi(.).sum w is a push ALONG pi (sharpening toward whatever already
-    holds mass when the open weights sum negative). Against y and z
-    directly, d/dy_m = -w_m and d/dz_a = -w_a exactly, open or clipped.
+    holds mass when the open weights sum negative). The loss instead
+    reads each level's CENTRED live logits (rnad.py's
+    `logit_pi - mean_logit`): d/dy_m = -(w_m - mean_legal(w)) — a
+    pi-free uniform projection, so no cross-term along pi, and the
+    softmax-invariant mean direction gets exactly zero push even when
+    the band clips (against raw y, z it was unopposed then).
 
     Levels: the macro decision's counterfactual value is the modality's
     value under the current micro policy, Q(m) = sum_{a in m} pi(a|m).Q(a),
@@ -200,7 +204,16 @@ def hierarchical_neurd(
     macro_weight = jax.lax.stop_gradient(jnp.where(macro_open, macro_c, 0.0))
     micro_weight = jax.lax.stop_gradient(jnp.where(micro_open, micro_c, 0.0))
 
-    loss = -((macro_weight * y).sum(axis=-1) + (micro_weight * z).sum(axis=-1))
+    # The loss reads the CENTRED live logits, not the raw ones —
+    # rnad.py's `logit_pi - mean_logit` (get_loss_nerd), verbatim per
+    # level. d/dy_m becomes -(w_m - mean_legal(w)): the softmax-invariant
+    # mean direction receives exactly zero push, open or clipped. Against
+    # the raw logits that direction was unopposed the moment the band
+    # zeroed cells (non-zero-sum weights) — free logits could drift
+    # together without bound, invisible to pi, the decay and the clip.
+    # This is a linear projection, NOT a normalisation: no pi prefactor
+    # enters (the log-softmax cross-term argument above is untouched).
+    loss = -((macro_weight * y_c).sum(axis=-1) + (micro_weight * z_c).sum(axis=-1))
     # Proximal restoring force (the smooth counterpart of the eq. 10
     # band): the linear NeuRD loss has NO inward force anywhere inside
     # +-beta, so a persistent same-sign advantage integrates into the

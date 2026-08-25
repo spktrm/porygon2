@@ -1,14 +1,20 @@
 """Hierarchical NeuRD gradient identity (rl/online/training/loss.py,
-hierarchical_neurd, 2026-08-24).
+hierarchical_neurd, 2026-08-24; centred-logit form 2026-08-26).
 
 The policy is pi(a) = softmax_M(y)[m(a)] . softmax_m(z)[a]. The loss is
-written against the FREE logits y, z, so d/dy_m = -W_m and d/dz_a = -w(a)
-exactly -- open or clipped -- with W_m = sum_{a in m} pi(a|m).adv(a) and
-w(a) = adv(a) - W_m(a), each centred over its own legal set and zeroed
-where its level's logit-gap clip is closed (Hennes et al. eq. 6 + 10, no
-pi prefactor). The previous loss read the composed log-policy, which
-picks up a -pi(.).sum_a w(a) cross-term once clipped cells break zero-sum;
-the last test pins that difference so it cannot come back.
+written against each level's CENTRED live logits (rnad.py's
+`logit_pi - mean_logit`), so d/dy_m = -(W_m - mean_legal(W)) and
+d/dz_a = -(w(a) - mean_m(w)) exactly -- open or clipped -- with
+W_m = sum_{a in m} pi(a|m).adv(a) and w(a) = adv(a) - W_m(a), each
+centred over its own legal set and zeroed where its level's logit-gap
+clip is closed (Hennes et al. eq. 6 + 10, no pi prefactor). The update
+is therefore zero-sum per level: the softmax-invariant mean direction
+receives exactly zero push even when the band clip breaks the weights'
+zero-sum -- against the RAW free logits that direction was unopposed
+then, which is the gauge drift the dx65cpwp micro runaway rode. The
+original loss read the composed log-policy, which picks up a
+-pi(.).sum_a w(a) cross-term once clipped cells break zero-sum; the
+composed-form test pins that difference so it cannot come back.
 """
 
 import jax
@@ -45,25 +51,62 @@ def _loss(y, z, legal, adv, beta):
     )
 
 
-def test_gradient_is_minus_weight_per_level():
+def test_gradient_is_minus_projected_weight_per_level():
     y, z, legal, adv, beta = _case()
     out = _loss(y, z, legal, adv, beta)
     gy, gz = jax.grad(
         lambda y_, z_: _loss(y_, z_, legal, adv, beta).loss.sum(), argnums=(0, 1)
     )(y, z)
-    np.testing.assert_allclose(
-        np.asarray(gy), -np.asarray(out.macro_weight), rtol=1e-5, atol=1e-6
+    w_macro = np.asarray(out.macro_weight)
+    w_micro = np.asarray(out.micro_weight)
+    mod_legal = np.asarray(out.modality_legal)
+    legal_np = np.asarray(legal)
+    # Expected: -(w - mean_legal(w)) per level, 0 off-legal.
+    macro_count = np.maximum(mod_legal.sum(-1, keepdims=True), 1)
+    exp_gy = np.where(
+        mod_legal, -(w_macro - w_macro.sum(-1, keepdims=True) / macro_count), 0.0
     )
-    np.testing.assert_allclose(
-        np.asarray(gz), -np.asarray(out.micro_weight), rtol=1e-5, atol=1e-6
-    )
-    # Clipped and illegal cells / modalities: untouched.
-    assert not np.asarray(gy)[~np.asarray(out.macro_open)].any()
-    assert not np.asarray(gz)[~np.asarray(out.micro_open)].any()
+    exp_gz = np.zeros_like(w_micro)
+    for m in range(3):
+        sel = legal_np & (MOD_INDEX == m)
+        for r in range(z.shape[0]):
+            if sel[r].any():
+                exp_gz[r, sel[r]] = -(w_micro[r, sel[r]] - w_micro[r, sel[r]].mean())
+    np.testing.assert_allclose(np.asarray(gy), exp_gy, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(gz), exp_gz, rtol=1e-5, atol=1e-6)
+    # Illegal cells / modalities: untouched.
+    assert not np.asarray(gy)[~mod_legal].any()
+    assert not np.asarray(gz)[~legal_np].any()
     # Something was actually clipped at both levels, or the clip branch
     # went untested.
-    assert bool((np.asarray(out.modality_legal) & ~np.asarray(out.macro_open)).any())
-    assert bool((np.asarray(legal) & ~np.asarray(out.micro_open)).any())
+    assert bool((mod_legal & ~np.asarray(out.macro_open)).any())
+    assert bool((legal_np & ~np.asarray(out.micro_open)).any())
+
+
+def test_gradient_is_zero_sum_even_when_clipped():
+    """The gauge fix (2026-08-26): the per-level gradient sums to exactly
+    zero over each legal set, so the softmax-invariant mean direction is
+    never pushed. Positive control: the clip has fired and the WEIGHTS'
+    sums are non-zero — under the previous raw-logit form the gradient
+    sum equalled the weight sum, so this test would have failed there."""
+    y, z, legal, adv, beta = _case()
+    out = _loss(y, z, legal, adv, beta)
+    gy, gz = jax.grad(
+        lambda y_, z_: _loss(y_, z_, legal, adv, beta).loss.sum(), argnums=(0, 1)
+    )(y, z)
+    # Control: clipping made the open weights non-zero-sum somewhere.
+    w_macro_sums = np.asarray(out.macro_weight).sum(-1)
+    assert bool((np.abs(w_macro_sums) > 1e-4).any())
+    # Macro: zero-sum per row.
+    np.testing.assert_allclose(np.asarray(gy).sum(-1), 0.0, atol=1e-5)
+    # Micro: zero-sum per modality per row.
+    legal_np = np.asarray(legal)
+    gz_np = np.asarray(gz)
+    for m in range(3):
+        sel = legal_np & (MOD_INDEX == m)
+        for r in range(z.shape[0]):
+            if sel[r].any():
+                np.testing.assert_allclose(gz_np[r][sel[r]].sum(), 0.0, atol=1e-5)
 
 
 def test_level_advantages_are_counterfactual_regrets():

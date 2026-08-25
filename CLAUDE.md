@@ -442,10 +442,16 @@ untaken switch cells can be untrained rather than genuinely flat. Read
 `absadv_ratio` against `player_q_switch_target_frac` before concluding the
 critic "means it".
 
-**NeuRD must be written against raw logits.** *(live)* The `log_policy` form was
-tried first and failed the identity test: once the logit-gap clip zeroes cells,
-the weights are no longer zero-sum and the softmax pulls in a `π(b)·Σ_a w(a)`
-cross-term. Against raw logits, `d/dy_b = -w(b)` exactly, open or clipped.
+**NeuRD must not differentiate through the log-softmax.** *(live, refined
+2026-08-26)* The `log_policy` form was tried first and failed the identity
+test: once the logit-gap clip zeroes cells, the weights are no longer zero-sum
+and the softmax pulls in a `π(b)·Σ_a w(a)` cross-term. But RAW free logits
+overshoot the other way: the softmax-invariant mean direction gets the clip
+residual unopposed — no pi, no decay, no clip sees it — and the dx65cpwp
+micro runaway rode exactly that gauge freedom. The correct form is rnad.py's:
+the loss reads each level's CENTRED live logits (`logit_pi - mean_logit`), so
+`d/dy_b = -(w(b) - mean_legal(w))` — a pi-free linear projection (no
+cross-term along π), zero-sum per level, open or clipped.
 
 **Clip and coefficient.** Advantages are not zero-mean per row, so unclipped
 logits diverge; β = 2.0 is OpenSpiel's NeuRD default. The coefficient went
