@@ -41,6 +41,7 @@ from rl.online.training.targets import (
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
+    q_fit_telemetry,
     calculate_r2,
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
@@ -561,12 +562,21 @@ def train_step(
         # automated backstop — watch player_normalized_modality_entropy
         # on the dashboard; 1330 died at 0.08 on that axis.)
 
-        # Residual Q loss: the learner's A composed with the TARGET net's
-        # V (stop-gradient by construction — target params are not the
-        # differentiated leaf) and centred under the target policy, Huber
-        # against the one-step label on the taken cell. The state route is
-        # closed: every state-level degree of freedom sits in V, which
-        # this loss cannot move.
+        # Residual Q loss: Huber on the taken cell against the one-step
+        # label. Q = sg(V) + A is composed in the MODEL (heads.compose_q),
+        # so this only reads it.
+        #
+        # The state route is closed — every state-level degree of freedom
+        # sits in V and this loss cannot move it — but WHY changed on
+        # 2026-08-25 and the new reason is the thing to protect. It used to
+        # hold for free: the composition used the TARGET net's V, which is
+        # not a differentiated leaf. It now holds because compose_q
+        # stop-gradients the learner's OWN V explicitly. Delete that
+        # stop_gradient and this loss silently starts fitting the label
+        # through the state route instead of the action axis — which the
+        # Step-6 probe in docs/critic-weakness-analysis.md showed it will
+        # do, reaching the label-entropy floor while within-state action
+        # variance FELL 5x. tests/test_q_identity.py pins it.
         q_taken_pred = jnp.take_along_axis(
             learner_player_pred.q.astype(jnp.float32),
             player_actor_action_head.action_index[..., None],
@@ -574,21 +584,16 @@ def train_step(
         ).squeeze(-1)
         q_err_rows = optax.huber_loss(q_taken_pred, q_label, delta=1.0)
         loss_q = average(q_err_rows, q_mask)
-        # Optimisation-level support (Step 1): the share of the Q loss each
-        # modality actually contributes — the acceptance measure for any
-        # row weighting, where sampled-chunk counts are only a replay
-        # diagnostic.
-        _q_err_total = jnp.maximum(jnp.sum(q_err_rows, where=q_mask), 1e-8)
-        q_loss_share = {
-            f"player_q_loss_share_{name}": jnp.sum(q_err_rows, where=m) / _q_err_total
-            for name, m in (
-                ("move", q_move_mask),
-                ("forced", q_forced_switch_mask),
-                ("voluntary", q_voluntary_switch_mask),
-            )
-        }
-        q_loss_share["player_q_mse"] = average(
-            jnp.square(q_taken_pred - q_label), q_mask
+        q_fit_logs = q_fit_telemetry(
+            q_err_rows=q_err_rows,
+            q_taken_pred=q_taken_pred,
+            q_label=q_label,
+            q_mask=q_mask,
+            context_masks={
+                "move": q_move_mask,
+                "forced": q_forced_switch_mask,
+                "voluntary": q_voluntary_switch_mask,
+            },
         )
 
         # Real-choice rows on the stay/switch axis: both a switch and a
@@ -876,7 +881,7 @@ def train_step(
             player_q_r2_move=q_context_r2(q_move_mask),
             player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
             player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
-            **q_loss_share,
+            **q_fit_logs,
         )
         # pg + (v + q) + kl + ent.
         loss = (

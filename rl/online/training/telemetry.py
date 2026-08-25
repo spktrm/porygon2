@@ -19,6 +19,7 @@ from rl.environment.data import (
     RESERVE_ENTITY_INDICES,
 )
 from rl.environment.interfaces import Trajectory
+from rl.utils import average
 from rl.environment.protos.features_pb2 import (
     FieldFeature,
     InfoFeature,
@@ -368,6 +369,30 @@ def masked_r2(pred: jax.Array, target: jax.Array, mask: jax.Array) -> jax.Array:
     mean_t = jnp.mean(target, where=mask)
     ss_total = jnp.sum(jnp.square(target - mean_t), where=mask)
     return jnp.where(m & (ss_total > 1e-4), calculate_r2(pred, target, mask), jnp.nan)
+
+
+def q_fit_telemetry(
+    *,
+    q_err_rows: jax.Array,
+    q_taken_pred: jax.Array,
+    q_label: jax.Array,
+    q_mask: jax.Array,
+    context_masks: dict[str, jax.Array],
+) -> dict[str, jax.Array]:
+    """How the Q fit is DISTRIBUTED across move / forced / voluntary rows.
+
+    The share each context contributes to the total Huber loss is the
+    acceptance measure for any row weighting — sampled-chunk counts are a
+    replay diagnostic and say nothing about what the optimiser actually
+    spent its gradient on.
+    """
+    total = jnp.maximum(jnp.sum(q_err_rows, where=q_mask), 1e-8)
+    logs = {
+        f"player_q_loss_share_{name}": jnp.sum(q_err_rows, where=m) / total
+        for name, m in context_masks.items()
+    }
+    logs["player_q_mse"] = average(jnp.square(q_taken_pred - q_label), q_mask)
+    return logs
 
 
 class ActionAxisMasks(NamedTuple):
