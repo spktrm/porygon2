@@ -315,14 +315,7 @@ class PlayerActor:
         return chunks[-1]
 
     def pull_own_player(self) -> ParamsContainer:
-        """The live player's current params — or the launch snapshot while
-        the Step-2 frozen-behaviour fallback is active (Learner.
-        warmup_behaviour_container; offline contexts have no such method)."""
-        warmup = getattr(self._learner, "warmup_behaviour_container", None)
-        if warmup is not None:
-            container = warmup()
-            if container is not None:
-                return container
+        """The live player's current params."""
         return self._learner.league.get_live(MAIN_KEY)
 
     def pull_main_player(self) -> ParamsContainer:
