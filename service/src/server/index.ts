@@ -346,9 +346,6 @@ export class WorkerPool {
 
 export class GameServer {
     private wss: WebSocketServer;
-    private actionCount: number;
-    private throughputIntervalMs: number;
-    private throughputInterval?: NodeJS.Timeout;
     private memoryStatsInterval?: NodeJS.Timeout;
     private logger: pino.Logger;
     private pool: WorkerPool;
@@ -356,25 +353,19 @@ export class GameServer {
     constructor(
         port = 8080,
         options: {
-            maxGamesPerWorker?: number;
             maxWorkers?: number;
             loggingLevel?: string;
-            logThroughput?: boolean;
-            throughputIntervalMs?: number;
         } = {},
     ) {
         const {
             maxWorkers,
             loggingLevel = "info",
-            logThroughput = false,
-            throughputIntervalMs = 5000,
         } = options;
 
         this.logger = pino({ level: loggingLevel });
         this.wss = new WebSocketServer({ port });
-        this.actionCount = 0;
         const safeCpuFrac = 0.8;
-        const safeCpuAmount = Math.min(safeCpuFrac * availableParallelism());
+        const safeCpuAmount = safeCpuFrac * availableParallelism();
         this.pool = new WorkerPool(this.logger, maxWorkers ?? safeCpuAmount);
 
         this.wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) =>
@@ -382,14 +373,6 @@ export class GameServer {
         );
 
         this.logger.info(`Game server started on port ${port}`);
-
-        this.throughputIntervalMs = throughputIntervalMs;
-        if (logThroughput) {
-            this.throughputInterval = setInterval(
-                () => this.logThroughput(),
-                throughputIntervalMs,
-            );
-        }
 
         fs.mkdirSync(MEMORY_STATS_DIR, { recursive: true });
         this.memoryStatsInterval = setInterval(
@@ -491,19 +474,7 @@ export class GameServer {
         });
     }
 
-    private logThroughput(): void {
-        this.logger.info(
-            `Throughput: ${
-                (1000 * this.actionCount) / this.throughputIntervalMs
-            } actions/sec`,
-        );
-        this.actionCount = 0;
-    }
-
     public close(): void {
-        if (this.throughputInterval) {
-            clearInterval(this.throughputInterval);
-        }
         if (this.memoryStatsInterval) {
             clearInterval(this.memoryStatsInterval);
         }
@@ -514,7 +485,6 @@ export class GameServer {
 
 // Initialize the server
 new GameServer(Number(process.env.PORT ?? 8080), {
-    maxGamesPerWorker: Number(process.env.MAX_GAMES_PER_WORKER ?? 50),
     // Each worker is a full V8 isolate with its own dex/sim data
     // (~150MB baseline before any battles). Under the learner's
     // block-sequential actor gating at most ONE population's pool plays
@@ -523,6 +493,4 @@ new GameServer(Number(process.env.PORT ?? 8080), {
     // python side's inference. 6 halves the idle baseline vs the old 12.
     maxWorkers: Number(process.env.MAX_WORKERS ?? 6),
     loggingLevel: process.env.LOG_LEVEL ?? "info", // 'debug' for more
-    logThroughput: false,
-    throughputIntervalMs: 1000,
 });

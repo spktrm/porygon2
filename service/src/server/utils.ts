@@ -120,26 +120,10 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         );
     }
 
-    setBuffer(buffer: T): void {
-        if (buffer.length < this.data.length) {
-            throw new Error(
-                `Buffer length ${buffer.length} is less than required length ${this.data.length}`,
-            );
-        }
-        this.data.set(buffer.subarray(0, this.data.length));
-    }
-
     private getElementAndBit(index: number): [number, number] {
         const element = (index / this.bitsPerElement) | 0;
         const bit = this.bitsPerElement - 1 - (index & this.mask); // Big-endian adjustment
         return [element, bit];
-    }
-
-    toggle(index: number): void {
-        if (index < 0 || index >= this.length)
-            throw new RangeError("Index out of bounds");
-        const [element, bit] = this.getElementAndBit(index);
-        this.data[element] ^= 1 << bit;
     }
 
     get(index: number): boolean {
@@ -192,10 +176,6 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         return total;
     }
 
-    getLength(): number {
-        return this.length;
-    }
-
     split(parts: number): OneDBoolean<T>[] {
         if (!Number.isInteger(parts) || parts <= 0) {
             throw new RangeError("parts must be a positive integer");
@@ -233,33 +213,6 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         return result;
     }
 
-    logIndices(): void {
-        const indices = [];
-        for (let i = 0; i < this.length; i++) {
-            if (this.get(i)) {
-                const rowIndex = Math.floor(i / numActionFeatures);
-                const colIndex = i % numActionFeatures;
-                indices.push([rowIndex, colIndex]);
-            }
-        }
-        console.log("Indices with true values:", indices);
-    }
-}
-
-export function generateRandomString(length: number): string {
-    const readableAsciiStart = 97; // 'a'
-    const readableAsciiEnd = 122; // 'z'
-    const range = readableAsciiEnd - readableAsciiStart + 1;
-
-    const array = new Uint8Array(length);
-    crypto.getRandomValues(array);
-
-    // Map each byte to a readable ASCII character
-    const chars = Array.from(array, (byte) =>
-        String.fromCharCode(readableAsciiStart + (byte % range)),
-    );
-
-    return chars.join("");
 }
 
 export function isEvalUser(userName: string) {
@@ -268,68 +221,4 @@ export function isEvalUser(userName: string) {
 
 export function isBaselineUser(userName: string) {
     return userName.startsWith("baseline");
-}
-
-export class AsyncQueue<T> {
-    private queue: T[] = [];
-    private maxSize: number;
-    private waitingConsumers: ((value: T | PromiseLike<T>) => void)[] = [];
-
-    constructor(maxSize: number = Infinity) {
-        this.maxSize = maxSize;
-    }
-
-    /**
-     * Adds an item to the queue synchronously. Throws an error if the queue is full.
-     * @param item - The item to be added to the queue
-     */
-    put(item: T): void {
-        if (this.queue.length >= this.maxSize) {
-            throw new Error("Queue is full");
-        }
-
-        this.queue.push(item);
-
-        // If there are waiting consumers, immediately provide them with the item
-        if (this.waitingConsumers.length > 0) {
-            const consumer = this.waitingConsumers.shift();
-            if (consumer) consumer(this.queue.shift()!);
-        }
-    }
-
-    /**
-     * Removes and returns an item from the queue. If the queue is empty, it waits until an item is available.
-     * @returns A promise that resolves to the item
-     */
-    async get(): Promise<T> {
-        if (this.queue.length === 0) {
-            return new Promise<T>((resolve) =>
-                this.waitingConsumers.push(resolve),
-            );
-        }
-
-        const item = this.queue.shift()!;
-        return item;
-    }
-
-    /**
-     * Returns the current size of the queue.
-     */
-    size(): number {
-        return this.queue.length;
-    }
-
-    /**
-     * Checks if the queue is empty.
-     */
-    isEmpty(): boolean {
-        return this.queue.length === 0;
-    }
-
-    /**
-     * Checks if the queue is full.
-     */
-    isFull(): boolean {
-        return this.queue.length >= this.maxSize;
-    }
 }

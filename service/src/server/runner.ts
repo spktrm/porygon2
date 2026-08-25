@@ -161,7 +161,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     outgoingQueue: AsyncQueue<EnvironmentState>;
     rewardTracker: RewardTracker;
 
-    currentRequest: ChoiceRequest | null = null;
     done: boolean;
 
     finishedEarly: boolean;
@@ -177,8 +176,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     isBaseline: boolean;
     baselineIndex: number;
 
-    prevMyFaintedCount: number;
-    prevOppFaintedCount: number;
 
     firstRequest: AnyObject | undefined;
     // Training self-play only: the other TrainablePlayerAI in this battle,
@@ -227,8 +224,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             this.baselineIndex = -1;
         }
 
-        this.prevMyFaintedCount = 0;
-        this.prevOppFaintedCount = 0;
     }
 
     finishEarly() {
@@ -535,12 +530,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
             const gameState = this.createGameState();
             this.outgoingQueue.enqueue(gameState);
         }
-    }
-
-    serialize() {
-        return {
-            log: this.log,
-        };
     }
 
     receiveLine(line: string) {

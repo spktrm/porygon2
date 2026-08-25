@@ -58,7 +58,6 @@ interface PlayerDetails {
 
 interface WaitingPlayerResolveArgs {
     player: TrainablePlayerAI;
-    opponentDetails: PlayerDetails | null;
 }
 
 interface WaitingPlayer {
@@ -216,13 +215,11 @@ export class WorkerHandler {
             // 3. "Wake up" the waiting opponent
             opponent.resolve({
                 player: player1,
-                opponentDetails: details,
             });
 
             // 4. Return the args for the *current* player
             return Promise.resolve({
                 player: player2,
-                opponentDetails: opponent.playerDetails,
             });
         } else {
             // --- CASE 2: No one is here yet (We are the 1st player) ---
@@ -277,7 +274,7 @@ export class WorkerHandler {
             smogonFormat,
         });
         this.playerMapping.set(userName, player1);
-        return { player: player1, opponentDetails: null };
+        return { player: player1 };
     }
 
     private async handleMessage(data: Buffer): Promise<void> {
@@ -437,7 +434,6 @@ export class WorkerHandler {
         gameId: string, // Added param
         smogonFormat: string,
         packedTeam: number[] | undefined,
-        // We no longer need ckpt params for matchmaking logic
     ): Promise<WaitingPlayerResolveArgs> {
         if (isEvalUser(userName)) {
             return Promise.resolve(

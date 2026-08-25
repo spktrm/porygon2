@@ -5,9 +5,7 @@ import {
     AbilitiesEnumMap,
     BattlemajorargsEnum,
     BattlemajorargsEnumMap,
-    BattleminorargsEnum,
     BattleminorargsEnumMap,
-    BoostsEnum,
     BoostsEnumMap,
     ConditionEnumMap,
     EffectEnumMap,
@@ -22,16 +20,13 @@ import {
     MovesEnumMap,
     NaturesEnum,
     NaturesEnumMap,
-    PseudoweatherEnum,
     PseudoweatherEnumMap,
-    SideconditionEnum,
     SideconditionEnumMap,
     SpeciesEnum,
     SpeciesEnumMap,
     StatusEnumMap,
     TypechartEnum,
     TypechartEnumMap,
-    VolatilestatusEnum,
     VolatilestatusEnumMap,
     WeatherEnumMap,
 } from "../../protos/enums_pb";
@@ -115,36 +110,9 @@ export const ITOS = {
 };
 
 export type MoveIndex = 0 | 1 | 2 | 3;
-export type BenchIndex = MoveIndex | 4 | 5;
 
-export const numBoosts = Object.keys(BoostsEnum).length;
-export const numTypes = Object.keys(TypechartEnum).length;
-export const numVolatiles = Object.keys(VolatilestatusEnum).length;
-export const numSideConditions = Object.keys(SideconditionEnum).length;
-export const numBattleMinorArgs = Object.keys(BattleminorargsEnum).length;
 export const numBattleMajorArgs = Object.keys(BattlemajorargsEnum).length;
-export const numPseudoweathers = Object.keys(PseudoweatherEnum).length;
 export const numActionFeatures = Object.keys(ActionEnum).length;
-
-export const actionIndexMapping = {
-    0: "move 1",
-    1: "move 2",
-    2: "move 3",
-    3: "move 4",
-    4: "switch 1",
-    5: "switch 2",
-    6: "switch 3",
-    7: "switch 4",
-    8: "switch 5",
-    9: "switch 6",
-};
-
-export const sideIdMapping: {
-    [k in "p1" | "p2"]: 0 | 1;
-} = {
-    p1: 0,
-    p2: 1,
-};
 
 export const numPrivateEntityNodeFeatures = Object.keys(
     EntityPrivateNodeFeature,
@@ -159,7 +127,6 @@ export const numEntityEdgeFeatures = Object.keys(EntityEdgeFeature).length;
 export const numFieldFeatures = Object.keys(FieldFeature).length;
 export const numInfoFeatures = Object.keys(InfoFeature).length;
 export const numMoveFeatures = Object.keys(MovesetFeature).length;
-export const numMovesetFeatures = 10 * numMoveFeatures;
 export const numPackedSetFeatures = Object.keys(PackedSetFeature).length;
 
 const constantsContent = fs.readFileSync("../constants/data.json", "utf-8");
