@@ -515,7 +515,14 @@ def rl_sections():
                     # -0.048±0.054. Per-batch n is tiny; read smoothed and
                     # with the n panel beside it.
                     "Matched-V realised gap (vol switch − move) per V bin",
-                    ["player_mv_bin0_gap_realised", "player_mv_bin1_gap_realised", "player_mv_bin2_gap_realised", "player_mv_bin3_gap_realised", "player_mv_bin4_gap_realised", "player_mv_pooled_gap_realised"],
+                    [
+                        "player_mv_bin0_gap_realised",
+                        "player_mv_bin1_gap_realised",
+                        "player_mv_bin2_gap_realised",
+                        "player_mv_bin3_gap_realised",
+                        "player_mv_bin4_gap_realised",
+                        "player_mv_pooled_gap_realised",
+                    ],
                     smooth=0.99,
                 ),
                 lp(
@@ -523,12 +530,25 @@ def rl_sections():
                     # bins. Flat across bins = a modality offset (the
                     # collapse signature); state-dependent = resolution.
                     "Matched-V critic gap (Q_sw − Q_mv) per V bin",
-                    ["player_mv_bin0_gap_critic", "player_mv_bin1_gap_critic", "player_mv_bin2_gap_critic", "player_mv_bin3_gap_critic", "player_mv_bin4_gap_critic", "player_mv_pooled_gap_critic"],
+                    [
+                        "player_mv_bin0_gap_critic",
+                        "player_mv_bin1_gap_critic",
+                        "player_mv_bin2_gap_critic",
+                        "player_mv_bin3_gap_critic",
+                        "player_mv_bin4_gap_critic",
+                        "player_mv_pooled_gap_critic",
+                    ],
                     smooth=0.99,
                 ),
                 lp(
                     "Matched-V support: voluntary switches per V bin",
-                    ["player_mv_bin0_n_vol", "player_mv_bin1_n_vol", "player_mv_bin2_n_vol", "player_mv_bin3_n_vol", "player_mv_bin4_n_vol"],
+                    [
+                        "player_mv_bin0_n_vol",
+                        "player_mv_bin1_n_vol",
+                        "player_mv_bin2_n_vol",
+                        "player_mv_bin3_n_vol",
+                        "player_mv_bin4_n_vol",
+                    ],
                     smooth=0.99,
                 ),
                 lp(
@@ -772,9 +792,7 @@ def rl_sections():
                         "col_idx": "col_idx",
                         "winrate": "winrate",
                     },
-                    chart_strings={
-                        "title": "league payoff table (row beats column)"
-                    },
+                    chart_strings={"title": "league payoff table (row beats column)"},
                 ),
                 lp(
                     "Fresh vs replayed value error",

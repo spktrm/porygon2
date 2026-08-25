@@ -117,16 +117,12 @@ image = (
         copy=True,
         ignore=["**/.DS_Store"],
     )
-    .add_local_dir(
-        "constants", remote_path=f"{REPO_REMOTE}/constants", copy=True
-    )
+    .add_local_dir("constants", remote_path=f"{REPO_REMOTE}/constants", copy=True)
     # The scraper script is baked at the repo root (not under replays/,
     # which the porygon2-replays volume mount shadows at runtime). Its
     # ROOT_DIR is CWD-relative ("replays/data/"), so run from REPO_REMOTE
     # and it writes straight onto the volume.
-    .add_local_file(
-        "replays/main.py", f"{REPO_REMOTE}/replays_main.py", copy=True
-    )
+    .add_local_file("replays/main.py", f"{REPO_REMOTE}/replays_main.py", copy=True)
     .add_local_dir(
         "service",
         remote_path=f"{REPO_REMOTE}/service",
@@ -154,9 +150,7 @@ image = (
 app = modal.App("porygon2-train", image=image)
 
 ckpts_volume = modal.Volume.from_name("porygon2-ckpts", create_if_missing=True)
-replays_volume = modal.Volume.from_name(
-    "porygon2-replays", create_if_missing=True
-)
+replays_volume = modal.Volume.from_name("porygon2-replays", create_if_missing=True)
 jax_cache = modal.Volume.from_name("porygon2-jax-cache", create_if_missing=True)
 
 VOLUMES = {
@@ -173,9 +167,7 @@ def _require_embeddings(generation: int) -> None:
     missing = [
         name
         for name in EMBEDDING_NPYS
-        if not os.path.exists(
-            f"{REPO_REMOTE}/data/data/gen{generation}/{name}.npy"
-        )
+        if not os.path.exists(f"{REPO_REMOTE}/data/data/gen{generation}/{name}.npy")
     ]
     if missing:
         raise RuntimeError(
@@ -337,17 +329,13 @@ def train_rl(debug: bool = False, load_state_mode: str = "checkpoint"):
                 break
             except OSError:
                 if time.time() > deadline:
-                    raise RuntimeError(
-                        "game service never opened port 8080"
-                    ) from None
+                    raise RuntimeError("game service never opened port 8080") from None
                 time.sleep(1)
         print("game service up on :8080")
 
         _start_commit_loop()
         train_env = dict(os.environ, LOAD_STATE_MODE=load_state_mode)
-        cmd = [sys.executable, "-m", "rl.online.main"] + (
-            ["--debug"] if debug else []
-        )
+        cmd = [sys.executable, "-m", "rl.online.main"] + (["--debug"] if debug else [])
         subprocess.run(cmd, cwd=REPO_REMOTE, env=train_env, check=True)
     finally:
         service.terminate()

@@ -65,21 +65,6 @@ def collect_batch_telemetry_data(
         + 1,
         :,
     ].any((-2, -1))
-    can_wildcard = (
-        batch.player_transitions.env_output.action_mask[
-            ...,
-            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD : ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD
-            + 1,
-            :,
-        ].any((-2, -1))
-    ) | (
-        batch.player_transitions.env_output.action_mask[
-            ...,
-            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
-            + 1,
-            :,
-        ].any((-2, -1))
-    )
     can_switch = batch.player_transitions.env_output.action_mask[
         ...,
         ALLY_SWITCH_INDICES,

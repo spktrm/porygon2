@@ -26,7 +26,13 @@ import numpy as np
 
 STATE_PARTS = ["state"]
 # Key layout of the latent read's attention (tokens, in concat order).
-READ_TOKEN_PARTS = [("public", 12 * 10), ("private", 6 * 8), ("field", 3), ("prev_action", 2), ("history", 13)]
+READ_TOKEN_PARTS = [
+    ("public", 12 * 10),
+    ("private", 6 * 8),
+    ("field", 3),
+    ("prev_action", 2),
+    ("history", 13),
+]
 ACTION_PARTS = ["move", "switch", "target"]
 
 
@@ -155,7 +161,7 @@ def main():
         pct = max(0.0, min(1.0, v)) * 100
         return (
             f'<div class="bar"><span style="width:{pct:.1f}%"></span>'
-            f'<em>{v:.3f}</em></div>'
+            f"<em>{v:.3f}</em></div>"
         )
 
     html = [

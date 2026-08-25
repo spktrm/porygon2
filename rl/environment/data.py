@@ -169,7 +169,7 @@ def add_pretrained_embedding(generation):
                 fpath=f"data/data/gen{generation}/{name}.npy",
                 dtype=ONEHOT_DTYPE,
             )
-        except:
+        except Exception:
             traceback.print_exc()
             tables[name] = ZeroEmbedding(dtype=ONEHOT_DTYPE)
     return tables

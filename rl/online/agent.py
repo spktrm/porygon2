@@ -20,6 +20,11 @@ from rl.model.heads import HeadParams
 from rl.model.utils import Params
 
 
+def _no_apply(*args, **kwargs):
+    """Stand-in for an absent apply_fn (an actor may drive only one head)."""
+    return None
+
+
 class Agent:
     """A stateless agent interface."""
 
@@ -44,14 +49,13 @@ class Agent:
         self.player_head_params = player_head_params
         self.builder_head_params = builder_head_params
 
-        dummy_func = lambda *args, **kwargs: None
         # head_params is a per-CALL argument of the jitted steps (a traced
         # pytree of scalars, one trace regardless of value), not baked in
         # via functools.partial: eval actors run at temp 0.5 and training
         # actors at 1.0 (main.py), which a
         # baked-in python float would turn into one recompile per value.
-        self._player_apply_fn = player_apply_fn or dummy_func
-        self._builder_apply_fn = builder_apply_fn or dummy_func
+        self._player_apply_fn = player_apply_fn or _no_apply
+        self._builder_apply_fn = builder_apply_fn or _no_apply
         self._gpu_lock = gpu_lock or nullcontext()
 
     def step_builder(

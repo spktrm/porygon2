@@ -32,7 +32,6 @@ import logging  # noqa: E402
 import sys  # noqa: E402
 
 import jax  # noqa: E402
-import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
 from rl.environment.interfaces import PlayerActorInput  # noqa: E402

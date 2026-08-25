@@ -719,13 +719,6 @@ def main(generation: int = 9):
 
             builder_actor_input = builder_env.step(builder_agent_output)
 
-            # print(get_packed_team_string(team_tokens))
-            # print(i)
-
-        builder_trajectory: BuilderTransition = jax.tree.map(
-            lambda *xs: np.array(jnp.stack(xs)), *build_traj
-        )
-
         team_tokens = builder_actor_input.history.packed_team_member_tokens.reshape(
             -1, NUM_PACKED_SET_FEATURES
         )

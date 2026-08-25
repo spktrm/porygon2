@@ -19,6 +19,18 @@ run_in_dir_or_file inference/*.py
 # one-level under sh: rl/online/training and tests/ were never linted).
 run_in_dir_or_file rl
 run_in_dir_or_file tests
+run_in_dir_or_file scripts
 run_in_dir_or_file scrape/*.py
 run_in_dir_or_file embeddings/*.py
 run_in_dir_or_file data/src/*.py
+
+# Catches what autoflake/isort/black cannot: bare except, lambda assignment,
+# unused locals. Runs LAST so it sees the formatted result. Config — ruleset,
+# protos exclusion, and the per-file E402 ignores for the load-order-critical
+# imports — is in pyproject.toml.
+#
+# Scoped to the actively-developed trees. embeddings/, inference/, scrape/ and
+# data/src/ are still formatted above but not ruff-gated: they carry findings
+# nobody is maintaining, and a gate that is red on day one is a gate everyone
+# learns to ignore. Widen when one of them is next touched.
+ruff check rl/ tests/ scripts/
