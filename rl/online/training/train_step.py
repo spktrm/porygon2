@@ -682,6 +682,17 @@ def train_step(
         adv_reg = jnp.where(
             flat_action_mask, adv_for_policy - ref_component - ent_component, 0.0
         )
+        # Bound the TOTAL per-cell force, rnad.py's `adv_pi = clip(...)`
+        # slot (get_loss_nerd clips after every correction). The shifts
+        # are unbounded — -eta_ent*log pi grows without limit as
+        # pi -> 0 — and neither reference system ever exposes an
+        # unbounded force to the logits: DeepNash routes eta through the
+        # reward transform (absorbed by the learned value) or a
+        # near-snap reference ratio, NashPG's ent_coef sits under a
+        # PPO clip. Same ±2 band as the critic advantage above: a
+        # starved cell still receives the full band-width restoring
+        # force, only the tail is removed.
+        adv_reg = jnp.clip(adv_reg, -2.0, 2.0)
         # Re-centre: the reference penalty is added per cell BEFORE
         # centring (it must grow like -eta*log pi(a) as pi(a) -> 0), so it
         # shifts the row mean and E_pi[adv_reg] is no longer 0.
