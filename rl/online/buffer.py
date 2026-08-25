@@ -62,7 +62,7 @@ class BuilderTrajectoryStore:
         return np.any((self._reuses < self._max_reuses) & self._valid)
 
     def ready_to_add(self) -> bool:
-        """Returns True if there is capacity to add a new trajectory."""
+        """True when there is a free slot OR an over-reused one to evict."""
         return len(self._trajectories) < self._max_size or np.any(
             self._reuses >= self._max_reuses
         )
@@ -174,7 +174,6 @@ class PlayerTrajectoryStore:
         desc = f"player_producer-{name}" if name else "player_producer"
         self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
-        # Tracking
         self.need_tracking = need_tracking
         if need_tracking:
             self._species_counts = np.zeros(NUM_SPECIES, dtype=np.float32)
@@ -218,7 +217,7 @@ class PlayerTrajectoryStore:
             return np.sum((self._reuses < self._max_reuses) & self._valid) >= n
 
     def ready_to_add(self) -> bool:
-        """Returns True if there is capacity to add a new trajectory."""
+        """True when there is a free slot OR an over-reused one to evict."""
         return len(self._trajectories) < self._max_size or np.any(
             self._reuses >= self._max_reuses
         )

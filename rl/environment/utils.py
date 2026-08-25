@@ -440,29 +440,19 @@ def generate_order(key: jax.Array, r: int, N: int):
     total_size = r * N
     selection_order = jax.random.permutation(key, jnp.arange(total_size))
 
-    # 1. Entry point is now i % N == 1
+    # A block's entry slot is i % N == 1, and every member inherits that
+    # slot's priority, so blocks stay contiguous through the sort.
     entry_priorities = selection_order.reshape(r, N)[:, 1]
     block_gate_priority = jnp.repeat(entry_priorities, N)
-
-    # 2. Effective priority
     effective_priority = jnp.maximum(selection_order, block_gate_priority)
-
-    # 3. Get the full sorted order
     sorted_indices = jnp.argsort(effective_priority)
 
-    # 4. FIXED: Instead of boolean masking, we use a static filter
-    # We find which positions in the 'sorted_indices' do NOT contain an i % N == 0
-    # But wait—it's easier to just calculate the valid indices first!
-
-    # Alternative JIT-safe approach:
-    # Use jnp.where with a fixed-size size argument or simple slicing if possible.
-    # Since we must return r * (N-1), we use jnp.take with static indices.
-
+    # Drop the i % N == 0 entries by SORTING the mask, not filtering on it: a
+    # boolean filter's output shape is data-dependent and jit cannot trace it,
+    # whereas argsort(~is_valid) pushes the keepers to the front and leaves a
+    # static r * (N - 1) slice.
     is_valid = (sorted_indices % N) != 0
-    # Sort the boolean mask to push all 'True' values to the front
-    # and then slice the first r*(N-1) elements.
     valid_positions = jnp.argsort(~is_valid)
-
     return sorted_indices[valid_positions[: r * (N - 1)]]
 
 

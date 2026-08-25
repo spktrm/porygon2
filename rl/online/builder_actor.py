@@ -44,10 +44,8 @@ class BuilderActor:
         builder_subkeys = split_rng(rng_key, builder_unroll_length + 1)
         build_traj = []
 
-        # Reset the builder environment.
         builder_actor_input = self._env.reset(builder_subkeys[0])
 
-        # Rollout the builder environment.
         for builder_step_index in range(1, builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],

@@ -236,10 +236,8 @@ def calculate_r2(
     if mask is None:
         mask = jnp.ones_like(value_prediction)
 
-    # Calculate residual sum of squares (SS_residual)
     ss_residual = jnp.sum((value_target - value_prediction) ** 2, where=mask)
 
-    # Calculate total sum of squares (SS_total)
     mean_target = jnp.mean(value_target, where=mask)
     ss_total = jnp.sum((value_target - mean_target) ** 2, where=mask)
 

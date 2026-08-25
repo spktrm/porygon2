@@ -60,31 +60,26 @@ def compute_policy_metrics(
     Computes standard policy distributions, entropy, normalized entropy,
     and the KL divergence (exploration magnet) penalty.
     """
-    # 1. Distill policy distributions
     log_policy = legal_log_policy(logits, valid_mask)
     policy = legal_policy(logits, valid_mask)
-
-    # 2. Base Entropy
     entropy = -jnp.sum(policy * log_policy, axis=-1)
 
-    # 3. Normalized Entropy
     valid_sum = valid_mask.sum(axis=-1)
     safe_log_sum = jnp.maximum(valid_sum, 2)
     log_factor = 1.0 / jnp.log(safe_log_sum).astype(entropy.dtype)
     entropy_scale = jnp.where(valid_sum <= 1, 1.0, log_factor)
     normalized_entropy = entropy * entropy_scale
 
-    # 4. Exploration KL (magnet_kl)
     if prior is None:
         valid_sum_expanded = jnp.maximum(valid_sum[..., None], 1)
         prior = jnp.where(valid_mask, 1.0 / valid_sum_expanded, 0.0)
     prior = prior.astype(log_policy.dtype)
 
-    # Safe log calculation
+    # 1e-9 rather than the true 0 on illegal cells: the log is taken before
+    # the mask is reapplied, so a literal 0 would make it -inf.
     safe_prior = jnp.where(valid_mask, prior, 1e-9)
     log_prior = jnp.where(valid_mask, jnp.log(safe_prior), 0.0)
 
-    # D_KL(Policy || Prior)
     magnet_kl = policy * (log_policy - log_prior)
     magnet_kl = jnp.where(valid_mask, magnet_kl, 0.0).sum(axis=-1)
 

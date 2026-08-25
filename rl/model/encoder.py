@@ -1110,7 +1110,6 @@ class Encoder(nn.Module):
         ]
         minor_args_encoding = encode_hex(minor_args_indices).reshape(-1)
 
-        # Aggregate embeddings for the relative edge.
         boolean_code = one_hot_concat_jax(
             [
                 encode_one_hot_edge(
@@ -1215,8 +1214,6 @@ class Encoder(nn.Module):
         """
         Embed features of the field
         """
-        # Compute turn and request count differences for encoding.
-
         turn_order_value = field[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE]
         request_count = field[FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
 
@@ -1237,7 +1234,6 @@ class Encoder(nn.Module):
         my_side_condition_encoding = encode_hex(my_side_condition_indices).reshape(-1)
         opp_side_condition_encoding = encode_hex(opp_side_condition_indices).reshape(-1)
 
-        # Aggregate embeddings for the absolute edge.
         field_encoding = one_hot_concat_jax(
             [
                 encode_one_hot_field(

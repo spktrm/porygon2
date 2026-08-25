@@ -594,10 +594,6 @@ def get_packed_team_string(packed_team_member_tokens: jax.Array):
     reconstructed_sets = []
 
     for row in reshaped_tokens:
-        # Check if the species is set (non-zero). If 0, it's an empty/padding slot.
-        # if row[PackedSetFeature.PACKED_SET_FEATURE__SPECIES] == 0:
-        #     continue
-
         species = ITOS["species"].get(
             row[PackedSetFeature.PACKED_SET_FEATURE__SPECIES].item(), ""
         )

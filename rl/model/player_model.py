@@ -90,33 +90,21 @@ class Porygon2PlayerModel(nn.Module):
         )
         modality_probs = jnp.exp(modality_log_probs)
 
-        # Count valid actions per modality
         valid_actions_per_modality = valid_modality_mask.sum(axis=0)
-
-        # --- THE FIX ---
-
-        # 1. Count how many total modalities actually have valid options
         num_valid_modalities = (valid_actions_per_modality > 0).sum(
             dtype=modality_probs.dtype
         )
-
-        # 2. Calculate the raw entropy safely
         raw_modality_entropy = -jnp.sum(
             jnp.where(
                 valid_actions_per_modality > 0, modality_probs * modality_log_probs, 0.0
             )
         )
-
-        # 3. Calculate max possible entropy
         max_modality_entropy = jnp.log(jnp.maximum(num_valid_modalities, 1.0))
-
-        # --- THE FIX ---
-        # Create a safe denominator that is never 0.0, even when the mask is False
+        # Never 0.0, so the divide below is safe on the one-live-modality row
+        # that the outer jnp.where discards anyway.
         safe_max_modality_entropy = jnp.where(
             num_valid_modalities > 1, max_modality_entropy, 1.0
         )
-
-        # 4. Safely normalize using the safe denominator
         return jnp.where(
             num_valid_modalities > 1,
             raw_modality_entropy / safe_max_modality_entropy,

@@ -509,7 +509,6 @@ def train_step(
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
-        # Softmax cross-entropy loss for value head
         loss_v_win = average(
             optax.softmax_cross_entropy(
                 logits=learner_value_head.logits.astype(jnp.float32),
@@ -890,17 +889,14 @@ def train_step(
         return loss, dict(
             **q_logs,
             **neurd_logs,
-            # Loss values
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
             player_action_normalized_entropy=action_head_normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
-            # Ratios
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
-            # KL values
             player_learner_actor_forward_kl=loss_actor_forward_kl,
             # Modality-resolved split of the SAME k3 estimator. The
             # global mean is an expectation over the policy, so drift
@@ -928,7 +924,6 @@ def train_step(
             player_learner_actor_backward_kl=loss_actor_backward_kl,
             player_learner_target_forward_kl=loss_target_forward_kl,
             player_learner_target_backward_kl=loss_target_backward_kl,
-            # Extra stats
             player_value_head_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
@@ -989,7 +984,6 @@ def train_step(
             # kernel rms sitting at its lecun init (0.0625 at fan-in 256)
             # with a flat gate = the within-modality route never trained.
             **q_head_param_telemetry(prev_player_state.params, player_grads),
-            # Mask sums
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
             ),

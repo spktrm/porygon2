@@ -471,14 +471,12 @@ def load_from_checkpoint(
     tqdm.write(pformat(player_scalars))
     tqdm.write(pformat(builder_scalars))
 
-    # Restore League
     if ckpt_league_bytes is not None:
         league = League.deserialize(ckpt_league_bytes)
     else:
         # Fallback if league is missing in ckpt
         league = _init_league(learner_config, player_state, builder_state)
 
-    # Fully replace player state
     player_state = player_state.replace(
         params=ckpt_player_state["params"],
         target_params=ckpt_player_state["target_params"],
@@ -492,7 +490,6 @@ def load_from_checkpoint(
         frame_count=player_scalars["frame_count"],
     )
 
-    # Fully replace builder state
     builder_state = builder_state.replace(
         params=ckpt_builder_state["params"],
         target_params=ckpt_builder_state["target_params"],

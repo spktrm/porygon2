@@ -155,8 +155,6 @@ class League:
         league.print_players()
         return league
 
-    # --- lazy materialisation + UCB-managed cache ---------------------------
-
     def cache_stats(self) -> tuple[int, int]:
         """(entries, total host bytes) of the materialized-opponent cache —
         RAM diagnostics (Learner._log_memory_diagnostics). At ~112MB per
@@ -301,8 +299,6 @@ class League:
         )
         denom = self.games.get((home, away), 0) + 1
         return numer / denom
-
-    # --- mutation ------------------------------------------------------------
 
     def add_player(self, ref: PlayerRef):
         with self.lock:

@@ -117,8 +117,6 @@ class Learner:
 
         self.done = False
 
-    # --- run-state construction ----------------------------------------------
-
     def _build_run_state(
         self,
         player_state: Porygon2PlayerTrainState,
@@ -178,8 +176,6 @@ class Learner:
         self.league.update_live(MAIN_KEY, create_params_container(run_state))
         return run_state
 
-    # --- trajectory intake ---------------------------------------------------
-
     def enqueue_traj(self, traj: Trajectory):
         """Called by actors to push data into the run's
         replay buffer."""
@@ -196,10 +192,6 @@ class Learner:
         sample_cond = run_state.player_replay._sample_cv
         with sample_cond:
             sample_cond.notify_all()
-
-    # --- background workers --------------------------------------------------
-
-    # --- controller state ----------------------------------------------------
 
     def controller_state_bytes(self, run_state: RunState) -> bytes:
         """Host-side training dynamics for the checkpoint. Every adaptive
@@ -242,8 +234,6 @@ class Learner:
     # (2026-08-22) and UPGO with the single-action PG (2026-08-21) — see
     # CLAUDE.md 10 and the removal ledgers. The replay
     # reuse-cap controller below is the one remaining per-log-tick loop.
-
-    # --- scheduler -----------------------------------------------------------
 
     def _ready_run_state(self) -> RunState | None:
         """The run state if it is ready to train this tick, else None:

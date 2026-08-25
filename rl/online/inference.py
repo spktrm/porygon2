@@ -172,8 +172,6 @@ class InferenceServer:
         a daemon and needs no join."""
         self._stop.set()
 
-    # --- actor-facing API -------------------------------------------------
-
     def step_player(
         self,
         rng_key: jax.Array,
@@ -198,8 +196,6 @@ class InferenceServer:
                 "inference server forward failed for this request"
             ) from request.error
         return request.output
-
-    # --- server internals ---------------------------------------------------
 
     @staticmethod
     def _version_key(container: ParamsContainer) -> tuple[int, int]:

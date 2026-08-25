@@ -191,7 +191,6 @@ class MultiHeadAttention(nn.Module):
         #     implementation=self.implementation,
         # )
 
-        # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = softcap(attn_logits / np.sqrt(qk_size).astype(q.dtype))
 
@@ -221,7 +220,6 @@ class MultiHeadAttention(nn.Module):
         attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
-        # Apply another projection to get the final embeddings.
         final_projection = nn.Dense(
             model_size, use_bias=self.use_bias, dtype=self.dtype, name="out_proj"
         )
@@ -681,7 +679,8 @@ class SumEmbeddings(nn.Module):
             for emb in embeddings
         ]
 
-        # Sum and scale the variance by dividing by sqrt(N)
+        # simple_sum alone divides by sqrt(N) to hold the variance; the
+        # other two modes do not.
         if self.aggregating_mode == "simple_sum":
             aggregated = simple_sum_embeddings(*embeddings)
         elif self.aggregating_mode == "sum":
@@ -724,7 +723,6 @@ class PointerLogits(nn.Module):
             query_heads = layer_norm(query_heads)
             key_heads = layer_norm(key_heads)
 
-        # Compute attention weights.
         attn_logits = jnp.einsum("...thd,...Thd->...tTh", query_heads, key_heads)
 
         if self.inverse_sqrt_normalisation:

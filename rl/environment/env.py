@@ -428,8 +428,9 @@ class TeamBuilderEnvironment:
                 & (self.teratype_masks[:, m_tera] | (m_tera == 0))
             )
 
-            # Prevent picking duplicate species across the team (Species Clause)
-            # Find all species currently on the team excluding the current slot
+            # Prevent picking duplicate species across the team (Species
+            # Clause). Every slot is read here; the current one is excluded
+            # from the mask below.
             other_species = packed_set_tokens[
                 :, PackedSetFeature.PACKED_SET_FEATURE__SPECIES
             ]
