@@ -37,7 +37,6 @@ from rl.online.training.targets import (
     compute_q_onestep_targets,
     ref_penalised_q,
     reference_kl,
-    residual_q,
 )
 from rl.online.training.telemetry import (
     calculate_r2,
@@ -200,14 +199,14 @@ def train_step(
     player_targets = promote_map(player_targets, float_dtype)
 
     # Residual Q critic (Step 3, docs/critic-weakness-analysis.md,
-    # 2026-08-23): Q = sg(V_target) + A centred under the target policy
-    # (targets.residual_q), trained by Huber on the taken cell against
-    # the TD(0) label r + gamma*V_win_target(s') — plain Q^pi, no trace,
-    # no transformed bootstrap. ONE rung since 2026-08-25: the critic and
-    # the policy share an information set, so there is no privileged
-    # sibling to compare against. The policy reads the target net's
-    # advantage as stop-gradient scalars.
-    target_log_policy = player_target_pred.action_head.log_policy
+    # 2026-08-23): Q = sg(V) + A centred under pi, composed in the MODEL
+    # (heads.compose_q) and read here — trained by Huber on the taken cell
+    # against the TD(0) label r + gamma*V_win_target(s'), plain Q^pi, no
+    # trace, no transformed bootstrap. ONE rung since 2026-08-25: the
+    # critic and the policy share an information set, so there is no
+    # privileged sibling to compare against. The policy reads the target
+    # net's ADVANTAGE as stop-gradient scalars — V cancels in the NeuRD
+    # centring, so it never enters the policy objective at all.
     v_target = player_target_pred.value_head.expectation.astype(jnp.float32)
     # The critics learn the PLAIN game (2026-08-25): the reference is a
     # policy-objective term only, analytic per cell in ref_penalised_q.
@@ -216,9 +215,8 @@ def train_step(
     # the objective and NO reward transform, and the stream had no
     # measured action-axis effect here (it shifted every cell of the Q
     # base identically, so it cancelled in the NeuRD centring).
-    q_target = residual_q(
-        player_target_pred.q_adv, v_target, target_log_policy, flat_action_mask
-    )
+    q_target = player_target_pred.q.astype(jnp.float32)
+    adv_target = player_target_pred.advantage.astype(jnp.float32)
     q_label = compute_q_onestep_targets(batch, v_target, config)
     q_taken_target = jnp.take_along_axis(
         q_target, player_actor_action_head.action_index[..., None], axis=-1
@@ -541,12 +539,7 @@ def train_step(
         # closed: every state-level degree of freedom sits in V, which
         # this loss cannot move.
         q_taken_pred = jnp.take_along_axis(
-            residual_q(
-                learner_player_pred.q_adv,
-                v_target,
-                target_log_policy,
-                flat_action_mask,
-            ),
+            learner_player_pred.q.astype(jnp.float32),
             player_actor_action_head.action_index[..., None],
             axis=-1,
         ).squeeze(-1)
@@ -605,27 +598,36 @@ def train_step(
         # without bound as pi(a) -> 0, with no pi prefactor, and it
         # vanishes only when pi == pi_reg — a moving reference, so the
         # fixed point is the regularised Nash, not a uniform prior.
-        # The policy reads the target critic's Q_all clipped to the reward
-        # support (the Huber loss saw it unclipped).
-        # +-2, not the +-1 reward support (2026-08-24): Q now carries
-        # V_reg's future-penalty stream on top of the win value, and a
-        # state whose whole row clips flat would hand NeuRD zeros.
-        # Centring removes the common shift; the clip only guards
-        # saturation.
-        q_for_policy = jnp.clip(q_target, -2.0, 2.0)
-        q_reg = ref_penalised_q(
-            q_for_policy,
+        # The policy reads the target critic's ADVANTAGE, not its Q
+        # (2026-08-25). V is a per-row constant that the centring below
+        # removes EXACTLY, so the V + A -> subtract-baseline round trip
+        # was always a no-op here; taking A directly makes that visible
+        # and makes the clip mean something.
+        #
+        # The clip is +-2 on A, not on Q. On Q it was scale-dependent
+        # nonsense: at V = 0.9 a cell's upside clipped ten times harder
+        # than at V = -0.9, for the same advantage. (Its stated reason —
+        # Q carrying V_reg's future-penalty stream — died with the reward
+        # transform in 27053a6.) On A the band is symmetric by
+        # construction and guards saturation only; the Huber loss still
+        # sees Q unclipped.
+        adv_for_policy = jnp.clip(adv_target, -2.0, 2.0)
+        adv_reg = ref_penalised_q(
+            adv_for_policy,
             learner_log_policy,
             reg_log_policy,
             flat_action_mask,
             config.player_ref_eta,
         )
-        v_cf = jax.lax.stop_gradient((pi_learner * q_reg).sum(axis=-1))
+        # Re-centre: the reference penalty is added per cell BEFORE
+        # centring (it must grow like -eta*log pi(a) as pi(a) -> 0), so it
+        # shifts the row mean and E_pi[adv_reg] is no longer 0.
+        adv_cf = jax.lax.stop_gradient((pi_learner * adv_reg).sum(axis=-1))
         neurd_adv = jax.lax.stop_gradient(
-            jnp.where(flat_action_mask, q_reg - v_cf[..., None], 0.0)
+            jnp.where(flat_action_mask, adv_reg - adv_cf[..., None], 0.0)
         )
         ref_penalty = jax.lax.stop_gradient(
-            jnp.where(flat_action_mask, q_for_policy - q_reg, 0.0)
+            jnp.where(flat_action_mask, adv_for_policy - adv_reg, 0.0)
         )
         # Hierarchical NeuRD on the head's FREE logits (2026-08-24,
         # loss.hierarchical_neurd). The composed pi_logits this read

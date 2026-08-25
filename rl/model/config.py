@@ -188,33 +188,51 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # (move/switch/target residual streams with per-type gates), not in
     # per-modality head stacks.
 
-    # Dedicated modality-level head: per-modality attention pooling over
-    # src-slot embeddings, shared MLP, zero-init output layer (keeps the
-    # init policy anchored to calculate_hierarchical_prior).
-    # Policy instantiation of the shared MacroMicroHead (2026-08-20; the
-    # Q critic instantiates the same module under cfg.q_head): 'dot'
-    # micro = the parameter-free scaled grid over the typed trunk
-    # streams; num_logits 1 = scalar logits per cell/modality for the
-    # policy's log-space hierarchy.
-    cfg.macro_micro = ConfigDict()
-    cfg.macro_micro.micro_kind = "dot"
-    cfg.macro_micro.num_logits = 1
-    cfg.macro_micro.macro = ConfigDict()
-    cfg.macro_micro.macro.qk_logits = ConfigDict()
-    cfg.macro_micro.macro.qk_logits.num_heads = 1
-    cfg.macro_micro.macro.qk_logits.use_bias = True
-    cfg.macro_micro.macro.qk_logits.qk_layer_norm = True
-    cfg.macro_micro.macro.mlp = ConfigDict()
-    cfg.macro_micro.macro.mlp.layer_sizes = entity_size
+    # The two action-axis readouts (2026-08-25). Both are ActionScoreHead
+    # over the same src x tgt grid — adapter -> macro/micro -> composition —
+    # and differ only in `reduce`, set at the call site in player_model:
+    # the policy multiplies softmaxes in log space, the advantage adds macro
+    # onto the legality-centred micro. Same shape of config for both, so the
+    # asymmetries between them are visible as config diffs rather than buried
+    # in two hand-written forward passes.
+    #
+    # Each owns a zero-init residual ADAPTER onto the trunk's action
+    # embeddings: exact identity at init and at a params-mode fresh reload,
+    # so adding one is policy-preserving, and the advantage head's loss
+    # cannot reshape the policy's micro geometry directly.
+    #
+    # num_logits 1 on both: a SCALAR per cell. For the advantage that is
+    # A(s, a), with Q = sg(V) + A centred under pi (heads.compose_q) — the
+    # categorical per-cell readout it replaced (2026-08-23, Step 3 of
+    # docs/critic-weakness-analysis.md) let the head fit taken-cell labels
+    # through a state-only route (Step 6 probe: label floor reached with
+    # within-state action variance collapsing 5x).
+    def _action_score_head(micro_kind: str) -> ConfigDict:
+        head = ConfigDict()
+        head.adapter = ConfigDict()
+        head.adapter.mlp = ConfigDict()
+        head.adapter.mlp.layer_sizes = entity_size
+        head.macro_micro = ConfigDict()
+        head.macro_micro.micro_kind = micro_kind
+        head.macro_micro.num_logits = 1
+        if micro_kind == "pointer":
+            head.macro_micro.micro_qk = ConfigDict()
+            head.macro_micro.micro_qk.use_bias = True
+            head.macro_micro.micro_qk.qk_layer_norm = True
+        # Modality-level head: per-modality attention pooling over src-slot
+        # embeddings, MLP, zero-init output layer (keeps the init policy
+        # anchored to calculate_hierarchical_prior).
+        head.macro_micro.macro = ConfigDict()
+        head.macro_micro.macro.qk_logits = ConfigDict()
+        head.macro_micro.macro.qk_logits.num_heads = 1
+        head.macro_micro.macro.qk_logits.use_bias = True
+        head.macro_micro.macro.qk_logits.qk_layer_norm = True
+        head.macro_micro.macro.mlp = ConfigDict()
+        head.macro_micro.macro.mlp.layer_sizes = entity_size
+        return head
 
-    # Policy-owned residual adapter between the trunk's action embeddings
-    # and its MacroMicroHead (2026-08-20): zero-init out layer = exact
-    # identity at init and at a params-mode fresh reload, so adding it is
-    # policy-preserving; it exists so the Q head's CE gradient stops
-    # reshaping the parameter-free micro dot grid's geometry directly.
-    cfg.policy_adapter = ConfigDict()
-    cfg.policy_adapter.mlp = ConfigDict()
-    cfg.policy_adapter.mlp.layer_sizes = entity_size
+    cfg.policy_head = _action_score_head("dot")
+    cfg.advantage_head = _action_score_head("pointer")
 
     # Deep value readout (Aug 2026): the previous single linear layer made
     # the value head the thinnest module in the model while the action
@@ -227,43 +245,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-    # All-action advantage head (learner-only; docs/q-critic-plan.md):
-    # one scalar per src x tgt cell, read off the same action embeddings
-    # as the policy head and conditioned on the pooled value embedding.
-    # ONE rung since 2026-08-25 — the privileged Q_all rung is gone, so
-    # the head's information set is the policy's, full stop.
-    # STRUCTURAL since 2026-08-20 (no enable flag) and the policy's exact
-    # module stack: an owned ActionAdapter with the cond concatenated in
-    # (the rung's information set reaches every cell) into the shared
-    # MacroMicroHead at num_logits 1, composed additively via
-    # compose_action_grid — the modality-centred micro grid plus a
-    # per-modality macro readout, the explicit
-    # low-dimensional parameter path for "is switching better here" that
-    # the flat grid made the head express cell-by-cell.
-    cfg.q_head = ConfigDict()
-    cfg.q_head.adapter = ConfigDict()
-    cfg.q_head.adapter.mlp = ConfigDict()
-    cfg.q_head.adapter.mlp.layer_sizes = entity_size
-    cfg.q_head.macro_micro = ConfigDict()
-    cfg.q_head.macro_micro.micro_kind = "pointer"
-    # 1 (2026-08-23, Step 3 of docs/critic-weakness-analysis.md): a SCALAR
-    # advantage A(s, a) per cell; Q = sg(V_target(s)) + A centred under
-    # pi over legal cells, composed learner-side (targets.residual_q). The
-    # categorical per-cell readout (num_logits = bin count) let the head
-    # fit taken-cell labels through a state-only route (Step 6 probe:
-    # floor reached with the action variance collapsing 5x).
-    cfg.q_head.macro_micro.num_logits = 1
-    cfg.q_head.macro_micro.micro_qk = ConfigDict()
-    cfg.q_head.macro_micro.micro_qk.use_bias = True
-    cfg.q_head.macro_micro.micro_qk.qk_layer_norm = True
-    cfg.q_head.macro_micro.macro = ConfigDict()
-    cfg.q_head.macro_micro.macro.qk_logits = ConfigDict()
-    cfg.q_head.macro_micro.macro.qk_logits.num_heads = 1
-    cfg.q_head.macro_micro.macro.qk_logits.use_bias = True
-    cfg.q_head.macro_micro.macro.qk_logits.qk_layer_norm = True
-    cfg.q_head.macro_micro.macro.mlp = ConfigDict()
-    cfg.q_head.macro_micro.macro.mlp.layer_sizes = entity_size
-
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the Retrace

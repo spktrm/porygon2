@@ -89,13 +89,15 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    # Learner-only (cfg.train; the advantage head is structural): (T, A)
-    # scalar RAW advantage logits over the flat src x tgt action grid —
-    # Q(s, a) = sg(V(s)) + A(s, a) - E_pi[A(s, .)], composed learner-side
-    # (targets.residual_q). One rung since 2026-08-25, on the same
-    # information set the policy acts from. Actors leave it empty so
-    # replay transitions stay small.
-    q_adv: ArrayLike = ()
+    # Learner-only (cfg.train; the advantage head is structural): the
+    # Q = V + A decomposition over the flat src x tgt action grid, both
+    # (T, A) f32 and both composed in the MODEL (heads.compose_q).
+    #   advantage  A(s, a), pi-centred so E_pi[A] = 0 exactly
+    #   q          sg(V(s)) + A(s, a), hence E_pi[q] = V exactly
+    # Illegal cells are zero in both. Actors leave them empty so replay
+    # transitions stay small.
+    advantage: ArrayLike = ()
+    q: ArrayLike = ()
 
 
 @dataclass

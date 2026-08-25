@@ -6,10 +6,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.model.heads import compose_q
 from rl.online.training.targets import (
     compute_player_targets,
     compute_q_onestep_targets,
-    residual_q,
     two_hot,
     vtrace,
 )
@@ -103,24 +103,6 @@ def _q_batch(done, win_reward, action_mask, action_index):
     )
 
 
-class TestResidualQ:
-    def test_centring_and_state_route(self):
-        """E_pi[Q] == V exactly, a constant shift of A is invisible (the
-        state route is closed), illegal cells read 0."""
-        legal = jnp.asarray([[True, True, False, True]])
-        log_pi = jnp.log(jnp.asarray([[0.5, 0.25, 0.0, 0.25]]) + 1e-12)
-        adv = jnp.asarray([[0.3, -0.1, 5.0, 0.2]])
-        v = jnp.asarray([0.4])
-        q = residual_q(adv, v, log_pi, legal)
-        pi = jnp.exp(log_pi) * legal
-        np.testing.assert_allclose(float((pi * q).sum(-1)[0]), 0.4, atol=1e-6)
-        assert float(q[0, 2]) == 0.0
-        shifted = residual_q(adv + 7.0, v, log_pi, legal)
-        np.testing.assert_allclose(np.asarray(shifted), np.asarray(q), atol=1e-5)
-        # the action axis survives: cell gaps equal the raw A gaps
-        np.testing.assert_allclose(float(q[0, 0] - q[0, 1]), 0.4, atol=1e-6)
-
-
 class TestQOnestepHandExample:
     """T=3, B=1, terminal win on the last (done) row, V_target = 0.2 on
     every row: y = [0 + V(s1), 0 + r, 0 (done row)] = [0.2, 1, 0]."""
@@ -192,9 +174,9 @@ class TestQOnestepOnExTrajectory:
         assert y.shape == (T, B)
         assert np.isfinite(np.asarray(y)).all()
         assert (np.abs(np.asarray(y)) <= 1.0 + 1e-6).all()
-        q_all = residual_q(
-            jnp.zeros((T, B, A)),
+        _, q_all = compose_q(
             v,
+            jnp.zeros((T, B, A)),
             jnp.full((T, B, A), -np.log(A)),
             jnp.asarray(flat_mask),
         )

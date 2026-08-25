@@ -217,8 +217,8 @@ def apply_override(params, override: str | None):
 
     flat = dict(flatten_dict(params))
     if override == "gate1_kzero":
-        gate = ("params", "q_macro_micro", "micro_scale")
-        key = ("params", "q_macro_micro", "micro", "Dense_1", "kernel")
+        gate = ("params", "advantage_head", "macro_micro", "micro_scale")
+        key = ("params", "advantage_head", "macro_micro", "micro", "Dense_1", "kernel")
         flat[gate] = jnp.ones_like(flat[gate])
         flat[key] = jnp.zeros_like(flat[key])
         for k in list(flat):
@@ -284,7 +284,6 @@ def make_learner_q_stats(player_net):
     which the `fixed` arm freezes by design."""
     from rl.environment.interfaces import PlayerActorInput
     from rl.model.heads import HeadParams
-    from rl.online.training.targets import residual_q
     from rl.online.training.telemetry import modality_means
 
     apply = jax.vmap(player_net.apply, in_axes=(None, 1, 1, None), out_axes=1)
@@ -305,9 +304,7 @@ def make_learner_q_stats(player_net):
         )
         done = pt.env_output.done.astype(bool)
         flat = pt.env_output.action_mask.reshape(*done.shape, -1).astype(bool)
-        q_all = residual_q(
-            pred.q_adv, pred.value_head.expectation, pred.action_head.log_policy, flat
-        )  # (T,B,A)
+        q_all = jnp.where(flat, pred.q, 0.0)  # (T,B,A), composed in the model
         before = (jnp.cumsum(done, axis=0) - done) == 0
         final = jnp.arange(done.shape[0])[:, None] == done.shape[0] - 1
         rows = before & (~final | done) & ~done

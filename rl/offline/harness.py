@@ -189,7 +189,7 @@ def forward(
     generation: int = 9,
 ) -> Iterator[tuple[PlayerActorOutput, object]]:
     """Yields (prediction, stacked batch) over `chunks` in batches, using
-    the learner-side model (train=True, so q_adv is populated). Batch axis
+    the learner-side model (train=True, so advantage/q are populated). Batch axis
     is 1, matching the learner's apply_fn. Leaves are host numpy-able jax
     arrays; decode Q_all with decode_q(pred, flat_action_mask) and V as
     pred.value_head.expectation."""
@@ -210,16 +210,10 @@ def forward(
 
 
 def decode_q(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
-    """Q_all = V_all + centred A_all (targets.residual_q), (T, B, A)."""
-    from rl.online.training.targets import residual_q
-
+    """Q = sg(V) + centred A, (T, B, A) — composed in the model since
+    2026-08-25 (heads.compose_q), so this is now just a masked read."""
     return np.asarray(
-        residual_q(
-            pred.q_adv,
-            pred.value_head.expectation,
-            pred.action_head.log_policy,
-            jnp.asarray(flat_action_mask, bool),
-        )
+        jnp.where(jnp.asarray(flat_action_mask, bool), pred.q, 0.0)
     )
 
 

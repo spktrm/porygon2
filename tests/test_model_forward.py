@@ -47,25 +47,24 @@ def test_q_head_forward_shapes(real_model_and_trajectory, real_model_apply):
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
-    for subtree in ("q_adapter", "q_macro_micro", "q_cond_proj", "q_cond_norm"):
+    for subtree in ("policy_head", "advantage_head", "v_head"):
         assert subtree in params["params"]
-    assert "macro_micro_head" in params["params"]
 
     out = real_model_apply(params, actor_input, actor_output, HeadParams())
     T = actor_input.env.done.shape[0]
     A = int(np.prod(actor_input.env.action_mask.shape[-2:]))
-    q_adv = np.asarray(out.q_adv, dtype=np.float32)
-    assert q_adv.shape == (T, A)
-    assert np.isfinite(q_adv).all()
+    adv = np.asarray(out.advantage, dtype=np.float32)
+    assert adv.shape == (T, A)
+    assert np.isfinite(adv).all()
     # At init the head is identically ZERO (e00a388's flat-at-init
     # contract zero-inits every advantage output path), so any test of
     # live geometry has to open the zero paths first — otherwise it
     # passes vacuously.
-    opened = open_zero_init_paths(params, ("q_adapter", "q_macro_micro"))
+    opened = open_zero_init_paths(params, ("advantage_head",))
     out_open = real_model_apply(opened, actor_input, actor_output, HeadParams())
-    q_adv_open = np.asarray(out_open.q_adv, dtype=np.float32)
-    assert np.isfinite(q_adv_open).all()
-    assert q_adv_open.any()
+    adv_open = np.asarray(out_open.advantage, dtype=np.float32)
+    assert np.isfinite(adv_open).all()
+    assert adv_open.any()
     # Full-support log_policy is present in train mode — the Retrace
     # target's expectation bootstrap depends on it.
     assert np.asarray(out.action_head.log_policy).shape[-1] == A
@@ -78,14 +77,14 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(
     regression test for the 2026-08-24 finding: the within-modality
     route must be a single zero-init factor, so a within-modality
     signal reaches its kernels at init WITHOUT the pointer gate having
-    moved. Loss = sum over legal cells of q_adv * (+-1 pattern by rank
+    moved. Loss = sum over legal cells of advantage * (+-1 pattern by rank
     parity within each modality) — pure within-modality by construction."""
     from rl.environment.data import FLAT_MODALITY_MASK
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
     out = real_model_apply(params, actor_input, actor_output, HeadParams())
-    assert not np.asarray(out.q_adv, dtype=np.float32).any()
+    assert not np.asarray(out.advantage, dtype=np.float32).any()
 
     flat = np.asarray(FLAT_MODALITY_MASK)
     pattern = np.zeros(flat.shape, np.float32)
@@ -97,10 +96,10 @@ def test_q_head_is_flat_at_init_and_local_routes_get_gradient(
     def loss(p):
         o = real_model_apply(p, actor_input, actor_output, HeadParams())
         return jnp.sum(
-            o.q_adv.astype(jnp.float32) * jnp.asarray(pattern) * jnp.asarray(legal)
+            o.advantage.astype(jnp.float32) * jnp.asarray(pattern) * jnp.asarray(legal)
         )
 
-    grads = jax.grad(loss)(params)["params"]["q_macro_micro"]
+    grads = jax.grad(loss)(params)["params"]["advantage_head"]["macro_micro"]
     for name in ("micro_local_src", "micro_local_tgt"):
         g = np.asarray(grads[name]["kernel"], dtype=np.float32)
         assert np.isfinite(g).all() and np.abs(g).max() > 0.0, name

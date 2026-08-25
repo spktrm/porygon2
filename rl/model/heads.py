@@ -461,6 +461,153 @@ class PolicyQKHead(nn.Module):
         )
 
 
+class ActionScores(NamedTuple):
+    """One action-axis readout's outputs.
+
+    `logits` is the composed src x tgt grid. `macro` / `micro` are the FREE
+    per-level logits before composition — NeuRD differentiates against these,
+    because the composed grid is already a normalised log-policy and
+    differentiating through the normalisations adds a pi-prefactored
+    cross-term (LESSONS.md section 3, tests/test_neurd_loss.py pins it).
+    """
+
+    logits: jax.Array
+    macro: jax.Array
+    micro: jax.Array
+    flat_valid: jax.Array
+
+
+class ActionScoreHead(nn.Module):
+    """THE action-axis readout: adapter -> macro/micro -> grid composition.
+
+    One module for both families, differing only in `reduce` — the policy and
+    the advantage score the same grid and disagree only about how macro and
+    micro combine:
+
+      reduce="logsumexp"  the hierarchical log-policy. micro becomes a
+                          within-modality log-softmax (per-modality
+                          shift-invariant) and macro, passed as a legal
+                          log-softmax over modalities, owns the modality
+                          contest — so micro confidence can never move the
+                          modality decision through logit magnitude.
+      reduce="mean"       the modality-centred advantage. micro is centred
+                          over each modality's LEGAL cells, so it carries
+                          only within-modality shape and each modality's
+                          LEVEL must flow through the low-dimensional macro
+                          route ("is switching better here").
+
+    Before 2026-08-25 this sequence was open-coded three times — the singles
+    policy, the doubles per-stage scorer and the Q head each rebuilt
+    adapter -> src_valid -> macro/micro -> compose by hand, and drifted.
+
+    `cond` is an optional per-state conditioning vector (the critic's value
+    embedding): projected and normed here, then threaded BOTH into the
+    adapter and into the macro MLP, so the information set reaches every
+    CELL rather than only the modality level.
+    """
+
+    cfg: ConfigDict
+    reduce: str
+
+    @nn.compact
+    def __call__(
+        self,
+        action_embeddings: jax.Array,
+        valid_mask: jax.Array,
+        cond: jax.Array | None = None,
+        temp: float = 1.0,
+    ) -> ActionScores:
+        flat_valid = valid_mask.reshape(*valid_mask.shape[:-2], -1)
+        # A src slot is actionable iff its row has any valid tgt cell.
+        src_valid = valid_mask.any(axis=-1)
+
+        c = None
+        if cond is not None:
+            # Projection/norm in f32 (flax default), cast back so the bf16
+            # grid tensors stay bf16.
+            c = nn.LayerNorm(name="cond_norm")(
+                nn.Dense(action_embeddings.shape[-1], name="cond_proj")(cond)
+            ).astype(action_embeddings.dtype)
+
+        adapted = ActionAdapter(self.cfg.adapter, name="adapter")(
+            action_embeddings, cond=c
+        )
+        macro, micro = MacroMicroHead(self.cfg.macro_micro, name="macro_micro")(
+            adapted, src_valid, cond=c
+        )
+        # num_logits 1: MacroHead already squeezes its single output; the
+        # pointer grid keeps its head axis — drop it so both micro kinds
+        # ride the one scalar composition path.
+        if micro.ndim == flat_valid.ndim + 1:
+            micro = micro.squeeze(-1)
+        if macro.ndim == flat_valid.ndim + 1:
+            macro = macro.squeeze(-1)
+
+        macro = macro.astype(jnp.float32) / temp
+        micro = micro.astype(jnp.float32) / temp
+
+        composed_macro = macro
+        if self.reduce == "logsumexp":
+            modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(
+                NUM_MODALITY_FEATURES
+            )
+            counts = (flat_valid[..., None] & modality_oh).sum(axis=-2)
+            composed_macro = legal_log_policy(macro, counts > 0)
+
+        logits = compose_action_grid(
+            composed_macro, micro, flat_valid, reduce=self.reduce
+        )
+        return ActionScores(
+            logits=logits, macro=macro, micro=micro, flat_valid=flat_valid
+        )
+
+
+def compose_q(
+    value: jax.Array,
+    advantage_raw: jax.Array,
+    log_policy: jax.Array,
+    legal_mask: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """The Q = V + A identity, written once.
+
+        A(s, a) = A_raw(s, a) - E_sg(pi)[A_raw(s, .)]
+        Q(s, a) = sg(V(s)) + A(s, a)
+
+    Returns (advantage, q) over legal cells, zero elsewhere, all f32.
+
+    Two stop-gradients, both load-bearing:
+
+    sg(V) closes the STATE route. Taken-cell supervision is satisfiable by a
+    state-only function (the Step-6 verdict in docs/critic-weakness-analysis.md
+    — the head fit the label to the label-entropy floor in <800 steps while
+    within-state action variance FELL 5x), so every state-level degree of
+    freedom must sit in V where this loss cannot reach it. What is left for
+    the advantage head to explain is the action axis alone.
+
+    sg(pi) stops the Q loss steering the POLICY through the centring term.
+
+    The pi-weighting here is required, and is deliberately NOT the uniform
+    centring compose_action_grid applies within each modality: pi-weighting is
+    what makes E_pi[Q] = V exactly, which is what makes V the correct NeuRD
+    baseline. Doing it at the micro tier instead would put a mass prefactor
+    back on starved cells, which docs/entropy-gradient-pressure.md shows can
+    never restore a dead modality.
+
+    Note what the centring can and cannot do: it conditions the head and pins
+    the level, but it cannot remove a MODALITY offset (a -0.1 on switches at
+    pi(switch) = 0.01 sums to ~0). Unclipped — the Huber loss sees the raw
+    sum, the policy clips to the reward support.
+    """
+    adv = advantage_raw.astype(jnp.float32)
+    pi = jax.lax.stop_gradient(jnp.exp(log_policy.astype(jnp.float32))) * legal_mask
+    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
+    baseline = (pi * jnp.where(legal_mask, adv, 0.0)).sum(axis=-1, keepdims=True)
+    advantage = jnp.where(legal_mask, adv - baseline, 0.0)
+    v = jax.lax.stop_gradient(value.astype(jnp.float32))
+    q = jnp.where(legal_mask, v[..., None] + advantage, 0.0)
+    return advantage, q
+
+
 def compose_action_grid(
     macro: jax.Array, micro: jax.Array, flat_valid_mask: jax.Array, reduce: str
 ) -> jax.Array:

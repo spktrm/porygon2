@@ -123,7 +123,7 @@ def test_train_step_player_q_smoke():
         # The per-module grad-norm loop picks the new modules up by
         # itself; nonzero norm proves the CE loss actually reaches the
         # Q family's MacroMicroHead params.
-        "player_q_macro_micro_gradient_norm",
+        "player_advantage_head_gradient_norm",
         # All-action NeuRD, the policy gradient: loss value plus the
         # signed switch-modality push readout.
         "player_loss_neurd",
@@ -181,7 +181,7 @@ def test_train_step_player_q_smoke():
         "player_q_target_edge_frac",
     ):
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
-    assert float(logs["player_q_macro_micro_gradient_norm"]) > 0.0
+    assert float(logs["player_advantage_head_gradient_norm"]) > 0.0
 
     # NeuRD term finite at the base coefficient; coef 0 is a scalar
     # multiply (finiteness at that end is hierarchical_neurd's unit test),

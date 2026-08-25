@@ -284,15 +284,15 @@ def modality_means(q: jax.Array, legal_mask: jax.Array) -> jax.Array:
 
 _Q_HEAD_LEAVES = {
     "player_q_micro_kernel_rms": (
-        ("q_macro_micro", "micro", "Dense_0", "kernel"),
-        ("q_macro_micro", "micro", "Dense_1", "kernel"),
+        ("advantage_head", "macro_micro", "micro", "Dense_0", "kernel"),
+        ("advantage_head", "macro_micro", "micro", "Dense_1", "kernel"),
     ),
-    "player_q_macro_out_rms": (("q_macro_micro", "macro", "Dense_0", "kernel"),),
-    "player_q_adapter_out_rms": (("q_adapter", "Dense_0", "kernel"),),
+    "player_q_macro_out_rms": (("advantage_head", "macro_micro", "macro", "Dense_0", "kernel"),),
+    "player_q_adapter_out_rms": (("advantage_head", "adapter", "Dense_0", "kernel"),),
 }
 _Q_HEAD_GRAD_SUBTREES = {
-    "player_q_grad_norm_micro": ("q_macro_micro", "micro"),
-    "player_q_grad_norm_macro": ("q_macro_micro", "macro"),
+    "player_q_grad_norm_micro": ("advantage_head", "macro_micro", "micro"),
+    "player_q_grad_norm_macro": ("advantage_head", "macro_micro", "macro"),
 }
 
 
@@ -311,13 +311,13 @@ def q_head_param_telemetry(params, grads) -> dict[str, jax.Array]:
     variable dicts (top-level "params" collection)."""
     p, g = params["params"], grads["params"]
     logs = {}
-    gate = jnp.asarray(_get(p, ("q_macro_micro", "micro_scale")), jnp.float32)
+    gate = jnp.asarray(_get(p, ("advantage_head", "macro_micro", "micro_scale")), jnp.float32)
     for i, name in enumerate(("move", "switch", "target")):
         logs[f"player_q_micro_scale_{name}"] = gate[i]
     # Policy micro type_scale (2026-08-25): with the gram rms-normalised
     # this IS the micro logit scale — watch it regrow from the crushed
     # 1e-4 without the gradient blowing up.
-    pol = jnp.asarray(_get(p, ("macro_micro_head", "micro", "type_scale")), jnp.float32)
+    pol = jnp.asarray(_get(p, ("policy_head", "macro_micro", "micro", "type_scale")), jnp.float32)
     for i, name in enumerate(("move", "switch", "target")):
         logs[f"player_policy_type_scale_{name}"] = pol[i]
     for key, paths in _Q_HEAD_LEAVES.items():

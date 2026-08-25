@@ -183,30 +183,6 @@ def ref_penalised_q(
     return jnp.where(legal_mask, q_all - penalty, 0.0)
 
 
-def residual_q(
-    adv: jax.Array, v: jax.Array, log_policy: jax.Array, legal_mask: jax.Array
-) -> jax.Array:
-    """Residual Q composition (Step 3, docs/critic-weakness-analysis.md):
-    Q(s, a) = V(s) + A(s, a) - sum_a' pi(a'|s) A(s, a') over legal cells.
-
-    V is the rung's state-value readout (the v_head's expectation for
-    Q_all, the private value rung's for Q_private) — stop-gradient at the
-    call site, so a state-level offset can live ONLY in V and the head's
-    per-cell output carries the action axis alone. The pi-centring keeps
-    the identity E_pi[Q] = V exactly (the NeuRD baseline is then V) and
-    conditions the head; it cannot remove a modality offset (a -0.1 on
-    switches at pi(switch) = 0.01 sums to ~0). Unclipped: the Huber loss
-    sees the raw sum, the policy clips to the reward support. Illegal
-    cells read 0. All f32.
-    """
-    adv = adv.astype(jnp.float32)
-    pi = jnp.exp(log_policy.astype(jnp.float32)) * legal_mask
-    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
-    baseline = (pi * jnp.where(legal_mask, adv, 0.0)).sum(axis=-1, keepdims=True)
-    q = v.astype(jnp.float32)[..., None] + adv - baseline
-    return jnp.where(legal_mask, q, 0.0)
-
-
 def compute_q_onestep_targets(
     batch: Batch, v_target: jax.Array, config: Porygon2LearnerConfig
 ) -> jax.Array:

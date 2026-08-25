@@ -22,17 +22,16 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import (
-    ActionAdapter,
+    ActionScoreHead,
     CategoricalValueLogitHead,
     HeadParams,
-    MacroMicroHead,
     SlotConditioning,
     calculate_hierarchical_prior,
-    compose_action_grid,
+    compose_q,
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.utils import get_num_params, legal_log_policy
+from rl.model.utils import get_num_params
 
 
 def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
@@ -44,42 +43,32 @@ class Porygon2PlayerModel(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
+        """Four modules, and two of them are the same class.
+
+        The action axis is read exactly twice — once as a policy, once as an
+        advantage — and both readouts are ActionScoreHead over the SAME
+        src x tgt grid, differing only in how macro and micro compose
+        (`reduce`). The state axis is read once, by v_head. That is the whole
+        model surface; everything else is composition.
+
+        The two ActionScoreHeads do NOT share parameters. The advantage
+        head's loss would otherwise reshape the live policy geometry
+        directly — each family reads the trunk through its own adapter, so
+        the trunk still receives both gradients while the head-specific
+        geometry stays decoupled.
+        """
         self.encoder = Encoder(self.cfg.encoder)
-        # Typed action streams (2026-08-17): the trunk carries move /
-        # switch / target slots as separate residual streams, so the
-        # within-modality readout is a parameter-less dot grid and the
-        # modality head pools typed spaces — depth lives in the trunk,
-        # not in per-modality head stacks. Since 2026-08-20 the macro +
-        # micro pair is one shared MacroMicroHead (the Q critic
-        # instantiates the same module below), read through an owned
-        # ActionAdapter: zero-init residual, exact identity at init/fresh
-        # reload, so the parameter-free micro dot grid no longer rides
-        # directly on embeddings the Q head's CE is also shaping.
-        self.macro_micro_head = MacroMicroHead(self.cfg.macro_micro)
-        self.policy_adapter = ActionAdapter(self.cfg.policy_adapter)
-        # The one critic (2026-08-25): the all/private/public ladder is
-        # gone with the opponent sheet, so there is a single V on the
-        # deploy-time information set — the same one the policy acts from.
+        self.policy_head = ActionScoreHead(
+            self.cfg.policy_head, reduce="logsumexp", name="policy_head"
+        )
+        self.advantage_head = ActionScoreHead(
+            self.cfg.advantage_head, reduce="mean", name="advantage_head"
+        )
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
-            # is called, so singles checkpoints are unaffected; a future
-            # doubles resume via load-mode "params" fresh-inits this.
+            # is called, so singles checkpoints are unaffected.
             self.slot_conditioning = SlotConditioning()
-        # All-action advantage head (docs/q-critic-plan.md), STRUCTURAL
-        # since 2026-08-20 — no enable flag, every consumer assumes it
-        # exists. Same module stack as the policy on the critic side: an
-        # owned ActionAdapter (the projected value conditioning
-        # concatenated in, so the information set reaches every CELL, not
-        # just the macro level) into a MacroMicroHead, composed via
-        # compose_action_grid. ONE rung since 2026-08-25 — the privileged
-        # Q_all rung is gone, so this head's information set is the
-        # policy's. Learner-only (train gate in __call__); never sampled
-        # from.
-        self.q_cond_proj = nn.Dense(self.cfg.entity_size)
-        self.q_cond_norm = nn.LayerNorm()
-        self.q_adapter = ActionAdapter(self.cfg.q_head.adapter)
-        self.q_macro_micro = MacroMicroHead(self.cfg.q_head.macro_micro)
 
     def _calculate_entropy_metrics(
         self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
@@ -154,6 +143,39 @@ class Porygon2PlayerModel(nn.Module):
             action_embeddings, valid_mask, head, train, temp
         )
 
+    def _score_and_sample(
+        self,
+        action_embeddings: jax.Array,
+        valid_mask: jax.Array,
+        given_index: jax.Array | None,
+        temp: float,
+    ):
+        """Score one decision grid and pick an action.
+
+        THE policy scoring path — singles calls it once, doubles calls it
+        once per stage with shared params. `given_index` teacher-forces the
+        stored choice so the learner's recompute conditions on what the
+        actor actually did; None samples.
+
+        Behaviour policy mu == pi, with illegal cells at the dtype's min so
+        the sampler can never draw one.
+        """
+        scores = self.policy_head(action_embeddings, valid_mask, temp=temp)
+        pi_logits = jnp.where(scores.flat_valid, scores.logits, -1e9)
+        metrics = compute_policy_metrics(
+            logits=pi_logits,
+            valid_mask=scores.flat_valid,
+            prior=calculate_hierarchical_prior(scores.flat_valid),
+        )
+        log_mu = _sampling_log_policy(metrics.log_policy, scores.flat_valid)
+        action_index = (
+            given_index
+            if given_index is not None
+            else sample_categorical(log_mu, self.make_rng("sampling"))
+        )
+        log_prob = jnp.take(log_mu, action_index, axis=-1)
+        return scores, metrics, action_index, log_prob
+
     def _forward_single_slot(
         self,
         action_embeddings: jax.Array,
@@ -162,123 +184,28 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
     ):
-        flat_valid_mask = valid_mask.reshape(-1)
-
-        action_embeddings = self.policy_adapter(action_embeddings)
-        # A src slot is actionable iff its row has any valid tgt cell.
-        src_valid = valid_mask.any(axis=-1)
-        macro_logits, square_logits = self.macro_micro_head(
-            action_embeddings, src_valid
+        scores, metrics, action_index, log_prob = self._score_and_sample(
+            action_embeddings, valid_mask, head.action_index if train else None, temp
         )
-        square_logits = square_logits.astype(jnp.float32) / temp
-
-        # Hierarchical composition (compose_action_grid, logsumexp reduce):
-        # a macro softmax over modalities times a micro softmax within each
-        # modality, multiplied in log space. The macro logits come from a
-        # dedicated head over per-modality pooled src embeddings rather
-        # than a mean-pool of the square logits, so the gram logits only
-        # ever receive within-modality (per-modality shift-invariant)
-        # gradient — micro confidence cannot move the modality contest
-        # through logit magnitude. The policy gradient still splits into a
-        # within-modality term and a modality-level term like the
-        # hierarchical multi-head did.
-        modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
-        modality_counts = (flat_valid_mask[:, None] & modality_oh).sum(axis=0)
-
-        macro_logits = macro_logits.astype(jnp.float32) / temp
-        log_macro_policy = legal_log_policy(macro_logits, modality_counts > 0)
-
-        pi_logits = jnp.where(
-            flat_valid_mask,
-            compose_action_grid(
-                log_macro_policy, square_logits, flat_valid_mask, reduce="logsumexp"
-            ),
-            -1e9,
-        )
-
-        prior = calculate_hierarchical_prior(flat_valid_mask)
-        policy_metrics = compute_policy_metrics(
-            logits=pi_logits, valid_mask=flat_valid_mask, prior=prior
-        )
-        # Behaviour policy mu == pi; illegal cells carry the dtype's min so
-        # the sampler never draws them.
-        log_mu = _sampling_log_policy(policy_metrics.log_policy, flat_valid_mask)
-
-        if train:
-            action_index = head.action_index
-        else:
-            action_index = sample_categorical(log_mu, self.make_rng("sampling"))
-
-        log_prob = jnp.take(log_mu, action_index, axis=-1)
-
         mask_width = valid_mask.shape[-1]
-        src_index = action_index // mask_width
-        tgt_index = action_index % mask_width
-
-        normalized_modality_entropy = self._calculate_entropy_metrics(
-            policy_metrics, flat_valid_mask
-        )
-
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
-            # Full support only in the learner: the magnet KL needs both
-            # distributions; actors skip it so replay transitions stay small.
-            log_policy=policy_metrics.log_policy if self.cfg.train else (),
-            macro_logits=macro_logits if self.cfg.train else (),
-            micro_logits=square_logits if self.cfg.train else (),
-            src_index=src_index,
-            tgt_index=tgt_index,
-            entropy=policy_metrics.entropy,
-            normalized_entropy=policy_metrics.normalized_entropy,
-            magnet_kl=policy_metrics.magnet_kl,
-            normalized_modality_entropy=normalized_modality_entropy,
-        )
-
-    def _score_stage(
-        self,
-        action_embeddings: jax.Array,
-        valid_mask: jax.Array,
-        given_index: jax.Array | None,
-        temp: float,
-    ):
-        """One decision stage of the doubles path: score the grid with the
-        per-modality heads (params shared across stages), compose with the
-        macro head, and pick an action — teacher-forced when given_index is
-        provided so the learner's recompute conditions on the stored
-        choice."""
-        flat_valid_mask = valid_mask.reshape(-1)
-        action_embeddings = self.policy_adapter(action_embeddings)
-        src_valid = valid_mask.any(axis=-1)
-        macro_logits, square_logits = self.macro_micro_head(
-            action_embeddings, src_valid
-        )
-        square_logits = square_logits.astype(jnp.float32) / temp
-
-        modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
-        modality_counts = (flat_valid_mask[:, None] & modality_oh).sum(axis=0)
-
-        macro_logits = macro_logits.astype(jnp.float32) / temp
-        log_macro_policy = legal_log_policy(macro_logits, modality_counts > 0)
-
-        pi_logits = jnp.where(
-            flat_valid_mask,
-            compose_action_grid(
-                log_macro_policy, square_logits, flat_valid_mask, reduce="logsumexp"
+            # Full support and the free per-level logits only in the
+            # learner: NeuRD differentiates against macro/micro, actors
+            # skip them so replay transitions stay small.
+            log_policy=metrics.log_policy if self.cfg.train else (),
+            macro_logits=scores.macro if self.cfg.train else (),
+            micro_logits=scores.micro if self.cfg.train else (),
+            src_index=action_index // mask_width,
+            tgt_index=action_index % mask_width,
+            entropy=metrics.entropy,
+            normalized_entropy=metrics.normalized_entropy,
+            magnet_kl=metrics.magnet_kl,
+            normalized_modality_entropy=self._calculate_entropy_metrics(
+                metrics, scores.flat_valid
             ),
-            -1e9,
         )
-        prior = calculate_hierarchical_prior(flat_valid_mask)
-        policy_metrics = compute_policy_metrics(
-            logits=pi_logits, valid_mask=flat_valid_mask, prior=prior
-        )
-        log_mu = _sampling_log_policy(policy_metrics.log_policy, flat_valid_mask)
-        if given_index is not None:
-            action_index = given_index
-        else:
-            action_index = sample_categorical(log_mu, self.make_rng("sampling"))
-        log_prob = jnp.take(log_mu, action_index, axis=-1)
-        return flat_valid_mask, policy_metrics, action_index, log_prob
 
     def _apply_choice_collision(self, valid_mask: jax.Array, action_index: jax.Array):
         """Slot-2 legality given slot 1's choice: both mons cannot switch
@@ -324,9 +251,10 @@ class Porygon2PlayerModel(nn.Module):
         is the remaining doubles workstream; the model side is complete.
         """
         stage1_given = head.action_index[0] if train else None
-        flat_valid_1, metrics_1, index_1, log_prob_1 = self._score_stage(
+        scores_1, metrics_1, index_1, log_prob_1 = self._score_and_sample(
             action_embeddings, valid_mask[0], stage1_given, temp
         )
+        flat_valid_1 = scores_1.flat_valid
 
         mask_width = valid_mask.shape[-1]
         cond_embeddings = self.slot_conditioning(
@@ -334,9 +262,10 @@ class Porygon2PlayerModel(nn.Module):
         )
         mask_2 = self._apply_choice_collision(valid_mask[1], index_1)
         stage2_given = head.action_index[1] if train else None
-        flat_valid_2, metrics_2, index_2, log_prob_2 = self._score_stage(
+        scores_2, metrics_2, index_2, log_prob_2 = self._score_and_sample(
             cond_embeddings, mask_2, stage2_given, temp
         )
+        flat_valid_2 = scores_2.flat_valid
 
         action_index = jnp.stack([index_1, index_2])
         # Diagnostic average of the per-stage values (a true joint version
@@ -383,30 +312,6 @@ class Porygon2PlayerModel(nn.Module):
         """value_embeddings: (4 * entity_size,)."""
         return self.v_head(value_embeddings)
 
-    def _forward_q_head(
-        self, action_embeddings: jax.Array, cond: jax.Array, valid_mask: jax.Array
-    ) -> jax.Array:
-        """The all-action readout over the flat action grid: (..., N * N)
-        scalar RAW advantage logits (uncentred — targets.residual_q
-        composes Q = V + A - E_pi[A]). cond is the pooled value embedding,
-        i.e. the critic's — and the policy's — information set.
-        Projection/norm in f32 (flax default), cast back so the bf16 grid
-        tensors stay bf16.
-        """
-        c = self.q_cond_norm(self.q_cond_proj(cond)).astype(action_embeddings.dtype)
-        adapted = self.q_adapter(action_embeddings, cond=c)
-        src_valid = valid_mask.any(axis=-1)
-        macro, micro = self.q_macro_micro(adapted, src_valid, cond=c)
-        flat_valid_mask = valid_mask.reshape(*valid_mask.shape[:-2], -1)
-        # num_logits 1: MacroHead already squeezes its single output; the
-        # pointer grid keeps its head axis — drop it so both ride the
-        # scalar composition path (the policy's own shape contract).
-        if micro.ndim == flat_valid_mask.ndim + 1:
-            micro = micro.squeeze(-1)
-        if macro.ndim == flat_valid_mask.ndim + 1:
-            macro = macro.squeeze(-1)
-        return compose_action_grid(macro, micro, flat_valid_mask, reduce="mean")
-
     def get_head_outputs(
         self,
         action_embeddings: jax.Array,
@@ -447,18 +352,25 @@ class Porygon2PlayerModel(nn.Module):
         )(action_embeddings, value_embeddings, actor_input.env, actor_output)
 
         if self.cfg.train:
-            # All-action residual readout over the flat action grid —
-            # (T, N*N) scalar raw advantages, learner-only so replay
-            # transitions stay small. Labels and the Q composition live
-            # learner-side; the policy reads the TARGET net's advantage as
-            # stop-gradient scalars only.
-            outputs = outputs.replace(
-                q_adv=self._forward_q_head(
-                    action_embeddings,
-                    value_embeddings,
-                    actor_input.env.action_mask,
-                ),
+            # Q = V + A, composed HERE — one place, next to the heads that
+            # produce the two terms, rather than reassembled at four call
+            # sites in the learner. Learner-only: actors never read Q, so
+            # replay transitions stay small.
+            #
+            # The advantage head runs with T leading (no vmap) — every
+            # module on this path takes arbitrary leading batch dims.
+            raw = self.advantage_head(
+                action_embeddings,
+                actor_input.env.action_mask,
+                cond=value_embeddings,
             )
+            advantage, q = compose_q(
+                outputs.value_head.expectation,
+                raw.logits,
+                outputs.action_head.log_policy,
+                raw.flat_valid,
+            )
+            outputs = outputs.replace(advantage=advantage, q=q)
         return outputs
 
 
