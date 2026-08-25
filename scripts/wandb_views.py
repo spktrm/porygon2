@@ -465,6 +465,31 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # Policy-head param drift (2026-08-26): the dx65cpwp
+                    # micro runaway lived here — local_tgt 0.0028 -> 0.070,
+                    # adapter 0.006 -> 0.105 — with no panel watching.
+                    # Healthy O(0.005); a march toward 0.07 is the runaway
+                    # re-forming. tgt/src split: coherent tgt-column
+                    # accumulation was the 7.5x diagnostic asymmetry.
+                    "Policy head: param drift from init",
+                    [
+                        "player_policy_micro_local_tgt_rms",
+                        "player_policy_micro_local_src_rms",
+                        "player_policy_adapter_rms",
+                    ],
+                ),
+                lp(
+                    # Pre-clip grad norm per policy-head subtree, the
+                    # NeuRD pathway's own gradient scale (the Q-head pair
+                    # below stayed calm through both dx65cpwp failures).
+                    "Policy head: grad norm by subtree",
+                    [
+                        "player_policy_grad_norm_micro",
+                        "player_policy_grad_norm_macro",
+                        "player_policy_head_gradient_norm",
+                    ],
+                ),
+                lp(
                     # Pre-clip grad norm per Q-head subtree. micro ≪
                     # macro = the loss is finding the modality offset
                     # but not the cells.

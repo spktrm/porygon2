@@ -294,6 +294,30 @@ _Q_HEAD_GRAD_SUBTREES = {
     "player_q_grad_norm_macro": (*_ADV, "macro"),
 }
 
+# Policy-head mirrors (2026-08-26). The dx65cpwp micro runaway lived
+# entirely in these params — micro_local_tgt 0.0028 -> 0.070 rms, the
+# adapter out kernel 0.0058 -> 0.105 — and was invisible on wandb: the
+# diagnosis needed checkpoint forensics. src/tgt split deliberately: the
+# 7.5x tgt-over-src growth asymmetry (a tgt column is read by every legal
+# move cell of a row) was itself the diagnostic.
+_POLICY = ("policy_head", "macro_micro")
+_POLICY_HEAD_LEAVES = {
+    "player_policy_micro_local_src_rms": (
+        (*_POLICY, "micro", "micro_local_src", "kernel"),
+    ),
+    "player_policy_micro_local_tgt_rms": (
+        (*_POLICY, "micro", "micro_local_tgt", "kernel"),
+    ),
+    "player_policy_adapter_rms": (
+        ("policy_head", "adapter", "Dense_0", "kernel"),
+        ("policy_head", "adapter", "MLP_0", "Dense_0", "bias"),
+    ),
+}
+_POLICY_HEAD_GRAD_SUBTREES = {
+    "player_policy_grad_norm_micro": (*_POLICY, "micro"),
+    "player_policy_grad_norm_macro": (*_POLICY, "macro"),
+}
+
 
 def _get(tree, path):
     for k in path:
@@ -301,12 +325,14 @@ def _get(tree, path):
     return tree
 
 
-def q_head_param_telemetry(params, grads) -> dict[str, jax.Array]:
-    """Learner-side readouts of the residual Q head's learning
-    (2026-08-24): the three-scalar zero-init micro gate (move / switch /
-    target slot groups), rms of the zero-init out layers and the pointer
+def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
+    """Learner-side readouts of BOTH action heads' learning: the
+    three-scalar zero-init micro gates (move / switch / target slot
+    groups), rms of the zero-init out layers, local routes and pointer
     q/k kernels (drift from init: 0 / 0 / 0.0625 lecun at fan-in 256),
-    and pre-clip grad norms per subtree. `params`/`grads` are the flax
+    and pre-clip grad norms per subtree. Q-head leaves 2026-08-24;
+    policy-head mirrors 2026-08-26 after the dx65cpwp micro runaway grew
+    25x in params no panel watched. `params`/`grads` are the flax
     variable dicts (top-level "params" collection)."""
     p, g = params["params"], grads["params"]
     logs = {}
@@ -321,12 +347,12 @@ def q_head_param_telemetry(params, grads) -> dict[str, jax.Array]:
     )
     for i, name in enumerate(("move", "switch", "target")):
         logs[f"player_policy_type_scale_{name}"] = pol[i, 0]
-    for key, paths in _Q_HEAD_LEAVES.items():
+    for key, paths in {**_Q_HEAD_LEAVES, **_POLICY_HEAD_LEAVES}.items():
         leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
         logs[key] = jnp.mean(
             jnp.stack([jnp.sqrt(jnp.mean(jnp.square(x))) for x in leaves])
         )
-    for key, path in _Q_HEAD_GRAD_SUBTREES.items():
+    for key, path in {**_Q_HEAD_GRAD_SUBTREES, **_POLICY_HEAD_GRAD_SUBTREES}.items():
         logs[key] = optax.global_norm(_get(g, path))
     return logs
 

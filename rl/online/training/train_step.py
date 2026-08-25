@@ -44,10 +44,10 @@ from rl.online.training.telemetry import (
     calculate_r2,
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
+    head_param_telemetry,
     modality_means,
     promote_map,
     q_fit_telemetry,
-    q_head_param_telemetry,
 )
 from rl.utils import average
 
@@ -1021,7 +1021,7 @@ def train_step(
             # kernels, and per-subtree grad norms (pre-clip). A micro
             # kernel rms sitting at its lecun init (0.0625 at fan-in 256)
             # with a flat gate = the within-modality route never trained.
-            **q_head_param_telemetry(prev_player_state.params, player_grads),
+            **head_param_telemetry(prev_player_state.params, player_grads),
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
             ),
