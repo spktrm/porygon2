@@ -137,6 +137,32 @@ TypeScript game service speaking protobuf over websockets.
   proves the test could fail.
 - **Structure-only changes must be bit-identical**; anything that moves a
   number is a separate commit carrying its reasoning.
+- **Diff against the reference implementation before inventing** (worked
+  example: the 2026-08-26 dx65cpwp runaway, lesson 3). For any update rule
+  with a published reference (rnad.py, NashPG, AlphaStar), enumerate every
+  discrepancy FIRST — details that read as incidental (Adam b1=0, a clip
+  applied after all corrections, centred logits) are usually the stability
+  machinery, load-bearing precisely because nothing in the paper flags them.
+  Invented mechanisms come after the reference diff is exhausted, and enter
+  the plan as fallbacks, not steps.
+- **Any new force on the logits answers four questions before it lands:**
+  (1) is the total per-cell force bounded after every analytic shift, or does
+  some input (e.g. `-log pi` as pi → 0) grow without bound? (2) what opposes
+  its component along the softmax-invariant mean direction — pi prefactor,
+  decay, clip, or nothing? (3) what does optimiser momentum do to it near the
+  stiff equilibrium it creates? (4) which shared high-gain routes does it
+  flow through (residual adapters, columns read by every cell of a row), and
+  is their param drift on a wandb panel BEFORE launch? An unanswered
+  question is the dx65cpwp runaway shape; the panels exist because that
+  diagnosis needed checkpoint forensics wandb could not provide.
+- **A coefficient cut that only delays onset is falsified.** Two eras hitting
+  the SAME diseased param attractor from coefficients 5x apart means the
+  mechanism is wrong, not the scale — stop retuning and find the structural
+  cause.
+- **Keep the matched control.** An architecturally identical module under a
+  different loss (the advantage head beside the policy head) is the
+  architecture-vs-pathway discriminator; without it the dx65cpwp diagnosis
+  would have blamed the head design.
 
 ## Conventions
 
