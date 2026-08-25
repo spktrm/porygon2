@@ -57,7 +57,9 @@ KL, epsilon ladder, critic-disagreement — as reward and as UCB selection) all
 collapsed switching at ~13k, and the critic diagnosis said why — it was correctly
 learning Q^π of a policy under which switching IS worse, so sampling switches more
 only confirmed it. What the search-free self-play successes (DeepNash) did instead
-is a reward transform against a MOVING reference policy that enters the values.
+is a penalty against a MOVING reference policy. DeepNash routes it through the
+values; NashPG (2025) shows the policy objective alone is enough, and that is
+what survives here — see the ledger row below.
 
 | mechanism | paths / symbols deleted | removed in | why it went |
 |---|---|---|---|
@@ -65,6 +67,7 @@ is a reward transform against a MOVING reference policy that enters the values.
 | Critic-ensemble intrinsic reward | `EnsembleValueLogitHead`, `v_ens_head`/`v_int_head`, `compute_intrinsic_targets`, `IntrinsicTargets`, `int_rms` state leaf, 8 config fields, panels, `tests/test_intrinsic_reward.py` | `114ff5c` | int_reward switch/move pinned at 1.0 as an observer — disagreement never concentrated on post-switch states; Chen 2017 already rated disagreement-as-reward below UCB selection |
 | Magnet KL | `loss_magnet_kl`, `magnet_log_policy`, `player_magnet_kl_coef` (+ its 50-line tuning history), `player_loss_magnet_kl` panel | `4254a1f` | gradient-side KL(π‖prior) carries a π prefactor (docs/entropy-gradient-pressure.md) — cannot refill a dead modality; its 0.05→0.1→0.2→0.05→0.1 ladder was compensation for a supply problem it could not fix |
 | Epsilon explore ladder | `HeadParams.mix`, `behaviour_log_policy`, `Trajectory.explore`, `own_rows` gating (league cadence, builder, replay controller, the `_own` KL variant), `explore_game_prob`/`explore_eps_range`, per-game explore Agent path, `player_q_explore_*` panels, `tests/test_behaviour_mix.py` | `92b06c4` | random switches lose (explore-row post-switch return ~0.3 below post-move for the whole collapse), so behaviour-side coverage taught the critic switching is bad faster; R-NaD's penalty is the exploration mechanism and every game plays π |
+| R-NaD reward transform (reg-value stream) | `reg_v_head`, `PlayerActorOutput.reg_value`, `PlayerTargets.reg_returns`, `compute_reg_returns`, `reg_reward`/`reg_v_target`, the `V_win + V_reg` Q bootstrap on both rungs, `loss_v_reg`, `player_reg_value_coef`, panels `player_reg_value_mean`/`player_reg_reward_mean`/`player_loss_v_reg` | `27053a6` | NashPG (arXiv:2510.18183) matches R-NaD's exploitability with the own-side KL in the POLICY objective and NO reward transform, at α=0.2 and a comparable reference-reset period; V_reg shifted every cell of the Q base identically so it cancelled exactly in the NeuRD centring, and no panel could have shown an action-axis effect (reg_value_mean −0.042 against ±1). The reference's measured contribution is the immediate analytic term alone — switch tilt +0.030 = 0.55σ of the NeuRD advantage — and that is kept |
 
 ## 1. Shapes, compilation, OOM
 
