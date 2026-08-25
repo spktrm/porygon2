@@ -2,7 +2,7 @@
 the dtype promotion the loss path uses.
 """
 
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import chex
 import jax
@@ -370,6 +370,64 @@ def masked_r2(pred: jax.Array, target: jax.Array, mask: jax.Array) -> jax.Array:
     return jnp.where(m & (ss_total > 1e-4), calculate_r2(pred, target, mask), jnp.nan)
 
 
+class ActionAxisMasks(NamedTuple):
+    """The switch/move row and cell predicates, derived ONCE.
+
+    This block used to be written out three times — twice in train_step
+    (the Q diagnostics and again inside player_loss_fn) and once here — and
+    the copies had DRIFTED. `has_both` required a legal switch AND a legal
+    MOVE; the NeuRD copy required a legal switch and any legal NON-switch,
+    which also admits WILDCARD / OTHER / TARGET cells. Both called
+    themselves "a switch and a non-switch are both legal", so the
+    `player_neurd_*` and `player_q_*` families were scoped to different row
+    populations while CLAUDE.md 3's decision rule reads one against the
+    other (`absadv_ratio` against `player_q_switch_target_frac`).
+
+    Unified 2026-08-25 on the STRICT reading: a stay/switch decision only
+    means something when staying and attacking is actually available, so a
+    row offering {switch, pass} is not a real choice. This narrows the
+    NeuRD slice; the Q slice is unchanged.
+
+    Row predicates are returned bare — each consumer combines them with its
+    own row mask (`q_mask` for the critic panels, `policy_mask` for the
+    policy loss), because those differ deliberately: policy_mask drops
+    forced single-option rows, q_mask keeps them.
+    """
+
+    switch_cells: jax.Array
+    move_cells: jax.Array
+    valid_switch: jax.Array
+    valid_move: jax.Array
+    has_switch: jax.Array
+    has_move: jax.Array
+    has_both: jax.Array
+    taken_switch: jax.Array
+
+
+def action_axis_masks(
+    flat_action_mask: jax.Array, action_index: jax.Array
+) -> ActionAxisMasks:
+    """See ActionAxisMasks. `has_both` is THE real-choice predicate."""
+    switch_cells = jnp.asarray(
+        FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
+    )
+    move_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE)
+    valid_switch = flat_action_mask & switch_cells
+    valid_move = flat_action_mask & move_cells
+    has_switch = valid_switch.any(axis=-1)
+    has_move = valid_move.any(axis=-1)
+    return ActionAxisMasks(
+        switch_cells=switch_cells,
+        move_cells=move_cells,
+        valid_switch=valid_switch,
+        valid_move=valid_move,
+        has_switch=has_switch,
+        has_move=has_move,
+        has_both=has_switch & has_move,
+        taken_switch=jnp.take(switch_cells, action_index),
+    )
+
+
 def critic_outcome_telemetry(
     *,
     game_outcome: jax.Array,
@@ -381,7 +439,7 @@ def critic_outcome_telemetry(
     q_taken: jax.Array,
     q_all: jax.Array,
     flat_action_mask: jax.Array,
-    action_index: jax.Array,
+    masks: ActionAxisMasks,
     q_mask: jax.Array,
     value_mask: jax.Array,
 ) -> dict[str, jax.Array]:
@@ -421,17 +479,9 @@ def critic_outcome_telemetry(
     q_taken = q_taken.astype(f32)
     q_all = q_all.astype(f32)
 
-    switch_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH)
-    move_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE)
-    valid_switch = flat_action_mask & switch_cells
-    valid_move = flat_action_mask & move_cells
-    has_move = valid_move.any(axis=-1)
-    has_switch = valid_switch.any(axis=-1)
-    has_both = has_move & has_switch
-    taken_switch = jnp.take(switch_cells, action_index)
-    vol_mask = q_mask & taken_switch & has_move
-    forced_mask = q_mask & taken_switch & jnp.logical_not(has_move)
-    move_mask = q_mask & jnp.logical_not(taken_switch)
+    vol_mask = q_mask & masks.taken_switch & masks.has_move
+    forced_mask = q_mask & masks.taken_switch & jnp.logical_not(masks.has_move)
+    move_mask = q_mask & jnp.logical_not(masks.taken_switch)
 
     logs: dict[str, jax.Array] = {}
     for name, m in (
@@ -456,12 +506,12 @@ def critic_outcome_telemetry(
         w = cells.astype(f32)
         return (q_all * w).sum(-1) / jnp.maximum(w.sum(-1), 1.0)
 
-    critic_gap = mean_over(valid_switch) - mean_over(valid_move)
-    rows = q_mask & valid_g & has_both
+    critic_gap = mean_over(masks.valid_switch) - mean_over(masks.valid_move)
+    rows = q_mask & valid_g & masks.has_both
     for i, (lo, hi) in enumerate(zip(MATCHED_V_EDGES[:-1], MATCHED_V_EDGES[1:])):
         b = rows & (v_target >= lo) & (v_target < hi)
-        bv = b & taken_switch
-        bm = b & jnp.logical_not(taken_switch)
+        bv = b & masks.taken_switch
+        bm = b & jnp.logical_not(masks.taken_switch)
         g_vol = masked_mean(G, bv)
         g_move = masked_mean(G, bm)
         logs[f"player_mv_bin{i}_n_vol"] = bv.sum().astype(f32)
@@ -471,12 +521,12 @@ def critic_outcome_telemetry(
         logs[f"player_mv_bin{i}_gap_realised"] = g_vol - g_move
         logs[f"player_mv_bin{i}_gap_critic"] = masked_mean(critic_gap, b)
     logs["player_mv_pooled_gap_realised"] = masked_mean(
-        G, rows & taken_switch
-    ) - masked_mean(G, rows & jnp.logical_not(taken_switch))
+        G, rows & masks.taken_switch
+    ) - masked_mean(G, rows & jnp.logical_not(masks.taken_switch))
     logs["player_mv_pooled_gap_critic"] = masked_mean(critic_gap, rows)
-    logs["player_mv_v_at_vol_switch"] = masked_mean(v_target, rows & taken_switch)
+    logs["player_mv_v_at_vol_switch"] = masked_mean(v_target, rows & masks.taken_switch)
     logs["player_mv_v_at_move"] = masked_mean(
-        v_target, rows & jnp.logical_not(taken_switch)
+        v_target, rows & jnp.logical_not(masks.taken_switch)
     )
 
     vm = value_mask & valid_g
@@ -499,10 +549,10 @@ def critic_outcome_telemetry(
     def shift(x):
         return jnp.concatenate([jnp.zeros_like(x[:1]), x[:-1]], axis=0)
 
-    prev_switch = shift(taken_switch)
-    prev_forced = shift(taken_switch & jnp.logical_not(has_move))
-    prev_voluntary = shift(taken_switch & has_move)
-    known_prev = (t_idx >= 1) & jnp.ones_like(taken_switch)
+    prev_switch = shift(masks.taken_switch)
+    prev_forced = shift(masks.taken_switch & jnp.logical_not(masks.has_move))
+    prev_voluntary = shift(masks.taken_switch & masks.has_move)
+    known_prev = (t_idx >= 1) & jnp.ones_like(masks.taken_switch)
     for name, m in (
         ("prev_switch", prev_switch),
         ("prev_forced", prev_forced),

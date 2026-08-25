@@ -17,9 +17,6 @@ from rl.environment.protos.features_pb2 import EntityRevealedNodeFeature, FieldF
 
 logger = logging.getLogger(__name__)
 
-# Why a snapshot was added to the league. "dominant" is the healthy path
-# (the agent beat its own history); "overdue" means only the frame budget
-
 
 def _chunk_required_shape(traj: Trajectory) -> tuple[int, int]:
     """Smallest (chunk_rows, history_rows) this chunk fits LOSSLESSLY.

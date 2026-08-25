@@ -40,18 +40,6 @@ class BuilderTrajectoryStore:
         self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
     @classmethod
-    def from_trajectories(
-        cls,
-        trajectories: list[BuilderTransition],
-        max_size: int = 1000,
-        max_reuses: int = 5,
-    ):
-        """Initializes the store with a list of trajectories. Primarily for testing."""
-        store = cls(max_size=max_size, max_reuses=max_reuses)
-        for trajectory in trajectories:
-            store.add_trajectory(trajectory)
-        return store
-
     def is_full(self, limit: int = None) -> bool:
         """Returns True if the store has reached its maximum capacity."""
         if limit is None:

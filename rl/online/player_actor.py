@@ -319,19 +319,17 @@ class PlayerActor:
         return self._learner.league.get_live(MAIN_KEY)
 
     def pull_main_player(self) -> ParamsContainer:
-        """Live main's params. Same thing as pull_own_player now, but the
-        two callers below mean it specifically: they weight against the
-        player whose blind spots they are checking."""
+        """Live main's params. Resolves to the same container as
+        pull_own_player (get_main_player is a MAIN_KEY-only alias for
+        get_live), but its caller means it specifically: it weights against
+        the player whose blind spots it is checking."""
         return self._learner.league.get_main_player()
 
-    def _pfsp_branch(
-        self, allowed_steps: frozenset[int] | None = None
-    ) -> ParamsContainer | None:
+    def _pfsp_branch(self) -> ParamsContainer | None:
         historical = [
             player
             for player in self._learner.league.players.values()
             if player.step_count not in LIVE_KEYS
-            and (allowed_steps is None or player.step_count in allowed_steps)
         ]
         if not historical:  # No historical players to play against
             return None

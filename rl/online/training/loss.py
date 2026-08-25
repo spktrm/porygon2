@@ -24,12 +24,10 @@ def policy_gradient_loss(
     advantages: jax.Array,
     valid: jax.Array,
     threshold: float,
-    objective: str = "spo",
 ):
     """Ratio-surrogate PG loss. Builder-only since 2026-08-21 — the player
     policy is trained by all-action NeuRD alone (CLAUDE.md 3)."""
-    objective_fn = {"spo": spo_objective}[objective]
-    pg_loss = objective_fn(
+    pg_loss = spo_objective(
         policy_ratios=policy_ratios,
         advantages=advantages,
         clip_ppo=threshold,

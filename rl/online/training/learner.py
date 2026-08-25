@@ -271,8 +271,7 @@ class Learner:
         pull one batch from the device_q, train via the compiled train_step
         under the gpu_lock, run the periodic tasks. The actor pool runs
         continuously and independently."""
-        for run_state in (self.run_state,):
-            start_workers(run_state, self.config)
+        start_workers(self.run_state, self.config)
         try:
             for _ in range(self.config.num_steps):
                 if self.done:
@@ -329,12 +328,11 @@ class Learner:
             raise
         finally:
             self.done = True
-            for run_state in (self.run_state,):
-                # strict=False: process is exiting — a straggler here is
-                # tolerable (daemon threads die with the process), and
-                # raising would mask the real outcome, turning e.g. a
-                # clean Ctrl-C into a crash. Resets keep strict=True.
-                stop_workers(run_state, strict=False)
+            # strict=False: process is exiting — a straggler here is
+            # tolerable (daemon threads die with the process), and raising
+            # would mask the real outcome, turning e.g. a clean Ctrl-C into
+            # a crash. Resets keep strict=True.
+            stop_workers(self.run_state, strict=False)
             tqdm.write("Training Finished.")
 
     def register_actor_threads(self, threads: list[threading.Thread]) -> None:

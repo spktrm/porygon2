@@ -1,10 +1,7 @@
-from typing import Literal
-
 import chex
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
 
-PolicyObjectiveT = Literal["spo"]
 
 
 @chex.dataclass(frozen=True)
@@ -291,7 +288,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Builder policy objective: ratio-based surrogate with a trust region.
     # The player has no ratio-surrogate term anymore — the single-action PG
     # and UPGO losses were removed 2026-08-21 (CLAUDE.md 3).
-    builder_policy_objective: PolicyObjectiveT = "spo"
     builder_ppo_clip_threshold: float = 0.3
 
     # Loss coefficients

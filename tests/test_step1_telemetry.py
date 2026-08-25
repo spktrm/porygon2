@@ -13,6 +13,7 @@ from rl.environment.interfaces import Trajectory
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.online.training.batching import _or_empty
 from rl.online.training.telemetry import (
+    action_axis_masks,
     MATCHED_V_EDGES,
     critic_outcome_telemetry,
     masked_mean,
@@ -78,7 +79,7 @@ def test_critic_outcome_telemetry_counts_and_splits():
         q_taken=jnp.zeros((T, B)),
         q_all=jnp.asarray(q_all),
         flat_action_mask=jnp.asarray(flat),
-        action_index=jnp.asarray(action),
+        masks=action_axis_masks(jnp.asarray(flat), jnp.asarray(action)),
         q_mask=jnp.asarray(q_mask),
         value_mask=jnp.ones((T, B), bool),
     )
@@ -137,7 +138,7 @@ def test_truncated_game_outcome_nan_drops_outcome_panels_only():
         q_taken=jnp.zeros((T, B)),
         q_all=jnp.zeros((T, B, A)),
         flat_action_mask=jnp.asarray(flat),
-        action_index=jnp.asarray(action),
+        masks=action_axis_masks(jnp.asarray(flat), jnp.asarray(action)),
         q_mask=jnp.asarray(q_mask),
         value_mask=jnp.ones((T, B), bool),
     )

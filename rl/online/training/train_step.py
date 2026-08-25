@@ -40,6 +40,7 @@ from rl.online.training.targets import (
     reference_kl,
 )
 from rl.online.training.telemetry import (
+    action_axis_masks,
     calculate_r2,
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
@@ -50,9 +51,6 @@ from rl.online.training.telemetry import (
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
-
-# Why a snapshot was added to the league. "dominant" is the healthy path
-# (the agent beat its own history); "overdue" means only the frame budget
 
 
 def train_step(
@@ -178,7 +176,7 @@ def train_step(
     # Per-group means are NaN in batches with no fresh (or no replayed)
     # member; wandb line plots skip them.
     if not isinstance(batch.reuse_count, tuple):
-        target_value = jnp.exp(player_target_pred.value_head.log_probs) @ cat_vf_support
+        target_value = player_target_pred.value_head.expectation
         return_value = player_targets.win_returns @ cat_vf_support
         value_sq_err = jnp.square(target_value - return_value)
         vm = value_mask.astype(value_sq_err.dtype)
@@ -241,15 +239,17 @@ def train_step(
     # (Aug 2026) had no way to measure. Since 2026-08-25 the critic's
     # information set IS the policy's, so the old "grade this on the
     # deployable rung" caveat is structural rather than a choice.
-    switch_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
-    move_cells = FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE
-    valid_switch = flat_action_mask & switch_cells
-    valid_move = flat_action_mask & move_cells
+    # One derivation of the switch/move predicates for the whole step —
+    # the panels below, critic_outcome_telemetry and the NeuRD loss all read
+    # THESE, so they cannot drift apart again (telemetry.ActionAxisMasks).
+    axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
+    valid_switch = axis.valid_switch
+    valid_move = axis.valid_move
     best_switch = jnp.max(
         jnp.where(valid_switch, q_target, -jnp.inf), axis=-1
     )
     best_move = jnp.max(jnp.where(valid_move, q_target, -jnp.inf), axis=-1)
-    has_both = valid_switch.any(axis=-1) & valid_move.any(axis=-1)
+    has_both = axis.has_both
     training_logs["player_q_switch_move_gap"] = average(
         jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
     )
@@ -262,8 +262,8 @@ def train_step(
     # starvation is; the conditional Retrace means are the
     # head-independent answer to "do voluntary switches actually lead
     # to worse outcomes than moves from the same kind of state?".
-    taken_switch = jnp.take(switch_cells, player_actor_action_head.action_index)
-    has_move = valid_move.any(axis=-1)
+    taken_switch = axis.taken_switch
+    has_move = axis.has_move
     q_voluntary_switch_mask = q_mask & taken_switch & has_move
     q_forced_switch_mask = q_mask & taken_switch & jnp.logical_not(has_move)
     q_move_mask = q_mask & jnp.logical_not(taken_switch)
@@ -337,7 +337,7 @@ def train_step(
                 q_taken=q_taken_target,
                 q_all=q_target,
                 flat_action_mask=flat_action_mask,
-                action_index=player_actor_action_head.action_index,
+                masks=axis,
                 q_mask=q_mask,
                 value_mask=value_mask,
             )
@@ -445,9 +445,8 @@ def train_step(
     # old "is the head leaking state level into A" question is answered
     # structurally rather than measured (tests/test_q_identity.py pins it).
     adv_sq = jnp.square(adv_target)
-    n_legal_f = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
     training_logs["player_adv_rms"] = average(
-        jnp.sqrt(jnp.where(flat_action_mask, adv_sq, 0.0).sum(axis=-1) / n_legal_f),
+        jnp.sqrt(jnp.where(flat_action_mask, adv_sq, 0.0).sum(axis=-1) / n_legal),
         q_mask,
     )
     for gid, gname in enumerate(("move", "switch", "target")):
@@ -593,14 +592,18 @@ def train_step(
         )
 
         # Real-choice rows on the stay/switch axis: both a switch and a
-        # non-switch are legal. This is the slice the collapse forms in,
-        # and every NeuRD decomposition readout below is scoped to it.
-        switch_actions = jnp.asarray(
-            FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
-        )
-        has_switch = (flat_action_mask & switch_actions).any(axis=-1)
-        has_other = (flat_action_mask & jnp.logical_not(switch_actions)).any(axis=-1)
-        switch_choice_mask = policy_mask & has_switch & has_other
+        # a MOVE are legal. This is the slice the collapse forms in, and
+        # every NeuRD decomposition readout below is scoped to it.
+        #
+        # STRICT since 2026-08-25. This previously required a switch and any
+        # legal NON-switch, which also admitted WILDCARD / OTHER / TARGET
+        # cells — so a row offering {switch, pass} counted as a stay/switch
+        # decision here while the identically-described `has_both` in the Q
+        # panels excluded it, and CLAUDE.md 3's rule reads the two families
+        # against each other. A stay/switch decision only means something
+        # when staying and attacking is actually on offer.
+        switch_actions = axis.switch_cells
+        switch_choice_mask = policy_mask & axis.has_both
 
         # COMA-style all-action counterfactual policy loss (replaced
         # the stage-2 forward KL, 2026-08-19 — see the config comment
@@ -1125,7 +1128,6 @@ def train_step(
                 advantages=builder_advantages,
                 valid=builder_valid,
                 threshold=config.builder_ppo_clip_threshold,
-                objective=config.builder_policy_objective,
             )
 
             loss_v = average(
