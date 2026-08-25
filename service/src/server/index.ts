@@ -185,11 +185,12 @@ export class WorkerPool {
      * pendingGames (worker.ts) is a per-worker map, so two sides of one
      * game on different workers would each wait forever for a match that
      * can never arrive on either — a silent, un-erroring hang identical
-     * in shape to a genuine deadlock. This was latent even before the
-     * three-population redesign (docs/exploiter-phase-plan.md) — it just
-     * needed enough concurrent pairs (or workers) actually in flight to
-     * surface, which multiple simultaneously-live populations makes far
-     * more likely than the one-population-at-a-time design ever hit. */
+     * in shape to a genuine deadlock. It has always been latent — it just
+     * needs enough concurrent pairs (or workers) actually in flight to
+     * surface. (This once carried a justification about the exploiter
+     * "three-population redesign" raising the odds; those populations were
+     * deleted 2026-08-21 and the league is one population again, but the
+     * routing invariant is unchanged and still load-bearing.) */
     private hashGameId(gameId: string): number {
         // FNV-1a — cheap, well-distributed, no external dependency.
         let hash = 2166136261;

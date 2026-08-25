@@ -312,21 +312,22 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # through a state-only route, which the residual form closes.
     # THE policy gradient. All-action NeuRD (Hennes et al. 2020 eq. 10):
     # per legal cell of every real-choice row,
-    # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')] (the COMA
-    # counterfactual baseline — swap own action, hold the world fixed,
-    # marginalise under the CURRENT policy), centred over legal cells,
-    # applied to the RAW LOGITS with no π prefactor. Zero sampling
+    # adv(a) = A(a) − Σ_a' π(a')·A(a') (a counterfactual baseline — swap
+    # own action, hold the world fixed, marginalise under the CURRENT
+    # policy), centred over legal cells, applied to the RAW LOGITS with no
+    # π prefactor. A is the head's advantage directly: V is a per-row
+    # constant this centring removes exactly, so it never enters. Zero sampling
     # variance, and counterfactual pressure lands on untaken actions —
     # which a sampled objective structurally cannot do (on a move row,
     # retrace−v_exp says nothing about the switch not taken). Advantages
     # enter as stop-gradient scalars off the target net.
     #
-    # Lineage: this was COMA proper (−π(b)·adv(b) per logit) until
-    # 2026-08-21. NeuRD eq. 6's restoring force shrinks with the starved
-    # cell's own mass, and the 157k-step 2026-08-20 run measured
-    # absadv_ratio ~4 against prob_ratio ~0.075 — the critic preferred
-    # switch cells MORE than move cells and π alone throttled the update
-    # (CLAUDE.md 3). The single-action PG and UPGO terms went the same
+    # Lineage: the π-prefactored form (−π(b)·adv(b) per logit) was used
+    # until 2026-08-21. Its restoring force shrinks with the starved cell's
+    # own mass, and the 157k-step 2026-08-20 run measured absadv_ratio ~4
+    # against prob_ratio ~0.075 — the critic preferred switch cells MORE
+    # than move cells and π alone throttled the update (CLAUDE.md 3 has the
+    # measurement and why no π-prefactored objective can be the restorer). The single-action PG and UPGO terms went the same
     # day, leaving this as the only loss that moves the action logits
     # toward return.
     #

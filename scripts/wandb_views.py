@@ -257,9 +257,9 @@ def rl_sections():
             # THE policy gradient since 2026-08-21: all-action NeuRD,
             # -adv(b) on the raw logits over every legal cell of every
             # real-choice row (Hennes et al. 2020 eq. 10). Zero sampling
-            # variance, counterfactual pressure on untaken actions. Was
-            # COMA (2026-08-19) until the pi prefactor was measured to be
-            # the throttle — see the decomposition panels below.
+            # variance, counterfactual pressure on untaken actions. The
+            # pi-prefactored form it replaced was measured to be the
+            # throttle — see the decomposition panels below.
             name="1.6 · NeuRD all-action policy loss",
             is_open=True,
             panels=[
@@ -274,9 +274,9 @@ def rl_sections():
                 ),
                 lp(
                     # THE decision panel for NeuRD (research note:
-                    # docs/rare-action-rl-literature.md). COMA's exact
-                    # per-logit gradient is −pi(b)·adv(b), so the
-                    # per-cell magnitude factorises as pi × |adv| and
+                    # docs/rare-action-rl-literature.md). A pi-prefactored
+                    # objective's per-logit gradient is −pi(b)·adv(b), so
+                    # its per-cell magnitude factorises as pi × |adv| and
                     # grad_ratio ≈ prob_ratio × absadv_ratio. Read the
                     # three ratios together on both-modality states:
                     #   grad tracks prob, absadv ≈ 1 → the pi prefactor

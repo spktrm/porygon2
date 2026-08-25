@@ -256,7 +256,7 @@ def train_step(
     )
 
     # Discriminators for a negative gap: starved switch cells vs a
-    # genuine judgement. The CE only trains the taken action's cell,
+    # genuine judgement. The Huber loss only trains the taken action's cell,
     # so a collapsing switch_ratio starves voluntary-switch cells of
     # gradient while forced replacements (post-faint, no legal move)
     # keep flowing regardless of policy. Coverage says how bad the
@@ -385,7 +385,7 @@ def train_step(
         jnp.where(q_mask, qvar_state, jnp.nan), 0.9
     )
     # π-free counterpart: uniform-over-legal variance of the same
-    # Q̄_all means. The π-weighted qvar above is squashed by a
+    # per-cell Q means. The π-weighted qvar above is squashed by a
     # collapsed policy regardless of what the critic believes (94%
     # move mass hides any spread on the move↔switch axis), so it
     # can't distinguish "critic is action-flat" from "critic is
@@ -610,18 +610,17 @@ def train_step(
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # COMA-style all-action counterfactual policy loss (replaced
-        # the stage-2 forward KL, 2026-08-19 — see the config comment
-        # and docs/entropy-gradient-pressure.md). Per legal cell,
-        # adv(a) = E[Q̄_all(a)] − Σ_a' π(a')·E[Q̄_all(a')]: the COMA
-        # counterfactual baseline under the CURRENT policy. The loss
-        # −Σ_a π(a)·sg(adv(a)) has per-cell gradient π(a)·adv(a) —
-        # the exact all-action policy gradient: zero sampling
-        # variance, counterfactual pressure on every real-choice row
-        # including untaken actions (the sampled boost advantage
-        # structurally carries none for those). Q enters as
-        # stop-gradient scalars off the target net. Weighted by the
-        # neurd_coef runtime scalar.
+        # All-action NeuRD, the only loss that moves the action logits
+        # toward return (see the config comment and
+        # docs/entropy-gradient-pressure.md). Per legal cell,
+        # adv(a) = A(a) − Σ_a' π(a')·A(a'): a counterfactual baseline
+        # under the CURRENT policy, applied to the RAW LOGITS with NO π
+        # prefactor, so a starved cell's restoring force does not shrink
+        # with its own mass. Zero sampling variance, and counterfactual
+        # pressure lands on untaken actions — which a sampled objective
+        # structurally cannot do. Advantages enter as stop-gradient
+        # scalars off the target net; weighted by the neurd_coef runtime
+        # scalar.
         learner_log_policy = learner_action_head.log_policy
         pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
         pi_learner = pi_learner / jnp.maximum(
@@ -710,18 +709,12 @@ def train_step(
         switch_modality = int(ModalityEnum.MODALITY_ENUM__SWITCH)
         move_modality = int(ModalityEnum.MODALITY_ENUM__MOVE)
         # Gradient decomposition for the pi-prefactor question
-        # (docs/rare-action-rl-literature.md). The COMA loss
-        # -sum_a pi(a).sg(adv(a)) has exact per-logit gradient
-        # -pi(b).adv(b) -- the sum_a pi.adv correction term
-        # vanishes because the COMA baseline makes it identically
-        # zero -- which is NeuRD eq. (6): the counterfactual
-        # regret SCALED BY THE ACTION'S OWN PROBABILITY. A starved
-        # switch cell therefore gets a restoring force
-        # proportional to how starved it already is, so COMA
-        # cannot be the restorer on its own.
+        # (docs/rare-action-rl-literature.md; CLAUDE.md 3 records the
+        # measurement that settled it and why no pi-prefactored objective
+        # can refill a starved modality).
         #
         # These three pairs decompose the per-cell gradient
-        # magnitude pi.|adv| into its two factors, over legal
+        # magnitude into its two factors, over legal
         # cells of real-choice rows (both a switch and a non-
         # switch legal), so that
         #     grad_ratio ~ prob_ratio x absadv_ratio.
@@ -731,9 +724,9 @@ def train_step(
         # absadv_ratio ~ 0: the critic carries no switch belief to
         # amplify, and NeuRD would amplify noise instead. NOTE the
         # Q label lands on the TAKEN cell; the pi-centring in
-        # residual_q spreads its gradient as -err.pi_target(a) over
-        # the other legal cells (dueling identifiability, not
-        # belief), so untaken switch cells are extrapolation --
+        # heads.compose_q spreads its gradient as -err.pi(a) over the
+        # other legal cells (dueling identifiability, not belief),
+        # so untaken switch cells are extrapolation --
         # read absadv_ratio against player_q_switch_target_frac
         # (the supervision coverage) before concluding the critic
         # "means it".
@@ -743,8 +736,6 @@ def train_step(
             flat_action_mask & jnp.logical_not(switch_actions) & neurd_row
         )
         neurd_abs_adv = jnp.abs(neurd_adv)
-        # Per-cell |d loss / d logit|: pi.|adv| under COMA,
-        # 1{clip open}.|adv| under NeuRD.
         # Per-cell |d loss_neurd / d micro logit| = the open, centred
         # within-modality regret |Q(a) - Q(m)|; absadv below stays the
         # critic's cell advantage |Q(a) - V|.

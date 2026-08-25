@@ -237,7 +237,7 @@ class ActionAdapter(nn.Module):
 
     The policy's micro readout is a parameter-free dot grid straight off
     the typed trunk streams, so before this adapter existed any OTHER
-    head training on the same embeddings (the Q head's CE) reshaped the
+    head training on the same embeddings (the advantage head's loss) reshaped the
     live policy geometry directly. Each head family now reads the trunk
     through its own instance — the policy's plain, the Q head's with the
     projected value conditioning concatenated in (the rung's information
@@ -371,9 +371,12 @@ class MacroMicroHead(nn.Module):
     result and the 2026-08-17 policy head paid for, now applied to any
     head family that scores actions.
 
-    cfg.num_logits is the output width PER CELL/MODALITY (1 = the
-    policy's scalar logits; the Q critic passes the categorical bin
-    count). micro scores every grid cell through MicroHead — per-slot-group
+    cfg.num_logits is the output width PER CELL/MODALITY. Both families
+    pass 1 — a scalar per cell. (The advantage head once passed the
+    categorical bin count; that per-cell distributional readout was
+    abandoned 2026-08-23 because it let the head fit taken-cell labels
+    through a state-only route.) micro scores every grid cell through
+    MicroHead — per-slot-group
     q/k projections, per-group zero-init scale and per-group zero-init
     local routes (2026-08-25: the 'dot' / 'pointer' split is gone, both
     families use the one readout). macro scores each modality via
@@ -660,7 +663,7 @@ def compose_action_grid(
     parameter route for "is switching better here" (the flat-grid
     predecessor made the head express the switch/move contest cell-by-cell
     through one shared bilinear). Legal cells only, because invalid cells
-    never receive CE gradient and their drift must not leak into live
+    never receive loss gradient and their drift must not leak into live
     values.
 
     micro is (..., N*N) scalar (policy) or (..., N*N, K) per-bin (Q), with
