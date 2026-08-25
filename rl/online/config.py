@@ -445,10 +445,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # policy speed into the grad-norm runaways of pgaijs6l (56k) and
     # 2wvnlsz3 (79.6k, ref_kl 2.07 nats, p90 62k by 98k): the penalty is
     # unbounded in the gap by design, so the GAP is bounded structurally
-    # instead. 20k = rnad.py's delta_m; also divides the warm-up so the
-    # first snap lands exactly at ramp completion, and a 20k-multiple
-    # resume snaps at its first step.
-    player_reg_snap_steps: int = 20_000
+    # instead. Divides the warm-up so the first snap lands exactly at
+    # ramp completion, and a multiple-of-N resume snaps at its first step.
+    # 10k, halved from rnad.py's delta_m of 20k (2026-08-25): NashPG
+    # re-clones every 1000 of 50k inner updates, i.e. FIFTY refinements
+    # over a run, against ~10 for us at 20k over a 200k-step target — and
+    # the iterative refinement is the paper's actual claim, so the cadence
+    # is load-bearing rather than incidental. Half-step, not their ratio:
+    # a 4k reference approaches an EMA magnet, which chases the policy and
+    # degenerates into a short-horizon trust region (LESSONS 4).
+    player_reg_snap_steps: int = 10_000
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

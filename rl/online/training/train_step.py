@@ -166,6 +166,8 @@ def train_step(
     # (warmup_steps % snap_steps == 0), and a resume from a pre-runaway
     # checkpoint at a snap multiple snaps immediately, repairing the
     # accumulated gap at restart. Between snaps the reference is FROZEN.
+    # 10k since 2026-08-25 (was 20k): NashPG refines 50x over a run, we
+    # refined ~10x, and the iterative refinement is its actual claim.
     reg_snap = (neurd_scale >= 1.0) & (
         player_state.step_count % config.player_reg_snap_steps == 0
     )
