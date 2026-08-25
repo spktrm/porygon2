@@ -346,6 +346,7 @@ def test_final_row_is_bootstrap_only_unless_terminal():
         batch,
         value_log_probs=value_log_probs,
         isr=isr,
+        adv_taken=jnp.zeros((t_len, batch_size), dtype=jnp.float32),
         config=Porygon2LearnerConfig(),
     )
     value_mask = np.asarray(targets.value_mask)

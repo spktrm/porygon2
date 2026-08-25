@@ -122,12 +122,24 @@ def train_step(
     # reads how far behaviour has drifted from the fast target.
     actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
 
-    # IMPACT-style targets: the fast target network supplies the v-trace
+    # Retrace baseline (targets.py): the TARGET critic's advantage at the
+    # action actually taken. Zero on terminal rows — the reward lands on the
+    # terminal OBSERVATION row, where no action was taken, so that row's
+    # error must stay r - V. Same condition as q_mask below.
+    adv_taken = jnp.take_along_axis(
+        player_target_pred.advantage.astype(jnp.float32),
+        player_actor_action_head.action_index[..., None],
+        axis=-1,
+    ).squeeze(-1)
+    adv_taken = jnp.where(player_valid, adv_taken, 0.0)
+
+    # IMPACT-style targets: the fast target network supplies the Retrace
     # reference policy and value/kl bootstraps.
     player_targets, channel_logs = compute_player_targets(
         batch,
         value_log_probs=player_target_pred.value_head.log_probs,
         isr=target_actor_ratio,
+        adv_taken=adv_taken,
         config=config,
     )
     training_logs.update(channel_logs)
@@ -302,6 +314,16 @@ def train_step(
     training_logs["player_isr_below1_move"] = average(
         (isr_f32 < 1.0).astype(jnp.float32), q_move_mask
     )
+    # How much action-conditional baseline the advantage head is actually
+    # supplying to the Retrace errors above. At zero the value target is
+    # bit-identical to the old v-trace one, so a flat ~0 here means the
+    # mechanism is inert and should be reverted rather than kept.
+    adv_taken_abs = jnp.abs(adv_taken)
+    training_logs["player_retrace_baseline_abs"] = average(adv_taken_abs, q_mask)
+    training_logs["player_retrace_baseline_switch"] = average(
+        adv_taken_abs, q_voluntary_switch_mask
+    )
+    training_logs["player_retrace_baseline_move"] = average(adv_taken_abs, q_move_mask)
     training_logs["player_q_target_move"] = average(q_label, q_move_mask & has_both)
 
     # Pivotal-state decision panel (2026-08-19). A negative MEAN gap is

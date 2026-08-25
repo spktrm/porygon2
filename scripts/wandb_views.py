@@ -721,6 +721,19 @@ def rl_sections():
                     range_y=(0, 1),
                 ),
                 lp(
+                    # What the Retrace baseline is worth: the value target
+                    # now subtracts Q = V + A, so the attenuation above
+                    # bites only on the residual A cannot explain. Flat at
+                    # ~0 means the advantage head is supplying nothing and
+                    # the mechanism is inert.
+                    "Retrace baseline |A(s, a_taken)|",
+                    [
+                        "player_retrace_baseline_abs",
+                        "player_retrace_baseline_switch",
+                        "player_retrace_baseline_move",
+                    ],
+                ),
+                lp(
                     # Context: the reuse cap the controller is holding,
                     # and the global upside-clip fraction.
                     "Replay reuse cap & rho clip fraction",

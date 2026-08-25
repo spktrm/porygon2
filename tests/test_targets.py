@@ -140,9 +140,10 @@ class TestQOnestepHandExample:
 
 @pytest.fixture(scope="module")
 def ex_target_inputs():
-    """Real env outputs from ex.bin (T, B=1), an on-policy isr, and a
-    uniform categorical critic — value expectation exactly 0 over the
-    [-1, 0, 1] support."""
+    """Real env outputs from ex.bin (T, B=1), an on-policy isr, a zero
+    Retrace baseline (the flat-at-init advantage head), and a uniform
+    categorical critic — value expectation exactly 0 over the [-1, 0, 1]
+    support."""
     from rl.environment.interfaces import Batch, PlayerTransition
     from rl.environment.utils import get_ex_player_step
     from rl.online.config import Porygon2LearnerConfig
@@ -153,12 +154,13 @@ def ex_target_inputs():
     T, B = env.done.shape
     value_log_probs = jnp.full((T, B, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)
     isr = jnp.ones((T, B), dtype=jnp.float32)
-    return batch, value_log_probs, isr, Porygon2LearnerConfig()
+    adv_taken = jnp.zeros((T, B), dtype=jnp.float32)
+    return batch, value_log_probs, isr, adv_taken, Porygon2LearnerConfig()
 
 
 class TestQOnestepOnExTrajectory:
     def test_shapes_and_ranges(self, ex_target_inputs):
-        batch, _, isr, config = ex_target_inputs
+        batch, _, isr, _, config = ex_target_inputs
         env = batch.player_transitions.env_output
         T, B = env.done.shape
         flat_mask = np.asarray(env.action_mask).reshape(T, B, -1)
@@ -186,9 +188,11 @@ class TestQOnestepOnExTrajectory:
 
 class TestPlayerTargetsOnExTrajectory:
     def test_shapes_and_finiteness(self, ex_target_inputs):
-        batch, value_log_probs, isr, config = ex_target_inputs
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
         T, B = batch.player_transitions.env_output.done.shape
-        targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
+        targets, _ = compute_player_targets(
+            batch, value_log_probs, isr, adv_taken, config
+        )
 
         assert targets.win_returns.shape == (T, B, 3)
         assert targets.policy_mask.shape == (T, B)
@@ -196,9 +200,11 @@ class TestPlayerTargetsOnExTrajectory:
         assert np.isfinite(np.asarray(targets.win_returns)).all()
 
     def test_masks_follow_episode_structure(self, ex_target_inputs):
-        batch, value_log_probs, isr, config = ex_target_inputs
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
         done = np.asarray(batch.player_transitions.env_output.done)
-        targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
+        targets, _ = compute_player_targets(
+            batch, value_log_probs, isr, adv_taken, config
+        )
 
         # value_mask covers everything up to and including the first done.
         expected = 1 - (np.cumsum(done, axis=0) - done)
@@ -214,19 +220,150 @@ class TestPlayerTargetsOnExTrajectory:
     def test_value_targets_stay_distributions(self, ex_target_inputs):
         # Bin-space v-trace with a one-hot terminal outcome and gamma=1 must
         # keep each masked target row a probability distribution.
-        batch, value_log_probs, isr, config = ex_target_inputs
-        targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        targets, _ = compute_player_targets(
+            batch, value_log_probs, isr, adv_taken, config
+        )
         sums = np.asarray(targets.win_returns).sum(-1)
         mask = np.asarray(targets.value_mask)
         np.testing.assert_allclose(sums[mask], 1.0, atol=1e-4)
         np.testing.assert_allclose(sums[~mask], 0.0, atol=1e-6)
 
     def test_on_policy_diagnostics(self, ex_target_inputs):
-        batch, value_log_probs, isr, config = ex_target_inputs
-        _, logs = compute_player_targets(batch, value_log_probs, isr, config)
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        _, logs = compute_player_targets(batch, value_log_probs, isr, adv_taken, config)
         # isr == 1 everywhere: full effective sample size, nothing clipped.
         np.testing.assert_allclose(float(logs["player_isr_ess"]), 1.0, atol=1e-3)
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
+
+
+class TestAdvantageShift:
+    """The signed measure that carries a scalar advantage into the
+    distributional value recursion (targets.advantage_shift)."""
+
+    support = jnp.array([-1.0, 0.0, 1.0])
+
+    def _probs(self):
+        return jnp.array(
+            [
+                [1 / 3, 1 / 3, 1 / 3],  # mean 0
+                [0.0, 0.02, 0.98],  # near-won
+                [0.5, 0.0, 0.5],  # coin flip, mean 0
+                [0.9, 0.1, 0.0],  # near-lost
+            ]
+        )
+
+    def test_zero_advantage_is_exactly_the_identity(self):
+        from rl.online.training.targets import advantage_shift
+
+        got = advantage_shift(self._probs(), jnp.zeros(4), self.support)
+        np.testing.assert_array_equal(np.asarray(got), np.zeros((4, 3), np.float32))
+
+    def test_zero_total_mass_and_exact_first_moment(self):
+        from rl.online.training.targets import advantage_shift
+
+        probs = self._probs()
+        adv = jnp.array([0.3, -0.3, 0.45, 0.15])
+        shift = advantage_shift(probs, adv, self.support)
+        # Adding it must not create or destroy probability mass, so the
+        # value targets stay normalised however large the advantage.
+        np.testing.assert_allclose(np.asarray(shift).sum(-1), np.zeros(4), atol=1e-6)
+        # ...and it must move the mean by exactly the advantage.
+        np.testing.assert_allclose(
+            np.asarray((probs + shift) @ self.support),
+            np.asarray(probs @ self.support + adv),
+            atol=1e-6,
+        )
+
+    def test_saturates_at_the_support_edge_rather_than_exploding(self):
+        from rl.online.training.targets import advantage_shift
+
+        probs = self._probs()
+        huge = advantage_shift(probs, jnp.full((4,), 50.0), self.support)
+        shifted_mean = np.asarray((probs + huge) @ self.support)
+        np.testing.assert_allclose(shifted_mean, np.ones(4), atol=1e-6)
+
+    def test_moves_mass_to_the_adjacent_atom_not_the_far_one(self):
+        """The reason for two_hot over a fixed (-1/2, 0, +1/2) direction: a
+        slightly worse action at a near-won state means 'more likely a
+        draw', not 'more likely a loss'."""
+        from rl.online.training.targets import advantage_shift
+
+        near_won = jnp.array([[0.0, 0.02, 0.98]])
+        shifted = np.asarray(
+            near_won + advantage_shift(near_won, jnp.array([-0.3]), self.support)
+        )
+        assert shifted[0, 0] == pytest.approx(0.0, abs=1e-6)  # no loss mass added
+        assert shifted[0, 1] > 0.02  # the draw atom is where it goes
+
+
+class TestRetraceBaseline:
+    """Retrace over the composed Q: the value target's baseline is
+    Q(s, a) = V(s) + A(s, a), not V(s)."""
+
+    def _expectation(self, targets, support):
+        return np.asarray(targets.win_returns @ support)
+
+    def test_zero_baseline_reproduces_the_vtrace_targets(self, ex_target_inputs):
+        """The flat-at-init advantage head must leave the estimator BITWISE
+        where it was — checked against a reference implementation of the
+        pre-Retrace v-trace form, not against another call of the same
+        function."""
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        done = batch.player_transitions.env_output.done[..., None]
+        mask = 1 - (jnp.cumsum(done, axis=0) - done)
+        discount_t = (1 - done) * config.player_gamma * mask
+        rho = jnp.minimum(1.0, isr)[..., None]
+        v_tm1 = jnp.exp(value_log_probs)
+        v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
+        td = (
+            rho
+            * mask
+            * (
+                batch.player_transitions.env_output.win_reward
+                + discount_t * v_t
+                - v_tm1
+            )
+        )
+        want = (vtrace(td, discount_t, rho * config.player_lambda) + v_tm1) * mask
+
+        got, _ = compute_player_targets(
+            batch, value_log_probs, isr, jnp.zeros_like(adv_taken), config
+        )
+        np.testing.assert_array_equal(np.asarray(got.win_returns), np.asarray(want))
+
+    def test_positive_advantage_lowers_the_state_target(self, ex_target_inputs):
+        """Positive control — without it the test above passes vacuously.
+        Q(s, a) = V + A, so subtracting a larger baseline must lower the
+        state's return, and a negative advantage must raise it."""
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        support = np.array([-1.0, 0.0, 1.0], dtype=np.float32)
+        mask = np.asarray(
+            compute_player_targets(batch, value_log_probs, isr, adv_taken, config)[
+                0
+            ].value_mask
+        )
+
+        def mean_target(scalar):
+            targets, _ = compute_player_targets(
+                batch,
+                value_log_probs,
+                isr,
+                jnp.full_like(adv_taken, scalar),
+                config,
+            )
+            return self._expectation(targets, support)[mask].mean()
+
+        assert mean_target(0.2) < mean_target(0.0) < mean_target(-0.2)
+
+    def test_targets_stay_normalised_under_a_nonzero_baseline(self, ex_target_inputs):
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        targets, _ = compute_player_targets(
+            batch, value_log_probs, isr, jnp.full_like(adv_taken, 0.4), config
+        )
+        sums = np.asarray(targets.win_returns).sum(-1)
+        mask = np.asarray(targets.value_mask)
+        np.testing.assert_allclose(sums[mask], 1.0, atol=1e-4)
 
 
 class TestRNaDTransform:

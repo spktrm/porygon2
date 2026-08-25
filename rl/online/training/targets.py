@@ -40,9 +40,10 @@ def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
     isr: jax.Array,
+    adv_taken: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
-    """Computes v-trace VALUE targets on the win/loss channel.
+    """Computes Retrace VALUE targets on the win/loss channel.
 
     Policy advantages are gone: the single-action PG and UPGO terms were
     removed 2026-08-21 (CLAUDE.md 3), so nothing consumes them. What is
@@ -56,6 +57,10 @@ def compute_player_targets(
     estimates the target policy's values with off-policy correction — stable
     under replay reuse because the fast target tracks the learner within ~1k
     steps.
+
+    ``adv_taken`` is the target critic's advantage at the action actually
+    taken, which turns the estimator into Retrace over the COMPOSED Q — see
+    the baseline comment below.
 
     config.player_lambda (0.8, AlphaStar's TD(lambda) value) shapes the
     value targets.
@@ -79,7 +84,30 @@ def compute_player_targets(
     last_values = v_tm1[-1:]
     v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
 
-    td_errors = rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1)
+    # Retrace over the COMPOSED Q (2026-08-25): the subtracted baseline is
+    # Q(s, a) = V(s) + A(s, a), not V(s) alone. E_pi[Q(s', .)] = V(s')
+    # EXACTLY by heads.compose_q's centring, so the bootstrap is untouched
+    # and only the baseline moves — and E_pi[A] = 0 means the doubly-robust
+    # correction adds nothing back, it only takes the taken cell out.
+    #
+    # What that buys: with the baseline at V, the truncated rho attenuates
+    # the WHOLE residual, including the action-conditional part the critic
+    # already predicts. rho-bar = 1 therefore targets min(pi, mu)
+    # renormalised — it pulls the value toward the BEHAVIOUR policy exactly
+    # on the rows where pi has fallen below mu, which is the collapse's own
+    # signature (LESSONS 6, player_isr_below1_switch_voluntary). With the
+    # baseline at Q the model term enters at full pi weight and rho
+    # attenuates only the environment noise: a bias reduction as much as a
+    # variance one.
+    #
+    # A is zero-init (flat-at-init contract), so this is the identity at
+    # launch and adv_taken = 0 is the exact revert.
+    support = jnp.asarray(CAT_VF_SUPPORT, dtype=v_tm1.dtype)
+    baseline_shift = advantage_shift(v_tm1, adv_taken.astype(v_tm1.dtype), support)
+
+    td_errors = (
+        rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1 - baseline_shift)
+    )
 
     td_lambda = jnp.asarray(config.player_lambda, dtype=isr.dtype)
     errors = vtrace(td_errors, discount_t, c_t * td_lambda)
@@ -149,6 +177,28 @@ def two_hot(scalar: jax.Array, support: jax.Array) -> jax.Array:
     return jax.nn.one_hot(upper_idx - 1, n_bins) * (1.0 - w_upper[..., None]) + (
         jax.nn.one_hot(upper_idx, n_bins) * w_upper[..., None]
     )
+
+
+def advantage_shift(
+    value_probs: jax.Array, adv: jax.Array, support: jax.Array
+) -> jax.Array:
+    """Signed measure over the value atoms carrying first moment ``adv`` and
+    zero total mass: two_hot(m + adv) - two_hot(m) at m = E[value_probs].
+
+    Adding it to a value distribution shifts that distribution's mean by
+    exactly ``adv`` (up to the support's clipping) and is the identity at
+    adv = 0. A scalar cannot enter the recursion any other way: the value
+    loss is a cross-entropy whose LABEL is a vector over the atoms, and the
+    recursion accumulates vectors to build it. Signed is fine — the whole
+    recursion is already an accumulation of target-minus-value differences,
+    and softmax_cross_entropy never required non-negative labels.
+
+    Two-hot rather than a fixed direction like adv*(-1/2, 0, +1/2): the
+    latter always moves mass between the EXTREME atoms, so a slightly worse
+    action at a near-won state reads as "more likely a loss" instead of
+    "more likely a draw"."""
+    mean = value_probs @ support
+    return two_hot(mean + adv, support) - two_hot(mean, support)
 
 
 def reference_kl(
