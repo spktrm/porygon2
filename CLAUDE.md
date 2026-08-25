@@ -163,6 +163,12 @@ TypeScript game service speaking protobuf over websockets.
   experiment has to be rerun to be read. Correctness fixes, precision fixes
   and cleanup go straight in. Acceptance is pre-registered, with a hold
   period.
+- NEVER call `network.apply` un-jitted in a test. Eager apply re-traces the whole
+  module and dispatches op by op (the scans recompile per call) — ~a minute each,
+  and inside `jax.grad` you pay it for the forward AND the backward. Wrapping the
+  three that did took the slow suite 3m37s → 1m13s, with the compile persisting
+  across pytest processes. Use `real_model_apply` (jitted, in conftest) or wrap in
+  `jax.jit` yourself; the first run after a model change pays the compile once.
 - Test markers: `gpu`, `slow`. `tests/conftest.py` owns env setup and the
   session-scoped `real_model_and_trajectory` fixture (model init dominates
   slow-suite runtime — share it, never re-init per module).
