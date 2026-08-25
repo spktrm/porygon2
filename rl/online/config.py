@@ -425,24 +425,26 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # is mass-independent: starved cells are pulled back toward the
     # legal-set mean, not just dominant ones pulled down.
     player_neurd_logit_decay: float = 0.05
-    # Reference-policy penalty in the NeuRD advantage (R-NaD's reward
-    # transform, Perolat et al. 2022; rnad.py in OpenSpiel <= 1.5), landed
-    # 2026-08-22 on Retrace; since Step 3 (2026-08-23) it is the ONLY
-    # place the reference enters — the residual critic's one-step label
-    # is the plain game, so this is a policy-objective term, not a label
-    # transform (hence ref_*, not rnad_*). Reward transform
-    # r' = r - eta*log(pi/pi_reg) against a REFERENCE policy pi_reg that is
-    # a periodic SNAP of the target params (player_reg_snap_steps; rnad.py snaps
-    # two anchors every delta_m steps and interpolates — the EMA is the
-    # one-forward continuous equivalent). The penalty enters the policy
-    # update analytically per legal cell (targets.ref_penalised_q); the
-    # critics learn the untransformed game. Own-side term only: the opponent's +eta*KL_opp needs the other
-    # side's chunk (no game id in a Trajectory), so the regularised game is
-    # not exactly zero-sum — the refill force and the moving reference
-    # (what the 13k switch collapse needs) do not depend on it. Replaces
-    # the gradient-side magnet KL, whose pi-prefactored pull could never
-    # refill a starved modality. eta 0.2 = DeepNash; reward support is
-    # +-1 here as in Stratego. 0 disables (plain NeuRD).
+    # Reference-policy penalty in the NeuRD advantage: the ONLY place the
+    # reference enters since the reg-value stream was deleted
+    # (2026-08-25). Per legal cell, analytically, -eta*(log pi - log
+    # pi_reg) is added to Q before centring (targets.ref_penalised_q);
+    # both critics learn the PLAIN game — no reward transform, no
+    # transformed bootstrap. pi_reg is a periodic SNAP of the target
+    # params (player_reg_snap_steps).
+    # This is NashPG (arXiv:2510.18183, Oct 2025): own-side KL to an
+    # iteratively refined reference in the POLICY objective, no reward
+    # transformation, reported at or below R-NaD's exploitability — and
+    # its independent sensitivity study lands on alpha = 0.2 with a
+    # U-shaped curve, which is where DeepNash's eta already put us.
+    # Own-side only, as NashPG's objective also is (the opponent's
+    # +eta*KL_opp would need the other side's chunk — no game id in a
+    # Trajectory), so the regularised game is not exactly zero-sum.
+    # NOTE the analytic advantage shift is deliberate and is NOT NashPG's
+    # differentiated KL: d/dz KL(pi||rho) carries a pi prefactor and so
+    # vanishes on a starved cell, whereas shifting the advantage under
+    # NeuRD's logit gradient makes the refill force GROW as pi -> 0. Same
+    # lesson as the gradient-side magnet this replaced. 0 = plain NeuRD.
     player_ref_eta: float = 0.2
     # Snap period of the reference (2026-08-25, replacing the continuous
     # EMA — 1e-4, then 5e-5): reg_params <- target_params, in place,
@@ -456,15 +458,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # first snap lands exactly at ramp completion, and a 20k-multiple
     # resume snaps at its first step.
     player_reg_snap_steps: int = 20_000
-    # MSE coefficient of the scalar reg-value head (2026-08-24): trains
-    # V_reg = E[sum of future -eta*KL(pi||pi_reg)] on scalar v-trace
-    # returns of the reg reward (targets.compute_reg_returns). Its ONLY
-    # consumers are the Q label / residual base, which bootstrap on
-    # V_win + V_reg so every cell's Q carries FUTURE reference penalties
-    # (OpenSpiel rnad.py folds the expected penalty into the value
-    # recursion; the immediate per-cell penalty stays analytic in
-    # ref_penalised_q as there).
-    player_reg_value_coef: float = 0.5
     ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0

@@ -188,11 +188,10 @@ def rl_sections():
                     ["player_q_switch_move_gap", "switch_ratio"],
                 ),
                 lp(
-                    # |sum(pi*E[Q]) - eta*KL - V|: since R-NaD the Q
-                    # critic carries the regularised game and V the
-                    # plain one, so this is calibration debt PLUS the
-                    # accumulated regularisation penalty — read with
-                    # player_ref_kl.
+                    # |sum(pi*E[Q]) - V|: both critics learn the PLAIN
+                    # game (the reference is a policy-objective term
+                    # only since 2026-08-25), so this is calibration
+                    # debt and nothing else.
                     "Q-V state-value agreement",
                     ["player_q_ev_gap"],
                 ),
@@ -586,19 +585,6 @@ def rl_sections():
                     [
                         "player_q_support_vol_switch_rows",
                         "player_q_support_forced_switch_rows",
-                    ],
-                ),
-                lp(
-                    # R-NaD reg-value stream (2026-08-24): V_reg = the
-                    # propagated future -eta*KL(pi||pi_reg); reward_mean
-                    # should track -eta*player_ref_kl, and value_mean
-                    # ~ reward x remaining game length. Q labels/bases
-                    # bootstrap on V_win + V_reg.
-                    "Reg-value stream: V_reg, reward, head MSE",
-                    [
-                        "player_reg_value_mean",
-                        "player_reg_reward_mean",
-                        "player_loss_v_reg",
                     ],
                 ),
                 lp(

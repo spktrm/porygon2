@@ -230,14 +230,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-    # Scalar value of the R-NaD regularisation-reward stream (2026-08-24):
-    # discounted sum of future -eta*KL(pi || pi_reg). Unbounded and
-    # smooth, so a plain regression head, not a categorical one; reads the
-    # privileged value_all embedding, learner-only.
-    cfg.reg_v_head = ConfigDict()
-    cfg.reg_v_head.mlp = ConfigDict()
-    cfg.reg_v_head.mlp.layer_sizes = (2 * entity_size, entity_size, 1)
-
     # Privileged two-rung all-action Q head (learner-only;
     # docs/q-critic-plan.md): categorical logits over CAT_VF_SUPPORT per
     # src x tgt cell, read off the same action embeddings as the policy

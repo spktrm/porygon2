@@ -332,35 +332,3 @@ def compute_builder_targets(
         ent_returns=ent_returns,
         ent_advantages=pg_advantages[..., n_bins],
     )
-
-
-def compute_reg_returns(
-    batch: Batch,
-    reg_values: jax.Array,
-    reg_reward: jax.Array,
-    isr: jax.Array,
-    config: Porygon2LearnerConfig,
-) -> jax.Array:
-    """Scalar v-trace returns of the R-NaD regularisation-reward stream
-    (2026-08-24). r_reg_t = -eta * KL(pi_target(s_t) || pi_reg(s_t)) on
-    decision rows (0 on terminal/padding) — OpenSpiel rnad.py's
-    eta_reg_entropy, the EXPECTED penalty under pi, folded into the value
-    recursion rather than the taken action's sampled penalty. Own-side
-    only, like the analytic policy term (ref_penalised_q). Same clipped-IS
-    v-trace as the win channel (rho = c = min(1, isr), lambda =
-    config.player_lambda), gamma = config.player_gamma, f32 throughout;
-    terminal rows bootstrap 0 (no future penalties). `reg_values` is the
-    TARGET net's scalar reg head."""
-    dones = batch.player_transitions.env_output.done
-    mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
-    discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
-
-    truncated_isr = jnp.minimum(1.0, isr).astype(jnp.float32)
-    r_t = (reg_reward * mask * (1 - dones)).astype(jnp.float32)
-
-    v_tm1 = reg_values.astype(jnp.float32) * mask
-    v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:] * 0.0], axis=0)
-
-    td_errors = truncated_isr * mask * (r_t + discount_t * v_t - v_tm1)
-    errors = vtrace(td_errors, discount_t, truncated_isr * config.player_lambda)
-    return (errors + v_tm1) * mask

@@ -132,9 +132,6 @@ def test_train_step_player_q_smoke():
         "player_neurd_switch_push",
         # R-NaD reg-value stream (2026-08-24): scalar head MSE + the
         # propagated reward/value telemetry.
-        "player_loss_v_reg",
-        "player_reg_value_mean",
-        "player_reg_reward_mean",
         "player_neurd_adv_std",
         # pi-prefactor decomposition: |d loss_neurd / d logit| on
         # switch vs non-switch legal cells of real-choice rows, split
