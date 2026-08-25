@@ -233,7 +233,9 @@ def test_q_loss_gradient_reaches_the_advantage_head_but_not_v_or_the_policy(
         taken = jnp.argmax(legal.astype(jnp.float32), axis=-1)
         return jnp.take_along_axis(q, taken[..., None], axis=-1).sum()
 
-    grads = jax.grad(loss_fn)(params)["params"]
+    # jit: an eager grad re-traces the whole module and dispatches op by op
+    # for both the forward and the backward (~77s); compiled once it is cached.
+    grads = jax.jit(jax.grad(loss_fn))(params)["params"]
 
     def norm(subtree):
         return float(

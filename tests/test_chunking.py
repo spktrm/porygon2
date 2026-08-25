@@ -2,6 +2,7 @@
 trailing history window clip, and the bootstrap-row mask in
 compute_player_targets."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -270,8 +271,11 @@ def test_untruncated_tail_window_forward_matches_within_bf16(
     )
     windowed = actor_input.replace(history=history_window, packed_history=packed_window)
 
-    full = network.apply(params, actor_input, actor_output, HeadParams())
-    clipped = network.apply(params, windowed, actor_output, HeadParams())
+    # jit: eager apply re-traces the module per call (see conftest). The two
+    # inputs differ in history length, so this is two compiles, both cached.
+    apply = jax.jit(network.apply)
+    full = apply(params, actor_input, actor_output, HeadParams())
+    clipped = apply(params, windowed, actor_output, HeadParams())
 
     np.testing.assert_allclose(
         np.asarray(clipped.value_head.log_probs, dtype=np.float32),
@@ -302,7 +306,7 @@ def test_truncated_tail_window_forward_is_finite(real_model_and_trajectory):
         actor_input.history, actor_input.packed_history, 32
     )
     windowed = actor_input.replace(history=history_window, packed_history=packed_window)
-    out = network.apply(params, windowed, actor_output, HeadParams())
+    out = jax.jit(network.apply)(params, windowed, actor_output, HeadParams())
     log_probs = np.asarray(out.value_head.log_probs, dtype=np.float32)
     assert np.isfinite(log_probs).all()
     # bf16 log_softmax: normalisation holds only to ~3e-3.
