@@ -466,7 +466,7 @@ export class WorkerHandler {
         const gameId = resetRequest.getGameId();
         const packedTeam = resetRequest.getPackedTeamsList();
 
-        const { player, opponentDetails } = await this.resetPlayerFromUserName(
+        const { player } = await this.resetPlayerFromUserName(
             userName,
             gameId,
             smogonFormat,

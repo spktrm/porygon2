@@ -153,7 +153,6 @@ class Battle {
         roomId: string,
         conn: Connection,
         username: string,
-        smogonFormat?: string,
     ) {
         this.battleId = roomId;
         this.conn = conn;
@@ -183,7 +182,7 @@ class Battle {
         this.battleId = roomId;
     }
 
-    public async start(rateLimit: number = 0) {
+    public async start() {
         while (true) {
             const state = await this.player.receiveEnvironmentState();
             if (!this.player.done) {
@@ -277,12 +276,7 @@ class User {
     }
 
     createNewBattle(roomId: string) {
-        const battle = new Battle(
-            roomId,
-            this.connection,
-            this.username!,
-            this.currentFormat,
-        );
+        const battle = new Battle(roomId, this.connection, this.username!);
         this.battles.addBattle(roomId, battle);
         battle.start().then(() => {
             battle.leave();
@@ -435,7 +429,7 @@ async function waitForServer(waitTimeout: number = 1000) {
             if (pong === "pong") {
                 break;
             }
-        } catch (error) {
+        } catch {
             console.log("Waiting for RL server to be ready...");
             await new Promise((resolve) => setTimeout(resolve, waitTimeout));
             continue;

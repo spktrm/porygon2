@@ -22,7 +22,6 @@ import {
 } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
-import { numActionFeatures } from "./data";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -578,7 +577,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         }
 
         const getTeamPreviewChoice = () => {
-            let order = [1, 2, 3, 4, 5, 6];
+            const order = [1, 2, 3, 4, 5, 6];
             for (const [toIdx, choice] of this.choices.entries()) {
                 const fromIdx = parseInt(choice.split(" ")[1]) - 1;
                 [order[toIdx], order[fromIdx]] = [order[fromIdx], order[toIdx]];

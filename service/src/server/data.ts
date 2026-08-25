@@ -35,7 +35,6 @@ import {
     VolatilestatusEnumMap,
     WeatherEnumMap,
 } from "../../protos/enums_pb";
-import { OneDBoolean } from "./utils";
 import {
     MovesetFeature,
     InfoFeature,

@@ -182,7 +182,7 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         return result;
     }
 
-    sum(axis?: number): number {
+    sum(): number {
         let total = 0;
         for (let i = 0; i < this.length; i++) {
             if (this.get(i)) {

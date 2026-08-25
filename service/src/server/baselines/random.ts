@@ -3,7 +3,6 @@ import { StateHandler } from "../state";
 import { OneDBoolean } from "../utils";
 import { Action, ActionEnum, ActionEnumMap } from "../../../protos/service_pb";
 import { AnyObject } from "@pkmn/sim";
-import { numActionFeatures } from "../data";
 
 export function getRandomOneIndex(arr: number[]): number {
     // Collect indices where the element is 1

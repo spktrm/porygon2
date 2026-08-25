@@ -15,7 +15,8 @@
         "start-evaluation-client": "npm run compile-base && node dist/client/index.js ",
         "test": "vitest run",
         "test-soak": "npm run compile-base && node dist/tests/main.js",
-        "offline": "npm run compile-base && node dist/scripts/offline.js"
+        "offline": "npm run compile-base && node dist/scripts/offline.js",
+        "lint": "eslint src"
     },
     "dependencies": {
         "@pkmn/client": "^0.7.2",
