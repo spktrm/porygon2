@@ -188,15 +188,17 @@ class Porygon2PlayerModel(nn.Module):
             action_embeddings, valid_mask, head.action_index if train else None, temp
         )
         mask_width = valid_mask.shape[-1]
+        learner_only = {}
+        if self.cfg.train:
+            learner_only = {
+                "log_policy": metrics.log_policy,
+                "macro_logits": scores.macro,
+                "micro_logits": scores.micro,
+            }
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
-            # Full support and the free per-level logits only in the
-            # learner: NeuRD differentiates against macro/micro, actors
-            # skip them so replay transitions stay small.
-            log_policy=metrics.log_policy if self.cfg.train else (),
-            macro_logits=scores.macro if self.cfg.train else (),
-            micro_logits=scores.micro if self.cfg.train else (),
+            **learner_only,
             src_index=action_index // mask_width,
             tgt_index=action_index % mask_width,
             entropy=metrics.entropy,

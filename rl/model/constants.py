@@ -80,34 +80,25 @@ class TokenType(IntEnum):
 NUM_TOKEN_TYPES = len(TokenType)
 assert max(TokenType) == NUM_TOKEN_TYPES - 1, "TokenType ids must be contiguous from 0"
 
-_SPECIES = TokenType.SPECIES
-_ABILITY = TokenType.ABILITY
-_ITEM = TokenType.ITEM
-_MOVE = TokenType.MOVE
-_LEARNSET = TokenType.LEARNSET
-_PUBLIC_STATE = TokenType.PUBLIC_STATE
-_ACTIVE_STATE = TokenType.ACTIVE_STATE
-_PRIVATE_STATE = TokenType.PRIVATE_STATE
-_FIELD = TokenType.FIELD
-_PREV_ACTION = TokenType.PREV_ACTION
-_HISTORY_SLOT = TokenType.HISTORY_SLOT
-_HISTORY_FIELD = TokenType.HISTORY_FIELD
-
 # The type vector for each token group the latent read is handed, in the
 # order that group's tokens appear.
 PUBLIC_TOKEN_TYPES = np.array(
-    [_SPECIES, _ABILITY, _ITEM]
-    + 4 * [_MOVE]
-    + [_LEARNSET, _PUBLIC_STATE, _ACTIVE_STATE],
+    [TokenType.SPECIES, TokenType.ABILITY, TokenType.ITEM]
+    + 4 * [TokenType.MOVE]
+    + [TokenType.LEARNSET, TokenType.PUBLIC_STATE, TokenType.ACTIVE_STATE],
     dtype=np.int32,
 )
 PRIVATE_TOKEN_TYPES = np.array(
-    [_SPECIES, _ABILITY, _ITEM] + 4 * [_MOVE] + [_PRIVATE_STATE], dtype=np.int32
+    [TokenType.SPECIES, TokenType.ABILITY, TokenType.ITEM]
+    + 4 * [TokenType.MOVE]
+    + [TokenType.PRIVATE_STATE],
+    dtype=np.int32,
 )
-FIELD_TOKEN_TYPES = np.array(3 * [_FIELD], dtype=np.int32)
-PREV_ACTION_TOKEN_TYPES = np.array(2 * [_PREV_ACTION], dtype=np.int32)
+FIELD_TOKEN_TYPES = np.array(3 * [TokenType.FIELD], dtype=np.int32)
+PREV_ACTION_TOKEN_TYPES = np.array(2 * [TokenType.PREV_ACTION], dtype=np.int32)
 HISTORY_TOKEN_TYPES = np.array(
-    NUM_PUBLIC_SLOTS * [_HISTORY_SLOT] + [_HISTORY_FIELD], dtype=np.int32
+    NUM_PUBLIC_SLOTS * [TokenType.HISTORY_SLOT] + [TokenType.HISTORY_FIELD],
+    dtype=np.int32,
 )
 
 # The flat input token count the latent read cross-attends, ASSERTED rather
