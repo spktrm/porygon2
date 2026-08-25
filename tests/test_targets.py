@@ -389,18 +389,27 @@ class TestRNaDTransform:
             float(reference_kl(log_pi, log_ref_junk, legal)[0]), expected, rtol=1e-5
         )
 
-    def test_starved_cell_gets_an_unbounded_upward_push(self):
-        """The property the transform is bought for: with Q flat, a cell
-        at pi ~ 1e-4 against a reference of 0.25 carries +eta*log(2500)
-        ~ +1.56 of advantage at eta 0.2 — no pi prefactor anywhere."""
-        from rl.online.training.targets import ref_penalised_q
-
+    @staticmethod
+    def _starved_row():
         legal = jnp.ones((1, 4), dtype=bool)
         pi = jnp.asarray([[0.9999 - 2e-4, 1e-4, 1e-4, 1e-4]])
         pi = pi / pi.sum()
         log_ref = jnp.log(jnp.full((1, 4), 0.25))
-        q = jnp.zeros((1, 4))
-        q_reg = ref_penalised_q(q, jnp.log(pi), log_ref, legal, eta=0.2)
+        return legal, pi, log_ref
+
+    @staticmethod
+    def _penalised(pi, log_ref, legal, eta, eta_ent):
+        from rl.online.training.targets import reference_penalty
+
+        ref, ent = reference_penalty(jnp.log(pi), log_ref, legal, eta, eta_ent)
+        return jnp.where(legal, jnp.zeros_like(ref) - ref - ent, 0.0)
+
+    def test_starved_cell_gets_an_unbounded_upward_push(self):
+        """The property the transform is bought for: with A flat, a cell
+        at pi ~ 1e-4 against a reference of 0.25 carries +eta*log(2500)
+        ~ +1.56 of advantage at eta 0.2 — no pi prefactor anywhere."""
+        legal, pi, log_ref = self._starved_row()
+        q_reg = self._penalised(pi, log_ref, legal, eta=0.2, eta_ent=0.0)
         adv = q_reg - (pi * q_reg).sum(axis=-1, keepdims=True)
         assert float(adv[0, 1]) > 1.5
         # And the dominant cell's value is marked DOWN by
@@ -409,7 +418,37 @@ class TestRNaDTransform:
         assert float(q_reg[0, 0]) < -0.25
         # eta 0 is the identity.
         np.testing.assert_allclose(
-            np.asarray(ref_penalised_q(q, jnp.log(pi), log_ref, legal, eta=0.0)),
+            np.asarray(self._penalised(pi, log_ref, legal, eta=0.0, eta_ent=0.0)),
+            0.0,
+            atol=1e-7,
+        )
+
+    def test_entropy_term_is_the_uniform_reference(self):
+        """eta_ent*log pi(a) alone: exactly the reference penalty with
+        pi_reg uniform, so it must reproduce that arm cell for cell up to
+        the log N constant NeuRD's centring drops."""
+        legal, pi, log_ref = self._starved_row()  # log_ref IS uniform here
+        ent_only = self._penalised(pi, log_ref, legal, eta=0.0, eta_ent=0.2)
+        ref_uniform = self._penalised(pi, log_ref, legal, eta=0.2, eta_ent=0.0)
+        offset = np.asarray(ent_only - ref_uniform)
+        np.testing.assert_allclose(offset, offset[0, 0], atol=1e-6)
+
+    def test_entropy_term_alone_restores_a_starved_cell(self):
+        """Positive control for the term landing at all: with no reference
+        pressure, entropy alone must still push the starved cell up, and
+        with no pi prefactor the push must GROW as pi(a) shrinks."""
+        legal, pi, log_ref = self._starved_row()
+
+        def starved_push(mass):
+            probs = jnp.asarray([[1.0 - 3 * mass, mass, mass, mass]])
+            q_reg = self._penalised(probs, log_ref, legal, eta=0.0, eta_ent=0.05)
+            adv = q_reg - (probs * q_reg).sum(axis=-1, keepdims=True)
+            return float(adv[0, 1])
+
+        assert starved_push(1e-2) > 0.0
+        assert starved_push(1e-4) > starved_push(1e-2)
+        np.testing.assert_allclose(
+            np.asarray(self._penalised(pi, log_ref, legal, eta=0.0, eta_ent=0.0)),
             0.0,
             atol=1e-7,
         )

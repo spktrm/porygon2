@@ -422,6 +422,21 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # NeuRD's logit gradient makes the refill force GROW as pi -> 0. Same
     # lesson as the gradient-side magnet this replaced. 0 = plain NeuRD.
     player_ref_eta: float = 0.2
+    # Entropy coefficient, applied the SAME analytic way: a second per-cell
+    # shift -eta_ent*log pi(a), which is KL(pi||uniform) up to the log N
+    # constant the re-centring drops. NashPG runs ent_coef 0.05 ALONGSIDE
+    # its magnet at 0.2 (conf/algorithm/nash_pg.yaml) and Ataraxos's magnet
+    # IS uniform, so both references carry this term and we carried
+    # neither since the gradient-side magnet went in 4254a1f. Analytic, not
+    # a loss term, for the reason above: a differentiated entropy is
+    # pi-prefactored and cannot refill a starved modality — the structural
+    # limit four magnet retunes hit (0.01 -> 0.05 -> 0.1 -> 0.2).
+    # Fixed, not decayed: Ataraxos anneals its temperature on a power
+    # schedule, but LESSONS 10's through-line is a fixed value plus a panel
+    # until a pathology proves fixed cannot work. The decay is the
+    # follow-up, and it goes on the traced step_count like warmup_scale
+    # (no recompile), not into a RuntimeScalars revival.
+    player_ref_eta_ent: float = 0.05
     # Snap period of the reference (2026-08-25, replacing the continuous
     # EMA — 1e-4, then 5e-5): reg_params <- target_params, in place,
     # every N steps once the NeuRD warm-up is done (rnad.py's delta_m

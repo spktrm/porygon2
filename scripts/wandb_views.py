@@ -200,6 +200,18 @@ def rl_sections():
                     ["player_ref_penalty_switch", "player_ref_penalty_move"],
                 ),
                 lp(
+                    # The other analytic shift, -eta_ent*log pi = the same
+                    # construction with pi_reg uniform (NashPG's ent_coef,
+                    # which it runs alongside its magnet). This is what is
+                    # left once the reference catches up and the pair
+                    # above goes to ~0, so switch must sit ABOVE move —
+                    # the term pushing where the mass is thin is its whole
+                    # claim, and equal levels mean it is doing nothing the
+                    # centring does not already undo.
+                    "Entropy penalty by modality",
+                    ["player_ent_penalty_switch", "player_ent_penalty_move"],
+                ),
+                lp(
                     # KL(pi_target || pi_reg) per state: the expected
                     # per-step penalty inside the Q bootstrap. Rises as
                     # the policy moves off its ~10k-step-lagged

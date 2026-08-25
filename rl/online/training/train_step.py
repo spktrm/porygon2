@@ -36,8 +36,8 @@ from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     compute_q_onestep_targets,
-    ref_penalised_q,
     reference_kl,
+    reference_penalty,
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
@@ -221,7 +221,7 @@ def train_step(
     # centring, so it never enters the policy objective at all.
     v_target = player_target_pred.value_head.expectation.astype(jnp.float32)
     # The critics learn the PLAIN game (2026-08-25): the reference is a
-    # policy-objective term only, analytic per cell in ref_penalised_q.
+    # policy-objective term only, analytic per cell in targets.reference_penalty.
     # The propagated-penalty bootstrap (V_win + V_reg) is gone — NashPG
     # (arXiv:2510.18183) matches R-NaD's exploitability with the KL in
     # the objective and NO reward transform, and the stream had no
@@ -665,12 +665,20 @@ def train_step(
         # construction and guards saturation only; the Huber loss still
         # sees Q unclipped.
         adv_for_policy = jnp.clip(adv_target, -2.0, 2.0)
-        adv_reg = ref_penalised_q(
-            adv_for_policy,
+        # Second analytic shift, same construction with pi_reg = uniform:
+        # NashPG runs its ent_coef alongside the magnet and Ataraxos's
+        # magnet IS uniform, so the entropy pressure belongs here rather
+        # than as a differentiated loss term (which would be
+        # pi-prefactored and unable to refill a starved modality).
+        ref_component, ent_component = reference_penalty(
             learner_log_policy,
             reg_log_policy,
             flat_action_mask,
             config.player_ref_eta,
+            config.player_ref_eta_ent,
+        )
+        adv_reg = jnp.where(
+            flat_action_mask, adv_for_policy - ref_component - ent_component, 0.0
         )
         # Re-centre: the reference penalty is added per cell BEFORE
         # centring (it must grow like -eta*log pi(a) as pi(a) -> 0), so it
@@ -679,9 +687,8 @@ def train_step(
         neurd_adv = jax.lax.stop_gradient(
             jnp.where(flat_action_mask, adv_reg - adv_cf[..., None], 0.0)
         )
-        ref_penalty = jax.lax.stop_gradient(
-            jnp.where(flat_action_mask, adv_for_policy - adv_reg, 0.0)
-        )
+        ref_penalty = jax.lax.stop_gradient(ref_component)
+        ent_penalty = jax.lax.stop_gradient(ent_component)
         # Hierarchical NeuRD on the head's FREE logits (2026-08-24,
         # loss.hierarchical_neurd). The composed pi_logits this read
         # before are a normalised log-policy (macro log-softmax +
@@ -766,14 +773,19 @@ def train_step(
         def neurd_ratio(numerator, denominator):
             return numerator / jnp.maximum(denominator, 1e-8)
 
-        # R-NaD penalty -eta*(log pi - log pi_reg) by modality over
-        # legal cells of real-choice rows (the sign convention: POSITIVE
-        # = the cell is pushed UP relative to its Q, i.e. pi sits below
-        # the reference there). penalty_switch climbing while
-        # switch_ratio falls is the transform doing its job; both flat
-        # at zero is a reference that has caught up (KL 0).
+        # The two analytic penalties by modality over legal cells of
+        # real-choice rows (sign convention: POSITIVE = the cell is pushed
+        # UP relative to its A). Split because they answer different
+        # questions and can disagree: ref_penalty_switch climbing while
+        # switch_ratio falls is the reference doing its job, and both ref
+        # terms flat at zero is a reference that has caught up (KL 0) —
+        # at which point the ENTROPY pair is the only pressure left, and
+        # ent_penalty_switch must sit above ent_penalty_move or the term
+        # is not pushing where the mass is thin, which is its whole claim.
         ref_penalty_switch = average(-ref_penalty, neurd_switch_cells)
         ref_penalty_move = average(-ref_penalty, neurd_move_cells)
+        ent_penalty_switch = average(-ent_penalty, neurd_switch_cells)
+        ent_penalty_move = average(-ent_penalty, neurd_move_cells)
 
         neurd_logs = dict(
             player_loss_neurd=loss_neurd,
@@ -798,6 +810,8 @@ def train_step(
             ),
             player_ref_penalty_switch=ref_penalty_switch,
             player_ref_penalty_move=ref_penalty_move,
+            player_ent_penalty_switch=ent_penalty_switch,
+            player_ent_penalty_move=ent_penalty_move,
             # Per-cell |d loss_neurd / d logit| on legal switch
             # cells vs legal non-switch cells of the same
             # real-choice rows, and the two factors it is the
@@ -850,7 +864,7 @@ def train_step(
             - average(neurd_grad_prefactor, neurd_move_cells),
             # KL(pi_learner || pi_reg) per state -- the expected
             # reference penalty the loss actually pays (same policy as
-            # ref_penalised_q). Drifts up as the policy moves away from
+            # targets.reference_penalty). Drifts up as the policy moves away from
             # the FROZEN reference and drops to ~0 at each snap; a level
             # that keeps climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
