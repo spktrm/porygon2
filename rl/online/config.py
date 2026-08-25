@@ -210,12 +210,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per-step fresh-vs-replayed value-error gap below stays: it is
     # computed from tensors train_step already has.
 
-    # Learning params. Momentum (b1=0.9) is on: stability under replay reuse
-    # is already provided by the SPO trust region, the behaviour-KL penalty
-    # and the replay-KL controller (which throttles reuse if actor-KL
-    # exceeds its 0.045 ceiling) — momentum-free Adam was leaving all three
-    # guardrails idle (actor-KL 0.013–0.044, grad norm 1–4 vs clip 10).
-    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
+    # Learning params. Player b1=0.0 — DeepNash Table 2 (b1 0.0, b2 0.999)
+    # and rnad.py's AdamConfig: no first-moment momentum anywhere near a
+    # NeuRD update. The old pro-momentum argument here cited guardrails
+    # (SPO trust region, behaviour-KL, replay-KL controller) that bound
+    # the builder's pi-prefactored surrogate and the replay path — none
+    # of them act on the prefactor-free NeuRD force, and momentum carried
+    # each push ~1/(1-b1) = 10 steps past the stiff equilibrium the
+    # analytic shifts create (the dx65cpwp micro runaway, 2026-08-26).
+    # The builder keeps b1=0.9: its PPO-style loss IS trust-regioned.
+    player_adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
+    builder_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     # 3e-5. A 1e-4 trial (Aug 2026, zany-leaf-1305) collapsed: pre-clip grad
     # norms 10-100x the clip, action-emb srank at 0.27 by 13k steps (vs
     # 0.82 at 3e-5), value CE degrading and eval regressing from ~40k —

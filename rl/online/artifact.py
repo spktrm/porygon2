@@ -189,10 +189,10 @@ def create_train_state(
         optax.clip_by_global_norm(config.player_clip_gradient),
         optax.adamw(
             learning_rate=config.player_learning_rate,
-            b1=config.adam.b1,
-            b2=config.adam.b2,
-            eps=config.adam.eps,
-            weight_decay=config.adam.weight_decay,
+            b1=config.player_adam.b1,
+            b2=config.player_adam.b2,
+            eps=config.player_adam.eps,
+            weight_decay=config.player_adam.weight_decay,
         ),
     )
     player_train_state = Porygon2PlayerTrainState.create(
@@ -217,10 +217,10 @@ def create_train_state(
         optax.clip_by_global_norm(config.builder_clip_gradient),
         optax.adamw(
             learning_rate=config.builder_learning_rate,
-            b1=config.adam.b1,
-            b2=config.adam.b2,
-            eps=config.adam.eps,
-            weight_decay=config.adam.weight_decay,
+            b1=config.builder_adam.b1,
+            b2=config.builder_adam.b2,
+            eps=config.builder_adam.eps,
+            weight_decay=config.builder_adam.weight_decay,
         ),
     )
     inital_builder_params = builder_params_init_fn(rng)
