@@ -11,15 +11,14 @@ import numpy as np
 import optax
 
 from rl.environment.data import (
-    NUM_MODALITY_FEATURES,
     ALLY_SWITCH_INDICES,
     CAT_VF_SUPPORT,
     FLAT_MODALITY_MASK,
+    NUM_MODALITY_FEATURES,
     NUM_PACKED_SET_FEATURES,
     RESERVE_ENTITY_INDICES,
 )
 from rl.environment.interfaces import Trajectory
-from rl.utils import average
 from rl.environment.protos.features_pb2 import (
     FieldFeature,
     InfoFeature,
@@ -27,6 +26,7 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import ActionEnum, ModalityEnum
 from rl.online.config import Porygon2LearnerConfig
+from rl.utils import average
 
 T = TypeVar("T")
 
@@ -433,9 +433,7 @@ def action_axis_masks(
     flat_action_mask: jax.Array, action_index: jax.Array
 ) -> ActionAxisMasks:
     """See ActionAxisMasks. `has_both` is THE real-choice predicate."""
-    switch_cells = jnp.asarray(
-        FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH
-    )
+    switch_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH)
     move_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE)
     valid_switch = flat_action_mask & switch_cells
     valid_move = flat_action_mask & move_cells

@@ -358,10 +358,7 @@ export class GameServer {
             loggingLevel?: string;
         } = {},
     ) {
-        const {
-            maxWorkers,
-            loggingLevel = "info",
-        } = options;
+        const { maxWorkers, loggingLevel = "info" } = options;
 
         this.logger = pino({ level: loggingLevel });
         this.wss = new WebSocketServer({ port });

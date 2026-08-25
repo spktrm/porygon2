@@ -68,7 +68,7 @@ def test_pi_centring_gives_expected_q_equals_v(
     """E_pi[A] = 0 and therefore E_pi[Q] = V, on OPENED params.
 
     At init this would pass vacuously (A is identically zero), so the zero-init
-    output paths are opened first — the same trap LESSONS.md section 7 records.
+    output paths are opened first — the same trap CLAUDE.md section 7 records.
     """
     from conftest import open_zero_init_paths
 
@@ -166,10 +166,7 @@ def test_micro_tier_is_centred_uniformly_not_by_pi(seed):
     """
     import jax.numpy as jnp
 
-    from rl.environment.data import (
-        FLAT_MODALITY_MASK,
-        NUM_MODALITY_FEATURES,
-    )
+    from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
     from rl.model.heads import compose_action_grid
 
     flat = np.asarray(FLAT_MODALITY_MASK)
@@ -240,9 +237,16 @@ def test_q_loss_gradient_reaches_the_advantage_head_but_not_v_or_the_policy(
 
     def norm(subtree):
         return float(
-            sum(np.square(np.asarray(x, np.float64)).sum() for x in jax.tree.leaves(subtree))
+            sum(
+                np.square(np.asarray(x, np.float64)).sum()
+                for x in jax.tree.leaves(subtree)
+            )
         )
 
-    assert norm(grads["advantage_head"]) > 0.0, "positive control: A head must get gradient"
+    assert (
+        norm(grads["advantage_head"]) > 0.0
+    ), "positive control: A head must get gradient"
     assert norm(grads["v_head"]) == 0.0, "sg(V) leaked: the Q loss moved the critic"
-    assert norm(grads["policy_head"]) == 0.0, "sg(pi) leaked: the Q loss moved the policy"
+    assert (
+        norm(grads["policy_head"]) == 0.0
+    ), "sg(pi) leaked: the Q loss moved the policy"

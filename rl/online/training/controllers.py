@@ -36,4 +36,3 @@ class PILogController:
         self.log += self.kp * (err - self.prev_err) + self.ki * err
         self.prev_err = err
         self.log = float(np.clip(self.log, self.log_min, self.log_max))
-

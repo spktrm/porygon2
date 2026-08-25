@@ -1,5 +1,3 @@
-import { numActionFeatures } from "./data";
-
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export class TaskQueueSystem<T> {
     private results: Map<number, Promise<T>> = new Map();
@@ -212,7 +210,6 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
 
         return result;
     }
-
 }
 
 export function isEvalUser(userName: string) {

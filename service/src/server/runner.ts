@@ -176,7 +176,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     isBaseline: boolean;
     baselineIndex: number;
 
-
     firstRequest: AnyObject | undefined;
     // Training self-play only: the other TrainablePlayerAI in this battle,
     // wired by createBattle after both players exist. Deploy-time players
@@ -223,7 +222,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         } else {
             this.baselineIndex = -1;
         }
-
     }
 
     finishEarly() {

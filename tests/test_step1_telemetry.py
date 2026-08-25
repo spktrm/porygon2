@@ -13,8 +13,8 @@ from rl.environment.interfaces import Trajectory
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.online.training.batching import _or_empty
 from rl.online.training.telemetry import (
-    action_axis_masks,
     MATCHED_V_EDGES,
+    action_axis_masks,
     critic_outcome_telemetry,
     masked_mean,
     masked_var,

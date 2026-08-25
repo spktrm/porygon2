@@ -3,7 +3,6 @@ import chex
 from rl.config.common import AdamWConfig, BaseTrainingConfig
 
 
-
 @chex.dataclass(frozen=True)
 class Porygon2LearnerConfig(BaseTrainingConfig):
     # ANNOTATED, so it is a real dataclass field: without the annotation

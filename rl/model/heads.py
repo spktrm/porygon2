@@ -164,9 +164,7 @@ class MicroHead(nn.Module):
         lead = action_embeddings.shape[:-2]
         n = action_embeddings.shape[-2]
         # (N, G) one-hot of each SRC slot's group: the per-group select.
-        group_oh = jax.nn.one_hot(
-            jnp.asarray(SRC_GROUP_MASK), g, dtype=jnp.float32
-        )
+        group_oh = jax.nn.one_hot(jnp.asarray(SRC_GROUP_MASK), g, dtype=jnp.float32)
 
         # Per-group q/k projections -> (..., N, N, G * K) -> (..., N, N, G, K)
         grid = PointerLogits(
@@ -188,9 +186,10 @@ class MicroHead(nn.Module):
             jnp.asarray(FLAT_SRC_GROUP_MASK), g, dtype=jnp.float32
         )
         sq = jnp.square(flat)
-        group_ms = jnp.einsum("...ck,cg->...gk", sq, flat_group_oh) / jnp.maximum(
-            flat_group_oh.sum(axis=0), 1.0
-        )[:, None]
+        group_ms = (
+            jnp.einsum("...ck,cg->...gk", sq, flat_group_oh)
+            / jnp.maximum(flat_group_oh.sum(axis=0), 1.0)[:, None]
+        )
         group_rms = jax.lax.stop_gradient(
             jnp.sqrt(group_ms + 1e-12)[..., FLAT_SRC_GROUP_MASK, :]
         )

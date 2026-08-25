@@ -130,10 +130,7 @@ def test_micro_params_are_not_shared_between_slot_groups(
     kernels (attention heads own disjoint output coordinates), so the
     assertion is per-column-block, not per-leaf.
     """
-    from rl.environment.data import (
-        FLAT_SRC_GROUP_MASK,
-        NUM_ACTION_SLOT_GROUPS,
-    )
+    from rl.environment.data import FLAT_SRC_GROUP_MASK, NUM_ACTION_SLOT_GROUPS
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
@@ -154,9 +151,7 @@ def test_micro_params_are_not_shared_between_slot_groups(
         def loss(p):
             o = real_model_apply(p, actor_input, actor_output, HeadParams())
             return jnp.sum(
-                o.advantage.astype(jnp.float32)
-                * jnp.asarray(sel)
-                * jnp.asarray(legal)
+                o.advantage.astype(jnp.float32) * jnp.asarray(sel) * jnp.asarray(legal)
             )
 
         return jax.grad(loss)(params)["params"]["advantage_head"]["macro_micro"][

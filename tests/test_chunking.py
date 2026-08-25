@@ -268,9 +268,7 @@ def test_untruncated_tail_window_forward_matches_within_bf16(
     history_window, packed_window = clip_history_windows_tail(
         actor_input.history, actor_input.packed_history, window
     )
-    windowed = actor_input.replace(
-        history=history_window, packed_history=packed_window
-    )
+    windowed = actor_input.replace(history=history_window, packed_history=packed_window)
 
     full = network.apply(params, actor_input, actor_output, HeadParams())
     clipped = network.apply(params, windowed, actor_output, HeadParams())

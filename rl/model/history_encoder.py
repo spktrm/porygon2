@@ -23,9 +23,8 @@ from ml_collections import ConfigDict
 
 from rl.environment.protos.enums_pb2 import BattlemajorargsEnum
 from rl.environment.protos.features_pb2 import EntityEdgeFeature, FieldFeature
+from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
-
-NUM_PUBLIC_SLOTS = 12
 
 # The scan is latency-bound (hundreds of tiny sequential kernels), not
 # FLOP-bound; unrolling fuses steps per launch.

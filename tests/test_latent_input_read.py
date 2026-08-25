@@ -17,14 +17,14 @@ import numpy as np
 from flax.traverse_util import flatten_dict
 
 from rl.model.config import get_player_model_config
-from rl.model.encoder import (
-    _FIELD_TOKEN_TYPES,
-    _HISTORY_TOKEN_TYPES,
-    _PREV_ACTION_TOKEN_TYPES,
-    _PRIVATE_TOKEN_TYPES,
-    _PUBLIC_TOKEN_TYPES,
-    LatentInputRead,
+from rl.model.constants import (
+    FIELD_TOKEN_TYPES,
+    HISTORY_TOKEN_TYPES,
+    PREV_ACTION_TOKEN_TYPES,
+    PRIVATE_TOKEN_TYPES,
+    PUBLIC_TOKEN_TYPES,
 )
+from rl.model.encoder import LatentInputRead
 
 NUM_PUBLIC = 12
 NUM_PRIVATE = 6
@@ -42,11 +42,11 @@ def _inputs(seed=0):
         return jnp.asarray(rng.normal(size=(num, len(types), dim)), dtype=cfg.dtype)
 
     types = (
-        _PUBLIC_TOKEN_TYPES,
-        _PRIVATE_TOKEN_TYPES,
-        _FIELD_TOKEN_TYPES,
-        _PREV_ACTION_TOKEN_TYPES,
-        _HISTORY_TOKEN_TYPES,
+        PUBLIC_TOKEN_TYPES,
+        PRIVATE_TOKEN_TYPES,
+        FIELD_TOKEN_TYPES,
+        PREV_ACTION_TOKEN_TYPES,
+        HISTORY_TOKEN_TYPES,
     )
     groups = (
         block(NUM_PUBLIC, types[0]),

@@ -12,7 +12,6 @@ from rl.environment.data import (
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     MOVE_INDICES,
-    MOVE_SLOT_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
@@ -21,9 +20,7 @@ from rl.environment.data import (
     PASS_INDICES,
     REGULAR_MOVE_INDICES,
     RESERVE_ENTITY_INDICES,
-    SWITCH_SLOT_INDICES,
     TARGET_INDICES,
-    TARGET_SLOT_INDICES,
     WILDCARD_MOVE_INDICES,
 )
 from rl.environment.interfaces import (
@@ -47,6 +44,17 @@ from rl.environment.protos.features_pb2 import (
     FieldFeature,
     InfoFeature,
     MovesetFeature,
+)
+from rl.model.constants import (
+    ACTION_DECODER_SLOT_GROUPS,
+    ACTION_GROUP_SLOTS,
+    ACTION_GROUP_SPLITS,
+    FIELD_TOKEN_TYPES,
+    HISTORY_TOKEN_TYPES,
+    NUM_TOKEN_TYPES,
+    PREV_ACTION_TOKEN_TYPES,
+    PRIVATE_TOKEN_TYPES,
+    PUBLIC_TOKEN_TYPES,
 )
 from rl.model.features import (
     binary_scale_encoding,
@@ -89,9 +97,6 @@ from rl.model.modules import (
 # move-feature-derived, switch slots entity-derived, target/structural
 # slots key-only. Since 2026-08-17 the groups are not just decoder
 # bookkeeping — each is its own residual stream through the round trunk.
-_MOVE_SLOTS = np.asarray(MOVE_SLOT_INDICES)
-_SWITCH_SLOTS = np.asarray(SWITCH_SLOT_INDICES)
-_TARGET_STATIC_SLOTS = np.asarray(TARGET_SLOT_INDICES)
 
 
 def _forward_vmap():
@@ -140,68 +145,6 @@ def _lifted_entity_vmap(method):
     )
 
 
-# (name, static slot indices) per decoder, used to gather/scatter action embeddings.
-ACTION_DECODER_SLOT_GROUPS = (
-    ("move", _MOVE_SLOTS),
-    ("switch", _SWITCH_SLOTS),
-    ("target", _TARGET_STATIC_SLOTS),
-)
-# Slot-aligned indices of the concatenated action stream's rows
-# ([move | switch | target] order) and the split points between groups —
-# the gather on the way into the trunk and the scatter back out are the
-# same permutation.
-ACTION_GROUP_SLOTS = np.concatenate(
-    [slot_indices for _, slot_indices in ACTION_DECODER_SLOT_GROUPS]
-)
-ACTION_GROUP_SPLITS = np.cumsum(
-    [len(slot_indices) for _, slot_indices in ACTION_DECODER_SLOT_GROUPS]
-)[:-1]
-
-# Intra-entity attribute-token types: rows of the shared token-type bias
-# table, giving the (otherwise permutation-invariant) intra-entity attention
-# a field identity per token. The four moves share one type — movesets are
-# unordered. Public entities carry two state tokens: a persistent one
-# (survives switching: hp, status, level, ...) and an active-only one
-# (volatiles, boosts, typechange, trapped, ...) that is masked out for
-# benched entities, so "not applicable" is an absent token rather than a
-# default-valued vector.
-_TOKEN_SPECIES = 0
-_TOKEN_ABILITY = 1
-_TOKEN_ITEM = 2
-_TOKEN_MOVE = 3
-_TOKEN_LEARNSET = 4
-_TOKEN_PUBLIC_STATE = 5
-_TOKEN_ACTIVE_STATE = 6
-_TOKEN_PRIVATE_STATE = 7
-# Non-entity tokens of the flat input set the latent read consumes
-# (2026-08-21): field / side conditions, the two prev-action slots, the
-# per-slot recurrent history states and the field history state.
-# (_TOKEN_LATENT went with the privileged read on 2026-08-25 -- it typed
-# the public latents when that read re-read them, and nothing re-reads
-# them now, so its row of the type table was never indexed again.)
-_TOKEN_FIELD = 8
-_TOKEN_PREV_ACTION = 9
-_TOKEN_HISTORY_SLOT = 10
-_TOKEN_HISTORY_FIELD = 11
-_NUM_TOKEN_TYPES = 12
-
-_PUBLIC_TOKEN_TYPES = np.array(
-    [_TOKEN_SPECIES, _TOKEN_ABILITY, _TOKEN_ITEM]
-    + 4 * [_TOKEN_MOVE]
-    + [_TOKEN_LEARNSET, _TOKEN_PUBLIC_STATE, _TOKEN_ACTIVE_STATE]
-)
-_PRIVATE_TOKEN_TYPES = np.array(
-    [_TOKEN_SPECIES, _TOKEN_ABILITY, _TOKEN_ITEM]
-    + 4 * [_TOKEN_MOVE]
-    + [_TOKEN_PRIVATE_STATE]
-)
-_FIELD_TOKEN_TYPES = np.array(3 * [_TOKEN_FIELD])
-_PREV_ACTION_TOKEN_TYPES = np.array(2 * [_TOKEN_PREV_ACTION])
-_HISTORY_TOKEN_TYPES = np.array(
-    NUM_PUBLIC_SLOTS * [_TOKEN_HISTORY_SLOT] + [_TOKEN_HISTORY_FIELD]
-)
-
-
 class EntityAttentionPool(nn.Module):
     """Pool one entity's attribute tokens into a single entity vector.
 
@@ -224,7 +167,7 @@ class EntityAttentionPool(nn.Module):
         token_bias = self.param(
             "token_bias",
             nn.initializers.zeros_init(),
-            (_NUM_TOKEN_TYPES, tokens.shape[-1]),
+            (NUM_TOKEN_TYPES, tokens.shape[-1]),
         )
         pool_query = self.param("pool_query", embedding_init, (1, tokens.shape[-1]))
 
@@ -294,7 +237,7 @@ class LatentInputRead(nn.Module):
         token_bias = self.param(
             "token_bias",
             nn.initializers.zeros_init(),
-            (_NUM_TOKEN_TYPES, model_size),
+            (NUM_TOKEN_TYPES, model_size),
         )
         entity_bias = self.param(
             "entity_bias", nn.initializers.zeros_init(), (num_entities, model_size)
@@ -1032,7 +975,7 @@ class Encoder(nn.Module):
         meaningful -- those rows are different turns, not a shared board)."""
         tokens, token_mask, mask, bias = self._public_entity_tokens(public, revealed)
         revealed_embedding = (
-            self.entity_attention_pool(tokens, token_mask, _PUBLIC_TOKEN_TYPES) + bias
+            self.entity_attention_pool(tokens, token_mask, PUBLIC_TOKEN_TYPES) + bias
         )
         return revealed_embedding, mask
 
@@ -1150,7 +1093,7 @@ class Encoder(nn.Module):
         served, was deleted 2026-08-25)."""
         tokens, token_mask, mask = self._private_entity_tokens(private, num_stat_bands)
         private_embedding = self.entity_attention_pool(
-            tokens, token_mask, _PRIVATE_TOKEN_TYPES
+            tokens, token_mask, PRIVATE_TOKEN_TYPES
         )
         return private_embedding, mask
 
@@ -1392,10 +1335,10 @@ class Encoder(nn.Module):
         return field_embeddings, mask, request_count, turn_order_value
 
     def _pool_public_tokens(self, tokens: jax.Array, token_mask: jax.Array):
-        return self.entity_attention_pool(tokens, token_mask, _PUBLIC_TOKEN_TYPES)
+        return self.entity_attention_pool(tokens, token_mask, PUBLIC_TOKEN_TYPES)
 
     def _pool_private_tokens(self, tokens: jax.Array, token_mask: jax.Array):
-        return self.entity_attention_pool(tokens, token_mask, _PRIVATE_TOKEN_TYPES)
+        return self.entity_attention_pool(tokens, token_mask, PRIVATE_TOKEN_TYPES)
 
     def _current_entity_tokens(self, env_step: PlayerEnvOutput):
         """Attribute tokens of every entity of the CURRENT board -- both
@@ -1608,11 +1551,11 @@ class Encoder(nn.Module):
                 history_valid[None],
             ),
             (
-                _PUBLIC_TOKEN_TYPES,
-                _PRIVATE_TOKEN_TYPES,
-                _FIELD_TOKEN_TYPES,
-                _PREV_ACTION_TOKEN_TYPES,
-                _HISTORY_TOKEN_TYPES,
+                PUBLIC_TOKEN_TYPES,
+                PRIVATE_TOKEN_TYPES,
+                FIELD_TOKEN_TYPES,
+                PREV_ACTION_TOKEN_TYPES,
+                HISTORY_TOKEN_TYPES,
             ),
             (public_bias, private_bias, None, None, None),
         )
@@ -1630,7 +1573,7 @@ class Encoder(nn.Module):
                 )
             )
         )
-        ((_, action_queries, value_queries), _) = self.round_trunk(
+        (_, action_queries, value_queries), _ = self.round_trunk(
             (public_latents, action_tokens, value_tokens),
             state_valid,
             *typed_action_valids,

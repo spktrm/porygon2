@@ -149,11 +149,7 @@ class Battle {
     prevMessage: string | undefined;
     active: boolean;
 
-    constructor(
-        roomId: string,
-        conn: Connection,
-        username: string,
-    ) {
+    constructor(roomId: string, conn: Connection, username: string) {
         this.battleId = roomId;
         this.conn = conn;
         this.active = true;

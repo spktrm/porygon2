@@ -212,9 +212,7 @@ def forward(
 def decode_q(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
     """Q = sg(V) + centred A, (T, B, A) — composed in the model since
     2026-08-25 (heads.compose_q), so this is now just a masked read."""
-    return np.asarray(
-        jnp.where(jnp.asarray(flat_action_mask, bool), pred.q, 0.0)
-    )
+    return np.asarray(jnp.where(jnp.asarray(flat_action_mask, bool), pred.q, 0.0))
 
 
 def gpu_headroom_env(fraction: float = 0.12) -> None:

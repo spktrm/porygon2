@@ -12,9 +12,9 @@ import jax.numpy as jnp
 import optax
 
 from rl.environment.data import (
-    FLAT_SRC_GROUP_MASK,
     CAT_VF_SUPPORT,
     FLAT_MODALITY_MASK,
+    FLAT_SRC_GROUP_MASK,
     NUM_MODALITY_FEATURES,
     PackedSetFeature,
 )
@@ -41,12 +41,12 @@ from rl.online.training.targets import (
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
-    q_fit_telemetry,
     calculate_r2,
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
     modality_means,
     promote_map,
+    q_fit_telemetry,
     q_head_param_telemetry,
 )
 from rl.utils import average
@@ -246,9 +246,7 @@ def train_step(
     axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
     valid_switch = axis.valid_switch
     valid_move = axis.valid_move
-    best_switch = jnp.max(
-        jnp.where(valid_switch, q_target, -jnp.inf), axis=-1
-    )
+    best_switch = jnp.max(jnp.where(valid_switch, q_target, -jnp.inf), axis=-1)
     best_move = jnp.max(jnp.where(valid_move, q_target, -jnp.inf), axis=-1)
     has_both = axis.has_both
     training_logs["player_q_switch_move_gap"] = average(
@@ -378,9 +376,7 @@ def train_step(
     # undersells the spread by construction when action-value spread
     # concentrates in few high-leverage states (which is how this game
     # works) — the p90 is the honest readout.
-    qvar_state = (pi_target * jnp.square(q_target - q_v_exp[..., None])).sum(
-        axis=-1
-    )
+    qvar_state = (pi_target * jnp.square(q_target - q_v_exp[..., None])).sum(axis=-1)
     training_logs["player_q_action_var"] = average(qvar_state, q_mask)
     training_logs["player_q_action_var_p90"] = jnp.nanquantile(
         jnp.where(q_mask, qvar_state, jnp.nan), 0.9
@@ -396,9 +392,7 @@ def train_step(
     # abandoned; both ≈ 0 means the critic genuinely can't tell
     # actions apart.
     n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
-    q_mean_uniform = (
-        jnp.where(flat_action_mask, q_target, 0.0).sum(axis=-1) / n_legal
-    )
+    q_mean_uniform = jnp.where(flat_action_mask, q_target, 0.0).sum(axis=-1) / n_legal
     qvar_uniform = (
         jnp.where(
             flat_action_mask,
@@ -452,9 +446,7 @@ def train_step(
         q_mask,
     )
     for gid, gname in enumerate(("move", "switch", "target")):
-        in_group = flat_action_mask & (
-            jnp.asarray(FLAT_SRC_GROUP_MASK) == gid
-        )
+        in_group = flat_action_mask & (jnp.asarray(FLAT_SRC_GROUP_MASK) == gid)
         cnt = in_group.sum(axis=-1)
         training_logs[f"player_adv_rms_{gname}"] = average(
             jnp.sqrt(
