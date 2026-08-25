@@ -105,8 +105,14 @@ TypeScript game service speaking protobuf over websockets.
 - History windows: field steps name packed-cache rows by ABSOLUTE index —
   never slice the field and packed axes independently; use
   `clip_history_windows_tail` (mirrors the service's `getHistory`).
-- bf16 only where it saves real memory; losses and value recursions in f32
-  (see `upgo_returns` docstring for the crash this prevents).
+- Params are STORED f32 (`param_dtype`); the forward COMPUTES bf16, inherited
+  from `cfg.dtype`. These are different knobs. A layer written without `dtype=`
+  silently promotes against its f32 params and every downstream layer inherits
+  the upcast — one omission on `cond_norm` upcast SEVEN activations. Fix by
+  passing `dtype=`, never by adding `.astype()`. f32 only where precision is
+  paid for; losses and value recursions in f32.
+  `tests/test_dtype_policy.py` pins this with an allowlist (a new f32
+  activation fails and names itself).
 - All training/exploration signals derive from self-play — no scripted
   heuristics, no human-derived shaping.
 - Checkpoint writes are atomic; a step>0 checkpoint with no league file
@@ -135,6 +141,11 @@ TypeScript game service speaking protobuf over websockets.
 ## Conventions
 
 - Australian English in code/comments/filenames (-ise, -isation).
+- No conditional expressions (ternaries) — use a plain `if` statement. When
+  converting one, REBIND in the branch; do not pre-assign a default and then
+  reassign, which is more code than the ternary was.
+- No single-letter names. Where two exist only to form a product, define the
+  product — that is what the code uses.
 - ALWAYS run `bash scripts/lint.sh` before committing (autoflake + isort +
   black over `rl/`, `tests/`, and prettier over `service/src`). It rewrites
   files in place, so running it after staging means committing unformatted

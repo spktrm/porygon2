@@ -109,7 +109,6 @@ class MultiHeadAttention(nn.Module):
     need_pos: bool = False
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
-    param_dtype: jnp.dtype = jnp.float32
     implementation: str | None = None  # "cudnn"
     collect_intermediates: bool = False
 

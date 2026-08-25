@@ -154,31 +154,37 @@ class MicroHead(nn.Module):
 
     @nn.compact
     def __call__(self, action_embeddings: jax.Array) -> jax.Array:
-        g = NUM_ACTION_SLOT_GROUPS
-        k = self.num_logits
+        num_slots = action_embeddings.shape[-2]
         lead = action_embeddings.shape[:-2]
-        n = action_embeddings.shape[-2]
+        # Every per-group projection is packed into one Dense's output;
+        # attention heads own disjoint output coordinates, so the groups
+        # share no weights.
+        packed_width = NUM_ACTION_SLOT_GROUPS * self.num_logits
         # (N, G) one-hot of each SRC slot's group: the per-group select.
-        group_oh = jax.nn.one_hot(jnp.asarray(SRC_GROUP_MASK), g, dtype=jnp.float32)
+        group_oh = jax.nn.one_hot(
+            jnp.asarray(SRC_GROUP_MASK), NUM_ACTION_SLOT_GROUPS, dtype=jnp.float32
+        )
 
-        # Per-group q/k projections -> (..., N, N, G * K) -> (..., N, N, G, K)
+        # Per-group q/self.num_logits projections -> (..., N, N, G * K) -> (..., N, N, G, K)
         grid = PointerLogits(
             qk_size=self.qk_size,
-            num_heads=g * k,
+            num_heads=packed_width,
             use_bias=self.use_bias,
             qk_layer_norm=self.qk_layer_norm,
             name="micro_qk",
         )(action_embeddings, action_embeddings)
-        grid = grid.reshape(*lead, n, n, g, k).astype(jnp.float32)
+        grid = grid.reshape(
+            *lead, num_slots, num_slots, NUM_ACTION_SLOT_GROUPS, self.num_logits
+        ).astype(jnp.float32)
         # Select each cell's group by its SRC slot.
         flat = jnp.einsum("...ijgk,ig->...ijk", grid, group_oh)
-        flat = flat.reshape(*lead, n * n, k)
+        flat = flat.reshape(*lead, num_slots * num_slots, self.num_logits)
 
         # Per-group rms over the grid cells (f32, eps-guarded, all cells:
         # legality lives downstream), stop-grad so the normaliser is a
         # gauge, not a trainable route.
         flat_group_oh = jax.nn.one_hot(
-            jnp.asarray(FLAT_SRC_GROUP_MASK), g, dtype=jnp.float32
+            jnp.asarray(FLAT_SRC_GROUP_MASK), NUM_ACTION_SLOT_GROUPS, dtype=jnp.float32
         )
         sq = jnp.square(flat)
         group_ms = (
@@ -191,38 +197,42 @@ class MicroHead(nn.Module):
         normed = flat / group_rms
 
         type_scale = self.param(
-            "type_scale", nn.initializers.zeros_init(), (g, k)
+            "type_scale",
+            nn.initializers.zeros_init(),
+            (NUM_ACTION_SLOT_GROUPS, self.num_logits),
         ).astype(jnp.float32)
         out = normed * type_scale[FLAT_SRC_GROUP_MASK, :]
 
         # Single-factor per-group local routes over live inputs.
-        local_src = (
-            nn.Dense(
-                g * k,
-                use_bias=False,
-                kernel_init=nn.initializers.zeros,
-                name="micro_local_src",
-            )(action_embeddings)
-            .reshape(*lead, n, g, k)
-            .astype(jnp.float32)
+        local_src = nn.Dense(
+            packed_width,
+            use_bias=False,
+            kernel_init=nn.initializers.zeros,
+            dtype=action_embeddings.dtype,
+            name="micro_local_src",
+        )(action_embeddings).reshape(
+            *lead, num_slots, NUM_ACTION_SLOT_GROUPS, self.num_logits
         )
-        local_tgt = (
-            nn.Dense(
-                g * k,
-                use_bias=False,
-                kernel_init=nn.initializers.zeros,
-                name="micro_local_tgt",
-            )(action_embeddings)
-            .reshape(*lead, n, g, k)
-            .astype(jnp.float32)
+        local_tgt = nn.Dense(
+            packed_width,
+            use_bias=False,
+            kernel_init=nn.initializers.zeros,
+            dtype=action_embeddings.dtype,
+            name="micro_local_tgt",
+        )(action_embeddings).reshape(
+            *lead, num_slots, NUM_ACTION_SLOT_GROUPS, self.num_logits
         )
         src_term = jnp.einsum("...igk,ig->...ik", local_src, group_oh)
         # The TGT token read under the CELL's group, i.e. the src's.
         tgt_term = jnp.einsum("...jgk,ig->...ijk", local_tgt, group_oh)
-        local = (src_term[..., :, None, :] + tgt_term).reshape(*lead, n * n, k)
+        local = (src_term[..., :, None, :] + tgt_term).reshape(
+            *lead, num_slots * num_slots, self.num_logits
+        )
 
         out = out + local
-        return out.squeeze(-1) if k == 1 else out
+        if self.num_logits == 1:
+            return out.squeeze(-1)
+        return out
 
 
 class ActionAdapter(nn.Module):
@@ -345,15 +355,21 @@ class MacroHead(nn.Module):
                 self.out_features,
                 kernel_init=nn.initializers.zeros,
                 dtype=pooled.dtype,
-                name=f"out_{m}",
-            )(MLP(**self.cfg.mlp.to_dict(), name=f"mlp_{m}")(pooled[..., m, :]))
-            for m in range(NUM_MODALITY_FEATURES)
+                name=f"out_{modality}",
+            )(
+                MLP(**self.cfg.mlp.to_dict(), name=f"mlp_{modality}")(
+                    pooled[..., modality, :]
+                )
+            )
+            for modality in range(NUM_MODALITY_FEATURES)
         ]
         logits = jnp.stack(per_modality, axis=-2)
         # Modalities with no live src pool zeros and read the out bias;
         # callers still mask them (legal_log_policy for the policy, the
         # flat action mask for the Q grid).
-        return logits.squeeze(-1) if self.out_features == 1 else logits
+        if self.out_features == 1:
+            return logits.squeeze(-1)
+        return logits
 
 
 class MacroMicroHead(nn.Module):
@@ -549,11 +565,12 @@ class ActionScoreHead(nn.Module):
 
         c = None
         if cond is not None:
-            # Projection/norm in f32 (flax default), cast back so the bf16
-            # grid tensors stay bf16.
-            c = nn.LayerNorm(name="cond_norm")(
-                nn.Dense(action_embeddings.shape[-1], name="cond_proj")(cond)
-            ).astype(action_embeddings.dtype)
+            dtype = action_embeddings.dtype
+            c = nn.LayerNorm(name="cond_norm", dtype=dtype)(
+                nn.Dense(action_embeddings.shape[-1], name="cond_proj", dtype=dtype)(
+                    cond
+                )
+            )
 
         adapted = ActionAdapter(self.cfg.adapter, name="adapter")(
             action_embeddings, cond=c
@@ -665,13 +682,14 @@ def compose_action_grid(
     dims.
     """
     scalar = micro.ndim == flat_valid_mask.ndim
-    m = micro[..., None] if scalar else micro
-    mac = macro[..., None] if scalar else macro
+    if scalar:
+        micro = micro[..., None]
+        macro = macro[..., None]
     modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
     valid_per_modality = flat_valid_mask[..., None] & modality_oh
     if reduce == "logsumexp":
         stat = nn.logsumexp(
-            jnp.where(valid_per_modality[..., None], m[..., :, None, :], -1e9),
+            jnp.where(valid_per_modality[..., None], micro[..., :, None, :], -1e9),
             axis=-3,
         )
         # An empty modality's stat is -1e9; subtracting it would leave
@@ -679,13 +697,15 @@ def compose_action_grid(
         # finite-small instead of one mask-drop from poisoning a softmax.
         stat = jnp.where(valid_per_modality.any(axis=-2)[..., None], stat, 0.0)
     elif reduce == "mean":
-        weights = valid_per_modality.astype(m.dtype)
+        weights = valid_per_modality.astype(micro.dtype)
         counts = jnp.maximum(weights.sum(axis=-2), 1.0)
-        stat = jnp.einsum("...cm,...ck->...mk", weights, m) / counts[..., None]
+        stat = jnp.einsum("...cm,...ck->...mk", weights, micro) / counts[..., None]
     else:
         raise ValueError(f"unknown reduce: {reduce}")
-    out = m - stat[..., FLAT_MODALITY_MASK, :] + mac[..., FLAT_MODALITY_MASK, :]
-    return out.squeeze(-1) if scalar else out
+    out = micro - stat[..., FLAT_MODALITY_MASK, :] + macro[..., FLAT_MODALITY_MASK, :]
+    if scalar:
+        return out.squeeze(-1)
+    return out
 
 
 # Alive-mon differential support: margins -6..+6, matching the offline
