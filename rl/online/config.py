@@ -436,7 +436,28 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # until a pathology proves fixed cannot work. The decay is the
     # follow-up, and it goes on the traced step_count like warmup_scale
     # (no recompile), not into a RuntimeScalars revival.
-    player_ref_eta_ent: float = 0.05
+    # 0.01, NOT NashPG's 0.05 (dx65cpwp diverged on 0.05, 2026-08-26).
+    # Their 0.05 is applied as a DIFFERENTIATED KL whose gradient carries a
+    # pi(b) prefactor, so on a thin cell the force is suppressed; ours is
+    # analytic and prefactor-free, which is the whole point of it — and
+    # therefore stronger by ~1/pi(a) on exactly the cells that matter.
+    # Transplanting the number without rescaling was the bug. Prefactor
+    # equivalence at pi ~ 1/9 legal cells is 0.05*0.11 ~ 0.0055; 0.01
+    # rounds up to keep it a real force. Sizing check that matters: the
+    # proximal decay's fixed point is gap* = w/player_neurd_logit_decay =
+    # 20w, and w here is -eta_ent*log pi(a), UNBOUNDED as pi(a) -> 0. At
+    # 0.05 a cell starved to 1e-6 gives w 0.69 -> gap* 13.8, so the
+    # restoring force overshoots the cell past dominant, gets slammed
+    # back, and the 20x amplifier turns that into a divergent oscillation
+    # (micro_gap_rms 0.57 -> 7.9 and logit_l2 1.3 -> 213 over 10k steps,
+    # all of it in the MOVE micro logits: forward_kl_move 3.49 against
+    # forward_kl_switch 0.0016). At 0.01 gap* stays inside the beta=2
+    # clip band for realistic starvation.
+    # NOTE the "unbounded penalty IS the restoring force" argument holds
+    # for the REFERENCE penalty because snapping bounds its gap. Nothing
+    # bounds -log pi against a uniform reference. If 0.01 still drifts,
+    # the next step is a floor (log max(pi, eps)), not another coef cut.
+    player_ref_eta_ent: float = 0.01
     # Snap period of the reference (2026-08-25, replacing the continuous
     # EMA — 1e-4, then 5e-5): reg_params <- target_params, in place,
     # every N steps once the NeuRD warm-up is done (rnad.py's delta_m
