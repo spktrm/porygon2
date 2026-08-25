@@ -453,6 +453,23 @@ the loss reads each level's CENTRED live logits (`logit_pi - mean_logit`), so
 `d/dy_b = -(w(b) - mean_legal(w))` — a pi-free linear projection (no
 cross-term along π), zero-sum per level, open or clipped.
 
+**The dx65cpwp micro runaway (2026-08-26) — diff against the reference impl
+before inventing.** The entropy analytic shift (eb3bf4a) made the policy micro
+level diverge twice — eta_ent 0.05 and, after f9b2481's 5x cut, again at 0.01,
+both eras converging on the SAME diseased params (micro_local_tgt 25x, adapter
+18x; the advantage head, same modules under the Huber Q loss, calm) — so the
+coefficient was never the root. The root was three discrepancies against
+rnad.py/DeepNash (Table 2, arXiv:2206.15378), each now fixed: (1) they run
+Adam **b1=0** — momentum carried each push ~10 steps past the stiff
+equilibrium the analytic shifts create (player-only now; the builder's PPO
+surrogate keeps 0.9); (2) they **clip the total per-cell force** after every
+correction — nothing in DeepNash/NashPG ever exposes an unbounded −η·log π
+to the logits (reward transform / near-snap ratio / PPO clip respectively);
+(3) they differentiate **centred logits** (the lesson above). The policy-head
+param panels (`player_policy_micro_local_*_rms`, `player_policy_adapter_rms`)
+exist because this diagnosis needed checkpoint forensics — healthy O(0.005),
+diseased 0.07–0.15.
+
 **Clip and coefficient.** Advantages are not zero-mean per row, so unclipped
 logits diverge; β = 2.0 is OpenSpiel's NeuRD default. The coefficient went
 0.05 → 0.1 → 1.0 across 2026-08-21: 0.05 was sized as ~1% relative pressure
