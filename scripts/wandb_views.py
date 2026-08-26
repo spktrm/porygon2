@@ -388,6 +388,7 @@ def rl_sections():
                     [
                         "player_policy_type_scale_move",
                         "player_policy_type_scale_switch",
+                        "player_policy_type_scale_target",
                     ],
                 ),
                 lp(
@@ -572,11 +573,20 @@ def rl_sections():
                     ["player_loss_q", "player_q_mse", "player_q_saturation_frac"],
                 ),
                 lp(
-                    "Q support: voluntary / forced switch rows per batch",
+                    # THE DEADLINE PANEL. Voluntary-switch rows per batch is
+                    # N*pi_switch, and a starved modality becomes absorbing
+                    # once it falls below 1.0 — below one expected sample per
+                    # batch the path stops being visited at all and no
+                    # gradient can restore it (APO, arXiv:2602.05717). Log-y
+                    # so the decay reads as a straight line and the approach
+                    # to the 1.0 floor is legible: 6ta9hmp6 ran 60.4 (3k) ->
+                    # 3.9 (33k), halving every ~8k.
+                    "Voluntary-switch rows per batch (absorbing floor = 1.0)",
                     [
                         "player_q_support_vol_switch_rows",
                         "player_q_support_forced_switch_rows",
                     ],
+                    log_y=True,
                 ),
                 lp(
                     # The reference cycle against the switch support it

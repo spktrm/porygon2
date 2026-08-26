@@ -355,6 +355,38 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # divergence was the ANALYTIC prefactor-free -eta_ent*log pi force,
     # which does not carry over to this form.
     player_ent_coef: float = 0.05
+    # Support anchor (2026-08-26): forward KL(p_T || pi) against the frozen
+    # reference raised to temperature T, p_T ~ pi_reg ** (1/T). The magnet
+    # above and the entropy bonus are BOTH pi-prefactored, so neither can
+    # refill a modality that has already starved — 6ta9hmp6 lost 53% of
+    # player_policy_type_scale_switch between 13k and 33k with both running.
+    # This term's per-logit force is exactly pi(b) - p_T(b): mass-independent,
+    # bounded by 1 for every pi including pi -> 0, and zero-sum over legal
+    # cells (the three properties the dx65cpwp analytic shifts each failed).
+    # Mode-covering, so it preserves support the mode-seeking magnet is
+    # indifferent to; monotone in pi_reg, so it re-weights starved cells by
+    # the model's OWN ranking and never says which switch to make.
+    # Literature: TS-OPSD (arXiv:2606.00755) recovers a collapsed checkpoint
+    # with exactly this gradient; APO (arXiv:2602.05717) shows recovery as a
+    # Pareto improvement, and gives the absorbing criterion N*pi < 1 that
+    # player_q_support_vol_switch_rows measures directly (3.9/batch at 33k).
+    # coef 0.25 is CALIBRATED, not guessed: at the current operating point
+    # (~0.05 switch mass) it delivers the same per-logit force as the entropy
+    # bonus does at 0.05, so the loss balance is unshocked — but where
+    # entropy's force collapses 17x as the modality starves, this one grows.
+    # T 1.2 is TS-OPSD's. The snap cycle turns it into a compounding ratchet:
+    # from the 49k launch point (0.013 switch mass) each snap lifts the anchor
+    # ~1.81x -- 0.013 -> 0.024 -> 0.043 -> 0.077 -- so ~40-50k steps back to a
+    # healthy ~0.15, and it self-limits once the PG force can hold mass down.
+    # Note this term is ALL-ACTION over the legal grid, so unlike the sampled
+    # PPO surrogate it does not need a switch to be taken to act on one: the
+    # N*pi < 1 absorbing bound does not apply to it. That is why it, and not a
+    # supply fix, is the mechanism at this depth.
+    # Off is coef 0.0. T = 1.0 degrades it to a pure brake (zero force when pi
+    # sits at the reference) if 0.25 overshoots; T = 1.5 (3.26x per snap) is
+    # the escalation if recovery is too slow.
+    player_support_coef: float = 0.25
+    player_support_temperature: float = 1.2
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —

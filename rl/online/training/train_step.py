@@ -33,6 +33,7 @@ from rl.online.training.targets import (
     compute_player_targets,
     compute_q_onestep_targets,
     reference_kl,
+    support_kl,
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
@@ -652,6 +653,26 @@ def train_step(
             learner_log_policy, reg_log_policy, flat_action_mask
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
+        # Support anchor: forward KL(p_T || pi) against the SAME frozen
+        # reference raised to temperature T. The magnet above is
+        # mode-seeking — its pi prefactor takes its force to zero on a
+        # starved cell, so it is structurally indifferent to a dropped
+        # modality — and this is the mode-covering half that is not.
+        # Per-logit force is exactly pi(b) - p_T(b): no prefactor, bounded
+        # by 1, zero-sum over legal cells. It concentrates on whatever the
+        # policy has abandoned without any trigger or floor to tune,
+        # because that is where pi has fallen furthest below p_T.
+        # The snap cycle makes a fixed T a compounding recovery ratchet:
+        # each snap re-anchors on a reference the anchor itself lifted,
+        # and it stops compounding once the PG force can hold the mass
+        # down again.
+        support_kl_rows = support_kl(
+            learner_log_policy,
+            reg_log_policy,
+            flat_action_mask,
+            config.player_support_temperature,
+        )
+        loss_support = average(support_kl_rows, policy_mask)
 
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
@@ -697,6 +718,13 @@ def train_step(
             # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
             player_ref_kl=loss_mag,
+            # KL(p_T || pi) — the support anchor's own value. Unlike
+            # ref_kl this does NOT return to ~0 at a snap: p_T sits above
+            # the reference by construction, so its floor is the anchor's
+            # own re-inflation. A level DECAYING across snaps means the
+            # policy is tracking the anchor (working); a level climbing
+            # across snaps means pi is outrunning it.
+            player_loss_support=loss_support,
         )
 
         # Calibration by context. The contexts exist to interpret the
@@ -740,6 +768,7 @@ def train_step(
                 loss_pg
                 + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
+                + config.player_support_coef * loss_support
             )
             # v + q: the critic stack — one V on the deploy-time
             # information set, one all-action advantage over it (the
