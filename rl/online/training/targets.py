@@ -224,6 +224,23 @@ def reference_kl(
     return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
 
 
+def support_target(
+    reg_log_policy: jax.Array,
+    legal_mask: jax.Array,
+    temperature: float,
+) -> jax.Array:
+    """log p_T over legal cells: the support anchor's target distribution,
+    p_T ~ pi_reg ** (1/T), f32, stop-gradiented. Written once here so the
+    loss (`support_kl`) and the anchor telemetry read the SAME construction.
+
+    Masked with -1e9 rather than -inf: `0 * -inf` poisons the vjp on rows
+    whose targets are all-zero.
+    """
+    lr = reg_log_policy.astype(jnp.float32)
+    scaled = jnp.where(legal_mask, lr / temperature, -1e9)
+    return jax.lax.stop_gradient(jax.nn.log_softmax(scaled, axis=-1))
+
+
 def support_kl(
     log_policy: jax.Array,
     reg_log_policy: jax.Array,
@@ -253,14 +270,9 @@ def support_kl(
     the reference's tail through a monotone power transform — same ranking,
     more mass on starved cells — putting the anchor above the current policy
     and making it restorative.
-
-    Masked with -1e9 rather than -inf: `0 * -inf` poisons the vjp on rows whose
-    targets are all-zero.
     """
     lp = log_policy.astype(jnp.float32)
-    lr = reg_log_policy.astype(jnp.float32)
-    scaled = jnp.where(legal_mask, lr / temperature, -1e9)
-    log_p_t = jax.lax.stop_gradient(jax.nn.log_softmax(scaled, axis=-1))
+    log_p_t = support_target(reg_log_policy, legal_mask, temperature)
     p_t = jnp.where(legal_mask, jnp.exp(log_p_t), 0.0)
     return jnp.where(legal_mask, p_t * (log_p_t - lp), 0.0).sum(axis=-1)
 

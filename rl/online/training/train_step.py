@@ -34,6 +34,7 @@ from rl.online.training.targets import (
     compute_q_onestep_targets,
     reference_kl,
     support_kl,
+    support_target,
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
@@ -694,6 +695,37 @@ def train_step(
         policy_absadv_switch = average(abs_adv, pg_switch_cells)
         policy_absadv_move = average(abs_adv, pg_move_cells)
 
+        # Anchor-target decomposition on the same real-choice slice: where
+        # p_T sits per modality, and the anchor's realised per-row push
+        # there (sum of p_T - pi over the modality's legal cells; positive
+        # = restoring). `support_target` is the loss's own construction,
+        # so under jit this is the identical computation, not a copy. At
+        # T = 1 p_T IS the frozen reference, so switch_mass reads the
+        # reference's own switch mass and force_switch reads only the
+        # policy's drift off it since the snap — the reference numbers any
+        # tilted anchor is judged against.
+        log_p_support = support_target(
+            reg_log_policy, flat_action_mask, config.player_support_temperature
+        )
+        p_support = jnp.where(flat_action_mask, jnp.exp(log_p_support), 0.0)
+        support_gap = p_support - pi_learner
+
+        def modality_row_sum(cell_values, cells):
+            return jnp.where(cells, cell_values, 0.0).sum(axis=-1)
+
+        support_switch_mass = average(
+            modality_row_sum(p_support, pg_switch_cells), switch_choice_mask
+        )
+        support_move_mass = average(
+            modality_row_sum(p_support, pg_move_cells), switch_choice_mask
+        )
+        support_force_switch = average(
+            modality_row_sum(support_gap, pg_switch_cells), switch_choice_mask
+        )
+        support_force_move = average(
+            modality_row_sum(support_gap, pg_move_cells), switch_choice_mask
+        )
+
         pg_logs = dict(
             player_loss_pg=loss_pg,
             player_loss_entropy=loss_entropy,
@@ -725,6 +757,10 @@ def train_step(
             # policy is tracking the anchor (working); a level climbing
             # across snaps means pi is outrunning it.
             player_loss_support=loss_support,
+            player_support_switch_mass=support_switch_mass,
+            player_support_move_mass=support_move_mass,
+            player_support_force_switch=support_force_switch,
+            player_support_force_move=support_force_move,
         )
 
         # Calibration by context. The contexts exist to interpret the
