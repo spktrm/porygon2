@@ -462,6 +462,42 @@ carry 4.4x the advantage magnitude on the grid. But widening ε_high loosens
 what removed the dx65cpwp runaway, so it wants its own decision and its own
 commit.
 
+## Addition ledger — 2026-08-26 anchor phase 3 (advantage tilt)
+
+**The through-line of the whole collapse lineage, stated once.** Every
+mechanism ever tried supplied exactly one of the two things a
+conditional-value action needs — probability MASS or DISCRIMINATION (which
+switch) — and in this game mass without discrimination is *negative*
+evidence (random switches lose ~0.3): entropy/reverse-KL magnet neither
+(π-prefactored); ε-ladder mass only → taught the critic the collapse faster;
+PPO discrimination only (taken cells, expected force ~π_b); anchor T>1 mass
+only → `type_scale_switch` → 0 (phase 1). The papers are not wrong — their
+convergence stories assume support never numerically dies, which sampled PPO
++ function approximation + ISR fade violates, and the reference diff already
+established no reference impl carries a mass-independent restorer. Meanwhile
+the discrimination signal existed in-run and was discarded beside the anchor:
+`absadv_ratio` 3.47 vs `prob_ratio` 0.093 @101.5k — the same signature that
+motivated NeuRD at 157k. Under the phase-2 T=1.0 brake, `vol_switch_rows`
+decayed 9.3 → 3: T=1 exerts no force at a reference that re-snaps from a
+collapsing policy.
+
+| mechanism | what it is | why |
+|---|---|---|
+| `player_support_adv_temperature` (τ) + tilt in `support_target` | p* ∝ π_reg^(1/T) · exp(sg(A_target)/τ) over legal cells, same forward-KL loss — MPO's E-step target (arXiv:1806.06920) with π_reg as prior under the anchor's existing mode-covering projection. Tilt sg'd, exponent clipped ±3; A_target is the TARGET net's advantage, so no gradient path opens into the observer stack. τ=0.0 bitwise off; launch 0.125 (~adv_rms_switch: +1σ = one e-fold of reference mass) once the T=1 telemetry panels (`player_support_{switch,move}_mass`, `player_support_force_{switch,move}`) validate against `prob_switch` at a snap | gradient stays π−p*: bounded by 1 for ANY A, zero-sum, prefactor-free — and now carries WHICH cell. Within a modality p* ranks cells by the critic, so the anchor TRAINS `type_scale_switch` instead of flattening it (phase 1's failure), and the snap ratchet compounds toward absadv_ratio → 1 (policy-critic consistency), not uniform: anchor lifts a cell → it gets taken → Retrace labels it → A corrects → anchor relaxes. The chicken-and-egg closed through play |
+
+**The gate is re-registered on discrimination, not frequency.** The
+strongest-ever lineage (eval wr 0.19–0.29 @101k, at the 0.29 all-time peak)
+has collapsed switching, and `vol_switch_rows` rises under any
+mass-restoring force whether or not it helps — Goodhartable alone. Judge
+this family on `type_scale_switch` training + `absadv_ratio` declining
+toward 1 + eval-wr trajectory, with raw frequency as an observer. That also
+makes the objective question empirical: wr climbing as discriminate mass
+returns = the collapse was costing strength; absadv_ratio → 1 with mass
+still low = low switching was locally correct against this league and the
+anchor's job is re-learnability. Acceptance/abort/fallback pre-registered in
+the config block; fallback is DAPO clip-higher (own commit), never a τ
+retune.
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family
