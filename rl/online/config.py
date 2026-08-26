@@ -483,10 +483,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # oscillates without settling): do NOT retune tau — a coefficient cut
     # that only delays onset is falsified — the next rung is the ledgered
     # DAPO clip-higher decision, its own commit.
-    # LAUNCH VALUE 0.125, once the phase-3 telemetry panels validate at T = 1
-    # (player_support_switch_mass ~ prob_switch at a snap); committed 0.0 so
-    # the telemetry commit's reference numbers land bit-identical first.
-    player_support_adv_temperature: float = 0.0
+    # FLIPPED 0.0 -> 0.125 (2026-08-26, after the T=1 panels validated on the
+    # resumed run @109.8k: switch/move mass 0.1169/0.8831 sum to 1, forces
+    # +-0.01732 exactly zero-sum, both coherent with prob_switch 0.031 x ~3.2
+    # legal switch cells/row. NOTE the mass panels read per-ROW modality mass,
+    # not the per-cell prob_* means — compare against prob_switch times the
+    # row's legal switch-cell count, ~0.10 here). Untilted baseline to judge
+    # the tilt against: switch_mass 0.117, force_switch +0.017.
+    player_support_adv_temperature: float = 0.125
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —
