@@ -299,6 +299,24 @@ class TestRetraceBaseline:
 
         assert mean_target(0.2) < mean_target(0.0) < mean_target(-0.2)
 
+    def test_baseline_does_not_leak_into_the_policy_advantage(self, ex_target_inputs):
+        """pg_advantages is the PLAIN v-trace pass: the Retrace baseline
+        (adv_taken) moves the VALUE targets only. Positive control below —
+        the value targets must move for the same perturbation."""
+        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        base, _ = compute_player_targets(
+            batch, value_log_probs, isr, jnp.zeros_like(adv_taken), config
+        )
+        shifted, _ = compute_player_targets(
+            batch, value_log_probs, isr, jnp.full_like(adv_taken, 0.3), config
+        )
+        np.testing.assert_array_equal(
+            np.asarray(base.pg_advantages), np.asarray(shifted.pg_advantages)
+        )
+        assert not np.array_equal(
+            np.asarray(base.win_returns), np.asarray(shifted.win_returns)
+        )
+
     def test_targets_stay_normalised_under_a_nonzero_baseline(self, ex_target_inputs):
         batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
         targets, _ = compute_player_targets(
@@ -307,6 +325,61 @@ class TestRetraceBaseline:
         sums = np.asarray(targets.win_returns).sum(-1)
         mask = np.asarray(targets.value_mask)
         np.testing.assert_allclose(sums[mask], 1.0, atol=1e-4)
+
+
+class TestPolicyAdvantage:
+    """The v-trace policy advantage the PPO surrogate reads: hand-checked
+    recursion, f32 contract, bootstrap-on-r at the terminal row."""
+
+    def _targets(self, done, win_reward, isr=None, player_lambda=0.8):
+        from rl.online.config import Porygon2LearnerConfig
+
+        T, B = done.shape
+        batch = _q_batch(
+            done, win_reward, jnp.ones((T, B, 2, 2), bool), jnp.zeros((T, B), jnp.int32)
+        )
+        value_log_probs = jnp.full((T, B, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)
+        if isr is None:
+            isr = jnp.ones((T, B), dtype=jnp.float32)
+        targets, _ = compute_player_targets(
+            batch,
+            value_log_probs,
+            isr,
+            jnp.zeros((T, B), jnp.float32),
+            Porygon2LearnerConfig(player_gamma=1.0, player_lambda=player_lambda),
+        )
+        return targets
+
+    def test_matches_hand_recursion(self):
+        """T=3, terminal win on the done row, V=0 everywhere, lambda 0.8:
+        td = [0, 0, 1]; v-trace values [0.64, 0.8, 1]; q_bootstrap =
+        [0.8*0.8, 0.8*1, 0] and the done row's discount is 0, so
+        pg_adv = [0.64, 0.8, 1] — the outcome enters the recursion once
+        and decays by lambda per step backward."""
+        done = jnp.array([[False], [False], [True]])
+        win_reward = jnp.zeros((3, 1, 3), dtype=jnp.float32).at[:, :, 1].set(1.0)
+        win_reward = win_reward.at[2, :, :].set(jnp.array([0.0, 0.0, 1.0]))
+        targets = self._targets(done, win_reward)
+        assert targets.pg_advantages.dtype == jnp.float32
+        np.testing.assert_allclose(
+            np.asarray(targets.pg_advantages[:, 0]), [0.64, 0.8, 1.0], atol=1e-6
+        )
+
+    def test_rho_truncation_attenuates_the_advantage(self):
+        """isr > 1 is clipped to 1 (no amplification); isr < 1 scales the
+        row's advantage down by exactly rho."""
+        done = jnp.array([[False], [False], [True]])
+        win_reward = jnp.zeros((3, 1, 3), dtype=jnp.float32).at[:, :, 1].set(1.0)
+        win_reward = win_reward.at[2, :, :].set(jnp.array([0.0, 0.0, 1.0]))
+        clipped = self._targets(done, win_reward, isr=jnp.full((3, 1), 4.0))
+        on_policy = self._targets(done, win_reward)
+        np.testing.assert_allclose(
+            np.asarray(clipped.pg_advantages), np.asarray(on_policy.pg_advantages)
+        )
+        half = self._targets(done, win_reward, isr=jnp.full((3, 1), 0.5))
+        # The terminal row has no v_t continuation, so its advantage is
+        # rho * (r - V) exactly: half the on-policy value.
+        assert float(half.pg_advantages[2, 0]) == pytest.approx(0.5, abs=1e-6)
 
 
 class TestRNaDTransform:

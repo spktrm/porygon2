@@ -43,11 +43,10 @@ def compute_player_targets(
     adv_taken: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
-    """Computes Retrace VALUE targets on the win/loss channel.
-
-    Policy advantages are gone: the single-action PG and UPGO terms were
-    removed 2026-08-21 (CLAUDE.md 3), so nothing consumes them. What is
-    left here feeds the value head and the off-policyness diagnostics.
+    """Computes Retrace VALUE targets on the win/loss channel plus the
+    plain v-trace POLICY advantage the PPO surrogate reads (2026-08-26 —
+    the single-action advantage returned after five days away: the
+    all-action NeuRD era in between read the advantage head instead).
 
     PBRS/potential shaping retired (Aug 2026): the shaped-advantage era's
     channel machinery lived here; the win channel is now the sole reward.
@@ -125,6 +124,27 @@ def compute_player_targets(
     # two-hot distribution (two_hot clips to the support range).
     win_returns = two_hot(scalar_returns, support) * mask[..., None]
 
+    # Policy advantage (2026-08-26): a PLAIN v-trace pass over the V
+    # readout — no Retrace baseline shift — feeding the PPO surrogate's
+    # taken-action advantage. Same construction as the builder's
+    # pg_advantages: q_estimate bootstraps on the lambda-mixed v-trace
+    # value of the NEXT step, so the outcome enters exactly once (a done
+    # row's discount is 0 and its estimate is the terminal reward itself;
+    # done rows are excluded by policy_mask anyway). rho truncates the
+    # off-policy weight as everywhere else; f32 like the value recursion.
+    td_plain = rho_t * mask * (r_t + discount_t * v_t - v_tm1)
+    vtrace_v = vtrace(td_plain, discount_t, c_t * config.player_lambda) + v_tm1
+    q_bootstrap = jnp.concatenate(
+        [
+            config.player_lambda * vtrace_v[1:]
+            + (1 - config.player_lambda) * v_tm1[1:],
+            v_tm1[-1:],
+        ],
+        axis=0,
+    )
+    q_estimate = r_t + discount_t * q_bootstrap
+    pg_advantages = rho_t * (q_estimate - v_tm1) * mask
+
     value_mask = mask.astype(jnp.bool_)
     # Chunked unrolls: a chunk's final row is bootstrap-only — it anchors
     # the recursions above (v_t reads its value) but
@@ -165,6 +185,7 @@ def compute_player_targets(
     return (
         PlayerTargets(
             win_returns=win_returns,
+            pg_advantages=pg_advantages,
             policy_mask=policy_mask,
             value_mask=value_mask,
         ),
