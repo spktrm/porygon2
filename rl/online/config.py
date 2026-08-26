@@ -437,6 +437,56 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # is too slow, and inherits the same exit and abort conditions.
     player_support_coef: float = 1.0
     player_support_temperature: float = 1.0
+    # PHASE 3 — ADVANTAGE-TILTED TARGET (2026-08-26). Phase 1 proved the
+    # transport and broke on the target: p_T knows only pi_reg — a snapshot of
+    # the collapsing policy — so T > 1 restored mass with no within-modality
+    # ranking and flattened type_scale_switch to the dead-group level.
+    # Meanwhile the discrimination signal exists in-run and was being
+    # discarded two lines above the anchor: absadv_ratio 3.47 against
+    # prob_ratio 0.093 @101.5k — the critic prefers switch cells ~3.5x while
+    # pi throttles them to 9%, the SAME signature that motivated NeuRD on the
+    # 157k lineage. Every mechanism this project has tried supplied MASS
+    # (T > 1, the eps ladder) or DISCRIMINATION (PPO, on taken cells only),
+    # never both; for a conditional-value action mass without discrimination
+    # is NEGATIVE evidence. The tilt supplies both at once:
+    #     p* ~ pi_reg^(1/T) * exp(sg(A_target) / tau),
+    #     tau = player_support_adv_temperature, 0.0 = tilt off (bitwise
+    #     phase-2 anchor)
+    # — MPO's E-step target (arXiv:1806.06920) with pi_reg as prior under the
+    # anchor's existing mode-covering projection, not an invention. The
+    # gradient stays pi(b) - p*(b): bounded by 1 for ANY advantage (A only
+    # relocates p* on the simplex), zero-sum over legal cells, no prefactor —
+    # the dx65cpwp bounding questions still answer. Within a modality p* now
+    # ranks cells by the critic, so the anchor TRAINS type_scale_switch
+    # instead of flattening it, and the snap ratchet compounds toward
+    # absadv_ratio -> 1 (policy-critic consistency) rather than uniform:
+    # the anchor lifts a cell -> it gets taken -> Retrace labels it -> A
+    # corrects -> the anchor relaxes. The good-switches-need-knowledge /
+    # knowledge-needs-good-switches loop, closed through play.
+    # tau sized on the equilibrium condition: tau ~ adv_rms_switch (0.125
+    # @101.5k) makes +1 sigma of critic advantage one e-fold of reference
+    # mass (+2 sigma = 7.4x); from pi_reg switch mass ~0.02 that puts p*
+    # switch mass ~0.05-0.13 CONCENTRATED on the critic's preferred cell.
+    # The tilt exponent is clipped at +-3 in support_target so one wild A
+    # outlier cannot own p*. A_target is the TARGET net's advantage: f32,
+    # EMA-smooth, stop-gradiented — no gradient path opens into the observer
+    # stack, and the policy reads the critic only through this bounded,
+    # all-action transport (unlike NeuRD's unbounded logit push).
+    # Acceptance (+15k from flip): type_scale_switch >= 0.005;
+    # vol_switch_rows >= 10 sustained; absadv_ratio DECLINING toward 1 (the
+    # anchor arbitraging the critic's preference away — the mechanism
+    # working); eval wr non-regressing vs its pre-flip trajectory. Abort:
+    # modality entropy climbing past ~0.85 across 2+ snaps, policy-head param
+    # rms into the diseased band (> 0.07), or wr clearly below trajectory for
+    # 10k+. Fallback if A on untaken switch cells proves to be noise
+    # (tilt-chosen cells get taken and refuted, absadv_switch -> 0, mass
+    # oscillates without settling): do NOT retune tau — a coefficient cut
+    # that only delays onset is falsified — the next rung is the ledgered
+    # DAPO clip-higher decision, its own commit.
+    # LAUNCH VALUE 0.125, once the phase-3 telemetry panels validate at T = 1
+    # (player_support_switch_mass ~ prob_switch at a snap); committed 0.0 so
+    # the telemetry commit's reference numbers land bit-identical first.
+    player_support_adv_temperature: float = 0.0
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —

@@ -667,11 +667,23 @@ def train_step(
         # each snap re-anchors on a reference the anchor itself lifted,
         # and it stops compounding once the PG force can hold the mass
         # down again.
+        # Phase 3 (2026-08-26): the target can carry the observer
+        # critic's per-cell advantage as a tilt — p* ~ pi_reg^(1/T) *
+        # exp(sg(A_target)/tau), MPO's E-step target (arXiv:1806.06920)
+        # — so restored mass lands on the cells the critic ranks highest
+        # instead of flattening the modality (phase 1's failure). See
+        # the config block for sizing, acceptance and abort. tau = 0.0
+        # is bitwise off.
+        if config.player_support_adv_temperature > 0.0:
+            support_tilt = adv_target / config.player_support_adv_temperature
+        else:
+            support_tilt = None
         support_kl_rows = support_kl(
             learner_log_policy,
             reg_log_policy,
             flat_action_mask,
             config.player_support_temperature,
+            tilt_logits=support_tilt,
         )
         loss_support = average(support_kl_rows, policy_mask)
 
@@ -705,7 +717,10 @@ def train_step(
         # policy's drift off it since the snap — the reference numbers any
         # tilted anchor is judged against.
         log_p_support = support_target(
-            reg_log_policy, flat_action_mask, config.player_support_temperature
+            reg_log_policy,
+            flat_action_mask,
+            config.player_support_temperature,
+            tilt_logits=support_tilt,
         )
         p_support = jnp.where(flat_action_mask, jnp.exp(log_p_support), 0.0)
         support_gap = p_support - pi_learner

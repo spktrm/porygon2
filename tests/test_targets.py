@@ -405,6 +405,21 @@ class TestMagnetKl:
         )
 
 
+def restoring_force(kl_fn, probs, ref_probs, legal, **kwargs):
+    """Restoring force per logit: -dL/dy, so positive = pushes mass UP.
+    Differentiates through the legal log-softmax, as the learner does."""
+    import jax
+
+    y = jnp.log(jnp.asarray([probs]))
+    log_ref = jnp.log(jnp.asarray([ref_probs]))
+
+    def loss(logits):
+        log_pi = jax.nn.log_softmax(jnp.where(legal, logits, -1e9), axis=-1)
+        return kl_fn(log_pi, log_ref, legal, **kwargs).sum()
+
+    return -np.asarray(jax.grad(loss)(y))[0]
+
+
 class TestSupportKl:
     """The support-preserving anchor: KL(p_T || pi) over legal cells, where
     p_T ~ pi_reg ** (1/T) is the frozen reference raised to temperature T.
@@ -416,18 +431,7 @@ class TestSupportKl:
     LEGAL = jnp.asarray([[True, True, True, False]])
 
     def _force(self, kl_fn, probs, ref_probs, **kwargs):
-        """Restoring force per logit: -dL/dy, so positive = pushes mass UP.
-        Differentiates through the legal log-softmax, as the learner does."""
-        import jax
-
-        y = jnp.log(jnp.asarray([probs]))
-        log_ref = jnp.log(jnp.asarray([ref_probs]))
-
-        def loss(logits):
-            log_pi = jax.nn.log_softmax(jnp.where(self.LEGAL, logits, -1e9), axis=-1)
-            return kl_fn(log_pi, log_ref, self.LEGAL, **kwargs).sum()
-
-        return -np.asarray(jax.grad(loss)(y))[0]
+        return restoring_force(kl_fn, probs, ref_probs, self.LEGAL, **kwargs)
 
     def test_zero_at_reference_only_when_temperature_is_one(self):
         from rl.online.training.targets import support_kl
@@ -506,3 +510,110 @@ class TestSupportKl:
         none_legal = jnp.zeros_like(legal, dtype=bool)
         value = float(support_kl(log_pi, log_ref, none_legal, 1.2)[0])
         assert value == 0.0 and np.isfinite(value)
+
+
+class TestSupportTilt:
+    """Phase 3: p* ~ pi_reg^(1/T) * exp(clip(tilt)) — the tilt is where
+    per-cell knowledge (sg(A_target)/tau at the call site) enters the anchor.
+    These pin that the tilt reorders the TARGET while every bounding property
+    of the untilted anchor survives it."""
+
+    LEGAL = jnp.asarray([[True, True, True, False]])
+    UNIFORM = [1 / 3, 1 / 3, 1 / 3, 1.0]
+
+    def test_zero_tilt_is_bitwise_off(self):
+        from rl.online.training.targets import support_kl, support_target
+
+        log_ref = jnp.log(jnp.asarray([[0.5, 0.3, 0.2, 1.0]]))
+        base = support_target(log_ref, self.LEGAL, 1.2)
+        tilted = support_target(log_ref, self.LEGAL, 1.2, jnp.zeros_like(log_ref))
+        assert (np.asarray(base) == np.asarray(tilted)).all()
+        log_pi = jnp.log(jnp.asarray([[0.7, 0.2, 0.1, 1.0]]))
+        untilted_kl = support_kl(log_pi, log_ref, self.LEGAL, 1.2)
+        zero_tilt_kl = support_kl(
+            log_pi, log_ref, self.LEGAL, 1.2, jnp.zeros_like(log_ref)
+        )
+        assert (np.asarray(untilted_kl) == np.asarray(zero_tilt_kl)).all()
+
+    def test_gradient_is_pi_minus_tilted_target(self):
+        """POSITIVE CONTROL built in: at uniform pi against a uniform
+        reference the untilted force is identically zero, so any push here is
+        the tilt's — it must lift the preferred cell and drop the others,
+        by exactly p* - pi."""
+        from rl.online.training.targets import support_kl
+
+        tilt = jnp.asarray([[0.0, 0.0, 1.0, 0.0]])
+        force = restoring_force(
+            support_kl,
+            self.UNIFORM,
+            self.UNIFORM,
+            self.LEGAL,
+            temperature=1.0,
+            tilt_logits=tilt,
+        )
+        weights = np.exp(np.asarray([0.0, 0.0, 1.0]))
+        p_star = weights / weights.sum()
+        np.testing.assert_allclose(
+            force[:3], p_star - np.asarray(self.UNIFORM[:3]), atol=1e-5
+        )
+        assert force[2] > 0.05 and force[0] < 0
+        untilted = restoring_force(
+            support_kl, self.UNIFORM, self.UNIFORM, self.LEGAL, temperature=1.0
+        )
+        np.testing.assert_allclose(untilted[:3], 0.0, atol=1e-6)
+
+    def test_tilted_force_is_zero_sum_over_legal_cells(self):
+        from rl.online.training.targets import support_kl
+
+        force = restoring_force(
+            support_kl,
+            [0.7, 0.2, 0.1, 1.0],
+            [0.5, 0.3, 0.2, 1.0],
+            self.LEGAL,
+            temperature=1.2,
+            tilt_logits=jnp.asarray([[0.5, -0.2, 1.0, 0.0]]),
+        )
+        np.testing.assert_allclose(force[:3].sum(), 0.0, atol=1e-5)
+
+    def test_extreme_tilt_is_clipped_and_force_stays_bounded(self):
+        """A wild advantage outlier is capped at the +-3 exponent clip — the
+        force it produces must be identical to tilt exactly 3, finite, and
+        within the bound of 1 even on a numerically dead cell."""
+        from rl.online.training.targets import support_kl
+
+        starved = [0.5 - 5e-9, 0.5 - 5e-9, 1e-8, 1.0]
+        wild = restoring_force(
+            support_kl,
+            starved,
+            self.UNIFORM,
+            self.LEGAL,
+            temperature=1.0,
+            tilt_logits=jnp.asarray([[0.0, 0.0, 100.0, 0.0]]),
+        )
+        capped = restoring_force(
+            support_kl,
+            starved,
+            self.UNIFORM,
+            self.LEGAL,
+            temperature=1.0,
+            tilt_logits=jnp.asarray([[0.0, 0.0, 3.0, 0.0]]),
+        )
+        np.testing.assert_allclose(wild, capped, atol=1e-6)
+        assert np.all(np.isfinite(wild))
+        assert np.all(np.abs(wild[:3]) <= 1.0)
+
+    def test_tilt_receives_no_gradient(self):
+        """The policy reads the critic through this term; the critic must not
+        feel the policy back — d(loss)/d(tilt) is exactly zero."""
+        import jax
+
+        from rl.online.training.targets import support_kl
+
+        log_pi = jnp.log(jnp.asarray([[0.7, 0.2, 0.1, 1.0]]))
+        log_ref = jnp.log(jnp.asarray([[0.5, 0.3, 0.2, 1.0]]))
+
+        def loss(tilt):
+            return support_kl(log_pi, log_ref, self.LEGAL, 1.0, tilt).sum()
+
+        tilt_grad = jax.grad(loss)(jnp.asarray([[0.5, -0.2, 1.0, 0.0]]))
+        np.testing.assert_allclose(np.asarray(tilt_grad), 0.0, atol=0.0)

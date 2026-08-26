@@ -224,20 +224,45 @@ def reference_kl(
     return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
 
 
+# Cap on the advantage tilt's per-cell log-mass contribution: e^3 ~ 20x is
+# plenty of reordering headroom, and one wild A outlier cannot own p*. The
+# GRADIENT pi - p* is bounded by 1 regardless — this bounds the TARGET's
+# concentration, not the force.
+_SUPPORT_TILT_CLIP = 3.0
+
+
 def support_target(
     reg_log_policy: jax.Array,
     legal_mask: jax.Array,
     temperature: float,
+    tilt_logits: jax.Array | None = None,
 ) -> jax.Array:
-    """log p_T over legal cells: the support anchor's target distribution,
-    p_T ~ pi_reg ** (1/T), f32, stop-gradiented. Written once here so the
-    loss (`support_kl`) and the anchor telemetry read the SAME construction.
+    """log p* over legal cells: the support anchor's target distribution,
+    p* ~ pi_reg ** (1/T) * exp(tilt), f32, stop-gradiented. Written once here
+    so the loss (`support_kl`) and the anchor telemetry read the SAME
+    construction.
+
+    With no tilt this is the phase-1/2 anchor: a monotone power transform of
+    the frozen reference — same ranking, it never says WHICH cell. The tilt
+    is where per-cell knowledge enters (phase 3 passes sg(A_target) / tau):
+    p* becomes MPO's E-step target (arXiv:1806.06920) with pi_reg as prior,
+    so restored mass lands on the cells the critic ranks highest instead of
+    flattening the modality. The tilt is stop-gradiented and clipped, and
+    tilt contributions are capped at +-_SUPPORT_TILT_CLIP per cell.
 
     Masked with -1e9 rather than -inf: `0 * -inf` poisons the vjp on rows
     whose targets are all-zero.
     """
     lr = reg_log_policy.astype(jnp.float32)
-    scaled = jnp.where(legal_mask, lr / temperature, -1e9)
+    target_logits = lr / temperature
+    if tilt_logits is not None:
+        clipped_tilt = jnp.clip(
+            jax.lax.stop_gradient(tilt_logits.astype(jnp.float32)),
+            -_SUPPORT_TILT_CLIP,
+            _SUPPORT_TILT_CLIP,
+        )
+        target_logits = target_logits + clipped_tilt
+    scaled = jnp.where(legal_mask, target_logits, -1e9)
     return jax.lax.stop_gradient(jax.nn.log_softmax(scaled, axis=-1))
 
 
@@ -246,9 +271,11 @@ def support_kl(
     reg_log_policy: jax.Array,
     legal_mask: jax.Array,
     temperature: float,
+    tilt_logits: jax.Array | None = None,
 ) -> jax.Array:
-    """KL(p_T || pi) per state over legal cells, f32, where p_T is the FROZEN
-    reference raised to temperature T: p_T ~ pi_reg ** (1/T).
+    """KL(p* || pi) per state over legal cells, f32, where p* is the FROZEN
+    reference raised to temperature T and optionally advantage-tilted:
+    p* ~ pi_reg ** (1/T) * exp(tilt) (see `support_target`).
 
     The support-preserving half of the reference pair, and the mirror image of
     `reference_kl` above in the only way that matters. Differentiated through
@@ -269,10 +296,11 @@ def support_kl(
     policy at the reference's own support (a brake), while T > 1 re-inflates
     the reference's tail through a monotone power transform — same ranking,
     more mass on starved cells — putting the anchor above the current policy
-    and making it restorative.
+    and making it restorative. The tilt is the third knob and carries the
+    only thing neither of those can: WHICH cell (phase 3).
     """
     lp = log_policy.astype(jnp.float32)
-    log_p_t = support_target(reg_log_policy, legal_mask, temperature)
+    log_p_t = support_target(reg_log_policy, legal_mask, temperature, tilt_logits)
     p_t = jnp.where(legal_mask, jnp.exp(log_p_t), 0.0)
     return jnp.where(legal_mask, p_t * (log_p_t - lp), 0.0).sum(axis=-1)
 
