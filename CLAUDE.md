@@ -498,6 +498,32 @@ anchor's job is re-learnability. Acceptance/abort/fallback pre-registered in
 the config block; fallback is DAPO clip-higher (own commit), never a τ
 retune.
 
+**PHASE 3 RESULT (110.4k–223k) and PHASE 4 (2026-08-27).** Each half of the
+tilt proved out on the axis it owned; the composition failed on the axis
+neither owned. `type_scale_switch` trained for the first time ever (0.0008
+→ 0.0039) and wr set new all-time highs (0.35 @223k) — but raw A's
+MODALITY-LEVEL sign is negative on switch cells (the −0.11..−0.18 mean Q^π
+gap; absadv_ratio is a MAGNITUDE, not a sign), so the tilt subtracted
+switch mass from p* and the snap cycle compounded it: ask 0.065 → 0.0024,
+`force_switch` NEGATIVE by 223k — the support anchor inverted into an
+anti-switch force, `vol_switch_rows` hit 0, and `absadv_switch` then
+DECAYED unsupervised (0.17 → 0.10). **Two lessons with teeth:** (1) the
+"absadv_ratio → 1" acceptance read cannot fire by arbitrage once supply is
+0 — it starves instead, which is unfalsifiable, not vindication; (2)
+"yields to evidence" is wrong at the modality level, because that sign IS
+the self-confirming Q^π view the anchor exists to break. Phase 4 =
+`targets.centre_within_modality` (the critic says WHICH switch, never
+WHETHER — a whole-modality shift of A leaves p* unchanged, test-pinned
+with the within-group ranking as positive control) + T back to 1.2 for the
+modality axis (its phase-1 within-modality flattening now opposed by the
+tilt), recovery mode from full absorption. Abort instruments are now the
+ones that actually saw each failure: `support_switch_mass` falling across
+2 consecutive snaps / `force_switch` persistently negative (the phase-3
+shape); `type_scale_switch` falling while switch mass rises (the phase-1
+shape). Also on the record twice now: pick the abort metric from the
+mechanism you fear — the entropy>0.85 guard watched the wrong direction
+while entropy fell to 0.025.
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family
