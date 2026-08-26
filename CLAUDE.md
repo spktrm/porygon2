@@ -433,6 +433,26 @@ snap, which reads as healthy for ~20k steps and is costly to undo. EXIT T→1.0
 once `player_q_support_vol_switch_rows` ≥ 10; ABORT early if
 `player_normalized_modality_entropy` climbs across 2+ snaps past ~0.85.
 
+**Reference diff vs the NashPG implementation** (ntu-agents/nashpg @ dda50fe,
+`train/core/update_agent.py`; config path `conf/default/nash_pg.yaml` ->
+`conf/algorithm/nash_pg.yaml` -> `train/nash_pg.py:76` -> `update_agent`).
+Confirmed faithful: `dists.kl_divergence(mag_dists)` is KL(pi || pi_mag),
+matching Algorithm 4; ent_coef 0.05, mag_coef 0.2, clip_eps 0.2 all match.
+Unrecorded divergences found 2026-08-26:
+
+| theirs | ours | note |
+|---|---|---|
+| `optax.adamw(lr, eps=1e-5)` — explicitly overriding optax's 1e-8 | eps 1e-8 | **the one to test.** Adam is scale-invariant, so a param whose gradient has gone tiny still steps at ~full lr along a noise-dominated direction; `eps` is the ONLY damper, and 1e-5 engages 1000x sooner. Directly relevant to `type_scale_switch` drifting once switch supply dies |
+| `weight_decay=1e-4` (optax.adamw default, not overridden) | 0 | ours is likely BETTER here — decay pulls unused params toward zero, which worsens forgetting — but it was undocumented |
+| magnet snaps `nnx.clone(agent)`, the LIVE agent, every `num_inner_update`=1000 | snaps from `target_params` (the EMA) every 10k | ours is smoother and staler |
+| advantage normalised per-MINIBATCH inside the loss fn | per-batch | minor |
+| `mag_divergence_type: "kl" | "l2"` | kl only | the l2 variant is MORE pi-prefactored, not less — measured force at a starved cell 0.0048 vs kl's 0.0386 at pi=1e-2, and exactly 0 by pi=1e-6 where kl still has 1.3e-5. **The reference offers no mass-independent magnet in either mode**, which is why the support anchor had to be built rather than adopted |
+
+Also theirs: PPO value clipping (`0.5*max(sq, sq_clipped)`) — declined, we keep
+categorical CE + Retrace (§4.3 estimator-agnostic); 4 epochs x 4 minibatches =
+16 grad steps per collected batch vs our 1 with replay reuse 8;
+`only_use_player0_experience=False` is hardcoded at their call site, not config.
+
 **Not bundled, deliberately:** DAPO's clip-higher. The symmetric PPO clip is
 itself implicated as a *cause* — DAPO measure that clipped actions are
 predominantly π < 0.2 and ours sit at 0.0144, while CE-GPPO name the discarded
