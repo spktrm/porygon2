@@ -620,7 +620,7 @@ def train_step(
         # NashPG policy update (2026-08-26, arXiv:2510.18183): a
         # PPO-clipped surrogate on the taken action's ratio pi/mu against
         # the batch-normalised v-trace advantage, plus a DIFFERENTIATED
-        # forward KL(pi || pi_reg) magnet toward the periodically snapped
+        # reverse KL(pi || pi_reg) magnet toward the periodically snapped
         # reference and a differentiated entropy bonus. Every force here
         # runs through the composed log-softmax, whose Jacobian is
         # zero-sum per level — the softmax-invariant mean direction

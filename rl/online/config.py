@@ -318,7 +318,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
     # pi/mu with a batch-normalised v-trace advantage from V, plus a
-    # DIFFERENTIATED forward KL(pi || pi_reg) magnet and an entropy
+    # DIFFERENTIATED reverse KL(pi || pi_reg) magnet and an entropy
     # bonus, the reference hard-snapped from the target params every
     # player_reg_snap_steps. Their section 5.4 ablation is the reason
     # for the operator choice: swapping PPO into the older reward-
@@ -339,7 +339,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (NashPG's own rule) or "spo" (the builder's smooth quadratic) for
     # an A/B. Static config: switching costs one recompile at launch.
     player_pg_objective: str = "ppo"
-    # Differentiated forward KL(pi || pi_reg) magnet, NashPG's mag_coef.
+    # Differentiated REVERSE KL(pi || pi_reg) magnet, NashPG's mag_coef —
+    # their Algorithm 4 line 8 / eq. 12 verbatim, D_KL(pi_theta(.|o) ||
+    # rho(.|o)) under E_{o~pi}, i.e. the OPTIMISED policy is the first
+    # argument. Called "forward" here until 2026-08-26; that was wrong by
+    # this package's own convention (loss.py's approx_forward_kl is the k3
+    # estimator for KL(actor || learner), reference first). Reverse =
+    # mode-seeking, which is exactly why it cannot refill a dropped modality
+    # and why player_support_coef exists — see targets.support_kl.
     # alpha = 0.2 is their U-shaped sensitivity optimum (fig. 1) and
     # DeepNash's eta; never anneal it (their Appendix C: annealing alpha
     # diverges). Own-side only, as NashPG's objective also is. The
