@@ -382,9 +382,23 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # PPO surrogate it does not need a switch to be taken to act on one: the
     # N*pi < 1 absorbing bound does not apply to it. That is why it, and not a
     # supply fix, is the mechanism at this depth.
-    # Off is coef 0.0. T = 1.0 degrades it to a pure brake (zero force when pi
-    # sits at the reference) if 0.25 overshoots; T = 1.5 (3.26x per snap) is
-    # the escalation if recovery is too slow.
+    # T > 1 IS A BOUNDED RECOVERY DOSE, NOT A PERMANENT SETTING. The ratchet
+    # compounds THROUGH the reference, so absent opposition its only fixed
+    # point is uniform; what stops it is the PG force, and the equilibrium is
+    # wherever 0.25*(p_T - pi) balances it. That equilibrium is genuine, but
+    # the failure mode is not a static coefficient's: an over-large coef does
+    # not merely shift it, it walks the reference flatter every snap, which
+    # can read as healthy for ~20k steps and then be expensive to reverse.
+    # EXIT: drop T to 1.0 once player_q_support_vol_switch_rows recovers to
+    # >= 10 (its level at the 13k type_scale peak). T = 1.0 is a complete,
+    # NON-compounding brake — force is exactly zero when pi sits at the
+    # reference, so there is no drive toward uniform at all, while
+    # mass-independence still catches any fresh drift away from it.
+    # ABORT to T = 1.0 early if player_normalized_modality_entropy climbs
+    # monotonically across 2+ consecutive snaps past ~0.85 (early-run healthy
+    # was 0.75-0.84): that is the ratchet outrunning the PG force.
+    # Off is coef 0.0. T = 1.5 (3.26x per snap) is the escalation if recovery
+    # is too slow, and inherits the same exit and abort conditions.
     player_support_coef: float = 0.25
     player_support_temperature: float = 1.2
     # Snap period of the reference: reg_params <- target_params, in
