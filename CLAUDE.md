@@ -377,6 +377,71 @@ the 4-epoch analogue), λ stays 0.8 (their GAE 0.95 — our monotone sweep), lr
 3e-5 / grad clip 10 (theirs 3e-4/0.5 on ≤512-dim MLPs), categorical CE +
 Retrace critic kept (NashPG is estimator-agnostic, §4.3).
 
+## Addition ledger — 2026-08-26 support anchor
+
+**Gate resolved, same day.** The NashPG switch gate FAILED (switch_ratio 0.42
+→ 0.041 @33k → 0.013 @49k) while the run became the strongest lineage the
+project has produced: eval wr vs SimpleHeuristic 0.167 @30k and 0.207 @49k,
+against 0.030 (2wvnlsz3) and 0.039 (dx65cpwp) at matched `lifetime_step` — it
+passed 2wvnlsz3's 80k mark at 30k. Critic quality is IDENTICAL across lineages
+(`v_outcome_r2_{early,mid,late}` 0.06/0.25/0.60 vs −0.07/0.25/0.59), so the
+~3x gain is the update rule. NashPG is vindicated; only the starvation risk
+was real, and it was measured on the parameter:
+`player_policy_type_scale_switch` peaked 0.0197 @13k and unwound 53% to
+0.0092 @33k while the move group grew 8.5x — with `type_scale_target ≡ 0.0`
+as the in-run never-trained control.
+
+**The fallback ladder was retired UNFIRED.** Rung 1 (ent 0.05→0.1) is
+falsified twice: π-prefactored (∂H/∂y_b = −π_b(log π_b + H) → 0), *and* blind
+— global normalised entropy read 0.755 against modality entropy 0.22, so a
+global target cannot see a modality-confined collapse (the same dilution
+`train_step` documents for the μ-sampled KL). Rung 2 (analytic tilt) is
+superseded by a form that is bounded where it was not.
+
+| mechanism | what it is | why |
+|---|---|---|
+| `targets.support_kl` + `player_support_coef` 1.0 / `player_support_temperature` 1.2 | forward KL(p_T‖π) over legal cells against the SAME frozen `reg_params` reference raised to temperature T, p_T ∝ π_reg^(1/T). Reuses `reg_log_policy` — no extra forward pass | per-logit gradient is exactly **π(b) − p_T(b)**: no π prefactor, bounded by 1 for every π, zero-sum over legal cells — the three properties every dx65cpwp analytic shift failed. It is **all-action**, so unlike the PPO surrogate it does not need a switch to be TAKEN to act on one, and APO's `N·π < 1` absorbing bound does not apply to it. That is why it, and not a supply fix, is the mechanism at this depth |
+
+**Direction vs temperature do different jobs.** Direction buys
+mass-independence — reverse KL(π‖π_reg) has gradient π_b(log(π_b/π_reg,b) −
+KL), so its force dies on a starved cell and the magnet is structurally
+indifferent to a *dropped modality*; forward KL is mode-covering and can
+refill one. Measured: as a cell starves 1.4e-2 → 1e-6 the magnet's restoring
+force collapses 0.050 → 0.000013 while this converges on p_T(b) — 25000x
+apart. T decides where the anchor SITS: π_reg is a snapshot of an
+already-collapsing policy, so T=1 is a pure brake (force exactly 0 at the
+reference) and T>1 re-inflates its tail through a monotone power transform
+(same ranking — it never says *which* switch to make).
+
+**SIZE THIS FAMILY ON THE EQUILIBRIUM CONDITION, NEVER ON LOSS BALANCE.** A
+switch cell is only TAKEN on ~π_b of rows, so the surrogate's expected force
+on it is ~π_b·(A_b − E_π[A]) while the anchor acts on EVERY row; they balance
+at `|A_b| = coef·(p_T,b − π_b)/π_b`, in σ since `pg_advantages` are unit-std.
+The 1/π_b is the point — the ask *diverges* as the cell starves, so this is a
+floor that yields to real evidence rather than a standing tax, and it falls to
+0.02σ at a healthy 0.30 mass. coef 1.0 / T 1.2 gives equilibrium switch mass
+0.124 / 0.081 / 0.038 against a 0.2 / 0.3 / 0.5σ headwind. **coef 0.25 shipped
+first and was wrong**: calibrated to match the entropy bonus's per-logit force
+at ent 0.05, which put the fixed point at 0.014 — the collapsed status quo, a
+brake and not a cure.
+
+**T>1 is a BOUNDED dose.** The ratchet compounds *through* the reference
+(π_reg re-snaps from the policy the anchor just lifted), so unopposed its only
+fixed point is uniform; the PG force is what stops it. The failure mode is not
+a static coefficient's — too large a coef walks the REFERENCE flatter each
+snap, which reads as healthy for ~20k steps and is costly to undo. EXIT T→1.0
+once `player_q_support_vol_switch_rows` ≥ 10; ABORT early if
+`player_normalized_modality_entropy` climbs across 2+ snaps past ~0.85.
+
+**Not bundled, deliberately:** DAPO's clip-higher. The symmetric PPO clip is
+itself implicated as a *cause* — DAPO measure that clipped actions are
+predominantly π < 0.2 and ours sit at 0.0144, while CE-GPPO name the discarded
+quadrant (positive-advantage, low-probability) as the exploration-preserving
+one; our `adv_rms_switch` 0.127 vs `adv_rms_move` 0.029 says switch cells
+carry 4.4x the advantage magnitude on the grid. But widening ε_high loosens
+what removed the dx65cpwp runaway, so it wants its own decision and its own
+commit.
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family
