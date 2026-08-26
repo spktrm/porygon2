@@ -78,6 +78,14 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         # to stop that, and it only works if the literal moves with the
         # head class.
         q_head="advantage_grouped_micro",
+        # Encoder action-pathway variant (2026-08-27): three PRIVATE
+        # per-group 2-layer decoders (q = group slice, kv = final trunk
+        # latents) between the trunk and the out-norms. The capability
+        # keys above cover none of the encoder, so without this literal a
+        # pre-decoder checkpoint would pass check_manifest strict and
+        # crash at first apply — the exact stale-literal failure the
+        # BUMPING note documents.
+        action_pathway="per_group_decoder_2l_1x",
     )
 
 

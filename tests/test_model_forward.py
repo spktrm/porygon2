@@ -136,30 +136,60 @@ def test_micro_params_are_not_shared_between_slot_groups(
     network, params, actor_input, actor_output = real_model_and_trajectory
     flat_group = np.asarray(FLAT_SRC_GROUP_MASK)
     legal = np.asarray(actor_input.env.action_mask).reshape(-1, flat_group.shape[0])
+    # Differentiate at OPENED head params: at init every advantage output
+    # path is zero, so d loss / d action_embeddings ≡ 0 and the encoder
+    # half of this test would pass vacuously (its positive control caught
+    # exactly this, 2026-08-27). The column/row isolation asserted below
+    # is structural, so it holds at any params.
+    opened = open_zero_init_paths(params, ("advantage_head",))
 
     def grads_for_group(g):
-        # +-1 by rank parity WITHIN the group, not a uniform +1: micro is
-        # mean-centred over each modality's legal cells (compose_action_grid,
-        # reduce="mean") and A is pi-centred over the row, so a uniform
-        # weight lands exactly in the null space of both and the loss is
-        # identically zero. This is the same trick the flat-at-init test
-        # above uses, and forgetting it makes the test pass vacuously.
-        cells = np.flatnonzero(flat_group == g)
-        sel = np.zeros(flat_group.shape, np.float32)
-        sel[cells] = np.where(np.arange(len(cells)) % 2 == 0, 1.0, -1.0)
+        # +-1 by rank parity WITHIN the group (a uniform weight lands in
+        # the null space of the within-modality mean-centring and the loss
+        # is identically zero), then BALANCED to a zero sum per row over
+        # the group's legal cells: compose_q's advantage is pi-centred
+        # over ALL legal cells (A - E_sg(pi)[A]), so any row weight with a
+        # non-zero sum rides that centring into every other modality's
+        # cells — a property of the Q identity, not a parameter leak, and
+        # exactly the direction this privacy test must project out
+        # (measured 2026-08-27: unbalanced parity put |grad| 4.3 on the
+        # move decoder through the centring; balanced puts exactly 0).
+        cells = flat_group == g
+        parity = np.where(np.arange(flat_group.shape[0]) % 2 == 0, 1.0, -1.0)
+        weight = (parity * cells)[None, :].astype(np.float32) * legal
+        row_count = np.maximum((cells[None, :] * legal).sum(-1, keepdims=True), 1)
+        weight = (
+            weight
+            - (weight.sum(-1, keepdims=True) / row_count) * cells[None, :] * legal
+        )
 
         def loss(p):
             o = real_model_apply(p, actor_input, actor_output, HeadParams())
-            return jnp.sum(
-                o.advantage.astype(jnp.float32) * jnp.asarray(sel) * jnp.asarray(legal)
-            )
+            return jnp.sum(o.advantage.astype(jnp.float32) * jnp.asarray(weight))
 
-        return jax.grad(loss)(params)["params"]["advantage_head"]["macro_micro"][
-            "micro"
-        ]
+        grads = jax.grad(loss)(opened)["params"]
+        return grads["advantage_head"]["macro_micro"]["micro"], grads["encoder"]
 
     target_group = 1  # switch
-    g = grads_for_group(target_group)
+    g, encoder_grads = grads_for_group(target_group)
+
+    # Encoder-level separation (2026-08-27): the per-group action decoders
+    # are PRIVATE computation, so a switch-only loss must leave the move
+    # and target decoders' parameters with exactly zero gradient — and the
+    # switch decoder must receive some (the positive control, which is why
+    # the loss runs at opened head params — see above).
+    group_names = ("move", "switch", "target")
+    for name in group_names:
+        decoder_grads = np.concatenate(
+            [
+                np.asarray(leaf, dtype=np.float32).ravel()
+                for leaf in jax.tree.leaves(encoder_grads[f"{name}_action_decoder"])
+            ]
+        )
+        if name == group_names[target_group]:
+            assert decoder_grads.any(), "switch decoder got no gradient"
+        else:
+            assert not decoder_grads.any(), f"{name} decoder leaked"
 
     # Local routes: kernel is (d, G) — exactly one column may be non-zero.
     for name in ("micro_local_src", "micro_local_tgt"):
@@ -184,6 +214,74 @@ def test_micro_params_are_not_shared_between_slot_groups(
         for name in ("micro_local_src", "micro_local_tgt")
     )
     assert touched, "positive control: the touched group got no gradient"
+
+
+def test_action_decoders_route_species_to_own_cell(
+    real_model_and_trajectory, real_model_apply
+):
+    """Wiring test for the per-group action decoders (2026-08-27),
+    following the latent-read pattern: live at init — perturbing one legal
+    reserve's SPECIES token must move that reserve's own switch cells more
+    than its siblings' (the advantage head's zero-init paths opened, else
+    the composition is exactly 0 and everything passes vacuously). own > 0
+    is the live check; own > 1.5x sibling is the separation claim."""
+    import dataclasses
+
+    from rl.environment.data import FLAT_MODALITY_MASK, RESERVE_ENTITY_INDICES
+    from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
+    from rl.environment.protos.service_pb2 import ModalityEnum
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    opened = open_zero_init_paths(params, ("advantage_head",))
+    species_col = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
+    num_cells = np.asarray(FLAT_MODALITY_MASK).shape[0]
+    A = int(np.sqrt(num_cells))
+    switch_cells = np.asarray(FLAT_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__SWITCH
+    cell_tgt = np.arange(num_cells) % A
+
+    env = actor_input.env
+    flat_mask = np.asarray(env.action_mask).reshape(env.done.shape[0], -1)
+    rows_ok = np.asarray(~env.done)
+    # Two reserves that are both legal battle-switch targets somewhere.
+    legal_counts = [
+        ((flat_mask & (switch_cells & (cell_tgt == slot))).any(-1) & rows_ok).sum()
+        for slot in RESERVE_ENTITY_INDICES
+    ]
+    ranked = np.argsort(legal_counts)[::-1]
+    first, second = int(ranked[0]), int(ranked[1])
+    assert legal_counts[first] > 0 and legal_counts[second] > 0
+
+    team = np.asarray(env.private_team).copy()
+    team[:, [first, second], species_col] = team[:, [second, first], species_col]
+    swapped_input = dataclasses.replace(
+        actor_input, env=dataclasses.replace(env, private_team=jnp.asarray(team))
+    )
+
+    base = real_model_apply(opened, actor_input, actor_output, HeadParams())
+    swapped = real_model_apply(opened, swapped_input, actor_output, HeadParams())
+    delta = np.abs(
+        np.asarray(swapped.advantage, np.float32)
+        - np.asarray(base.advantage, np.float32)
+    )
+
+    own_cells = switch_cells & np.isin(
+        cell_tgt, [RESERVE_ENTITY_INDICES[first], RESERVE_ENTITY_INDICES[second]]
+    )
+    own_deltas, sibling_deltas = [], []
+    for t in np.nonzero(rows_ok)[0]:
+        legal = flat_mask[t]
+        own = legal & own_cells
+        sibling = legal & switch_cells & ~own_cells
+        if own.any() and sibling.any():
+            own_deltas.append(delta[t][own].mean())
+            sibling_deltas.append(delta[t][sibling].mean())
+    assert own_deltas, "no rows with both own and sibling legal switch cells"
+    own_mean, sibling_mean = np.mean(own_deltas), np.mean(sibling_deltas)
+    # Live at init AND separated: the perturbed reserves' own cells respond,
+    # and more strongly than their unperturbed siblings.
+    assert own_mean > 0.0
+    assert own_mean > 1.5 * sibling_mean, (own_mean, sibling_mean)
 
 
 def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):

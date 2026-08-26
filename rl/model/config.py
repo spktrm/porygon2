@@ -136,6 +136,27 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.latent_read.num_layers = 1
     cfg.encoder.latent_read.init_residual_scale = 1.0
 
+    # Per-group action decoders (2026-08-27): the Nov-2025 capacity
+    # restored — one PRIVATE 2-layer decoder per action slot group
+    # (move/switch/target), q = that group's trunk-output slice, kv = the
+    # trunk's final public latents. Motivated by the separation probe
+    # (rl/offline/separation_probe.py): the shared action stream
+    # generalises identity-keyed within-modality labels at held-out
+    # r = 0.58 for MOVES and r = 0.096 for SWITCHES — the live critic's
+    # within-row asymmetry reproduced under control, so the deficit is
+    # representational, not label supply. FFW width is the OLD design's 1x
+    # (8492b54^: resblocks_hidden = entity_size), not the 4x decoder
+    # default — evidence-backed and ~0.93M params per group.
+    # init_residual_scale 0.05 EXPLICITLY: the shared decoder default
+    # above is 0.0, the measured-dead product-of-zeros case (see
+    # round.init_gate below).
+    cfg.encoder.action_decoder = ConfigDict()
+    set_attributes(cfg.encoder.action_decoder, **transformer_decoder_kwargs)
+    cfg.encoder.action_decoder.need_pos = False
+    cfg.encoder.action_decoder.num_layers = 2
+    cfg.encoder.action_decoder.resblocks_hidden_size = entity_size
+    cfg.encoder.action_decoder.init_residual_scale = 0.05
+
     # Round trunk over the unified [state | action | value] sequence: each
     # round is masked self-attention over the state latents, the action
     # self-attention plus the state<->action exchange, the value rows'
