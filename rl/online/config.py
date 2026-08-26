@@ -436,7 +436,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Off is coef 0.0. T = 1.5 (3.26x per snap) is the escalation if recovery
     # is too slow, and inherits the same exit and abort conditions.
     player_support_coef: float = 1.0
-    player_support_temperature: float = 1.0
+    # PHASE 4 (2026-08-27): back to 1.2 — RECOVERY mode from full absorption
+    # (223k: prob_switch 0.0014, vol_switch_rows 0, reference switch mass
+    # 0.0024). The modality axis belongs to this sign-free power transform;
+    # the phase-1 within-modality flattening it caused is now opposed by the
+    # centred tilt below. Ratchet arithmetic from 0.0024 at T 1.2: ~2-2.7x
+    # per snap at these depths -> ~4-5 snaps (~40-50k steps) to ~0.1 row
+    # mass. The pre-registered exit stands: T -> 1.0 once
+    # player_q_support_vol_switch_rows >= 10.
+    player_support_temperature: float = 1.2
     # PHASE 3 — ADVANTAGE-TILTED TARGET (2026-08-26). Phase 1 proved the
     # transport and broke on the target: p_T knows only pi_reg — a snapshot of
     # the collapsing policy — so T > 1 restored mass with no within-modality
@@ -490,6 +498,33 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # not the per-cell prob_* means — compare against prob_switch times the
     # row's legal switch-cell count, ~0.10 here). Untilted baseline to judge
     # the tilt against: switch_mass 0.117, force_switch +0.017.
+    #
+    # PHASE 3 RESULT (110.4k-223k, raw tilt, T 1.0) — each half of the design
+    # proved out on the axis it owned and the composition failed on the axis
+    # neither owned. type_scale_switch trained for the first time ever
+    # (0.0008 -> 0.0039) and wr set new all-time highs (0.35 @223k): the
+    # WITHIN-modality tilt works. But raw A's MODALITY-LEVEL sign is negative
+    # on switch cells (the -0.11..-0.18 mean Q^pi gap; absadv_ratio is a
+    # MAGNITUDE, not a sign), so the tilt subtracted switch mass from p* and
+    # the snap cycle compounded it downward — support_switch_mass 0.065 ->
+    # 0.049 -> 0.032 -> 0.0024, force_switch NEGATIVE by 223k: the support
+    # anchor inverted into an anti-switch force. vol_switch_rows hit 0, and
+    # absadv_switch then DECAYED unsupervised (0.17 -> 0.10): the
+    # "absadv_ratio -> 1" acceptance read cannot fire by arbitrage once
+    # supply is 0 — it starves instead, which is unfalsifiable, not
+    # vindication. "Yields to evidence" was wrong at the modality level:
+    # that sign IS the self-confirming Q^pi view the anchor exists to break.
+    # PHASE 4 (2026-08-27): the tilt is CENTRED WITHIN each modality
+    # (targets.centre_within_modality) — the critic says WHICH switch, never
+    # WHETHER to switch — and T returns to 1.2 for the modality axis (its
+    # phase-1 within-modality flattening now opposed by the tilt). Abort
+    # instruments picked from the mechanisms actually feared, both
+    # directions: support_switch_mass FALLING across 2 consecutive snaps, or
+    # force_switch persistently negative, aborts the recovery (the phase-3
+    # failure shape); type_scale_switch falling while switch mass rises
+    # aborts to T 1.0 (the phase-1 shape). Acceptance: vol_switch_rows >= 10
+    # within ~50k of 223k, type_scale_switch resuming its climb once supply
+    # returns, wr non-regressing.
     player_support_adv_temperature: float = 0.125
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs

@@ -29,6 +29,7 @@ from rl.online.training.loss import (
     policy_gradient_loss,
 )
 from rl.online.training.targets import (
+    centre_within_modality,
     compute_builder_targets,
     compute_player_targets,
     compute_q_onestep_targets,
@@ -667,15 +668,23 @@ def train_step(
         # each snap re-anchors on a reference the anchor itself lifted,
         # and it stops compounding once the PG force can hold the mass
         # down again.
-        # Phase 3 (2026-08-26): the target can carry the observer
+        # Phase 3/4 (2026-08-26/27): the target carries the observer
         # critic's per-cell advantage as a tilt — p* ~ pi_reg^(1/T) *
-        # exp(sg(A_target)/tau), MPO's E-step target (arXiv:1806.06920)
+        # exp(sg(A_centred)/tau), MPO's E-step target (arXiv:1806.06920)
         # — so restored mass lands on the cells the critic ranks highest
-        # instead of flattening the modality (phase 1's failure). See
-        # the config block for sizing, acceptance and abort. tau = 0.0
-        # is bitwise off.
+        # instead of flattening the modality (phase 1's failure). The
+        # tilt is CENTRED WITHIN each modality (phase 4): raw A's
+        # modality-level sign is the self-confirming Q^pi view learned
+        # under the collapse, and feeding it here inverted the anchor
+        # (force_switch < 0 by 223k) — centred, the critic says WHICH
+        # switch, never WHETHER to switch; the modality axis belongs to
+        # the sign-free T > 1 power transform. See the config block for
+        # sizing, acceptance and abort. tau = 0.0 is bitwise off.
         if config.player_support_adv_temperature > 0.0:
-            support_tilt = adv_target / config.player_support_adv_temperature
+            support_tilt = (
+                centre_within_modality(adv_target, flat_action_mask, switch_actions)
+                / config.player_support_adv_temperature
+            )
         else:
             support_tilt = None
         support_kl_rows = support_kl(

@@ -617,3 +617,56 @@ class TestSupportTilt:
 
         tilt_grad = jax.grad(loss)(jnp.asarray([[0.5, -0.2, 1.0, 0.0]]))
         np.testing.assert_allclose(np.asarray(tilt_grad), 0.0, atol=0.0)
+
+
+class TestCentreWithinModality:
+    """Phase 4: the tilt must carry WITHIN-modality ranking only. The
+    modality-level component of raw A is the self-confirming Q^pi view that
+    inverted the phase-3 anchor, and centring removes it exactly."""
+
+    LEGAL = jnp.asarray([[True, True, True, True, False]])
+    SWITCH = jnp.asarray([[False, False, True, True, False]])
+
+    def test_modality_constant_is_removed_ranking_survives(self):
+        from rl.online.training.targets import centre_within_modality
+
+        values = jnp.asarray([[0.1, 0.3, -5.0, -5.4, 9.9]])
+        # A uniformly pessimistic view of the whole switch modality must be
+        # invisible to the tilt...
+        shifted = values + jnp.where(self.SWITCH, -7.0, 0.0)
+        base = centre_within_modality(values, self.LEGAL, self.SWITCH)
+        moved = centre_within_modality(shifted, self.LEGAL, self.SWITCH)
+        np.testing.assert_allclose(np.asarray(base), np.asarray(moved), atol=1e-6)
+        # ...while the POSITIVE CONTROL, the within-group ranking, survives:
+        # cell 2 sits 0.4 above cell 3 before and after centring.
+        assert float(base[0, 2] - base[0, 3]) == pytest.approx(0.4, abs=1e-6)
+        assert float(base[0, 1] - base[0, 0]) == pytest.approx(0.2, abs=1e-6)
+
+    def test_zero_sum_per_group_and_illegal_cells_zero(self):
+        from rl.online.training.targets import centre_within_modality
+
+        values = jnp.asarray([[0.1, 0.3, -5.0, -5.4, 9.9]])
+        centred = np.asarray(centre_within_modality(values, self.LEGAL, self.SWITCH))
+        assert centred[0, :2].sum() == pytest.approx(0.0, abs=1e-6)
+        assert centred[0, 2:4].sum() == pytest.approx(0.0, abs=1e-6)
+        assert centred[0, 4] == 0.0
+
+    def test_composed_target_ignores_modality_level_advantage(self):
+        """End-to-end pin of the phase-3 failure: a whole-modality advantage
+        shift must leave p* unchanged (to f32 rounding — the two centrings
+        subtract different means, so exact bit-equality is not available)."""
+        from rl.online.training.targets import (
+            centre_within_modality,
+            support_target,
+        )
+
+        log_ref = jnp.log(jnp.asarray([[0.4, 0.3, 0.2, 0.09, 0.01]]))
+        values = jnp.asarray([[0.1, 0.3, -5.0, -5.4, 9.9]])
+        shifted = values + jnp.where(self.SWITCH, -7.0, 0.0)
+        tau = 0.125
+
+        def target_of(advantages):
+            tilt = centre_within_modality(advantages, self.LEGAL, self.SWITCH) / tau
+            return np.asarray(support_target(log_ref, self.LEGAL, 1.2, tilt))
+
+        np.testing.assert_allclose(target_of(values), target_of(shifted), atol=1e-5)

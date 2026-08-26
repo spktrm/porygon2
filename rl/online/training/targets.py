@@ -231,6 +231,44 @@ def reference_kl(
 _SUPPORT_TILT_CLIP = 3.0
 
 
+def centre_within_modality(
+    values: jax.Array,
+    legal_mask: jax.Array,
+    switch_cells: jax.Array,
+) -> jax.Array:
+    """Per-row, per-modality centring of a cell-valued signal: subtract the
+    mean over the row's legal cells of the SAME modality (switch vs
+    non-switch); illegal cells come back 0.
+
+    Built for the support-anchor tilt (phase 4). Phase 3 fed raw A_target,
+    and its MODALITY-LEVEL sign — the self-confirming Q^pi view the anchor
+    exists to break — walked the anchor's switch ask down every snap until
+    force_switch went NEGATIVE (223k: -0.0014, vol_switch_rows 0). Centred,
+    exp(tilt) redistributes only WITHIN each modality: the critic says WHICH
+    switch, never WHETHER to switch. Adding any constant to a whole
+    modality's values leaves the output unchanged — the property that makes
+    the anchor's modality allocation A-independent (tests pin it, with the
+    within-group ranking as the positive control).
+
+    A convexity residual remains: within a group, E_p[e^tilt] >= 1 with
+    equality only for a flat tilt, so the group whose critic view is more
+    DIFFERENTIATED gains slightly at the other's expense. Bounded by the
+    +-_SUPPORT_TILT_CLIP cap, and currently pro-switch (adv_rms_switch ~2x
+    move) — acceptable, not load-bearing.
+    """
+    vals = values.astype(jnp.float32)
+    centred = jnp.zeros_like(vals)
+    switch_group = legal_mask & switch_cells
+    move_group = legal_mask & jnp.logical_not(switch_cells)
+    for group_mask in (switch_group, move_group):
+        group_count = jnp.maximum(group_mask.sum(axis=-1, keepdims=True), 1)
+        group_mean = (
+            jnp.where(group_mask, vals, 0.0).sum(axis=-1, keepdims=True) / group_count
+        )
+        centred = jnp.where(group_mask, vals - group_mean, centred)
+    return centred
+
+
 def support_target(
     reg_log_policy: jax.Array,
     legal_mask: jax.Array,
