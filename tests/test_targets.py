@@ -1,6 +1,5 @@
-"""v-trace / UPGO return math on hand-checkable inputs, plus the full
-target pipeline on the real example trajectory bundled in
-rl/environment/ex.bin."""
+"""v-trace return math on hand-checkable inputs, plus the full target
+pipeline on the real example trajectory bundled in rl/environment/ex.bin."""
 
 import jax.numpy as jnp
 import numpy as np

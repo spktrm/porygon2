@@ -211,12 +211,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # computed from tensors train_step already has.
 
     # Learning params. Player b1 back to 0.9 (2026-08-26): the b1=0
-    # detour was specific to the prefactor-free NeuRD force (momentum
-    # carried each push ~1/(1-b1) steps past the stiff equilibria its
-    # analytic shifts created — the dx65cpwp runaway). The player now
-    # runs the same trust-regioned PPO surrogate as the builder, the
-    # exact case the pro-momentum argument was always about; NashPG's
-    # own optimiser is AdamW with default moments.
+    # detour was specific to the previous prefactor-free logit force
+    # (momentum carried each push ~1/(1-b1) steps past the stiff
+    # equilibria its analytic shifts created — the dx65cpwp runaway).
+    # The player now runs the same trust-regioned PPO surrogate as the
+    # builder, the exact case the pro-momentum argument was always
+    # about; NashPG's own optimiser is AdamW with default moments.
     player_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     builder_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     # 3e-5. A 1e-4 trial (Aug 2026, zany-leaf-1305) collapsed: pre-clip grad
@@ -232,8 +232,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Fast EMA target (IMPACT-style): supplies the clipped-target ratio in
     # the surrogate, the v-trace reference policy, and the value bootstraps,
     # so it must track the learner closely for stability under replay reuse.
-    # (R-NaD likewise keeps a 1e-3 target purely for v-trace stability,
-    # separate from its slow anchors.)
+    # (Reference systems likewise keep a fast target purely for v-trace
+    # stability, separate from their slow regularisation anchors.)
     player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
 
@@ -321,9 +321,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # DIFFERENTIATED forward KL(pi || pi_reg) magnet and an entropy
     # bonus, the reference hard-snapped from the target params every
     # player_reg_snap_steps. Their section 5.4 ablation is the reason
-    # for the operator choice: swapping NeuRD -> PPO inside R-NaD's own
-    # framework closes most of the gap in larger games, i.e. the inner
-    # update rule, not the regularisation cycle, was the bottleneck.
+    # for the operator choice: swapping PPO into the older reward-
+    # transform framework closes most of its gap in larger games, i.e.
+    # the inner update rule, not the regularisation cycle, was the
+    # bottleneck.
     # The whole bracket shares this coefficient; 1.0 is the reference's
     # implicit value (the advantage is unit-std by construction).
     player_pg_coef: float = 1.0
@@ -331,7 +332,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # region: the surrogate's gradient is exactly zero once the ratio
     # leaves the band in the push direction, so no force persists at a
     # stiff equilibrium — the structural fix for the runaway class the
-    # NeuRD era needed a force clip, centred logits and b1=0 to contain.
+    # previous logit-force loss needed a force clip, centred logits and
+    # b1=0 to contain.
     player_ppo_clip: float = 0.2
     # Which surrogate policy_gradient_loss runs for the player: "ppo"
     # (NashPG's own rule) or "spo" (the builder's smooth quadratic) for

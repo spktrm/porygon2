@@ -9,11 +9,11 @@ held-out switch-rich batch for generalisation.
 
 Two arms, same batch, same checkpoint:
 
-  fixed   — labels frozen: target/reference EMA rates 0, NeuRD coef 0,
-            R-NaD eta 0. Retrace labels come from target_params only, so
+  fixed   — labels frozen: target EMA rate 0, pg bracket coef 0.
+            Retrace labels come from target_params only, so
             this is pure supervised fitting of fixed 3-bin labels on
             fixed rows. Failure here ⇒ architecture / optimisation.
-  live    — production config (EMA, NeuRD, R-NaD all on) so the labels
+  live    — production config (EMA and the full pg bracket on) so the labels
             move with the target net as they do in training. The gap to
             `fixed` is what the moving target costs.
   synthetic — `fixed` config, but the one-step label is replaced by

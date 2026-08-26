@@ -14,7 +14,7 @@ with two identifiability tiers that are deliberately different:
     shows can never restore a starved modality.
   * A is pi-mean-zero across all legal cells (identifies A against V). This one
     MUST be pi-weighted: it is what makes E_pi[Q] = V exactly, which is what
-    makes V the correct NeuRD baseline.
+    makes V the correct counterfactual baseline.
 
 Both stop-gradients are load-bearing. sg(V) closes the state route, so the
 taken-cell Huber loss cannot satisfy itself with a state-only function (the

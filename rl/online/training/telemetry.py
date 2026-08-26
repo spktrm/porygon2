@@ -410,17 +410,17 @@ class ActionAxisMasks(NamedTuple):
     This block used to be written out three times — twice in train_step
     (the Q diagnostics and again inside player_loss_fn) and once here — and
     the copies had DRIFTED. `has_both` required a legal switch AND a legal
-    MOVE; the NeuRD copy required a legal switch and any legal NON-switch,
+    MOVE; the policy-loss copy required a legal switch and any legal NON-switch,
     which also admits WILDCARD / OTHER / TARGET cells. Both called
     themselves "a switch and a non-switch are both legal", so the
-    `player_neurd_*` and `player_q_*` families were scoped to different row
+    `player_policy_*` and `player_q_*` families were scoped to different row
     populations while CLAUDE.md 3's decision rule reads one against the
     other (`absadv_ratio` against `player_q_switch_target_frac`).
 
     Unified 2026-08-25 on the STRICT reading: a stay/switch decision only
     means something when staying and attacking is actually available, so a
     row offering {switch, pass} is not a real choice. This narrows the
-    NeuRD slice; the Q slice is unchanged.
+    policy slice; the Q slice is unchanged.
 
     Row predicates are returned bare — each consumer combines them with its
     own row mask (`q_mask` for the critic panels, `policy_mask` for the

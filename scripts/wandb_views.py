@@ -156,9 +156,9 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # The Q critic drives the policy through NeuRD (1.6), so these
-            # stopped being "does the critic look sane" and became "is the
-            # thing steering the policy trustworthy".
+            # Observer stack (2026-08-26): the policy no longer reads the
+            # Q critic, but it remains the matched control and the
+            # starvation discriminators' evidence base.
             name="1.5 · Q critic",
             is_open=True,
             panels=[
@@ -176,7 +176,7 @@ def rl_sections():
                     # THE switching readout: best legal switch E[Q] minus
                     # best legal move E[Q], joint-read with switch_ratio.
                     # Gap positive while switch_ratio collapses = the
-                    # ratchet NeuRD exists to break; gap negative = the critic
+                    # self-reinforcing ratchet; gap negative = the critic
                     # agrees with not switching on the visited data (fix
                     # is opponents/data, not the policy update).
                     "Switch-vs-move value gap & switch rate",
@@ -189,36 +189,6 @@ def rl_sections():
                     # debt and nothing else.
                     "Q-V state-value agreement",
                     ["player_q_ev_gap"],
-                ),
-                lp(
-                    # R-NaD: per-cell -eta*(log pi - log pi_reg) on legal
-                    # cells by modality (positive = pushed up relative to
-                    # Q). penalty_switch rising while switch_ratio falls
-                    # is the transform restoring the modality; both ~0 =
-                    # the reference has caught up with the policy.
-                    "R-NaD penalty by modality",
-                    ["player_ref_penalty_switch", "player_ref_penalty_move"],
-                ),
-                lp(
-                    # The other analytic shift, -eta_ent*log pi = the same
-                    # construction with pi_reg uniform (NashPG's ent_coef,
-                    # which it runs alongside its magnet). This is what is
-                    # left once the reference catches up and the pair
-                    # above goes to ~0, so switch must sit ABOVE move —
-                    # the term pushing where the mass is thin is its whole
-                    # claim, and equal levels mean it is doing nothing the
-                    # centring does not already undo.
-                    "Entropy penalty by modality",
-                    ["player_ent_penalty_switch", "player_ent_penalty_move"],
-                ),
-                lp(
-                    # KL(pi_target || pi_reg) per state: the expected
-                    # per-step penalty inside the Q bootstrap. Rises as
-                    # the policy moves off its ~10k-step-lagged
-                    # reference, falls as the EMA catches up; a level
-                    # that only climbs is a runaway.
-                    "R-NaD reference KL",
-                    ["player_ref_kl"],
                 ),
                 lp(
                     # Gap discriminator 1/3 — calibration by context.
@@ -266,127 +236,83 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # THE policy gradient since 2026-08-21: all-action NeuRD,
-            # -adv(b) on the raw logits over every legal cell of every
-            # real-choice row (Hennes et al. 2020 eq. 10). Zero sampling
-            # variance, counterfactual pressure on untaken actions. The
-            # pi-prefactored form it replaced was measured to be the
-            # throttle — see the decomposition panels below.
-            name="1.6 · NeuRD all-action policy loss",
+            # THE policy gradient since 2026-08-26: NashPG
+            # (arXiv:2510.18183) — a PPO-clipped surrogate on the taken
+            # action's pi/mu ratio over the batch-normalised v-trace
+            # advantage, plus a differentiated forward KL magnet to the
+            # periodically snapped reference and an entropy bonus inside
+            # the same bracket.
+            name="1.6 · NashPG policy loss",
             is_open=True,
             panels=[
                 lp(
-                    # THE worth-it readout: signed gradient mass toward
-                    # the switch modality on both-modality states.
-                    # Positive = the critic wants more switching than the
-                    # policy carries and NeuRD is pushing it up; pinned
-                    # negative = NeuRD is transmitting critic aversion.
-                    "NeuRD switch push (signed, both-modality states)",
-                    ["player_neurd_switch_push"],
+                    # The surrogate's value and how often the trust region
+                    # is active. clip_frac pinned near 0 = the policy
+                    # barely moves (look at lr/coef before blaming the
+                    # critic); climbing toward 1 = replayed data has
+                    # outrun the band (staleness / replay controller).
+                    "PPO surrogate & clip occupancy",
+                    ["player_loss_pg", "player_ppo_clip_frac"],
                 ),
                 lp(
-                    # THE decision panel for NeuRD (research note:
-                    # docs/rare-action-rl-literature.md). A pi-prefactored
-                    # objective's per-logit gradient is −pi(b)·adv(b), so
-                    # its per-cell magnitude factorises as pi × |adv| and
-                    # grad_ratio ≈ prob_ratio × absadv_ratio. Read the
-                    # three ratios together on both-modality states:
-                    #   grad tracks prob, absadv ≈ 1 → the pi prefactor
-                    #     IS the throttle; NeuRD (advantage on the
-                    #     logits, no pi) is the indicated fix.
-                    #   absadv ≈ 0 → the critic has no switch belief to
-                    #     amplify; check player_q_switch_target_frac
-                    #     first (loss_q only supervises the TAKEN cell,
-                    #     so untaken switch cells may simply be
-                    #     untrained) — NeuRD would amplify noise.
-                    "pi-prefactor decomposition (ratios, switch/move)",
+                    # Batch advantage statistics BEFORE normalisation —
+                    # the scale the unit-std surrogate advantage divides
+                    # out. std collapsing toward 0 = the value function
+                    # sees no return differences to steer by.
+                    "v-trace advantage scale (pre-normalisation)",
+                    ["player_pg_adv_mean", "player_pg_adv_std"],
+                ),
+                lp(
+                    # The magnet cycle: KL(pi || pi_reg) sawtooths — up
+                    # against the FROZEN reference, ~0 at each snap. A
+                    # level climbing ACROSS snaps is a policy outrunning
+                    # the snap period.
+                    "Magnet: reference KL sawtooth & snaps",
+                    ["player_ref_kl", "player_reg_snapped"],
+                ),
+                lp(
+                    # Entropy bonus value (= -mean entropy) and the two
+                    # normalised entropies. A cliff here is the abort
+                    # signal: every remaining policy force is
+                    # pi-prefactored, so nothing refills a starved
+                    # modality once it empties — first fallback is
+                    # player_ent_coef 0.05 -> 0.1 (paper Table 4).
+                    "Entropy bonus & abort watch",
                     [
-                        "player_neurd_grad_ratio",
-                        "player_neurd_prob_ratio",
-                        "player_neurd_absadv_ratio",
-                    ],
-                    log_y=True,
-                ),
-                lp(
-                    # The magnitudes behind the ratios: mean per-cell
-                    # |d loss_neurd / d logit| on legal switch vs legal
-                    # non-switch cells of the same rows.
-                    "Per-cell gradient magnitude (switch vs move)",
-                    [
-                        "player_neurd_grad_switch",
-                        "player_neurd_grad_move",
-                    ],
-                    log_y=True,
-                ),
-                lp(
-                    # The two factors separately. prob_* is the
-                    # per-cell mass, not the modality mass.
-                    "Gradient factors: per-cell pi and |adv|",
-                    [
-                        "player_neurd_prob_switch",
-                        "player_neurd_prob_move",
-                        "player_neurd_absadv_switch",
-                        "player_neurd_absadv_move",
-                    ],
-                    log_y=True,
-                ),
-                lp(
-                    # NeuRD logit-gap clip occupancy: share of legal
-                    # switch / move cells on real-choice rows whose
-                    # outward push is blocked (|gap| > beta). Switch
-                    # climbing toward 1 = the clip, not the critic, now
-                    # bounds switch mass -> raise player_neurd_logit_clip.
-                    "NeuRD macro clipped fraction (switch vs move modality)",
-                    ["player_neurd_clipped_switch", "player_neurd_clipped_move"],
-                ),
-                lp(
-                    # Within-modality level of the hierarchical NeuRD
-                    # (2026-08-24): legal switch / move CELLS whose
-                    # within-modality push is blocked.
-                    "NeuRD micro clipped fraction (switch vs move cells)",
-                    [
-                        "player_neurd_clipped_micro_switch",
-                        "player_neurd_clipped_micro_move",
-                    ],
-                ),
-                lp(
-                    # Proximal logit decay (2026-08-25): centred-gap rms
-                    # per level. Healthy = plateau at ~|w|/decay_coef
-                    # (band edge 2.0 at most). Climbing without bound
-                    # alongside the macro-head grad norm was the runaway
-                    # signature the decay exists to remove.
-                    "NeuRD centred logit-gap rms (macro vs micro)",
-                    [
-                        "player_neurd_macro_gap_rms",
-                        "player_neurd_micro_gap_rms",
-                    ],
-                ),
-                lp(
-                    # Loss value ≈ 0 at the stopgrad point by
-                    # construction (baseline is the current policy's own
-                    # expectation) — scale lives in adv_std; the loss
-                    # trending negative means pi is drifting toward the
-                    # critic's preferences between updates.
-                    "NeuRD loss & counterfactual advantage spread",
-                    ["player_loss_neurd", "player_neurd_adv_std"],
-                ),
-                lp(
-                    # A cliff in either = the policy chasing critic
-                    # noise — back player_neurd_coef off (edit config,
-                    # relaunch).
-                    "Abort watch: entropy & modality entropy",
-                    [
+                        "player_loss_entropy",
                         "player_action_normalized_entropy",
                         "player_normalized_modality_entropy",
                     ],
                 ),
+                lp(
+                    # Modality decomposition of the two throttles on any
+                    # taken-action update: per-cell pi mass and the
+                    # observer critic's |A|, as switch/move ratios.
+                    # prob_ratio falling while absadv_ratio holds ~ 1 is
+                    # the starvation signature — the critic still
+                    # believes, the policy has stopped sampling.
+                    "Starvation watch (ratios, switch/move)",
+                    ["player_policy_prob_ratio", "player_policy_absadv_ratio"],
+                    log_y=True,
+                ),
+                lp(
+                    "Starvation factors: per-cell pi and |A|",
+                    [
+                        "player_policy_prob_switch",
+                        "player_policy_prob_move",
+                        "player_policy_absadv_switch",
+                        "player_policy_absadv_move",
+                    ],
+                    log_y=True,
+                ),
             ],
         ),
         ws.Section(
-            # Does the critic have anything for NeuRD to amplify? Since
-            # 2026-08-21 the policy's only link to return runs through
-            # Q_all, so an action-flat critic means NeuRD amplifies noise.
-            name="1.7 · Critic quality (what NeuRD reads)",
+            # Observer critic quality. The policy no longer reads the Q
+            # stack (2026-08-26; its link to return is the v-trace
+            # advantage), but an action-flat critic still voids the
+            # matched control and the starvation discriminators above.
+            name="1.7 · Critic quality (observer stack)",
             is_open=True,
             panels=[
                 lp(
@@ -480,7 +406,7 @@ def rl_sections():
                 ),
                 lp(
                     # Pre-clip grad norm per policy-head subtree, the
-                    # NeuRD pathway's own gradient scale (the Q-head pair
+                    # policy pathway's own gradient scale (the Q-head pair
                     # below stayed calm through both dx65cpwp failures).
                     "Policy head: grad norm by subtree",
                     [
@@ -514,8 +440,8 @@ def rl_sections():
                 ),
                 lp(
                     # switch_ratio is the number this whole saga is about;
-                    # an entropy cliff is the abort signal (back
-                    # player_neurd_coef off).
+                    # an entropy cliff is the abort signal (raise
+                    # player_ent_coef first; back player_pg_coef off).
                     "Outcome watch: switch ratio & modality entropy",
                     [
                         "switch_ratio",
@@ -653,14 +579,11 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Step 2: the NeuRD warm-up ramp and what it must hold.
-                    # reg_params is frozen at launch while the coef < full,
-                    # so ref_kl = drift from the launch policy
-                    # (fallback trigger 0.05); voluntary-switch target
-                    # fraction must stay >= 0.2 through the ramp.
-                    "Step 2: NeuRD ramp, drift from launch, switch support",
+                    # The reference cycle against the switch support it
+                    # must hold: voluntary-switch target fraction >= 0.2
+                    # is the wire every collapsed lineage tripped.
+                    "Reference cycle & switch support",
                     [
-                        "player_neurd_coef_effective",
                         "player_ref_kl",
                         "player_q_voluntary_switch_target_frac",
                         "player_reg_snapped",
@@ -861,7 +784,8 @@ def rl_sections():
                 lp(
                     "Loss components",
                     [
-                        "player_loss_neurd",
+                        "player_loss_pg",
+                        "player_loss_entropy",
                         "player_loss_kl",
                         "player_loss_v_win",
                         "player_loss_q",

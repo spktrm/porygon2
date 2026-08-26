@@ -72,15 +72,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
     normalized_modality_entropy: ArrayLike = ()
-    # The two levels' FREE logits, learner only like log_policy: macro
-    # (M,) over modalities, micro (A,) over the flat src x tgt grid,
-    # f32. The NeuRD loss is written against these
-    # (loss.hierarchical_neurd): the composed pi_logits are already a
-    # normalised log-policy, and a loss on them picks up a
-    # -pi(.).sum_a w(a) cross-term the moment the logit-gap clip breaks
-    # zero-sum (2026-08-24).
-    macro_logits: ArrayLike = ()
-    micro_logits: ArrayLike = ()
 
 
 @dataclass

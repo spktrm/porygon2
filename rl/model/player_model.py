@@ -180,8 +180,6 @@ class Porygon2PlayerModel(nn.Module):
         if self.cfg.train:
             learner_only = {
                 "log_policy": metrics.log_policy,
-                "macro_logits": scores.macro,
-                "micro_logits": scores.micro,
             }
         return PlayerPolicyHeadOutput(
             action_index=action_index,

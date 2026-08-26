@@ -507,10 +507,7 @@ class ActionScores(NamedTuple):
     """One action-axis readout's outputs.
 
     `logits` is the composed src x tgt grid. `macro` / `micro` are the FREE
-    per-level logits before composition — NeuRD differentiates against these,
-    because the composed grid is already a normalised log-policy and
-    differentiating through the normalisations adds a pi-prefactored
-    cross-term (CLAUDE.md section 3, tests/test_neurd_loss.py pins it).
+    per-level logits before composition, kept for head-internal reuse.
     """
 
     logits: jax.Array
@@ -631,8 +628,8 @@ def compose_q(
 
     The pi-weighting here is required, and is deliberately NOT the uniform
     centring compose_action_grid applies within each modality: pi-weighting is
-    what makes E_pi[Q] = V exactly, which is what makes V the correct NeuRD
-    baseline. Doing it at the micro tier instead would put a mass prefactor
+    what makes E_pi[Q] = V exactly, which is what makes V the correct
+    counterfactual baseline. Doing it at the micro tier instead would put a mass prefactor
     back on starved cells, which docs/entropy-gradient-pressure.md shows can
     never restore a dead modality.
 

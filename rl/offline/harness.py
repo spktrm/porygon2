@@ -75,7 +75,7 @@ class OfflineContext:
 
 def load_params(ckpt_dir: str, which: str = "target_params"):
     """`target_params` (EMA — what actors and the league play) by default;
-    `params` for the raw learner leaf, `reg_params` for the R-NaD
+    `params` for the raw learner leaf, `reg_params` for the NashPG
     reference."""
     return checkpoint.load_component(ckpt_dir, "player", which)
 

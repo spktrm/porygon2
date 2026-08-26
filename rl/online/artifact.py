@@ -127,16 +127,14 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    # R-NaD reference policy pi_reg (2026-08-22; snap semantics
+    # NashPG reference policy pi_reg (2026-08-22; snap semantics
     # 2026-08-25): a periodic hard SNAP of target_params, in place, every
-    # config.player_reg_snap_steps (frozen between snaps; launch snapshot
-    # through the NeuRD warm-up). The reference penalty
-    # -eta*(log pi - log pi_reg) in the policy objective
-    # is measured against it; the snap bounds the log-ratio gap
-    # structurally — the continuous EMA it replaces (1e-4, then 5e-5)
-    # never reset, and the compounding gap drove the pgaijs6l/2wvnlsz3
-    # grad-norm runaways. One param set instead of rnad.py's prev/prev_
-    # crossfade pair: same delta_m reset, no 4th net.
+    # config.player_reg_snap_steps, frozen between snaps. The magnet
+    # KL(pi || pi_reg) in the policy objective is measured against it;
+    # the snap bounds the log-ratio gap structurally — the continuous
+    # EMA it replaces (1e-4, then 5e-5) never reset, and the compounding
+    # gap drove the pgaijs6l/2wvnlsz3 grad-norm runaways. One param set:
+    # a hard reset needs no crossfade pair, no 4th net.
     reg_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     # Force these to be dynamic JAX arrays (PyTree nodes) instead of static Python scalars

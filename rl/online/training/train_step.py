@@ -212,17 +212,14 @@ def train_step(
     # against the TD(0) label r + gamma*V_win_target(s'), plain Q^pi, no
     # trace, no transformed bootstrap. ONE rung since 2026-08-25: the
     # critic and the policy share an information set, so there is no
-    # privileged sibling to compare against. The policy reads the target
-    # net's ADVANTAGE as stop-gradient scalars — V cancels in the NeuRD
-    # centring, so it never enters the policy objective at all.
+    # privileged sibling to compare against. The policy no longer reads
+    # this stack (2026-08-26): it is the matched-control observer and the
+    # Retrace value baseline.
     v_target = player_target_pred.value_head.expectation.astype(jnp.float32)
-    # The critics learn the PLAIN game (2026-08-25): the reference is a
-    # policy-objective term only, analytic per cell in targets.reference_penalty.
-    # The propagated-penalty bootstrap (V_win + V_reg) is gone — NashPG
-    # (arXiv:2510.18183) matches R-NaD's exploitability with the KL in
-    # the objective and NO reward transform, and the stream had no
-    # measured action-axis effect here (it shifted every cell of the Q
-    # base identically, so it cancelled in the NeuRD centring).
+    # The critics learn the PLAIN game: NashPG carries its reference KL
+    # in the POLICY objective and uses no reward transform
+    # (arXiv:2510.18183), so no penalty stream enters the labels or
+    # bootstraps.
     q_target = player_target_pred.q.astype(jnp.float32)
     adv_target = player_target_pred.advantage.astype(jnp.float32)
     q_label = compute_q_onestep_targets(batch, v_target, config)
@@ -249,8 +246,9 @@ def train_step(
     # information set IS the policy's, so the old "grade this on the
     # deployable rung" caveat is structural rather than a choice.
     # One derivation of the switch/move predicates for the whole step —
-    # the panels below, critic_outcome_telemetry and the NeuRD loss all read
-    # THESE, so they cannot drift apart again (telemetry.ActionAxisMasks).
+    # the panels below, critic_outcome_telemetry and the policy-loss
+    # telemetry all read THESE, so they cannot drift apart again
+    # (telemetry.ActionAxisMasks).
     axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
     valid_switch = axis.valid_switch
     valid_move = axis.valid_move
@@ -384,11 +382,9 @@ def train_step(
         q_label, pivotal_mask & jnp.logical_not(taken_switch)
     )
 
-    # Loss-free critic-quality diagnostics, on permanently. Since
-    # 2026-08-21 the policy's ONLY link to returns is NeuRD through the
-    # target net's ADVANTAGE, so these stopped being nice-to-have:
-    # action-value spread (is there anything to prefer?) and calibration
-    # of the taken-cell readout against its own realised one-step labels.
+    # Loss-free critic-quality diagnostics, on permanently: action-value
+    # spread (is there anything to prefer?) and calibration of the
+    # taken-cell readout against its own realised one-step labels.
     #
     # pi_target computed above (pivotal-state panel). The MEAN
     # undersells the spread by construction when action-value spread
@@ -608,7 +604,7 @@ def train_step(
 
         # Real-choice rows on the stay/switch axis: both a switch and a
         # a MOVE are legal. This is the slice the collapse forms in, and
-        # every NeuRD decomposition readout below is scoped to it.
+        # every policy-modality readout below is scoped to it.
         #
         # STRICT since 2026-08-25. This previously required a switch and any
         # legal NON-switch, which also admitted WILDCARD / OTHER / TARGET
@@ -660,7 +656,7 @@ def train_step(
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
         # over legal switch vs non-switch cells of real-choice rows.
-        # Loss-agnostic, kept across the NeuRD -> NashPG transition:
+        # Loss-agnostic, kept across the 2026-08-26 policy-loss transition:
         # prob_ratio falling with absadv_ratio ~ 1 is still the
         # starvation signature to watch, now with nothing but the magnet
         # cycle and entropy to oppose it.

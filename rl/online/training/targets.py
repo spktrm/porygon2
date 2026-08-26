@@ -45,8 +45,8 @@ def compute_player_targets(
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes Retrace VALUE targets on the win/loss channel plus the
     plain v-trace POLICY advantage the PPO surrogate reads (2026-08-26 —
-    the single-action advantage returned after five days away: the
-    all-action NeuRD era in between read the advantage head instead).
+    the single-action advantage returned after five days away — the
+    all-action logit-force era in between read the advantage head).
 
     PBRS/potential shaping retired (Aug 2026): the shaped-advantage era's
     channel machinery lived here; the win channel is now the sole reward.
@@ -229,8 +229,8 @@ def compute_q_onestep_targets(
 ) -> jax.Array:
     """TD(0) labels for the residual Q critic: y_t = r_t + gamma * V(s_{t+1})
     from the TARGET net's win-value head (plain Q^pi — no Retrace trace,
-    no reference-policy transform; the reference penalty lives only in the
-    NeuRD advantage, targets.reference_penalty). Replaced the Retrace
+    no reference-policy transform; the reference enters the POLICY
+    objective only, as the differentiated magnet). Replaced the Retrace
     recursion 2026-08-23: the one-step label has ~33x less variance than
     the outcome chain for the action axis to be learnt against, and its
     state component is exactly what V already carries, so the residual
