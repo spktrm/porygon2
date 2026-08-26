@@ -224,6 +224,47 @@ def reference_kl(
     return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
 
 
+def support_kl(
+    log_policy: jax.Array,
+    reg_log_policy: jax.Array,
+    legal_mask: jax.Array,
+    temperature: float,
+) -> jax.Array:
+    """KL(p_T || pi) per state over legal cells, f32, where p_T is the FROZEN
+    reference raised to temperature T: p_T ~ pi_reg ** (1/T).
+
+    The support-preserving half of the reference pair, and the mirror image of
+    `reference_kl` above in the only way that matters. Differentiated through
+    pi alone, so the per-logit gradient is exactly
+
+        d/dy_b  KL(p_T || pi)  =  pi(b) - p_T(b)
+
+    which carries NO pi prefactor, is bounded by 1 for every pi including
+    pi -> 0, and sums to zero over legal cells. `reference_kl`'s KL(pi ||
+    pi_reg) has gradient pi(b) * (log(pi(b)/pi_reg(b)) - KL): the pi prefactor
+    makes its force vanish on a starved cell, so it is mode-SEEKING and by
+    construction indifferent to a dropped modality. This one is mode-covering
+    and can refill one.
+
+    The two knobs do different jobs. Direction buys mass-independence — even at
+    T = 1 the gradient is pi(b) - pi_reg(b). T decides where the anchor SITS:
+    pi_reg is a snapshot of an already-collapsing policy, so T = 1 pins the
+    policy at the reference's own support (a brake), while T > 1 re-inflates
+    the reference's tail through a monotone power transform — same ranking,
+    more mass on starved cells — putting the anchor above the current policy
+    and making it restorative.
+
+    Masked with -1e9 rather than -inf: `0 * -inf` poisons the vjp on rows whose
+    targets are all-zero.
+    """
+    lp = log_policy.astype(jnp.float32)
+    lr = reg_log_policy.astype(jnp.float32)
+    scaled = jnp.where(legal_mask, lr / temperature, -1e9)
+    log_p_t = jax.lax.stop_gradient(jax.nn.log_softmax(scaled, axis=-1))
+    p_t = jnp.where(legal_mask, jnp.exp(log_p_t), 0.0)
+    return jnp.where(legal_mask, p_t * (log_p_t - lp), 0.0).sum(axis=-1)
+
+
 def compute_q_onestep_targets(
     batch: Batch, v_target: jax.Array, config: Porygon2LearnerConfig
 ) -> jax.Array:

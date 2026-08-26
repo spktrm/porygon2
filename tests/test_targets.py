@@ -403,3 +403,106 @@ class TestMagnetKl:
         np.testing.assert_allclose(
             float(reference_kl(log_pi, log_ref_junk, legal)[0]), expected, rtol=1e-5
         )
+
+
+class TestSupportKl:
+    """The support-preserving anchor: KL(p_T || pi) over legal cells, where
+    p_T ~ pi_reg ** (1/T) is the frozen reference raised to temperature T.
+
+    What these pin is the GRADIENT, not the value — the whole reason the term
+    exists is that its per-logit force pi(b) - p_T(b) has no pi prefactor, so
+    unlike the magnet it survives on a starved cell."""
+
+    LEGAL = jnp.asarray([[True, True, True, False]])
+
+    def _force(self, kl_fn, probs, ref_probs, **kwargs):
+        """Restoring force per logit: -dL/dy, so positive = pushes mass UP.
+        Differentiates through the legal log-softmax, as the learner does."""
+        import jax
+
+        y = jnp.log(jnp.asarray([probs]))
+        log_ref = jnp.log(jnp.asarray([ref_probs]))
+
+        def loss(logits):
+            log_pi = jax.nn.log_softmax(jnp.where(self.LEGAL, logits, -1e9), axis=-1)
+            return kl_fn(log_pi, log_ref, self.LEGAL, **kwargs).sum()
+
+        return -np.asarray(jax.grad(loss)(y))[0]
+
+    def test_zero_at_reference_only_when_temperature_is_one(self):
+        from rl.online.training.targets import support_kl
+
+        legal = self.LEGAL
+        log_pi = jnp.log(jnp.asarray([[0.7, 0.2, 0.1, 1.0]]))
+        np.testing.assert_allclose(
+            np.asarray(support_kl(log_pi, log_pi, legal, 1.0)), 0.0, atol=1e-6
+        )
+        # POSITIVE CONTROL: raising T must move it off zero, or the assertion
+        # above would pass for a function that returns a constant zero.
+        assert float(support_kl(log_pi, log_pi, legal, 1.2)[0]) > 1e-4
+
+    def test_gradient_is_pi_minus_p_t(self):
+        from rl.online.training.targets import support_kl
+
+        probs, ref = [0.7, 0.2, 0.1, 1.0], [0.5, 0.3, 0.2, 1.0]
+        force = self._force(support_kl, probs, ref, temperature=1.2)
+        raised = np.asarray(ref[:3]) ** (1 / 1.2)
+        p_t = raised / raised.sum()
+        np.testing.assert_allclose(force[:3], p_t - np.asarray(probs[:3]), atol=1e-5)
+
+    def test_force_is_zero_sum_over_legal_cells(self):
+        from rl.online.training.targets import support_kl
+
+        force = self._force(
+            support_kl, [0.7, 0.2, 0.1, 1.0], [0.5, 0.3, 0.2, 1.0], temperature=1.2
+        )
+        np.testing.assert_allclose(force[:3].sum(), 0.0, atol=1e-5)
+
+    def test_force_survives_a_starved_cell_where_the_magnet_dies(self):
+        """The design claim, as a test. Drive one cell's mass toward zero and
+        watch the two references diverge: the magnet's pi prefactor takes its
+        force to nothing, while this one converges on p_T(b)."""
+        from rl.online.training.targets import reference_kl, support_kl
+
+        uniform = [1 / 3, 1 / 3, 1 / 3, 1.0]
+        magnet_forces, support_forces = [], []
+        for starved in (1e-2, 1e-4, 1e-6):
+            rest = (1.0 - starved) / 2
+            probs = [rest, rest, starved, 1.0]
+            magnet_forces.append(self._force(reference_kl, probs, uniform)[2])
+            support_forces.append(
+                self._force(support_kl, probs, uniform, temperature=1.2)[2]
+            )
+        # The magnet's restoring force decays to nothing as the cell starves.
+        assert magnet_forces[0] > magnet_forces[1] > magnet_forces[2]
+        assert magnet_forces[2] < 1e-4
+        # This one converges on p_T(b) ~ 1/3 instead of vanishing.
+        assert all(f > 0.3 for f in support_forces)
+        assert support_forces[2] > 3000 * magnet_forces[2]
+
+    def test_force_stays_bounded_on_a_numerically_dead_cell(self):
+        """Regression for the dx65cpwp failure class: an unbounded per-cell
+        force (-eta * log pi) diverged twice. This one is bounded by 1."""
+        from rl.online.training.targets import support_kl
+
+        probs = [0.5 - 5e-9, 0.5 - 5e-9, 1e-8, 1.0]
+        force = self._force(
+            support_kl, probs, [1 / 3, 1 / 3, 1 / 3, 1.0], temperature=1.2
+        )
+        assert np.all(np.isfinite(force))
+        assert np.all(np.abs(force[:3]) <= 1.0)
+
+    def test_illegal_cells_and_empty_rows_are_inert(self):
+        from rl.online.training.targets import support_kl
+
+        legal = self.LEGAL
+        log_pi = jnp.log(jnp.asarray([[0.7, 0.2, 0.1, 1.0]]))
+        log_ref = jnp.log(jnp.asarray([[0.5, 0.3, 0.2, 1.0]]))
+        base = float(support_kl(log_pi, log_ref, legal, 1.2)[0])
+        junk = log_ref.at[0, 3].set(-50.0)
+        np.testing.assert_allclose(
+            float(support_kl(log_pi, junk, legal, 1.2)[0]), base, rtol=1e-5
+        )
+        none_legal = jnp.zeros_like(legal, dtype=bool)
+        value = float(support_kl(log_pi, log_ref, none_legal, 1.2)[0])
+        assert value == 0.0 and np.isfinite(value)
