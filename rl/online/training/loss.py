@@ -18,21 +18,51 @@ def spo_objective(
     ) / (2 * clip_ppo)
 
 
+def ppo_objective(
+    *,
+    policy_ratios: jax.Array,
+    advantages: jax.Array,
+    clip_ppo: float,
+):
+    """PPO clipped surrogate (Schulman et al. 2017; restored 2026-08-26
+    from the pre-4234016 form): min(r*A, clip(r, 1-eps, 1+eps)*A). The
+    min is one-sided pessimism — the gradient is exactly zero once the
+    ratio leaves the band IN THE DIRECTION the advantage pushes, and
+    untouched when the clip would flatter the objective."""
+    l1 = policy_ratios * advantages
+    l2 = jnp.clip(policy_ratios, 1.0 - clip_ppo, 1.0 + clip_ppo) * advantages
+    return jnp.minimum(l1, l2)
+
+
 def policy_gradient_loss(
     *,
     policy_ratios: jax.Array,
     advantages: jax.Array,
     valid: jax.Array,
     threshold: float,
+    objective: str = "spo",
 ):
-    """Ratio-surrogate PG loss. Builder-only since 2026-08-21 — the player
-    policy is trained by all-action NeuRD alone (CLAUDE.md 3)."""
-    pg_loss = spo_objective(
+    """Ratio-surrogate PG loss, one selector over the two objectives: the
+    builder keeps SPO's smooth quadratic penalty; the player runs NashPG's
+    PPO clip (config.player_pg_objective — "spo" is the A/B alternative)."""
+    objective_fn = {"spo": spo_objective, "ppo": ppo_objective}[objective]
+    pg_loss = objective_fn(
         policy_ratios=policy_ratios,
         advantages=advantages,
         clip_ppo=threshold,
     )
     return -average(pg_loss, valid)
+
+
+def clip_fraction(
+    *,
+    policy_ratios: jax.Array,
+    valid: jax.Array,
+    clip_ppo: float,
+):
+    """Fraction of valid rows whose ratio sits outside the PPO band."""
+    clipped = jnp.abs(policy_ratios - 1) > clip_ppo
+    return average(clipped, valid)
 
 
 def mse_value_loss(*, pred: jax.Array, target: jax.Array, valid: jax.Array):
