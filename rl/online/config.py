@@ -412,6 +412,19 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # the failure mode is not a static coefficient's: an over-large coef does
     # not merely shift it, it walks the reference flatter every snap, which
     # can read as healthy for ~20k steps and then be expensive to reverse.
+    # PHASE 1 RESULT (49.5k-97.6k at T 1.2, coef 1.0): the ratchet WORKED on the
+    # modality axis exactly as designed — switch_ratio 0.0285 -> 0.0929 and
+    # vol_switch_rows 2.4 -> 9.3, stepping up at each 10k snap. It also drove
+    # type_scale_switch 0.0122 -> 0.0003, i.e. to the type_scale_target ~= 0
+    # dead-group level, while type_scale_move fell only 23%. p_T flattens
+    # WITHIN a modality as well as across it, and the equilibrium was only ever
+    # analysed on the modality axis, where the PG opposes it; inside a starved
+    # modality there were 1-5 sampled rows per batch and so almost no PG
+    # opposition, and the micro readout went to uniform unopposed. Eval wr
+    # peaked 0.2508 at 65-70k and was flat-to-down for the 30k that followed.
+    # So T > 1 restores FREQUENCY at the cost of DISCRIMINATION, and
+    # vol_switch_rows — the gate — rises either way, which makes it Goodhartable
+    # on its own. Judge T > 1 on type_scale_switch, never on supply alone.
     # EXIT: drop T to 1.0 once player_q_support_vol_switch_rows recovers to
     # >= 10 (its level at the 13k type_scale peak). T = 1.0 is a complete,
     # NON-compounding brake — force is exactly zero when pi sits at the
@@ -423,7 +436,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Off is coef 0.0. T = 1.5 (3.26x per snap) is the escalation if recovery
     # is too slow, and inherits the same exit and abort conditions.
     player_support_coef: float = 1.0
-    player_support_temperature: float = 1.2
+    player_support_temperature: float = 1.0
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —
