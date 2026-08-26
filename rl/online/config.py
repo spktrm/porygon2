@@ -370,10 +370,26 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # with exactly this gradient; APO (arXiv:2602.05717) shows recovery as a
     # Pareto improvement, and gives the absorbing criterion N*pi < 1 that
     # player_q_support_vol_switch_rows measures directly (3.9/batch at 33k).
-    # coef 0.25 is CALIBRATED, not guessed: at the current operating point
-    # (~0.05 switch mass) it delivers the same per-logit force as the entropy
-    # bonus does at 0.05, so the loss balance is unshocked — but where
-    # entropy's force collapses 17x as the modality starves, this one grows.
+    # coef 1.0 is sized on the EQUILIBRIUM condition, which is the criterion
+    # that matters. A switch cell is only TAKEN on ~pi_b of rows, so the PPO
+    # surrogate's expected force on it is ~pi_b * (A_b - E_pi[A]) while this
+    # term acts on EVERY row, and the two balance at
+    #     |A_b| = coef * (p_T,b - pi_b) / pi_b      [pg_advantages are
+    #                                                unit-std, so this is
+    #                                                sigma]
+    # The 1/pi_b is the point: the ask DIVERGES as the cell starves, so this
+    # is a floor that yields to real evidence rather than a standing tax.
+    # At coef 1.0 / T 1.2 the equilibrium switch mass is 0.124 against a
+    # 0.2 sigma headwind, 0.081 at 0.3, 0.038 at 0.5 — it recovers under the
+    # optimistic read and does not lose ground under the pessimistic one —
+    # while asking only 0.02 sigma at a healthy 0.30 mass, i.e. inert when
+    # things work. An earlier 0.25 was calibrated on LOSS BALANCE (matching
+    # the entropy bonus's force at 0.05) and that was the wrong criterion:
+    # its equilibrium sat at 0.014, i.e. exactly the collapsed status quo.
+    # The headwind is uncertain and probably nearer 0.2 than 0.5: the -0.18
+    # matched-V gap was measured on the DESPERATE switches a collapsed policy
+    # chose, whereas p_T is monotone in pi_reg so the mass this adds goes to
+    # the model's top-RANKED switches.
     # T 1.2 is TS-OPSD's. The snap cycle turns it into a compounding ratchet:
     # from the 49k launch point (0.013 switch mass) each snap lifts the anchor
     # ~1.81x -- 0.013 -> 0.024 -> 0.043 -> 0.077 -- so ~40-50k steps back to a
@@ -399,7 +415,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # was 0.75-0.84): that is the ratchet outrunning the PG force.
     # Off is coef 0.0. T = 1.5 (3.26x per snap) is the escalation if recovery
     # is too slow, and inherits the same exit and abort conditions.
-    player_support_coef: float = 0.25
+    player_support_coef: float = 1.0
     player_support_temperature: float = 1.2
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
