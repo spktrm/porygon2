@@ -65,29 +65,41 @@ def compute_player_targets(
     config.player_lambda (0.8, AlphaStar's TD(lambda) value) shapes the
     value targets.
     """
-    dones_expanded = jnp.expand_dims(batch.player_transitions.env_output.done, axis=-1)
-    mask_expanded = 1 - (jnp.cumsum(dones_expanded, axis=0) - dones_expanded)
-    discount_t = (1 - dones_expanded) * config.player_gamma * mask_expanded
+    dones = batch.player_transitions.env_output.done
+    mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
+    discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
 
     # Truncated importance weights, AlphaStar/IMPALA: clipped IS only.
     # rho and c are the SAME quantity here — the two were separate
     # expressions behind a player_alpha blend between raw and clipped IS,
     # a dial nothing ever moved off 1.0 (removed 2026-08-21), so this is
     # one min() instead of four multiplies and two adds.
-    truncated_isr = jnp.expand_dims(jnp.minimum(1.0, isr), axis=-1)
+    truncated_isr = jnp.minimum(1.0, isr).astype(jnp.float32)
     rho_t = truncated_isr
     c_t = truncated_isr
 
-    r_t = batch.player_transitions.env_output.win_reward
+    # Scalar-space recursion (2026-08-26). The recursion used to run
+    # per-atom in distribution space, accumulating signed measures
+    # (advantage_shift, r_t as a distribution) into a CE label that was
+    # NOT a probability distribution — negative components, mass != 1.
+    # softmax CE tolerates that algebraically, but the label stopped
+    # meaning "a distribution over outcomes". The scalar form is the
+    # same estimator (v-trace is linear, so @ support commutes with the
+    # recursion) projected once through two_hot at the end, so the label
+    # is always on the simplex and the recursion is one channel instead
+    # of n_bins. f32 throughout (LESSONS 2: value recursions run and
+    # return f32).
+    support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
+    r_t = batch.player_transitions.env_output.win_reward.astype(jnp.float32) @ support
 
-    v_tm1 = jnp.exp(value_log_probs)
-    last_values = v_tm1[-1:]
-    v_t = jnp.concatenate([v_tm1[1:], last_values], axis=0)
+    v_tm1 = jnp.exp(value_log_probs.astype(jnp.float32)) @ support
+    v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
 
     # Retrace over the COMPOSED Q (2026-08-25): the subtracted baseline is
-    # Q(s, a) = V(s) + A(s, a), not V(s) alone. E_pi[Q(s', .)] = V(s')
-    # EXACTLY by heads.compose_q's centring, so the bootstrap is untouched
-    # and only the baseline moves — and E_pi[A] = 0 means the doubly-robust
+    # Q(s, a) = V(s) + A(s, a), not V(s) alone — in scalar space the
+    # baseline shift IS adv_taken. E_pi[Q(s', .)] = V(s') EXACTLY by
+    # heads.compose_q's centring, so the bootstrap is untouched and only
+    # the baseline moves — and E_pi[A] = 0 means the doubly-robust
     # correction adds nothing back, it only takes the taken cell out.
     #
     # What that buys: with the baseline at V, the truncated rho attenuates
@@ -102,20 +114,18 @@ def compute_player_targets(
     #
     # A is zero-init (flat-at-init contract), so this is the identity at
     # launch and adv_taken = 0 is the exact revert.
-    support = jnp.asarray(CAT_VF_SUPPORT, dtype=v_tm1.dtype)
-    baseline_shift = advantage_shift(v_tm1, adv_taken.astype(v_tm1.dtype), support)
-
     td_errors = (
-        rho_t * mask_expanded * (r_t + discount_t * v_t - v_tm1 - baseline_shift)
+        rho_t * mask * (r_t + discount_t * v_t - v_tm1 - adv_taken.astype(jnp.float32))
     )
 
-    td_lambda = jnp.asarray(config.player_lambda, dtype=isr.dtype)
-    errors = vtrace(td_errors, discount_t, c_t * td_lambda)
-    targets_tm1 = (errors + v_tm1) * mask_expanded
+    errors = vtrace(td_errors, discount_t, c_t * config.player_lambda)
+    scalar_returns = (errors + v_tm1) * mask
 
-    win_returns = targets_tm1
+    # Off-mask rows stay inert zero vectors; every masked row is a proper
+    # two-hot distribution (two_hot clips to the support range).
+    win_returns = two_hot(scalar_returns, support) * mask[..., None]
 
-    value_mask = jnp.squeeze(mask_expanded, axis=-1).astype(jnp.bool_)
+    value_mask = mask.astype(jnp.bool_)
     # Chunked unrolls: a chunk's final row is bootstrap-only — it anchors
     # the recursions above (v_t reads its value) but
     # takes no loss here, because chunks overlap by one row and that same
@@ -177,28 +187,6 @@ def two_hot(scalar: jax.Array, support: jax.Array) -> jax.Array:
     return jax.nn.one_hot(upper_idx - 1, n_bins) * (1.0 - w_upper[..., None]) + (
         jax.nn.one_hot(upper_idx, n_bins) * w_upper[..., None]
     )
-
-
-def advantage_shift(
-    value_probs: jax.Array, adv: jax.Array, support: jax.Array
-) -> jax.Array:
-    """Signed measure over the value atoms carrying first moment ``adv`` and
-    zero total mass: two_hot(m + adv) - two_hot(m) at m = E[value_probs].
-
-    Adding it to a value distribution shifts that distribution's mean by
-    exactly ``adv`` (up to the support's clipping) and is the identity at
-    adv = 0. A scalar cannot enter the recursion any other way: the value
-    loss is a cross-entropy whose LABEL is a vector over the atoms, and the
-    recursion accumulates vectors to build it. Signed is fine — the whole
-    recursion is already an accumulation of target-minus-value differences,
-    and softmax_cross_entropy never required non-negative labels.
-
-    Two-hot rather than a fixed direction like adv*(-1/2, 0, +1/2): the
-    latter always moves mass between the EXTREME atoms, so a slightly worse
-    action at a near-won state reads as "more likely a loss" instead of
-    "more likely a draw"."""
-    mean = value_probs @ support
-    return two_hot(mean + adv, support) - two_hot(mean, support)
 
 
 def reference_kl(

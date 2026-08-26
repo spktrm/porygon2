@@ -218,16 +218,20 @@ class TestPlayerTargetsOnExTrajectory:
         assert policy_mask.any()  # the example game has real decisions
 
     def test_value_targets_stay_distributions(self, ex_target_inputs):
-        # Bin-space v-trace with a one-hot terminal outcome and gamma=1 must
-        # keep each masked target row a probability distribution.
+        # The simplex contract (2026-08-26): every masked CE label is a
+        # proper two-hot distribution — non-negative, mass exactly 1 —
+        # because the recursion runs in scalar space and projects once at
+        # the end. The old distribution-space form accumulated signed
+        # measures and could leave the simplex.
         batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
         targets, _ = compute_player_targets(
             batch, value_log_probs, isr, adv_taken, config
         )
-        sums = np.asarray(targets.win_returns).sum(-1)
+        returns = np.asarray(targets.win_returns)
         mask = np.asarray(targets.value_mask)
-        np.testing.assert_allclose(sums[mask], 1.0, atol=1e-4)
-        np.testing.assert_allclose(sums[~mask], 0.0, atol=1e-6)
+        np.testing.assert_allclose(returns.sum(-1)[mask], 1.0, atol=1e-4)
+        assert (returns[mask] >= 0.0).all()
+        np.testing.assert_allclose(returns.sum(-1)[~mask], 0.0, atol=1e-6)
 
     def test_on_policy_diagnostics(self, ex_target_inputs):
         batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
@@ -235,66 +239,6 @@ class TestPlayerTargetsOnExTrajectory:
         # isr == 1 everywhere: full effective sample size, nothing clipped.
         np.testing.assert_allclose(float(logs["player_isr_ess"]), 1.0, atol=1e-3)
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
-
-
-class TestAdvantageShift:
-    """The signed measure that carries a scalar advantage into the
-    distributional value recursion (targets.advantage_shift)."""
-
-    support = jnp.array([-1.0, 0.0, 1.0])
-
-    def _probs(self):
-        return jnp.array(
-            [
-                [1 / 3, 1 / 3, 1 / 3],  # mean 0
-                [0.0, 0.02, 0.98],  # near-won
-                [0.5, 0.0, 0.5],  # coin flip, mean 0
-                [0.9, 0.1, 0.0],  # near-lost
-            ]
-        )
-
-    def test_zero_advantage_is_exactly_the_identity(self):
-        from rl.online.training.targets import advantage_shift
-
-        got = advantage_shift(self._probs(), jnp.zeros(4), self.support)
-        np.testing.assert_array_equal(np.asarray(got), np.zeros((4, 3), np.float32))
-
-    def test_zero_total_mass_and_exact_first_moment(self):
-        from rl.online.training.targets import advantage_shift
-
-        probs = self._probs()
-        adv = jnp.array([0.3, -0.3, 0.45, 0.15])
-        shift = advantage_shift(probs, adv, self.support)
-        # Adding it must not create or destroy probability mass, so the
-        # value targets stay normalised however large the advantage.
-        np.testing.assert_allclose(np.asarray(shift).sum(-1), np.zeros(4), atol=1e-6)
-        # ...and it must move the mean by exactly the advantage.
-        np.testing.assert_allclose(
-            np.asarray((probs + shift) @ self.support),
-            np.asarray(probs @ self.support + adv),
-            atol=1e-6,
-        )
-
-    def test_saturates_at_the_support_edge_rather_than_exploding(self):
-        from rl.online.training.targets import advantage_shift
-
-        probs = self._probs()
-        huge = advantage_shift(probs, jnp.full((4,), 50.0), self.support)
-        shifted_mean = np.asarray((probs + huge) @ self.support)
-        np.testing.assert_allclose(shifted_mean, np.ones(4), atol=1e-6)
-
-    def test_moves_mass_to_the_adjacent_atom_not_the_far_one(self):
-        """The reason for two_hot over a fixed (-1/2, 0, +1/2) direction: a
-        slightly worse action at a near-won state means 'more likely a
-        draw', not 'more likely a loss'."""
-        from rl.online.training.targets import advantage_shift
-
-        near_won = jnp.array([[0.0, 0.02, 0.98]])
-        shifted = np.asarray(
-            near_won + advantage_shift(near_won, jnp.array([-0.3]), self.support)
-        )
-        assert shifted[0, 0] == pytest.approx(0.0, abs=1e-6)  # no loss mass added
-        assert shifted[0, 1] > 0.02  # the draw atom is where it goes
 
 
 class TestRetraceBaseline:
@@ -305,32 +249,31 @@ class TestRetraceBaseline:
         return np.asarray(targets.win_returns @ support)
 
     def test_zero_baseline_reproduces_the_vtrace_targets(self, ex_target_inputs):
-        """The flat-at-init advantage head must leave the estimator BITWISE
+        """The flat-at-init advantage head must leave the estimator exactly
         where it was — checked against a reference implementation of the
-        pre-Retrace v-trace form, not against another call of the same
+        plain scalar v-trace form, not against another call of the same
         function."""
         batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
-        done = batch.player_transitions.env_output.done[..., None]
-        mask = 1 - (jnp.cumsum(done, axis=0) - done)
-        discount_t = (1 - done) * config.player_gamma * mask
-        rho = jnp.minimum(1.0, isr)[..., None]
-        v_tm1 = jnp.exp(value_log_probs)
+        support = jnp.array([-1.0, 0.0, 1.0], dtype=jnp.float32)
+        done = batch.player_transitions.env_output.done
+        mask = (1 - (jnp.cumsum(done, axis=0) - done)).astype(jnp.float32)
+        discount_t = (1 - done).astype(jnp.float32) * config.player_gamma * mask
+        rho = jnp.minimum(1.0, isr).astype(jnp.float32)
+        v_tm1 = jnp.exp(value_log_probs.astype(jnp.float32)) @ support
         v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
-        td = (
-            rho
-            * mask
-            * (
-                batch.player_transitions.env_output.win_reward
-                + discount_t * v_t
-                - v_tm1
-            )
+        r_t = (
+            batch.player_transitions.env_output.win_reward.astype(jnp.float32) @ support
         )
-        want = (vtrace(td, discount_t, rho * config.player_lambda) + v_tm1) * mask
+        td = rho * mask * (r_t + discount_t * v_t - v_tm1)
+        scalar = (vtrace(td, discount_t, rho * config.player_lambda) + v_tm1) * mask
+        want = two_hot(scalar, support) * mask[..., None]
 
         got, _ = compute_player_targets(
             batch, value_log_probs, isr, jnp.zeros_like(adv_taken), config
         )
-        np.testing.assert_array_equal(np.asarray(got.win_returns), np.asarray(want))
+        np.testing.assert_allclose(
+            np.asarray(got.win_returns), np.asarray(want), atol=1e-6
+        )
 
     def test_positive_advantage_lowers_the_state_target(self, ex_target_inputs):
         """Positive control — without it the test above passes vacuously.
