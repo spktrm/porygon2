@@ -210,16 +210,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # per-step fresh-vs-replayed value-error gap below stays: it is
     # computed from tensors train_step already has.
 
-    # Learning params. Player b1=0.0 — DeepNash Table 2 (b1 0.0, b2 0.999)
-    # and rnad.py's AdamConfig: no first-moment momentum anywhere near a
-    # NeuRD update. The old pro-momentum argument here cited guardrails
-    # (SPO trust region, behaviour-KL, replay-KL controller) that bound
-    # the builder's pi-prefactored surrogate and the replay path — none
-    # of them act on the prefactor-free NeuRD force, and momentum carried
-    # each push ~1/(1-b1) = 10 steps past the stiff equilibrium the
-    # analytic shifts create (the dx65cpwp micro runaway, 2026-08-26).
-    # The builder keeps b1=0.9: its PPO-style loss IS trust-regioned.
-    player_adam: AdamWConfig = AdamWConfig(b1=0.0, b2=0.999, eps=1e-08, weight_decay=0)
+    # Learning params. Player b1 back to 0.9 (2026-08-26): the b1=0
+    # detour was specific to the prefactor-free NeuRD force (momentum
+    # carried each push ~1/(1-b1) steps past the stiff equilibria its
+    # analytic shifts created — the dx65cpwp runaway). The player now
+    # runs the same trust-regioned PPO surrogate as the builder, the
+    # exact case the pro-momentum argument was always about; NashPG's
+    # own optimiser is AdamW with default moments.
+    player_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     builder_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     # 3e-5. A 1e-4 trial (Aug 2026, zany-leaf-1305) collapsed: pre-clip grad
     # norms 10-100x the clip, action-emb srank at 0.27 by 13k steps (vs
@@ -289,9 +287,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     builder_lambda: float = 0.99
 
-    # Builder policy objective: ratio-based surrogate with a trust region.
-    # The player has no ratio-surrogate term anymore — the single-action PG
-    # and UPGO losses were removed 2026-08-21 (CLAUDE.md 3).
+    # Builder policy objective: ratio-based surrogate with a trust region
+    # (SPO's smooth quadratic; the player runs the PPO clip — see
+    # player_pg_objective).
     builder_ppo_clip_threshold: float = 0.3
 
     # Loss coefficients
@@ -309,177 +307,59 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # everything (CLAUDE.md 5).
     player_q_coef: float = 0.5
     # No trace parameter since 2026-08-23 (Step 3): the residual critic
-    # regresses on the TD(0) label r + gamma*V_win_target(s'), and the
-    # policy reads that critic directly. Retrace at q_lambda 1.0 / pi
-    # lambda 0.8 (the outcome chain within the chunk) is in git history;
-    # the Step-6 probe showed the categorical head fitting those labels
-    # through a state-only route, which the residual form closes.
-    # THE policy gradient. All-action NeuRD (Hennes et al. 2020 eq. 10):
-    # per legal cell of every real-choice row,
-    # adv(a) = A(a) − Σ_a' π(a')·A(a') (a counterfactual baseline — swap
-    # own action, hold the world fixed, marginalise under the CURRENT
-    # policy), centred over legal cells, applied to the RAW LOGITS with no
-    # π prefactor. A is the head's advantage directly: V is a per-row
-    # constant this centring removes exactly, so it never enters. Zero sampling
-    # variance, and counterfactual pressure lands on untaken actions —
-    # which a sampled objective structurally cannot do (on a move row,
-    # retrace−v_exp says nothing about the switch not taken). Advantages
-    # enter as stop-gradient scalars off the target net.
+    # regresses on the TD(0) label r + gamma*V_win_target(s'). Retrace at
+    # q_lambda 1.0 / pi lambda 0.8 (the outcome chain within the chunk)
+    # is in git history; the Step-6 probe showed the categorical head
+    # fitting those labels through a state-only route, which the residual
+    # form closes. Since 2026-08-26 the policy no longer reads this stack
+    # — it is the matched-control observer (same modules as the policy
+    # head under a different loss) and the Retrace value baseline.
     #
-    # Lineage: the π-prefactored form (−π(b)·adv(b) per logit) was used
-    # until 2026-08-21. Its restoring force shrinks with the starved cell's
-    # own mass, and the 157k-step 2026-08-20 run measured absadv_ratio ~4
-    # against prob_ratio ~0.075 — the critic preferred switch cells MORE
-    # than move cells and π alone throttled the update (CLAUDE.md 3 has the
-    # measurement and why no π-prefactored objective can be the restorer). The single-action PG and UPGO terms went the same
-    # day, leaving this as the only loss that moves the action logits
-    # toward return.
-    #
-    # 1.0 (up from 0.1, 2026-08-21): this is the policy learning rate
-    # now, so it takes the coefficient the PG term it replaced carried.
-    # Scale check — the PG advantages it stands in for were EMA-
-    # normalised to ~unit std, while these are raw win units (~0.1-0.2
-    # spread), so at 1.0 a starved switch cell at adv +0.15 gets
-    # ~0.15/logit: ~10x its pull at 0.1, and about an order above the
-    # magnet's. That asymmetry is the point (the magnet is the only
-    # opposing force left), but it is also the thing to watch: if
-    # normalised modality entropy cliffs or player_neurd_clipped_switch
-    # pins at 1, the clip rather than the critic is bounding switch mass
-    # — back this off or raise the magnet. Static config since
-    # 2026-08-21, so retuning it costs one train_step recompile at the
-    # next launch (nothing varies it during a run any more).
-    # 0.2 (2026-08-21 eve, from 1.0): the first run at 1.0 tripped the
-    # condition above inside 6k steps -- pi(switch) 0.16 -> 0.011 with the
-    # critic's gap still -0.04, clipped_switch 0.99 by 10k, switch mass
-    # ~0.1% per cell (the band floor) -- a near-zero early gap
-    # transmitted at full volume before the critic had a belief. 0.1
-    # with the old PG still present never saturated past ~0.7; 0.1-0.2
-    # brackets it.
-    # 0.1 (2026-08-21 night, from 0.2): 0.2 on a fresh lineage tripped
-    # the same wire, only slower -- clipped_switch 0 -> 0.83 by 12.9k,
-    # switch_ratio 0.47 -> 0.076, switch_push pinned at -0.035, magnet KL
-    # 0.43 and climbing; no checkpoint yet (first save 20k) so relaunched
-    # from scratch.
-    # 0.2 (2026-08-22, from 0.1, with magnet 0.1 in place): 0.1 + magnet
-    # 0.1 held switching but learnt nothing -- normalised entropy 0.9+
-    # parked next to the anchor (magnet KL ~0.1, not straining), eval wr
-    # vs the heuristic flat at 0.07 from 48k to 65k while the collapsed
-    # 0.2/0.05 lineage was at 0.15-0.23 by 20k. NeuRD is the sole
-    # improvement term now, so halving it halved the learning. Tests
-    # whether magnet 0.1 holds 0.2 where 0.05 didn't; resumed @60k.
-    # 2026-08-22: the magnet is gone; the opposing force is now inside
-    # the advantage itself (player_ref_eta), so this coef scales both
-    # the improvement and the regularisation together, as in rnad.py.
-    player_neurd_coef: float = 0.2
-    # Step-2 warm-up (docs/critic-weakness-analysis.md, 2026-08-23): NeuRD's
-    # coefficient ramps 0 -> player_neurd_coef linearly over the lineage's
-    # first N learner steps, and the reference snap is gated off (reference
-    # policy frozen at the launch snapshot) until the ramp completes, so
-    # player_ref_kl reads KL(pi || pi_launch) = policy drift from
-    # launch. The Q routes are zero-initialised and NeuRD consumed an
-    # immature Q from step 0, reshaping the behaviour distribution before
-    # the critic had any action coverage — the support loss began at
-    # launch, not at 13k (run 3sc7wlgq). 20k since the 2026-08-22
-    # relaunch (up from the pre-registered 11k, and an exact divisor of
-    # player_reg_snap_steps so the first snap lands as the ramp
-    # completes). 11k was the pre-registered first
-    # schedule only (the Q R2 plateau age on that run); acceptance is the
-    # panel set in the plan doc plus a >=5k-step hold at full coefficient.
-    # 0 disables. Traced from step_count inside train_step, so a resumed
-    # lineage never re-ramps.
-    player_neurd_warmup_steps: int = 20_000
-    # NeuRD logit-gap clip beta: no outward push on a legal cell whose
-    # log-policy sits more than beta from the row's legal-mean. Bounds
-    # the logit spread NeuRD can build (advantages are not zero-mean
-    # per row, so unclipped logits diverge); other losses still move
-    # cells outside the band. 2.0 = OpenSpiel's NeuRD default.
-    player_neurd_logit_clip: float = 2.0
-    # Quadratic decay on each level's centred free logits, inside the
-    # NeuRD bracket (shares neurd_coef and the warm-up ramp, so the
-    # per-cell fixed point |centred logit| = |w| / decay is coef- and
-    # ramp-invariant). The linear all-action loss has no inward force
-    # inside the +-beta band; a persistent same-sign modality advantage
-    # therefore integrates without bound — macro-head grad runaway at
-    # ~64k on three lineages (2026-08-25). 0.05 puts the fixed point at
-    # the band edge for |w| = 0.1 (the observed coherent macro push) and
-    # is mass-independent: starved cells are pulled back toward the
-    # legal-set mean, not just dominant ones pulled down.
-    player_neurd_logit_decay: float = 0.05
-    # Reference-policy penalty in the NeuRD advantage: the ONLY place the
-    # reference enters since the reg-value stream was deleted
-    # (2026-08-25). Per legal cell, analytically, -eta*(log pi - log
-    # pi_reg) is added to the ADVANTAGE before re-centring
-    # (targets.ref_penalised_q);
-    # the critic learns the PLAIN game — no reward transform, no
-    # transformed bootstrap. pi_reg is a periodic SNAP of the target
-    # params (player_reg_snap_steps).
-    # This is NashPG (arXiv:2510.18183, Oct 2025): own-side KL to an
-    # iteratively refined reference in the POLICY objective, no reward
-    # transformation, reported at or below R-NaD's exploitability — and
-    # its independent sensitivity study lands on alpha = 0.2 with a
-    # U-shaped curve, which is where DeepNash's eta already put us.
-    # Own-side only, as NashPG's objective also is (the opponent's
-    # +eta*KL_opp would need the other side's chunk — no game id in a
-    # Trajectory), so the regularised game is not exactly zero-sum.
-    # NOTE the analytic advantage shift is deliberate and is NOT NashPG's
-    # differentiated KL: d/dz KL(pi||rho) carries a pi prefactor and so
-    # vanishes on a starved cell, whereas shifting the advantage under
-    # NeuRD's logit gradient makes the refill force GROW as pi -> 0. Same
-    # lesson as the gradient-side magnet this replaced. 0 = plain NeuRD.
-    player_ref_eta: float = 0.2
-    # Entropy coefficient, applied the SAME analytic way: a second per-cell
-    # shift -eta_ent*log pi(a), which is KL(pi||uniform) up to the log N
-    # constant the re-centring drops. NashPG runs ent_coef 0.05 ALONGSIDE
-    # its magnet at 0.2 (conf/algorithm/nash_pg.yaml) and Ataraxos's magnet
-    # IS uniform, so both references carry this term and we carried
-    # neither since the gradient-side magnet went in 4254a1f. Analytic, not
-    # a loss term, for the reason above: a differentiated entropy is
-    # pi-prefactored and cannot refill a starved modality — the structural
-    # limit four magnet retunes hit (0.01 -> 0.05 -> 0.1 -> 0.2).
-    # Fixed, not decayed: Ataraxos anneals its temperature on a power
-    # schedule, but LESSONS 10's through-line is a fixed value plus a panel
-    # until a pathology proves fixed cannot work. The decay is the
-    # follow-up, and it goes on the traced step_count like warmup_scale
-    # (no recompile), not into a RuntimeScalars revival.
-    # 0.01, NOT NashPG's 0.05 (dx65cpwp diverged on 0.05, 2026-08-26).
-    # Their 0.05 is applied as a DIFFERENTIATED KL whose gradient carries a
-    # pi(b) prefactor, so on a thin cell the force is suppressed; ours is
-    # analytic and prefactor-free, which is the whole point of it — and
-    # therefore stronger by ~1/pi(a) on exactly the cells that matter.
-    # Transplanting the number without rescaling was the bug. Prefactor
-    # equivalence at pi ~ 1/9 legal cells is 0.05*0.11 ~ 0.0055; 0.01
-    # rounds up to keep it a real force. Sizing check that matters: the
-    # proximal decay's fixed point is gap* = w/player_neurd_logit_decay =
-    # 20w, and w here is -eta_ent*log pi(a), UNBOUNDED as pi(a) -> 0. At
-    # 0.05 a cell starved to 1e-6 gives w 0.69 -> gap* 13.8, so the
-    # restoring force overshoots the cell past dominant, gets slammed
-    # back, and the 20x amplifier turns that into a divergent oscillation
-    # (micro_gap_rms 0.57 -> 7.9 and logit_l2 1.3 -> 213 over 10k steps,
-    # all of it in the MOVE micro logits: forward_kl_move 3.49 against
-    # forward_kl_switch 0.0016). At 0.01 gap* stays inside the beta=2
-    # clip band for realistic starvation.
-    # NOTE the "unbounded penalty IS the restoring force" argument holds
-    # for the REFERENCE penalty because snapping bounds its gap. Nothing
-    # bounds -log pi against a uniform reference. If 0.01 still drifts,
-    # the next step is a floor (log max(pi, eps)), not another coef cut.
-    player_ref_eta_ent: float = 0.01
-    # Snap period of the reference (2026-08-25, replacing the continuous
-    # EMA — 1e-4, then 5e-5): reg_params <- target_params, in place,
-    # every N steps once the NeuRD warm-up is done (rnad.py's delta_m
-    # reset without the prev/prev_ crossfade pair — no 4th param set).
-    # The EMA never reset, so the log(pi/pi_reg) gap compounded with
-    # policy speed into the grad-norm runaways of pgaijs6l (56k) and
-    # 2wvnlsz3 (79.6k, ref_kl 2.07 nats, p90 62k by 98k): the penalty is
-    # unbounded in the gap by design, so the GAP is bounded structurally
-    # instead. Divides the warm-up so the first snap lands exactly at
-    # ramp completion, and a multiple-of-N resume snaps at its first step.
-    # 10k, halved from rnad.py's delta_m of 20k (2026-08-25): NashPG
-    # re-clones every 1000 of 50k inner updates, i.e. FIFTY refinements
-    # over a run, against ~10 for us at 20k over a 200k-step target — and
-    # the iterative refinement is the paper's actual claim, so the cadence
-    # is load-bearing rather than incidental. Half-step, not their ratio:
-    # a 4k reference approaches an EMA magnet, which chases the policy and
-    # degenerates into a short-horizon trust region (LESSONS 4).
+    # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
+    # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
+    # pi/mu with a batch-normalised v-trace advantage from V, plus a
+    # DIFFERENTIATED forward KL(pi || pi_reg) magnet and an entropy
+    # bonus, the reference hard-snapped from the target params every
+    # player_reg_snap_steps. Their section 5.4 ablation is the reason
+    # for the operator choice: swapping NeuRD -> PPO inside R-NaD's own
+    # framework closes most of the gap in larger games, i.e. the inner
+    # update rule, not the regularisation cycle, was the bottleneck.
+    # The whole bracket shares this coefficient; 1.0 is the reference's
+    # implicit value (the advantage is unit-std by construction).
+    player_pg_coef: float = 1.0
+    # PPO clip epsilon (NashPG/paper Table 4). The clip is the trust
+    # region: the surrogate's gradient is exactly zero once the ratio
+    # leaves the band in the push direction, so no force persists at a
+    # stiff equilibrium — the structural fix for the runaway class the
+    # NeuRD era needed a force clip, centred logits and b1=0 to contain.
+    player_ppo_clip: float = 0.2
+    # Which surrogate policy_gradient_loss runs for the player: "ppo"
+    # (NashPG's own rule) or "spo" (the builder's smooth quadratic) for
+    # an A/B. Static config: switching costs one recompile at launch.
+    player_pg_objective: str = "ppo"
+    # Differentiated forward KL(pi || pi_reg) magnet, NashPG's mag_coef.
+    # alpha = 0.2 is their U-shaped sensitivity optimum (fig. 1) and
+    # DeepNash's eta; never anneal it (their Appendix C: annealing alpha
+    # diverges). Own-side only, as NashPG's objective also is. The
+    # gradient is pi-prefactored — with the PPO surrogate there is no
+    # prefactor-free refill force anywhere any more; the bet (theirs) is
+    # that the magnet cycle plus entropy keep pi interior so starvation
+    # never starts. switch_ratio through the 13k wire is the acceptance
+    # gate; the analytic-shift form is in git history if it fails.
+    player_mag_coef: float = 0.2
+    # Entropy bonus, differentiated, NashPG's ent_coef (0.05 in their
+    # yaml; paper Table 4 ran 0.1 — the pre-registered first fallback if
+    # switch mass decays). Bounded under the PPO clip; the dx65cpwp
+    # divergence was the ANALYTIC prefactor-free -eta_ent*log pi force,
+    # which does not carry over to this form.
+    player_ent_coef: float = 0.05
+    # Snap period of the reference: reg_params <- target_params, in
+    # place, every N steps (NashPG's K inner updates; their paper runs
+    # re-clone every 10k for 25 outer rounds). Frozen between snaps —
+    # the continuous EMA it replaced never reset, so the KL gap
+    # compounded with policy speed (2wvnlsz3: ref_kl 2.07 nats). A
+    # shorter period approaches an EMA magnet, which chases the policy
+    # and degenerates into a short-horizon trust region (LESSONS 4).
     player_reg_snap_steps: int = 10_000
     ## Builder
     builder_value_loss_coef: float = 0.5

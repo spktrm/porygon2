@@ -34,9 +34,7 @@ def test_train_step_player_q_smoke():
     from rl.online.config import Porygon2LearnerConfig
     from rl.online.training.train_step import TRAIN_STEP_JIT
 
-    # Warm-up off: at step_count 0 the Step-2 ramp would zero NeuRD and
-    # the policy-gradient assertions below would read 0 by design.
-    config = Porygon2LearnerConfig(player_neurd_warmup_steps=0)
+    config = Porygon2LearnerConfig()
     player_net = get_player_model(
         get_player_model_config(config.generation, train=True)
     )
@@ -92,8 +90,6 @@ def test_train_step_player_q_smoke():
         "player_q_saturation_frac",
         "player_q_mse",
         "player_ref_kl",
-        "player_ref_penalty_switch",
-        "player_ref_penalty_move",
         "player_q_switch_move_gap",
         # Gap discriminators: per-context calibration + data coverage +
         # head-independent conditional Retrace means.
@@ -124,25 +120,23 @@ def test_train_step_player_q_smoke():
         # itself; nonzero norm proves the CE loss actually reaches the
         # Q family's MacroMicroHead params.
         "player_advantage_head_gradient_norm",
-        # All-action NeuRD, the policy gradient: loss value plus the
-        # signed switch-modality push readout.
-        "player_loss_neurd",
-        "player_neurd_switch_push",
-        # R-NaD reg-value stream (2026-08-24): scalar head MSE + the
-        # propagated reward/value telemetry.
-        "player_neurd_adv_std",
-        # pi-prefactor decomposition: |d loss_neurd / d logit| on
-        # switch vs non-switch legal cells of real-choice rows, split
-        # into its pi and |adv| factors (grad ~ prob x absadv).
-        "player_neurd_grad_switch",
-        "player_neurd_grad_move",
-        "player_neurd_grad_ratio",
-        "player_neurd_prob_switch",
-        "player_neurd_prob_move",
-        "player_neurd_prob_ratio",
-        "player_neurd_absadv_switch",
-        "player_neurd_absadv_move",
-        "player_neurd_absadv_ratio",
+        # NashPG policy update: the PPO surrogate, its clip occupancy,
+        # the differentiated entropy/magnet terms and the batch-advantage
+        # statistics.
+        "player_loss_pg",
+        "player_ppo_clip_frac",
+        "player_loss_entropy",
+        "player_pg_adv_mean",
+        "player_pg_adv_std",
+        "player_reg_snapped",
+        # Modality decomposition of the taken-action update's two
+        # throttles: pi mass and the observer critic's |A|.
+        "player_policy_prob_switch",
+        "player_policy_prob_move",
+        "player_policy_prob_ratio",
+        "player_policy_absadv_switch",
+        "player_policy_absadv_move",
+        "player_policy_absadv_ratio",
         # Loss-free critic-quality diagnostics. (Calibration r2
         # fresh/replay needs batch.reuse_count, absent in this minimal
         # batch.)
@@ -188,7 +182,7 @@ def test_train_step_player_q_smoke():
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
     assert float(logs["player_advantage_head_gradient_norm"]) > 0.0
 
-    # NeuRD term finite at the base coefficient; coef 0 is a scalar
-    # multiply (finiteness at that end is hierarchical_neurd's unit test),
+    # PG term finite at the base coefficients; coef 0 is a scalar
+    # multiply (surrogate semantics are test_ppo_loss's unit tests),
     # and a second static config would be a second full compile.
-    assert np.isfinite(np.asarray(logs["player_loss_neurd"], dtype=np.float32))
+    assert np.isfinite(np.asarray(logs["player_loss_pg"], dtype=np.float32))

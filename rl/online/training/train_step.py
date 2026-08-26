@@ -13,31 +13,26 @@ import optax
 
 from rl.environment.data import (
     CAT_VF_SUPPORT,
-    FLAT_MODALITY_MASK,
     FLAT_SRC_GROUP_MASK,
-    NUM_MODALITY_FEATURES,
     PackedSetFeature,
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.model.heads import HeadParams
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
+    clip_fraction,
     forward_kl_loss,
-    hierarchical_neurd,
     mse_value_loss,
     policy_gradient_loss,
-    warmup_scale,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     compute_q_onestep_targets,
     reference_kl,
-    reference_penalty,
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
@@ -63,7 +58,7 @@ def train_step(
     """Train for a single step.
 
     Every loss coefficient is a static config field. There used to be a
-    RuntimeScalars pytree carrying magnet_coef/neurd_coef as TRACED leaves
+    RuntimeScalars pytree carrying host-varied coefficients as TRACED leaves
     so a host-side controller could vary them without recompiling — the
     hazard being that config is a jit static_argname, and static scalars
     retained ~5GB of executables per distinct value and OOM-killed run
@@ -93,7 +88,7 @@ def train_step(
         HeadParams(),
     )
 
-    # R-NaD reference policy: the FROZEN reg_params' full-support
+    # NashPG reference policy: the FROZEN reg_params' full-support
     # log-policy on the same batch (one extra forward; stop-gradient by
     # construction — reg_params are not the differentiated leaf).
     reg_log_policy = player_state.apply_fn(
@@ -145,35 +140,14 @@ def train_step(
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
-    # Step-2 warm-up (docs/critic-weakness-analysis.md): NeuRD ramps in
-    # over the lineage's first player_neurd_warmup_steps so the critic
-    # gains coverage under the broad launch behaviour distribution before
-    # it steers that distribution; reg_params stays the launch snapshot
-    # meanwhile. Both are functions of the traced step_count — no static
-    # config variation, no second executable.
-    neurd_scale = warmup_scale(
-        player_state.step_count, config.player_neurd_warmup_steps
-    )
-    # R-NaD reference SNAP (2026-08-25): reg_params <- target_params every
-    # player_reg_snap_steps once the warm-up is done — rnad.py's delta_m
-    # reset, in place, still three param sets. The continuous EMA (1e-4,
-    # then 5e-5) never reset, so the log(pi/pi_reg) gap compounded with
-    # policy speed: 2wvnlsz3 hit ref_kl 2.07 nats and grad-norm p90 62k
-    # by 98k (pgaijs6l: 22% of steps at the clip past 56k). The penalty
-    # is unbounded in the gap BY DESIGN (it is the restoring force), so
-    # the GAP is what must be bounded — structurally, not by clipping
-    # the penalty. The first snap lands exactly as the ramp completes
-    # (warmup_steps % snap_steps == 0), and a resume from a pre-runaway
-    # checkpoint at a snap multiple snaps immediately, repairing the
-    # accumulated gap at restart. Between snaps the reference is FROZEN.
-    # 10k since 2026-08-25 (was 20k): NashPG refines 50x over a run, we
-    # refined ~10x, and the iterative refinement is its actual claim.
-    reg_snap = (neurd_scale >= 1.0) & (
-        player_state.step_count % config.player_reg_snap_steps == 0
-    )
-    training_logs["player_neurd_coef_effective"] = (
-        config.player_neurd_coef * neurd_scale
-    )
+    # NashPG reference SNAP: reg_params <- target_params every
+    # player_reg_snap_steps — their outer-loop rho reset, in place,
+    # still three param sets, FROZEN between snaps. (The continuous EMA
+    # this replaced never reset, so the KL gap compounded with policy
+    # speed: 2wvnlsz3 hit ref_kl 2.07 nats by 98k.) Step 0 snaps
+    # trivially (reg = target = init), and a resume at a snap multiple
+    # snaps on its first step, repairing any accumulated gap at restart.
+    reg_snap = player_state.step_count % config.player_reg_snap_steps == 0
     training_logs["player_reg_snapped"] = reg_snap.astype(jnp.float32)
 
     # Fraction of steps where the IMPACT clipped-target correction is
@@ -209,6 +183,26 @@ def train_step(
         )
     action_mask = player_transitions.env_output.action_mask
     flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
+
+    # NashPG advantage: the plain v-trace pass from targets.py, batch-
+    # normalised over the surrogate's own rows with masked mean/std (the
+    # reference's update_agent does exactly this per minibatch). f32
+    # before promote_map bf16-casts the rest of the targets. The count
+    # guard covers an all-masked batch; there is no running statistic
+    # here to poison (LESSONS 2 applies to EMAs, not batch stats).
+    pg_advantages = player_targets.pg_advantages.astype(jnp.float32)
+    pg_adv_count = jnp.maximum(policy_mask.sum().astype(jnp.float32), 1.0)
+    pg_adv_mean = jnp.where(policy_mask, pg_advantages, 0.0).sum() / pg_adv_count
+    pg_adv_var = (
+        jnp.where(policy_mask, jnp.square(pg_advantages - pg_adv_mean), 0.0).sum()
+        / pg_adv_count
+    )
+    pg_adv_std = jnp.sqrt(pg_adv_var)
+    pg_adv_norm = jnp.where(
+        policy_mask, (pg_advantages - pg_adv_mean) / (pg_adv_std + 1e-8), 0.0
+    )
+    training_logs["player_pg_adv_mean"] = pg_adv_mean
+    training_logs["player_pg_adv_std"] = pg_adv_std
 
     player_targets = promote_map(player_targets, float_dtype)
 
@@ -626,265 +620,87 @@ def train_step(
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # All-action NeuRD, the only loss that moves the action logits
-        # toward return (see the config comment and
-        # docs/entropy-gradient-pressure.md). Per legal cell,
-        # adv(a) = A(a) − Σ_a' π(a')·A(a'): a counterfactual baseline
-        # under the CURRENT policy, applied to the RAW LOGITS with NO π
-        # prefactor, so a starved cell's restoring force does not shrink
-        # with its own mass. Zero sampling variance, and counterfactual
-        # pressure lands on untaken actions — which a sampled objective
-        # structurally cannot do. Advantages enter as stop-gradient
-        # scalars off the target net; weighted by the neurd_coef runtime
-        # scalar.
+        # NashPG policy update (2026-08-26, arXiv:2510.18183): a
+        # PPO-clipped surrogate on the taken action's ratio pi/mu against
+        # the batch-normalised v-trace advantage, plus a DIFFERENTIATED
+        # forward KL(pi || pi_reg) magnet toward the periodically snapped
+        # reference and a differentiated entropy bonus. Every force here
+        # runs through the composed log-softmax, whose Jacobian is
+        # zero-sum per level — the softmax-invariant mean direction
+        # receives no push — and the clip zeroes the surrogate's gradient
+        # once the ratio leaves the band in the push direction, so no
+        # force persists at a stiff equilibrium. All three terms carry a
+        # pi prefactor: there is deliberately no prefactor-free refill
+        # force any more (the NashPG bet is that the magnet cycle plus
+        # entropy keep pi interior so starvation never starts —
+        # switch_ratio through the 13k wire is the acceptance gate).
         learner_log_policy = learner_action_head.log_policy
         pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
         pi_learner = pi_learner / jnp.maximum(
             pi_learner.sum(axis=-1, keepdims=True), 1e-8
         )
-        # R-NaD reference PENALTY (2026-08-22), applied analytically per
-        # legal cell to the ADVANTAGE:
-        # a'(a) = A(a) - eta*(log pi(a) - log pi_reg(a)). It is not a
-        # reward transform — that was deleted in 27053a6. Since Step 3
-        # the critic learns the PLAIN game (one-step label, no transformed
-        # bootstrap), so this own-step term is the whole reference
-        # penalty — a policy-objective term, not a label transform. The
-        # -eta*log pi(a) term is what refills a starved cell: it grows
-        # without bound as pi(a) -> 0, with no pi prefactor, and it
-        # vanishes only when pi == pi_reg — a moving reference, so the
-        # fixed point is the regularised Nash, not a uniform prior.
-        # The policy reads the target critic's ADVANTAGE, not its Q
-        # (2026-08-25). V is a per-row constant that the centring below
-        # removes EXACTLY, so the V + A -> subtract-baseline round trip
-        # was always a no-op here; taking A directly makes that visible
-        # and makes the clip mean something.
-        #
-        # The clip is +-2 on A, not on Q. On Q it was scale-dependent
-        # nonsense: at V = 0.9 a cell's upside clipped ten times harder
-        # than at V = -0.9, for the same advantage. (Its stated reason —
-        # Q carrying V_reg's future-penalty stream — died with the reward
-        # transform in 27053a6.) On A the band is symmetric by
-        # construction and guards saturation only; the Huber loss still
-        # sees Q unclipped.
-        adv_for_policy = jnp.clip(adv_target, -2.0, 2.0)
-        # Second analytic shift, same construction with pi_reg = uniform:
-        # NashPG runs its ent_coef alongside the magnet and Ataraxos's
-        # magnet IS uniform, so the entropy pressure belongs here rather
-        # than as a differentiated loss term (which would be
-        # pi-prefactored and unable to refill a starved modality).
-        ref_component, ent_component = reference_penalty(
-            learner_log_policy,
-            reg_log_policy,
-            flat_action_mask,
-            config.player_ref_eta,
-            config.player_ref_eta_ent,
-        )
-        adv_reg = jnp.where(
-            flat_action_mask, adv_for_policy - ref_component - ent_component, 0.0
-        )
-        # Bound the TOTAL per-cell force, rnad.py's `adv_pi = clip(...)`
-        # slot (get_loss_nerd clips after every correction). The shifts
-        # are unbounded — -eta_ent*log pi grows without limit as
-        # pi -> 0 — and neither reference system ever exposes an
-        # unbounded force to the logits: DeepNash routes eta through the
-        # reward transform (absorbed by the learned value) or a
-        # near-snap reference ratio, NashPG's ent_coef sits under a
-        # PPO clip. Same ±2 band as the critic advantage above: a
-        # starved cell still receives the full band-width restoring
-        # force, only the tail is removed.
-        adv_reg = jnp.clip(adv_reg, -2.0, 2.0)
-        # Re-centre: the reference penalty is added per cell BEFORE
-        # centring (it must grow like -eta*log pi(a) as pi(a) -> 0), so it
-        # shifts the row mean and E_pi[adv_reg] is no longer 0.
-        adv_cf = jax.lax.stop_gradient((pi_learner * adv_reg).sum(axis=-1))
-        neurd_adv = jax.lax.stop_gradient(
-            jnp.where(flat_action_mask, adv_reg - adv_cf[..., None], 0.0)
-        )
-        ref_penalty = jax.lax.stop_gradient(ref_component)
-        ent_penalty = jax.lax.stop_gradient(ent_component)
-        # Hierarchical NeuRD on the head's FREE logits (2026-08-24,
-        # loss.hierarchical_neurd). The composed pi_logits this read
-        # before are a normalised log-policy (macro log-softmax +
-        # within-modality log-softmax), so the loss differentiated
-        # through two normalisations: modality m's logit received
-        # W_m - pi_M(m).sum_a w(a), each micro cell w(a) - pi(a|m).W_m.
-        # Exact NeuRD only while the weights are zero-sum, which the
-        # logit-gap clip breaks -- the leftover -pi(.).sum_a w(a) is a
-        # push ALONG pi, sharpening toward the cells that already hold
-        # mass whenever the open weights sum negative (the collapsed
-        # regime: starved switch cells clipped, dominant moves pushed
-        # down). Against each level's own logits d/dy_m = -W_m and
-        # d/dz_a = -w(a) exactly, open or clipped:
-        #   W_m  = sum_{a in m} pi(a|m).adv(a)  = Q(m) - V
-        #   w(a) = adv(a) - W_{m(a)}            = Q(a) - Q(m)
-        # each centred uniformly over its own legal set and clipped
-        # (eq. 10) against its level's centred free logit at +-beta.
-        # The band now bounds each LEVEL: with two live modalities the
-        # macro push stops at |y_sw - y_mv| = 2.beta, pi_M ~ 1.8% at
-        # beta 2 (the flat cell-level band floored a switch cell near
-        # 0.1%); nothing below it is restored, only no longer pushed.
-        modality_oh = jnp.asarray(
-            FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
-        )
-        neurd = hierarchical_neurd(
-            macro_logits=learner_action_head.macro_logits,
-            micro_logits=learner_action_head.micro_logits,
-            adv=neurd_adv,
-            legal=flat_action_mask,
-            modality_oh=modality_oh,
-            beta=config.player_neurd_logit_clip,
-        )
-        loss_neurd = average(neurd.loss, policy_mask)
-        # Proximal decay on the centred free logits (see loss.py) —
-        # averaged with the same mask so the w/decay fixed point holds
-        # row-wise.
-        loss_neurd_decay = average(neurd.logit_l2, policy_mask)
-        # Cell-level "open" for the per-cell readouts below is the
-        # micro clip; the modality contest has its own macro clip.
-        neurd_grad_prefactor = neurd.micro_open.astype(jnp.float32)
-        switch_modality = int(ModalityEnum.MODALITY_ENUM__SWITCH)
-        move_modality = int(ModalityEnum.MODALITY_ENUM__MOVE)
-        # Gradient decomposition for the pi-prefactor question
-        # (docs/rare-action-rl-literature.md; CLAUDE.md 3 records the
-        # measurement that settled it and why no pi-prefactored objective
-        # can refill a starved modality).
-        #
-        # These three pairs decompose the per-cell gradient
-        # magnitude into its two factors, over legal
-        # cells of real-choice rows (both a switch and a non-
-        # switch legal), so that
-        #     grad_ratio ~ prob_ratio x absadv_ratio.
-        # prob_ratio << 1 with absadv_ratio ~ 1: the whole
-        # suppression is the pi prefactor, and dropping it (NeuRD
-        # -- advantage on the LOGITS, no pi) is the fix.
-        # absadv_ratio ~ 0: the critic carries no switch belief to
-        # amplify, and NeuRD would amplify noise instead. NOTE the
-        # Q label lands on the TAKEN cell; the pi-centring in
-        # heads.compose_q spreads its gradient as -err.pi(a) over the
-        # other legal cells (dueling identifiability, not belief),
-        # so untaken switch cells are extrapolation --
-        # read absadv_ratio against player_q_switch_target_frac
-        # (the supervision coverage) before concluding the critic
-        # "means it".
-        neurd_row = switch_choice_mask[..., None]
-        neurd_switch_cells = flat_action_mask & switch_actions & neurd_row
-        neurd_move_cells = (
-            flat_action_mask & jnp.logical_not(switch_actions) & neurd_row
-        )
-        neurd_abs_adv = jnp.abs(neurd_adv)
-        # Per-cell |d loss_neurd / d micro logit| = the open, centred
-        # within-modality regret |Q(a) - Q(m)|; absadv below stays the
-        # critic's cell advantage |Q(a) - V|.
-        neurd_grad_mag = jnp.abs(neurd.micro_weight)
-        neurd_grad_switch = average(neurd_grad_mag, neurd_switch_cells)
-        neurd_grad_move = average(neurd_grad_mag, neurd_move_cells)
-        neurd_prob_switch = average(pi_learner, neurd_switch_cells)
-        neurd_prob_move = average(pi_learner, neurd_move_cells)
-        neurd_absadv_switch = average(neurd_abs_adv, neurd_switch_cells)
-        neurd_absadv_move = average(neurd_abs_adv, neurd_move_cells)
 
-        def neurd_ratio(numerator, denominator):
+        loss_pg = policy_gradient_loss(
+            policy_ratios=learner_actor_ratio,
+            advantages=pg_adv_norm,
+            valid=policy_mask,
+            threshold=config.player_ppo_clip,
+            objective=config.player_pg_objective,
+        )
+        # Entropy bonus: maximise E[H(pi)] over real-choice rows.
+        loss_entropy = -action_head_entropy
+        # Magnet: full-distribution KL(pi || pi_reg) per row —
+        # differentiated through the learner side (reg_log_policy comes
+        # off the frozen reg_params, a constant).
+        magnet_kl_rows = reference_kl(
+            learner_log_policy, reg_log_policy, flat_action_mask
+        )
+        loss_mag = average(magnet_kl_rows, policy_mask)
+
+        # Modality decomposition of the two factors any taken-action
+        # update is throttled by: pi mass and the observer critic's |A|,
+        # over legal switch vs non-switch cells of real-choice rows.
+        # Loss-agnostic, kept across the NeuRD -> NashPG transition:
+        # prob_ratio falling with absadv_ratio ~ 1 is still the
+        # starvation signature to watch, now with nothing but the magnet
+        # cycle and entropy to oppose it.
+        pg_row = switch_choice_mask[..., None]
+        pg_switch_cells = flat_action_mask & switch_actions & pg_row
+        pg_move_cells = flat_action_mask & jnp.logical_not(switch_actions) & pg_row
+        abs_adv = jnp.abs(adv_target)
+
+        def modality_ratio(numerator, denominator):
             return numerator / jnp.maximum(denominator, 1e-8)
 
-        # The two analytic penalties by modality over legal cells of
-        # real-choice rows (sign convention: POSITIVE = the cell is pushed
-        # UP relative to its A). Split because they answer different
-        # questions and can disagree: ref_penalty_switch climbing while
-        # switch_ratio falls is the reference doing its job, and both ref
-        # terms flat at zero is a reference that has caught up (KL 0) —
-        # at which point the ENTROPY pair is the only pressure left, and
-        # ent_penalty_switch must sit above ent_penalty_move or the term
-        # is not pushing where the mass is thin, which is its whole claim.
-        ref_penalty_switch = average(-ref_penalty, neurd_switch_cells)
-        ref_penalty_move = average(-ref_penalty, neurd_move_cells)
-        ent_penalty_switch = average(-ent_penalty, neurd_switch_cells)
-        ent_penalty_move = average(-ent_penalty, neurd_move_cells)
+        policy_prob_switch = average(pi_learner, pg_switch_cells)
+        policy_prob_move = average(pi_learner, pg_move_cells)
+        policy_absadv_switch = average(abs_adv, pg_switch_cells)
+        policy_absadv_move = average(abs_adv, pg_move_cells)
 
-        neurd_logs = dict(
-            player_loss_neurd=loss_neurd,
-            # Logit-scale panel: the decay's own value plus per-level
-            # centred-gap rms. Healthy = rms plateauing at ~|w|/decay
-            # (band edge 2.0 at most); the runaway signature was these
-            # climbing without bound alongside the head grad norm.
-            player_neurd_logit_l2=loss_neurd_decay,
-            player_neurd_macro_gap_rms=jnp.sqrt(
-                average(
-                    (neurd.macro_gap**2).sum(-1)
-                    / jnp.maximum(neurd.modality_legal.sum(-1), 1),
-                    policy_mask,
-                )
+        pg_logs = dict(
+            player_loss_pg=loss_pg,
+            player_loss_entropy=loss_entropy,
+            player_ppo_clip_frac=clip_fraction(
+                policy_ratios=learner_actor_ratio,
+                valid=policy_mask,
+                clip_ppo=config.player_ppo_clip,
             ),
-            player_neurd_micro_gap_rms=jnp.sqrt(
-                average(
-                    (neurd.micro_gap**2).sum(-1)
-                    / jnp.maximum(flat_action_mask.sum(-1), 1),
-                    policy_mask,
-                )
+            player_policy_prob_switch=policy_prob_switch,
+            player_policy_prob_move=policy_prob_move,
+            player_policy_prob_ratio=modality_ratio(
+                policy_prob_switch, policy_prob_move
             ),
-            player_ref_penalty_switch=ref_penalty_switch,
-            player_ref_penalty_move=ref_penalty_move,
-            player_ent_penalty_switch=ent_penalty_switch,
-            player_ent_penalty_move=ent_penalty_move,
-            # Per-cell |d loss_neurd / d logit| on legal switch
-            # cells vs legal non-switch cells of the same
-            # real-choice rows, and the two factors it is the
-            # product of. The ratios are the readout: if
-            # grad_ratio tracks prob_ratio while absadv_ratio
-            # stays near 1, the restoring force is being throttled
-            # by the pi prefactor alone.
-            player_neurd_grad_switch=neurd_grad_switch,
-            player_neurd_grad_move=neurd_grad_move,
-            player_neurd_grad_ratio=neurd_ratio(neurd_grad_switch, neurd_grad_move),
-            player_neurd_prob_switch=neurd_prob_switch,
-            player_neurd_prob_move=neurd_prob_move,
-            player_neurd_prob_ratio=neurd_ratio(neurd_prob_switch, neurd_prob_move),
-            player_neurd_absadv_switch=neurd_absadv_switch,
-            player_neurd_absadv_move=neurd_absadv_move,
-            player_neurd_absadv_ratio=neurd_ratio(
-                neurd_absadv_switch, neurd_absadv_move
+            player_policy_absadv_switch=policy_absadv_switch,
+            player_policy_absadv_move=policy_absadv_move,
+            player_policy_absadv_ratio=modality_ratio(
+                policy_absadv_switch, policy_absadv_move
             ),
-            # Signed push on the SWITCH MODALITY's macro logit per
-            # real-choice row -- exactly -d loss_neurd / d y_switch:
-            # the open, centred Q(switch) - V. Positive = the loss is
-            # currently pushing the switch modality UP (the critic
-            # prefers more switching than the policy carries).
-            player_neurd_switch_push=average(
-                neurd.macro_weight[..., switch_modality], switch_choice_mask
-            ),
-            player_neurd_adv_std=neurd_adv.std(
-                where=flat_action_mask & policy_mask[..., None]
-            ),
-            # Macro clip occupancy: fraction of real-choice rows where
-            # the switch / move modality's outward macro push is
-            # blocked by the logit-gap clip. This is the "clip rather
-            # than the critic is bounding switch mass" wire
-            # (config.player_neurd_coef).
-            player_neurd_clipped_switch=1.0
-            - average(
-                neurd.macro_open[..., switch_modality].astype(jnp.float32),
-                switch_choice_mask,
-            ),
-            player_neurd_clipped_move=1.0
-            - average(
-                neurd.macro_open[..., move_modality].astype(jnp.float32),
-                switch_choice_mask & neurd.modality_legal[..., move_modality],
-            ),
-            # Micro clip occupancy: legal switch / move CELLS on
-            # real-choice rows whose within-modality push is blocked.
-            player_neurd_clipped_micro_switch=1.0
-            - average(neurd_grad_prefactor, neurd_switch_cells),
-            player_neurd_clipped_micro_move=1.0
-            - average(neurd_grad_prefactor, neurd_move_cells),
-            # KL(pi_learner || pi_reg) per state -- the expected
-            # reference penalty the loss actually pays (same policy as
-            # targets.reference_penalty). Drifts up as the policy moves away from
-            # the FROZEN reference and drops to ~0 at each snap; a level
-            # that keeps climbing ACROSS snaps is a policy running away
+            # KL(pi_learner || pi_reg) per state — the magnet loss's own
+            # value (name kept across the transition). Sawtooth: drifts
+            # up against the FROZEN reference, drops to ~0 at each snap;
+            # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
-            player_ref_kl=average(
-                reference_kl(learner_log_policy, reg_log_policy, flat_action_mask),
-                policy_mask,
-            ),
+            player_ref_kl=loss_mag,
         )
 
         # Calibration by context. The contexts exist to interpret the
@@ -917,27 +733,34 @@ def train_step(
             player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
             **q_fit_logs,
         )
-        # neurd (+ logit decay) + (v + q) + kl.
+        # pg bracket + (v + q) + kl.
         loss = (
-            # pg: all-action NeuRD is the ONLY term that moves the action
-            # logits toward return — the two below only regularise.
-            # neurd_scale: the Step-2 warm-up ramp (1 once warmed up / off).
-            config.player_neurd_coef
-            * neurd_scale
-            * (loss_neurd + config.player_neurd_logit_decay * loss_neurd_decay)
+            # pg: the NashPG bracket — the PPO surrogate is the only term
+            # that moves the action logits toward return; the entropy
+            # bonus and the magnet sit inside the bracket so one
+            # coefficient scales improvement and regularisation together.
+            config.player_pg_coef
+            * (
+                loss_pg
+                + config.player_ent_coef * loss_entropy
+                + config.player_mag_coef * loss_mag
+            )
             # v + q: the critic stack — one V on the deploy-time
-            # information set, one all-action advantage over it.
+            # information set, one all-action advantage over it (the
+            # policy no longer reads it: matched-control observer and
+            # Retrace baseline).
             + (
                 config.player_value_head_loss_coef * loss_v_win
                 + config.player_q_coef * loss_q
             )
-            # kl: trust region against the behaviour policy.
+            # kl: trust region against the behaviour policy — the
+            # replay-staleness guard alongside the PPO clip.
             + config.player_kl_loss_coef * loss_actor_backward_kl
         )
 
         return loss, dict(
             **q_logs,
-            **neurd_logs,
+            **pg_logs,
             player_loss_v_win=loss_v_win,
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
@@ -994,9 +817,8 @@ def train_step(
     player_state = player_state.replace(
         step_count=player_state.step_count + 1,
         frame_count=player_state.frame_count + player_valid.sum(),
-        # Frozen at the launch snapshot while the NeuRD warm-up ramps
-        # (Step 2), then hard-snapped to the target net every
-        # player_reg_snap_steps (see reg_snap above).
+        # Hard-snapped to the target net every player_reg_snap_steps —
+        # NashPG's outer-loop reference reset (see reg_snap above).
         reg_params=jax.tree.map(
             lambda t, r: jnp.where(reg_snap, t, r),
             player_state.target_params,

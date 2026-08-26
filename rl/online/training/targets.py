@@ -224,39 +224,6 @@ def reference_kl(
     return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
 
 
-def reference_penalty(
-    log_policy: jax.Array,
-    reg_log_policy: jax.Array,
-    legal_mask: jax.Array,
-    eta: float,
-    eta_ent: float,
-) -> tuple[jax.Array, jax.Array]:
-    """The two analytic per-cell penalties the policy objective pays,
-    returned split so the panels can tell them apart: eta*(log pi(a) - log
-    pi_reg(a)) against the iteratively refined reference, and
-    eta_ent*log pi(a) against uniform. The caller subtracts both from the
-    critic's ADVANTAGE — rnad.py's learning_output, with A in place of the
-    single-sample v-trace estimate (V is a per-row constant the NeuRD
-    centring removes exactly).
-
-    The second IS an entropy bonus. KL(pi || uniform) = sum_a pi(a) log
-    pi(a) + log N, so under NeuRD — which reads the advantage per cell and
-    applies it with no pi prefactor — it is just the first penalty with
-    pi_reg = uniform, and the log N constant cancels in the re-centring at
-    the call site. That is why it is written here rather than as a loss
-    term: a differentiated entropy (or a reverse-KL magnet) carries a pi
-    prefactor and cannot refill a modality that has already starved, which
-    is what four magnet retunes measured (LESSONS 4). Together the two are
-    a reference geometrically mixed toward uniform.
-
-    Both grow without bound as pi(a) -> 0, which is the restoring force."""
-    lp = log_policy.astype(jnp.float32)
-    lr = reg_log_policy.astype(jnp.float32)
-    ref = jnp.where(legal_mask, eta * (lp - lr), 0.0)
-    ent = jnp.where(legal_mask, eta_ent * lp, 0.0)
-    return ref, ent
-
-
 def compute_q_onestep_targets(
     batch: Batch, v_target: jax.Array, config: Porygon2LearnerConfig
 ) -> jax.Array:

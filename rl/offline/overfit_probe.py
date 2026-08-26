@@ -157,9 +157,7 @@ def arm_config(arm: str):
     if arm in ("fixed", "synthetic"):
         return dataclasses.replace(
             base,
-            player_neurd_warmup_steps=0,
-            player_neurd_coef=0.0,
-            player_ref_eta=0.0,
+            player_pg_coef=0.0,
             player_ema_update_rate=0.0,
             player_reg_snap_steps=1_000_000_000,  # reference frozen in the probe
         )
