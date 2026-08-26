@@ -94,3 +94,34 @@ def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
 
     total_params = calculate_params("base", vars)
     return build_param_dict(vars, total_params, 0)
+
+
+def open_zero_init_paths(params, subtrees, seed=0, scale=0.02):
+    """Perturb the all-zero leaves under `subtrees` with small noise.
+
+    The flat-at-init contract (e00a388) zero-inits every micro/macro/adapter
+    OUTPUT path, so on freshly-initialised params the Q rungs emit identical
+    all-zero logits and any "the rungs must differ" assertion is vacuously
+    false — not because the conditioning is dead, but because nothing has
+    trained yet. Opening the zero paths lets the rung conditioning propagate,
+    so the tests check the property they mean: that the pathway is WIRED, not
+    that it currently carries signal.
+
+    Hoisted from tests/conftest.py 2026-08-27 so the offline separation
+    probe opens the SAME paths the tests do — the identity written once.
+    """
+    import numpy as np
+    from flax.traverse_util import flatten_dict, unflatten_dict
+
+    rng = np.random.default_rng(seed)
+    flat = dict(flatten_dict(params))
+    opened = 0
+    for k, v in flat.items():
+        if not any(s in k for s in subtrees):
+            continue
+        arr = np.asarray(v, dtype=np.float32)
+        if arr.size and not arr.any():
+            flat[k] = jnp.asarray(rng.normal(0.0, scale, arr.shape), dtype=v.dtype)
+            opened += 1
+    assert opened, f"no zero-init leaves found under {subtrees} — contract changed?"
+    return unflatten_dict(flat)
