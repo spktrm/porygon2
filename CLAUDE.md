@@ -342,6 +342,41 @@ streams, and the modality separation cost only +0.8M on the heads.
 | per-modality macro MLP | modality-level parameters | the MLP and out layer were shared across all five modalities; only the pooling query differed |
 | NeuRD reads A, clip on A | — | V is a per-row constant the centring already cancelled; on Q the +-2 clip was scale-dependent (V=0.9 clipped upside 10x harder than V=-0.9) |
 
+## Removal ledger — 2026-08-26 NashPG transition
+
+Everything below existed at tag **`pre-nashpg-2026-08-26`** (commit `a9952f8`).
+Same restore recipe as above. The through-line: NashPG's own §5.4 ablation —
+swapping PPO into the reward-transform framework closes most of its gap in
+larger games — says the inner update rule, not the regularisation cycle, was
+the bottleneck, and the dx65cpwp runaway was a NeuRD-pathway disease the PPO
+clip removes structurally (zero gradient once the ratio leaves the band in
+the push direction, so nothing persists at a stiff equilibrium). The player
+policy loss is now full NashPG: PPO clip 0.2 on the taken action's π/μ ratio,
+batch-normalised plain-v-trace advantage from V, differentiated forward
+KL(π‖π_reg) magnet at 0.2 (the same reg_params 10k snap), differentiated
+entropy bonus 0.05, one `player_pg_coef` bracket, player Adam b1 back to 0.9.
+`player_pg_objective` selects `ppo|spo` for A/B. The Q/advantage stack stays
+trained as the matched-control observer; the policy no longer reads it.
+
+| mechanism | paths / symbols deleted | removed in | why it went |
+|---|---|---|---|
+| Hierarchical NeuRD loss | `loss.hierarchical_neurd` + `HierarchicalNeurd`, the centred-logit form, the eq.-10 β=2 band, the proximal logit decay, `player_neurd_coef`/`player_neurd_logit_clip`/`player_neurd_logit_decay`, `tests/test_neurd_loss.py`, every `player_neurd_*` panel | this pass | the operator itself is replaced; the b1=0/force-clip/centred-logits triad and the log-softmax differentiation ban were all NeuRD-scoped stability machinery and retire with it — under a true PG objective the log-softmax cross-term IS the correct gradient |
+| Analytic reference/entropy shifts | `targets.reference_penalty`, the ±2 total-force clip, `player_ref_eta`/`player_ref_eta_ent`, the `ref_penalty_*`/`ent_penalty_*` panels | this pass | the reference becomes NashPG's differentiated KL in the objective (`reference_kl`, now a loss term); the measured +0.030 switch tilt of the analytic form is given up KNOWINGLY — every remaining force is π-prefactored, there is no starved-cell refill any more, and switch_ratio through the 13k wire is the pre-registered acceptance gate (fallback ladder: ent 0.05→0.1, then reinstate an analytic tilt as its own commit) |
+| Warm-up ramp | `loss.warmup_scale`, `player_neurd_warmup_steps`, the ramp-gated snap, `tests/test_step2_warmup.py` | this pass | it held the policy gradient off a fresh critic's noise; the PPO surrogate on a batch-normalised advantage is bounded from step one, and the snap gate is a plain step modulus |
+| Distribution-space value labels | `targets.advantage_shift`, the per-atom Retrace recursion | this pass | CE labels were signed measures off the simplex; the recursion now runs in SCALAR space and projects once through `two_hot` — mean preserved exactly (v-trace is linear), labels always proper distributions, 1 channel instead of n_bins. NOTE the middle atom now means "expected value ≈ 0", not "draw" — standard MuZero/Dreamer two-hot semantics; nothing consumes the distribution shape |
+| Free-level logit outputs | `PlayerPolicyHeadOutput.macro_logits`/`micro_logits` | this pass | learner-only outputs whose sole consumer was the NeuRD loss |
+
+What came in: `loss.ppo_objective` (restored from pre-`4234016`) behind a
+selector on `policy_gradient_loss` (builder keeps `"spo"`), `clip_fraction`,
+`PlayerTargets.pg_advantages` (plain v-trace over V, builder-pattern, ρ-
+truncated, f32), panels `player_loss_pg`/`player_ppo_clip_frac`/
+`player_loss_entropy`/`player_pg_adv_{mean,std}`, and the loss-agnostic
+starvation pairs renamed `player_policy_{prob,absadv}_*`. Deliberate
+reference-diff residue: single grad step per batch (replay reuse ratio 8 is
+the 4-epoch analogue), λ stays 0.8 (their GAE 0.95 — our monotone sweep), lr
+3e-5 / grad clip 10 (theirs 3e-4/0.5 on ≤512-dim MLPs), categorical CE +
+Retrace critic kept (NashPG is estimator-agnostic, §4.3).
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family
@@ -468,8 +503,10 @@ untaken switch cells can be untrained rather than genuinely flat. Read
 `absadv_ratio` against `player_q_switch_target_frac` before concluding the
 critic "means it".
 
-**NeuRD must not differentiate through the log-softmax.** *(live, refined
-2026-08-26)* The `log_policy` form was tried first and failed the identity
+**NeuRD must not differentiate through the log-softmax.** *(retired with
+NeuRD 2026-08-26 — under a true PG objective the log-softmax cross-term IS
+the correct gradient; this ban was about NeuRD's regret-weight semantics
+only.)* The `log_policy` form was tried first and failed the identity
 test: once the logit-gap clip zeroes cells, the weights are no longer zero-sum
 and the softmax pulls in a `π(b)·Σ_a w(a)` cross-term. But RAW free logits
 overshoot the other way: the softmax-invariant mean direction gets the clip
@@ -524,6 +561,15 @@ declined, which is exactly the axis that collapses here. NeuRD's all-action form
 lands counterfactual pressure on every legal cell of every real-choice row. The
 cost of the change is that the policy's only link to returns now runs through
 `Q_all`, whose supervision coverage is the caveat above.
+
+**NashPG closes the lineage (2026-08-26).** The sampled-action objective
+returned — this time as the deliberate, reference-backed choice (NashPG §5.4:
+the inner update rule was the bottleneck, PPO > NeuRD in large games), with
+its eyes open about the cost: no force refills a starved cell any more, so the
+all-action era's starvation instruments (`player_policy_prob_ratio` vs
+`absadv_ratio`, switch_ratio through the 13k wire) are now the acceptance
+gate rather than a diagnosis. See the 2026-08-26 removal ledger for the full
+trade and the fallback ladder.
 
 ## 4. Entropy and the magnet
 
@@ -820,8 +866,8 @@ value cannot work.
   measured: 60k steps, gate 0.03-0.06, q/k kernels still at lecun init.
 - **Flat-at-init contract.** Every micro/macro/adapter output path is zero-init,
   so the policy starts at its hierarchical prior and Q at uniform bins — no
-  lecun noise posing as action preferences for CE to unlearn or for NeuRD to
-  misread. Exception: the cross-entity pool read gate starts at 1.0, because
+  lecun noise posing as action preferences for CE to unlearn or for the
+  policy loss to misread. Exception: the cross-entity pool read gate starts at 1.0, because
   token content can only reach the entity vector through that read.
 - **Cross-entity pooling exists because matchup reasoning is a species-token ×
   move-token comparison across two mons**, and with entity-local pooling there
