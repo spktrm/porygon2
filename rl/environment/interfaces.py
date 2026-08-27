@@ -72,6 +72,14 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
     src_index: ArrayLike = ()
     tgt_index: ArrayLike = ()
     normalized_modality_entropy: ArrayLike = ()
+    # log pi_macro(m(a_taken)): the composed modality log-softmax evaluated
+    # at the taken action's modality (2026-08-27, factorised policy loss).
+    # Stored by the ACTOR so the learner can form the per-level ratios
+    # mu_macro and mu_micro = log_prob - macro_log_prob; the learner side
+    # is re-derived from its own forward via the composition identity
+    # (logsumexp of log_policy over a modality's legal cells == the
+    # composed macro exactly). Singles path only; doubles leaves it ().
+    macro_log_prob: ArrayLike = ()
 
 
 @dataclass

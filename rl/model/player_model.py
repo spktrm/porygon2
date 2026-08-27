@@ -70,27 +70,35 @@ class Porygon2PlayerModel(nn.Module):
             # is called, so singles checkpoints are unaffected.
             self.slot_conditioning = SlotConditioning()
 
-    def _calculate_entropy_metrics(
-        self, policy_metrics: PolicyHeadOutput, flat_valid_mask: jax.Array
-    ):
+    def _modality_log_marginal(self, log_policy: jax.Array, flat_valid_mask: jax.Array):
+        """log of the policy's modality marginal over legal cells, plus each
+        modality's legal-cell count. By the composition identity
+        (heads.compose_action_grid: log_policy(a) = composed_macro[m(a)] +
+        centred micro) this marginal IS the composed macro log-softmax —
+        recovered here by marginalisation so neither the head signature nor
+        the actor payload has to carry the full distribution. Written once:
+        the modality-entropy metric and the factorised loss's
+        `macro_log_prob` both read it."""
         modality_oh = jax.nn.one_hot(
             FLAT_MODALITY_MASK,
             NUM_MODALITY_FEATURES,
-            dtype=policy_metrics.log_policy.dtype,
+            dtype=log_policy.dtype,
         )
         valid_modality_mask = flat_valid_mask[..., None] * modality_oh
-
         modality_log_probs = nn.logsumexp(
             jnp.where(
                 valid_modality_mask,
-                policy_metrics.log_policy[..., None],
+                log_policy[..., None],
                 -1e9,
             ),
             axis=0,
         )
-        modality_probs = jnp.exp(modality_log_probs)
+        return modality_log_probs, valid_modality_mask.sum(axis=0)
 
-        valid_actions_per_modality = valid_modality_mask.sum(axis=0)
+    def _calculate_entropy_metrics(
+        self, modality_log_probs: jax.Array, valid_actions_per_modality: jax.Array
+    ):
+        modality_probs = jnp.exp(modality_log_probs)
         num_valid_modalities = (valid_actions_per_modality > 0).sum(
             dtype=modality_probs.dtype
         )
@@ -181,6 +189,12 @@ class Porygon2PlayerModel(nn.Module):
             learner_only = {
                 "log_policy": metrics.log_policy,
             }
+        modality_log_probs, valid_per_modality = self._modality_log_marginal(
+            metrics.log_policy, scores.flat_valid
+        )
+        taken_modality = jnp.take(
+            jnp.asarray(FLAT_MODALITY_MASK), action_index, axis=-1
+        )
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
@@ -191,8 +205,9 @@ class Porygon2PlayerModel(nn.Module):
             normalized_entropy=metrics.normalized_entropy,
             magnet_kl=metrics.magnet_kl,
             normalized_modality_entropy=self._calculate_entropy_metrics(
-                metrics, scores.flat_valid
+                modality_log_probs, valid_per_modality
             ),
+            macro_log_prob=jnp.take(modality_log_probs, taken_modality, axis=-1),
         )
 
     def _apply_choice_collision(self, valid_mask: jax.Array, action_index: jax.Array):
@@ -260,8 +275,12 @@ class Porygon2PlayerModel(nn.Module):
         # would need raw/max modality entropies threaded out; not worth it
         # for telemetry).
         normalized_modality_entropy = (
-            self._calculate_entropy_metrics(metrics_1, flat_valid_1)
-            + self._calculate_entropy_metrics(metrics_2, flat_valid_2)
+            self._calculate_entropy_metrics(
+                *self._modality_log_marginal(metrics_1.log_policy, flat_valid_1)
+            )
+            + self._calculate_entropy_metrics(
+                *self._modality_log_marginal(metrics_2.log_policy, flat_valid_2)
+            )
         ) / 2.0
 
         # Joint normalised entropy: (H1 + H2) / (log N1 + log N2) — the

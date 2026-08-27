@@ -186,6 +186,45 @@ def test_micro_params_are_not_shared_between_slot_groups(
     assert touched, "positive control: the touched group got no gradient"
 
 
+def test_macro_log_prob_matches_modality_marginal(
+    real_model_and_trajectory, real_model_apply
+):
+    """The factorised objective's stored level (2026-08-27): macro_log_prob
+    must equal the modality-wise logsumexp of the full log_policy at the
+    taken action's modality — the composition identity pinned end to end,
+    so mu_micro = log_prob - macro_log_prob is exact."""
+    from scipy.special import logsumexp
+
+    from rl.environment.data import FLAT_MODALITY_MASK
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    out = real_model_apply(params, actor_input, actor_output, HeadParams())
+    log_policy = np.asarray(out.action_head.log_policy, dtype=np.float32)
+    T = log_policy.shape[0]
+    flat_mask = np.asarray(actor_input.env.action_mask).reshape(T, -1)
+    flat_mod = np.asarray(FLAT_MODALITY_MASK)
+    idx = np.asarray(out.action_head.action_index)
+    got = np.asarray(out.action_head.macro_log_prob, dtype=np.float32)
+    assert got.shape == (T,)
+    expected = np.empty(T, dtype=np.float32)
+    for t in range(T):
+        cells = flat_mask[t] & (flat_mod == flat_mod[idx[t]])
+        expected[t] = logsumexp(log_policy[t][cells])
+    np.testing.assert_allclose(got, expected, atol=1e-2)
+    # Ordering control: a modality's mass bounds its member's mass, so the
+    # macro log-prob can never sit below the joint log-prob — and on rows
+    # where the taken modality has >1 legal cell it must sit strictly above
+    # (proves the field is not just a copy of log_prob).
+    joint = np.asarray(out.action_head.log_prob, dtype=np.float32)
+    assert (got >= joint - 1e-2).all()
+    multi = np.array(
+        [(flat_mask[t] & (flat_mod == flat_mod[idx[t]])).sum() > 1 for t in range(T)]
+    )
+    assert multi.any()
+    assert (got[multi] > joint[multi] + 1e-4).any()
+
+
 def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):
     network, params, actor_input, actor_output = real_model_and_trajectory
     from rl.model.heads import HeadParams
