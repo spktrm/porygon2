@@ -521,6 +521,17 @@ class Encoder(nn.Module):
         self.private_side_bias = self.param(
             "private_side_bias", embedding_init, (1, entity_size)
         )
+        # Whose side a field token describes. Row 1 = mine, row 0 = theirs —
+        # the SIDE convention, written once. Until 2026-08-28 these two
+        # tokens borrowed pos_bias rows 1/0, but pos_bias is indexed by
+        # ENTITY_PUBLIC_NODE_FEATURE__ACTIVE (= scoreOrder, {0, 2} in
+        # singles), so row 0 meant "benched pokemon" AND "opponent side
+        # conditions" — one vector, two meanings, coupled gradients. It is
+        # also the only thing separating my hazards from theirs, since both
+        # go through side_condition_linear.
+        self.field_side_bias = self.param(
+            "field_side_bias", embedding_init, (2, entity_size)
+        )
         self.prev_action_src_bias = self.param(
             "prev_action_src_bias", embedding_init, (1, entity_size)
         )
@@ -1329,12 +1340,12 @@ class Encoder(nn.Module):
         my_field_embedding = self.side_condition_linear(my_side_condition_encoding)
         opp_field_embedding = self.side_condition_linear(opp_side_condition_encoding)
 
-        pos_biases = self.pos_bias.embedding.astype(field_embedding.dtype)
+        side_biases = self.field_side_bias.astype(field_embedding.dtype)
         field_embeddings = jnp.stack(
             (
                 field_embedding,
-                my_field_embedding + pos_biases[1],
-                opp_field_embedding + pos_biases[0],
+                my_field_embedding + side_biases[1],
+                opp_field_embedding + side_biases[0],
             )
         )
         return field_embeddings, mask, request_count, turn_order_value

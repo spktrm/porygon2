@@ -249,3 +249,52 @@ def test_private_side_bias_is_the_live_route(real_model_and_trajectory):
     _, after = _encoder_entity_biases(network, perturbed, actor_input)
 
     assert not np.allclose(np.asarray(before), np.asarray(after))
+
+
+def _field_tokens(network, params, actor_input):
+    """The (global, my-side, opp-side) field token triple for one timestep."""
+
+    def call(module, field):
+        return module.encoder._embed_field(field)[0]
+
+    field = jax.tree.map(lambda x: x[0], actor_input.env.field)
+    return jax.jit(lambda p, f: network.apply(p, f, method=call))(params, field)
+
+
+def _perturbed(params, path, delta=1.0):
+    tree = jax.tree.map(lambda x: x, params)
+    node = tree["params"]["encoder"]
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = node[path[-1]] + delta
+    return tree
+
+
+def test_field_side_tokens_do_not_read_the_active_status_table(
+    real_model_and_trajectory,
+):
+    """The my/opp side-condition tokens must not borrow pos_bias.
+
+    pos_bias is indexed by ENTITY_PUBLIC_NODE_FEATURE__ACTIVE (= scoreOrder,
+    {0, 2} in singles), so before 2026-08-28 its row 0 meant both "benched
+    pokemon" and "opponent side conditions" — and that bias was the only
+    thing separating my hazards from theirs, since both sides share
+    side_condition_linear.
+    """
+    network, params, actor_input, _ = real_model_and_trajectory
+    base = _field_tokens(network, params, actor_input)
+
+    moved_pos = _field_tokens(
+        network, _perturbed(params, ("pos_bias", "embedding")), actor_input
+    )
+    np.testing.assert_allclose(np.asarray(base), np.asarray(moved_pos), atol=0)
+
+    # Positive control: the replacement IS on the path, so the test above is
+    # not passing merely because nothing reaches these tokens.
+    moved_side = _field_tokens(
+        network, _perturbed(params, ("field_side_bias",)), actor_input
+    )
+    assert not np.allclose(np.asarray(base[1]), np.asarray(moved_side[1]))
+    assert not np.allclose(np.asarray(base[2]), np.asarray(moved_side[2]))
+    # The global field token carries no side, so it must be untouched.
+    np.testing.assert_allclose(np.asarray(base[0]), np.asarray(moved_side[0]), atol=0)
