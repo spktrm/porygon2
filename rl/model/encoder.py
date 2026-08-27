@@ -512,6 +512,15 @@ class Encoder(nn.Module):
         self.target_embeddings = self.param(
             "target_embeddings", embedding_init, (len(TARGET_INDICES), entity_size)
         )
+        # My own private sheet's identity tag. NOT side_bias(0): the service
+        # writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so row 1 of
+        # side_bias is MINE and row 0 is the opponent's -- the sheet was
+        # carrying the opponent's tag (fixed 2026-08-28). It gets its own
+        # param rather than side_bias(1) because the sheet's provenance is
+        # already the read's group_bias; what it needs here is only "mine".
+        self.private_side_bias = self.param(
+            "private_side_bias", embedding_init, (1, entity_size)
+        )
         self.prev_action_src_bias = self.param(
             "prev_action_src_bias", embedding_init, (1, entity_size)
         )
@@ -1353,7 +1362,7 @@ class Encoder(nn.Module):
             Encoder._private_entity_tokens
         )(self, env_step.private_team)
         private_bias = jnp.broadcast_to(
-            self.side_bias(jnp.zeros((), dtype=jnp.int32)).astype(private_tokens.dtype),
+            self.private_side_bias.astype(private_tokens.dtype),
             private_tokens.shape[:1] + private_tokens.shape[-1:],
         )
         public_vectors = (

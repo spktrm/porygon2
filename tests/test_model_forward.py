@@ -196,3 +196,56 @@ def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):
         np.asarray(a.value_head.log_probs, dtype=np.float32),
         np.asarray(b.value_head.log_probs, dtype=np.float32),
     )
+
+
+def _encoder_entity_biases(network, params, actor_input):
+    """(public per-entity bias, private per-entity bias) as the encoder
+    actually builds them for the latent read, on one timestep."""
+
+    def call(module, env_step):
+        (_, _, _, public_bias), (_, _, _, private_bias), _, _ = (
+            module.encoder._current_entity_tokens(env_step)
+        )
+        return public_bias, private_bias
+
+    env_step = jax.tree.map(lambda x: x[0], actor_input.env)
+    return jax.jit(lambda p, e: network.apply(p, e, method=call))(params, env_step)
+
+
+def test_private_sheet_is_not_tagged_with_the_opponents_side(
+    real_model_and_trajectory,
+):
+    """My private sheet must not carry the tag that marks OPPONENT rows.
+
+    The service writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so
+    side_bias row 1 is mine and row 0 is theirs. Until 2026-08-28 the sheet
+    was tagged side_bias(0) -- the opponent's row -- which put 48 of the
+    read's keys under the wrong side. The sheet now owns private_side_bias.
+    """
+    network, params, actor_input, _ = real_model_and_trajectory
+    _, private_bias = _encoder_entity_biases(network, params, actor_input)
+
+    encoder = params["params"]["encoder"]
+    own = jnp.asarray(encoder["private_side_bias"][0], dtype=private_bias.dtype)
+    opponent_tag = jnp.asarray(
+        encoder["side_bias"]["embedding"][0], dtype=private_bias.dtype
+    )
+
+    for row in private_bias:
+        np.testing.assert_allclose(np.asarray(row), np.asarray(own), atol=0)
+    # The regression itself: the old wiring made this equality hold.
+    assert not np.allclose(np.asarray(private_bias[0]), np.asarray(opponent_tag))
+
+
+def test_private_side_bias_is_the_live_route(real_model_and_trajectory):
+    """Positive control for the test above: it compares against a param, so
+    it would pass just as well if the bias never reached the tokens."""
+    network, params, actor_input, _ = real_model_and_trajectory
+    _, before = _encoder_entity_biases(network, params, actor_input)
+
+    perturbed = jax.tree.map(lambda x: x, params)
+    encoder = perturbed["params"]["encoder"]
+    encoder["private_side_bias"] = encoder["private_side_bias"] + 1.0
+    _, after = _encoder_entity_biases(network, perturbed, actor_input)
+
+    assert not np.allclose(np.asarray(before), np.asarray(after))
