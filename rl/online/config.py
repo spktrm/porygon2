@@ -345,8 +345,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # argument. Called "forward" here until 2026-08-26; that was wrong by
     # this package's own convention (loss.py's approx_forward_kl is the k3
     # estimator for KL(actor || learner), reference first). Reverse =
-    # mode-seeking, which is exactly why it cannot refill a dropped modality
-    # and why player_support_coef exists — see targets.support_kl.
+    # mode-seeking, which is exactly why it cannot refill a dropped
+    # modality (the removed support-anchor family was built for that; see
+    # the note below player_ent_coef).
     # alpha = 0.2 is their U-shaped sensitivity optimum (fig. 1) and
     # DeepNash's eta; never anneal it (their Appendix C: annealing alpha
     # diverges). Own-side only, as NashPG's objective also is. The
@@ -362,170 +363,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # divergence was the ANALYTIC prefactor-free -eta_ent*log pi force,
     # which does not carry over to this form.
     player_ent_coef: float = 0.05
-    # Support anchor (2026-08-26): forward KL(p_T || pi) against the frozen
-    # reference raised to temperature T, p_T ~ pi_reg ** (1/T). The magnet
-    # above and the entropy bonus are BOTH pi-prefactored, so neither can
-    # refill a modality that has already starved — 6ta9hmp6 lost 53% of
-    # player_policy_type_scale_switch between 13k and 33k with both running.
-    # This term's per-logit force is exactly pi(b) - p_T(b): mass-independent,
-    # bounded by 1 for every pi including pi -> 0, and zero-sum over legal
-    # cells (the three properties the dx65cpwp analytic shifts each failed).
-    # Mode-covering, so it preserves support the mode-seeking magnet is
-    # indifferent to; monotone in pi_reg, so it re-weights starved cells by
-    # the model's OWN ranking and never says which switch to make.
-    # Literature: TS-OPSD (arXiv:2606.00755) recovers a collapsed checkpoint
-    # with exactly this gradient; APO (arXiv:2602.05717) shows recovery as a
-    # Pareto improvement, and gives the absorbing criterion N*pi < 1 that
-    # player_q_support_vol_switch_rows measures directly (3.9/batch at 33k).
-    # coef 1.0 is sized on the EQUILIBRIUM condition, which is the criterion
-    # that matters. A switch cell is only TAKEN on ~pi_b of rows, so the PPO
-    # surrogate's expected force on it is ~pi_b * (A_b - E_pi[A]) while this
-    # term acts on EVERY row, and the two balance at
-    #     |A_b| = coef * (p_T,b - pi_b) / pi_b      [pg_advantages are
-    #                                                unit-std, so this is
-    #                                                sigma]
-    # The 1/pi_b is the point: the ask DIVERGES as the cell starves, so this
-    # is a floor that yields to real evidence rather than a standing tax.
-    # At coef 1.0 / T 1.2 the equilibrium switch mass is 0.124 against a
-    # 0.2 sigma headwind, 0.081 at 0.3, 0.038 at 0.5 — it recovers under the
-    # optimistic read and does not lose ground under the pessimistic one —
-    # while asking only 0.02 sigma at a healthy 0.30 mass, i.e. inert when
-    # things work. An earlier 0.25 was calibrated on LOSS BALANCE (matching
-    # the entropy bonus's force at 0.05) and that was the wrong criterion:
-    # its equilibrium sat at 0.014, i.e. exactly the collapsed status quo.
-    # The headwind is uncertain and probably nearer 0.2 than 0.5: the -0.18
-    # matched-V gap was measured on the DESPERATE switches a collapsed policy
-    # chose, whereas p_T is monotone in pi_reg so the mass this adds goes to
-    # the model's top-RANKED switches.
-    # T 1.2 is TS-OPSD's. The snap cycle turns it into a compounding ratchet:
-    # from the 49k launch point (0.013 switch mass) each snap lifts the anchor
-    # ~1.81x -- 0.013 -> 0.024 -> 0.043 -> 0.077 -- so ~40-50k steps back to a
-    # healthy ~0.15, and it self-limits once the PG force can hold mass down.
-    # Note this term is ALL-ACTION over the legal grid, so unlike the sampled
-    # PPO surrogate it does not need a switch to be taken to act on one: the
-    # N*pi < 1 absorbing bound does not apply to it. That is why it, and not a
-    # supply fix, is the mechanism at this depth.
-    # T > 1 IS A BOUNDED RECOVERY DOSE, NOT A PERMANENT SETTING. The ratchet
-    # compounds THROUGH the reference, so absent opposition its only fixed
-    # point is uniform; what stops it is the PG force, and the equilibrium is
-    # wherever 0.25*(p_T - pi) balances it. That equilibrium is genuine, but
-    # the failure mode is not a static coefficient's: an over-large coef does
-    # not merely shift it, it walks the reference flatter every snap, which
-    # can read as healthy for ~20k steps and then be expensive to reverse.
-    # PHASE 1 RESULT (49.5k-97.6k at T 1.2, coef 1.0): the ratchet WORKED on the
-    # modality axis exactly as designed — switch_ratio 0.0285 -> 0.0929 and
-    # vol_switch_rows 2.4 -> 9.3, stepping up at each 10k snap. It also drove
-    # type_scale_switch 0.0122 -> 0.0003, i.e. to the type_scale_target ~= 0
-    # dead-group level, while type_scale_move fell only 23%. p_T flattens
-    # WITHIN a modality as well as across it, and the equilibrium was only ever
-    # analysed on the modality axis, where the PG opposes it; inside a starved
-    # modality there were 1-5 sampled rows per batch and so almost no PG
-    # opposition, and the micro readout went to uniform unopposed. Eval wr
-    # peaked 0.2508 at 65-70k and was flat-to-down for the 30k that followed.
-    # So T > 1 restores FREQUENCY at the cost of DISCRIMINATION, and
-    # vol_switch_rows — the gate — rises either way, which makes it Goodhartable
-    # on its own. Judge T > 1 on type_scale_switch, never on supply alone.
-    # EXIT: drop T to 1.0 once player_q_support_vol_switch_rows recovers to
-    # >= 10 (its level at the 13k type_scale peak). T = 1.0 is a complete,
-    # NON-compounding brake — force is exactly zero when pi sits at the
-    # reference, so there is no drive toward uniform at all, while
-    # mass-independence still catches any fresh drift away from it.
-    # ABORT to T = 1.0 early if player_normalized_modality_entropy climbs
-    # monotonically across 2+ consecutive snaps past ~0.85 (early-run healthy
-    # was 0.75-0.84): that is the ratchet outrunning the PG force.
-    # Off is coef 0.0. T = 1.5 (3.26x per snap) is the escalation if recovery
-    # is too slow, and inherits the same exit and abort conditions.
-    player_support_coef: float = 1.0
-    # PHASE 4 (2026-08-27): back to 1.2 — RECOVERY mode from full absorption
-    # (223k: prob_switch 0.0014, vol_switch_rows 0, reference switch mass
-    # 0.0024). The modality axis belongs to this sign-free power transform;
-    # the phase-1 within-modality flattening it caused is now opposed by the
-    # centred tilt below. Ratchet arithmetic from 0.0024 at T 1.2: ~2-2.7x
-    # per snap at these depths -> ~4-5 snaps (~40-50k steps) to ~0.1 row
-    # mass. The pre-registered exit stands: T -> 1.0 once
-    # player_q_support_vol_switch_rows >= 10.
-    player_support_temperature: float = 1.2
-    # PHASE 3 — ADVANTAGE-TILTED TARGET (2026-08-26). Phase 1 proved the
-    # transport and broke on the target: p_T knows only pi_reg — a snapshot of
-    # the collapsing policy — so T > 1 restored mass with no within-modality
-    # ranking and flattened type_scale_switch to the dead-group level.
-    # Meanwhile the discrimination signal exists in-run and was being
-    # discarded two lines above the anchor: absadv_ratio 3.47 against
-    # prob_ratio 0.093 @101.5k — the critic prefers switch cells ~3.5x while
-    # pi throttles them to 9%, the SAME signature that motivated NeuRD on the
-    # 157k lineage. Every mechanism this project has tried supplied MASS
-    # (T > 1, the eps ladder) or DISCRIMINATION (PPO, on taken cells only),
-    # never both; for a conditional-value action mass without discrimination
-    # is NEGATIVE evidence. The tilt supplies both at once:
-    #     p* ~ pi_reg^(1/T) * exp(sg(A_target) / tau),
-    #     tau = player_support_adv_temperature, 0.0 = tilt off (bitwise
-    #     phase-2 anchor)
-    # — MPO's E-step target (arXiv:1806.06920) with pi_reg as prior under the
-    # anchor's existing mode-covering projection, not an invention. The
-    # gradient stays pi(b) - p*(b): bounded by 1 for ANY advantage (A only
-    # relocates p* on the simplex), zero-sum over legal cells, no prefactor —
-    # the dx65cpwp bounding questions still answer. Within a modality p* now
-    # ranks cells by the critic, so the anchor TRAINS type_scale_switch
-    # instead of flattening it, and the snap ratchet compounds toward
-    # absadv_ratio -> 1 (policy-critic consistency) rather than uniform:
-    # the anchor lifts a cell -> it gets taken -> Retrace labels it -> A
-    # corrects -> the anchor relaxes. The good-switches-need-knowledge /
-    # knowledge-needs-good-switches loop, closed through play.
-    # tau sized on the equilibrium condition: tau ~ adv_rms_switch (0.125
-    # @101.5k) makes +1 sigma of critic advantage one e-fold of reference
-    # mass (+2 sigma = 7.4x); from pi_reg switch mass ~0.02 that puts p*
-    # switch mass ~0.05-0.13 CONCENTRATED on the critic's preferred cell.
-    # The tilt exponent is clipped at +-3 in support_target so one wild A
-    # outlier cannot own p*. A_target is the TARGET net's advantage: f32,
-    # EMA-smooth, stop-gradiented — no gradient path opens into the observer
-    # stack, and the policy reads the critic only through this bounded,
-    # all-action transport (unlike NeuRD's unbounded logit push).
-    # Acceptance (+15k from flip): type_scale_switch >= 0.005;
-    # vol_switch_rows >= 10 sustained; absadv_ratio DECLINING toward 1 (the
-    # anchor arbitraging the critic's preference away — the mechanism
-    # working); eval wr non-regressing vs its pre-flip trajectory. Abort:
-    # modality entropy climbing past ~0.85 across 2+ snaps, policy-head param
-    # rms into the diseased band (> 0.07), or wr clearly below trajectory for
-    # 10k+. Fallback if A on untaken switch cells proves to be noise
-    # (tilt-chosen cells get taken and refuted, absadv_switch -> 0, mass
-    # oscillates without settling): do NOT retune tau — a coefficient cut
-    # that only delays onset is falsified — the next rung is the ledgered
-    # DAPO clip-higher decision, its own commit.
-    # FLIPPED 0.0 -> 0.125 (2026-08-26, after the T=1 panels validated on the
-    # resumed run @109.8k: switch/move mass 0.1169/0.8831 sum to 1, forces
-    # +-0.01732 exactly zero-sum, both coherent with prob_switch 0.031 x ~3.2
-    # legal switch cells/row. NOTE the mass panels read per-ROW modality mass,
-    # not the per-cell prob_* means — compare against prob_switch times the
-    # row's legal switch-cell count, ~0.10 here). Untilted baseline to judge
-    # the tilt against: switch_mass 0.117, force_switch +0.017.
-    #
-    # PHASE 3 RESULT (110.4k-223k, raw tilt, T 1.0) — each half of the design
-    # proved out on the axis it owned and the composition failed on the axis
-    # neither owned. type_scale_switch trained for the first time ever
-    # (0.0008 -> 0.0039) and wr set new all-time highs (0.35 @223k): the
-    # WITHIN-modality tilt works. But raw A's MODALITY-LEVEL sign is negative
-    # on switch cells (the -0.11..-0.18 mean Q^pi gap; absadv_ratio is a
-    # MAGNITUDE, not a sign), so the tilt subtracted switch mass from p* and
-    # the snap cycle compounded it downward — support_switch_mass 0.065 ->
-    # 0.049 -> 0.032 -> 0.0024, force_switch NEGATIVE by 223k: the support
-    # anchor inverted into an anti-switch force. vol_switch_rows hit 0, and
-    # absadv_switch then DECAYED unsupervised (0.17 -> 0.10): the
-    # "absadv_ratio -> 1" acceptance read cannot fire by arbitrage once
-    # supply is 0 — it starves instead, which is unfalsifiable, not
-    # vindication. "Yields to evidence" was wrong at the modality level:
-    # that sign IS the self-confirming Q^pi view the anchor exists to break.
-    # PHASE 4 (2026-08-27): the tilt is CENTRED WITHIN each modality
-    # (targets.centre_within_modality) — the critic says WHICH switch, never
-    # WHETHER to switch — and T returns to 1.2 for the modality axis (its
-    # phase-1 within-modality flattening now opposed by the tilt). Abort
-    # instruments picked from the mechanisms actually feared, both
-    # directions: support_switch_mass FALLING across 2 consecutive snaps, or
-    # force_switch persistently negative, aborts the recovery (the phase-3
-    # failure shape); type_scale_switch falling while switch mass rises
-    # aborts to T 1.0 (the phase-1 shape). Acceptance: vol_switch_rows >= 10
-    # within ~50k of 223k, type_scale_switch resuming its climb once supply
-    # returns, wr non-regressing.
-    player_support_adv_temperature: float = 0.125
+    # The support-anchor family (forward KL toward a temperature-raised /
+    # advantage-tilted reference; player_support_{coef,temperature,
+    # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every
+    # mass-restoring variant either erased within-modality discrimination
+    # (mode-covering targets + the snap ratchet) or taught the mean
+    # switch's losing value. Replaced by the FACTORISED objective: the
+    # PPO surrogate and the entropy bonus each split into macro (whether)
+    # and micro (which, within the taken modality) terms with their own
+    # row masks — see train_step's policy bracket and the CLAUDE.md
+    # removal ledger for the full history and revert handles.
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —

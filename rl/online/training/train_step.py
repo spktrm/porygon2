@@ -29,13 +29,10 @@ from rl.online.training.loss import (
     policy_gradient_loss,
 )
 from rl.online.training.targets import (
-    centre_within_modality,
     compute_builder_targets,
     compute_player_targets,
     compute_q_onestep_targets,
     reference_kl,
-    support_kl,
-    support_target,
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
@@ -655,46 +652,13 @@ def train_step(
             learner_log_policy, reg_log_policy, flat_action_mask
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
-        # Support anchor: forward KL(p_T || pi) against the SAME frozen
-        # reference raised to temperature T. The magnet above is
-        # mode-seeking — its pi prefactor takes its force to zero on a
-        # starved cell, so it is structurally indifferent to a dropped
-        # modality — and this is the mode-covering half that is not.
-        # Per-logit force is exactly pi(b) - p_T(b): no prefactor, bounded
-        # by 1, zero-sum over legal cells. It concentrates on whatever the
-        # policy has abandoned without any trigger or floor to tune,
-        # because that is where pi has fallen furthest below p_T.
-        # The snap cycle makes a fixed T a compounding recovery ratchet:
-        # each snap re-anchors on a reference the anchor itself lifted,
-        # and it stops compounding once the PG force can hold the mass
-        # down again.
-        # Phase 3/4 (2026-08-26/27): the target carries the observer
-        # critic's per-cell advantage as a tilt — p* ~ pi_reg^(1/T) *
-        # exp(sg(A_centred)/tau), MPO's E-step target (arXiv:1806.06920)
-        # — so restored mass lands on the cells the critic ranks highest
-        # instead of flattening the modality (phase 1's failure). The
-        # tilt is CENTRED WITHIN each modality (phase 4): raw A's
-        # modality-level sign is the self-confirming Q^pi view learned
-        # under the collapse, and feeding it here inverted the anchor
-        # (force_switch < 0 by 223k) — centred, the critic says WHICH
-        # switch, never WHETHER to switch; the modality axis belongs to
-        # the sign-free T > 1 power transform. See the config block for
-        # sizing, acceptance and abort. tau = 0.0 is bitwise off.
-        if config.player_support_adv_temperature > 0.0:
-            support_tilt = (
-                centre_within_modality(adv_target, flat_action_mask, switch_actions)
-                / config.player_support_adv_temperature
-            )
-        else:
-            support_tilt = None
-        support_kl_rows = support_kl(
-            learner_log_policy,
-            reg_log_policy,
-            flat_action_mask,
-            config.player_support_temperature,
-            tilt_logits=support_tilt,
-        )
-        loss_support = average(support_kl_rows, policy_mask)
+        # The support anchor family (forward KL toward a temperature-raised
+        # / advantage-tilted reference, phases 1-4) was REMOVED 2026-08-27:
+        # every mass-restoring force either erased within-modality
+        # discrimination or taught the mean switch's (losing) value — see
+        # the CLAUDE.md removal ledger. The factorised objective below is
+        # the replacement: the axes get their own trust regions and their
+        # own entropy budgets, and mass is left to follow value.
 
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
@@ -715,40 +679,6 @@ def train_step(
         policy_prob_move = average(pi_learner, pg_move_cells)
         policy_absadv_switch = average(abs_adv, pg_switch_cells)
         policy_absadv_move = average(abs_adv, pg_move_cells)
-
-        # Anchor-target decomposition on the same real-choice slice: where
-        # p_T sits per modality, and the anchor's realised per-row push
-        # there (sum of p_T - pi over the modality's legal cells; positive
-        # = restoring). `support_target` is the loss's own construction,
-        # so under jit this is the identical computation, not a copy. At
-        # T = 1 p_T IS the frozen reference, so switch_mass reads the
-        # reference's own switch mass and force_switch reads only the
-        # policy's drift off it since the snap — the reference numbers any
-        # tilted anchor is judged against.
-        log_p_support = support_target(
-            reg_log_policy,
-            flat_action_mask,
-            config.player_support_temperature,
-            tilt_logits=support_tilt,
-        )
-        p_support = jnp.where(flat_action_mask, jnp.exp(log_p_support), 0.0)
-        support_gap = p_support - pi_learner
-
-        def modality_row_sum(cell_values, cells):
-            return jnp.where(cells, cell_values, 0.0).sum(axis=-1)
-
-        support_switch_mass = average(
-            modality_row_sum(p_support, pg_switch_cells), switch_choice_mask
-        )
-        support_move_mass = average(
-            modality_row_sum(p_support, pg_move_cells), switch_choice_mask
-        )
-        support_force_switch = average(
-            modality_row_sum(support_gap, pg_switch_cells), switch_choice_mask
-        )
-        support_force_move = average(
-            modality_row_sum(support_gap, pg_move_cells), switch_choice_mask
-        )
 
         pg_logs = dict(
             player_loss_pg=loss_pg,
@@ -774,17 +704,6 @@ def train_step(
             # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
             player_ref_kl=loss_mag,
-            # KL(p_T || pi) — the support anchor's own value. Unlike
-            # ref_kl this does NOT return to ~0 at a snap: p_T sits above
-            # the reference by construction, so its floor is the anchor's
-            # own re-inflation. A level DECAYING across snaps means the
-            # policy is tracking the anchor (working); a level climbing
-            # across snaps means pi is outrunning it.
-            player_loss_support=loss_support,
-            player_support_switch_mass=support_switch_mass,
-            player_support_move_mass=support_move_mass,
-            player_support_force_switch=support_force_switch,
-            player_support_force_move=support_force_move,
         )
 
         # Calibration by context. The contexts exist to interpret the
@@ -828,7 +747,6 @@ def train_step(
                 loss_pg
                 + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
-                + config.player_support_coef * loss_support
             )
             # v + q: the critic stack — one V on the deploy-time
             # information set, one all-action advantage over it (the

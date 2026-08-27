@@ -271,34 +271,6 @@ def rl_sections():
                     ["player_ref_kl", "player_reg_snapped"],
                 ),
                 lp(
-                    # The support anchor's own value. Unlike ref_kl it does
-                    # NOT return to ~0 at a snap: decaying across snaps =
-                    # the policy tracking the anchor (working); climbing =
-                    # pi outrunning it.
-                    "Support anchor: KL(p_T || pi)",
-                    ["player_loss_support"],
-                ),
-                lp(
-                    # Where the anchor target SITS per modality on
-                    # real-choice rows. At T = 1 with no tilt this is the
-                    # frozen reference's own switch mass (~ prob_switch at
-                    # the snap); a tilted anchor is judged by how far
-                    # switch_mass rises above that and on WHICH cells
-                    # (type_scale_switch, not this panel, answers which).
-                    "Support anchor: target mass per modality",
-                    ["player_support_switch_mass", "player_support_move_mass"],
-                    log_y=True,
-                ),
-                lp(
-                    # The anchor's realised per-row push per modality:
-                    # sum(p_T - pi) over the modality's legal cells,
-                    # positive = restoring. force_switch ~ 0 at T = 1 right
-                    # after a snap, growing between snaps only as fast as
-                    # the policy drifts off the reference.
-                    "Support anchor: realised force per modality",
-                    ["player_support_force_switch", "player_support_force_move"],
-                ),
-                lp(
                     # Entropy bonus value (= -mean entropy) and the two
                     # normalised entropies. A cliff here is the abort
                     # signal: every remaining policy force is
