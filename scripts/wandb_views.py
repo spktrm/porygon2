@@ -271,12 +271,10 @@ def rl_sections():
                     ["player_ref_kl", "player_reg_snapped"],
                 ),
                 lp(
-                    # Entropy bonus value (= -mean entropy) and the two
-                    # normalised entropies. A cliff here is the abort
-                    # signal: every remaining policy force is
-                    # pi-prefactored, so nothing refills a starved
-                    # modality once it empties — first fallback is
-                    # player_ent_coef 0.05 -> 0.1 (paper Table 4).
+                    # Entropy bonus value (alpha-weighted since 2026-08-28)
+                    # and the two normalised entropies. A cliff here now
+                    # means the CONTROLLER is losing at its alpha ceiling,
+                    # not that a static coef needs a bump.
                     "Entropy bonus & abort watch",
                     [
                         "player_loss_entropy",
@@ -285,24 +283,28 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # The factorised objective's per-level readouts
-                    # (2026-08-27): each axis has its own entropy budget
-                    # and its own trust region. micro_taken staying off
-                    # its floor on switch-heavy batches is the which-axis
-                    # plasticity signal; clip_frac_macro pinned high with
-                    # micro starved is the band-consumption signature the
-                    # composed ratio used to hide.
-                    "Factorised levels: entropy & clip per axis",
+                    # The per-axis normalised entropies the floor holds
+                    # (targets player_ent_target_{macro,micro} = 0.5).
+                    # micro_taken staying off its floor on switch-heavy
+                    # batches is the which-axis plasticity signal.
+                    "Entropy floor: per-axis normalised entropies",
                     [
                         "player_entropy_macro",
                         "player_entropy_micro_taken",
-                        "player_ppo_clip_frac_macro",
-                        "player_ppo_clip_frac_micro",
                     ],
                 ),
                 lp(
-                    "Factorised levels: surrogate per axis",
-                    ["player_loss_pg_macro", "player_loss_pg_micro"],
+                    # The dual temperatures (2026-08-28). Equilibrium away
+                    # from both bounds = the floor holds at finite cost;
+                    # pinned at alpha_max (0.5) = the ask is infeasible
+                    # against the PG at this bound — the abort instrument;
+                    # at alpha_min = the axis holds itself for free.
+                    "Entropy floor: dual temperatures alpha",
+                    [
+                        "player_ent_alpha_macro",
+                        "player_ent_alpha_micro",
+                    ],
+                    log_y=True,
                 ),
                 lp(
                     # Modality decomposition of the two throttles on any

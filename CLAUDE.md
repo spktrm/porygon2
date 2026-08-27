@@ -561,6 +561,65 @@ panels cliffing. Fallback ladder: per-level clip epsilons, factorised
 magnet, then the engine-fork counterfactual-labels workstream (scoped
 independently — it is the evidence fix regardless).
 
+## Removal + addition ledger — 2026-08-28 entropy floor; per-level PPO retired
+
+**The BR probe delivered the project's first ground-truth exploitability
+readings** (mechanism: 2026-08-27 BR child runs, `start_br.sh`). Against the
+factorised-objective lineage @77638: flat 0.509 over ~2000 games at a
+20k-step budget, then — budget extended — a climb from ~26k to a **0.57–0.58
+plateau held 60k→118k** (stopped there; published `p_100077638` at br_steps
+120670). The exploit is substantially the SWITCH AXIS: the BR's voluntary
+switches against the frozen target return +0.8..+0.95 while its own
+prob_switch recovered 0.006 → ~0.02 and its inherited anti-switch
+`type_scale_switch` unwound −0.038 → −0.012. Three verdicts with teeth:
+(1) low switching was NOT locally correct — the collapse costs measurable
+strength (the phase-3 open question, closed); (2) the machinery CAN learn
+switching the moment labels say switches win (stationary opponent) —
+supervision coverage, not capacity, again; (3) a BR "not exploitable"
+certificate is budget-relative — the 20k read expired at ~33k (the BR must
+first climb out of the collapsed prior it inits from).
+
+**REMOVED: the per-level PPO split** (`factorised_log_probs`, actor-stored
+`macro_log_prob`, per-level ratios/clips, `player_{loss_pg,ppo_clip_frac}_{macro,micro}`
+panels; revert commit 4317fb4, landed b1c767f/923ebb2). The factorised-PPO
+lineage answered its own gate — `type_scale_switch` trained NEGATIVE
+(−0.026 @13k, −0.039 @77k), prob_switch 0.131 → 0.02 — and the BR probe
+located the deficit in evidence supply, not trust-region geometry. Back to
+ONE pi/mu ratio, one clip. The per-level ENTROPY terms and their row masks
+STAY.
+
+**ADDED: entropy-floor dual controllers** (commit 5285d9e). Each per-axis
+entropy coefficient is now a SAC-style dual temperature: log-space leaves
+on the player TrainState (traced — varying them costs NO recompile, the
+run-1326 rule satisfied structurally), dual ascent `log α += lr·(target −
+H_norm)` per axis after each grad step, clipped [0.005, 0.5], frozen on
+empty-axis batches (`average()` reads 0.0 there — a spurious full deficit),
+updated before the finite gate so poisoned batches revert alphas too. Init
+= `player_ent_coef` (0.05); targets `player_ent_target_{macro,micro}` = 0.5
+normalised; target 0.0 = that axis's controller OFF (bit-identical static
+behaviour). This is CLAUDE.md 4's own prescription firing after the
+four-retune static-coef falsification (0.01/0.05/0.1/0.2 all collapsed).
+**Calibration that reframed the ask**: the Nov-2025 stable lineage
+(generous-sky-444, 412k steps) held raw action entropy 0.5–1.4 nats — the
+SAME band today's global H occupies; the remembered "3 nats" was the
+per-head-sum loss metric. What the old model held and today loses is
+entropy DISTRIBUTED ACROSS BOTH AXES; a raw-nats global floor is both
+infeasible (avg max legal H ≈ 1.9 nats) and blind to modality collapse
+(the old global-target dilution lesson). Temperature-not-target law
+respected: the controller picks only the temperature (equilibrium still
+π ∝ exp(A/α) per axis); evidence keeps deciding WHICH cells hold the mass.
+
+**Pre-registered acceptance** (fresh lineage from step 0; judged against
+the factorised lineage's and 6ta9hmp6's early curves): `entropy_macro`
+holds ≥ ~0.45 through 33k with `player_ent_alpha_macro` OFF the 0.5
+ceiling; prob_switch not collapsing to ≤0.02 by 33k (factorised lineage
+hit 0.019 @32k); wr vs SimpleHeuristic ≥ 0.167 @30k; and the new
+instrument — a BR probe against the ~77k ckpt reading ≤ the 0.57–0.58 the
+77638 probe read. **Abort**: alphas pinned at max with eval-wr falling
+(the floor is a pure tax); entropy AT target while `type_scale_switch` →
+0 (mass without discrimination — the phase-1 shape, watched on the
+mechanism actually feared, per the twice-paid abort-instrument lesson).
+
 ## Probe ledger — 2026-08-27 capacity falsification (separation probe)
 
 The within-switch flatness measured on the live critic (within-row Q std
