@@ -436,18 +436,33 @@ class ActionAxisMasks(NamedTuple):
     has_move: jax.Array
     has_both: jax.Array
     taken_switch: jax.Array
+    # Factorised-objective predicates (2026-08-27). taken_modality is the
+    # M-way modality index of the taken action; num_legal_modalities and
+    # taken_modality_count feed the per-level row masks: the macro bracket
+    # acts only where >= 2 modalities are live (a broader predicate than
+    # the strict has_both above — WILDCARD/OTHER count as real macro
+    # alternatives), the micro bracket only where the TAKEN modality has
+    # >= 2 legal cells (a singleton's conditional is deterministic: its
+    # ratio is exactly 1 and its entropy exactly 0).
+    taken_modality: jax.Array
+    num_legal_modalities: jax.Array
+    taken_modality_count: jax.Array
 
 
 def action_axis_masks(
     flat_action_mask: jax.Array, action_index: jax.Array
 ) -> ActionAxisMasks:
     """See ActionAxisMasks. `has_both` is THE real-choice predicate."""
-    switch_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__SWITCH)
-    move_cells = jnp.asarray(FLAT_MODALITY_MASK == ModalityEnum.MODALITY_ENUM__MOVE)
+    flat_modality = jnp.asarray(FLAT_MODALITY_MASK)
+    switch_cells = flat_modality == ModalityEnum.MODALITY_ENUM__SWITCH
+    move_cells = flat_modality == ModalityEnum.MODALITY_ENUM__MOVE
     valid_switch = flat_action_mask & switch_cells
     valid_move = flat_action_mask & move_cells
     has_switch = valid_switch.any(axis=-1)
     has_move = valid_move.any(axis=-1)
+    modality_oh = jax.nn.one_hot(flat_modality, NUM_MODALITY_FEATURES, dtype=jnp.int32)
+    legal_per_modality = (flat_action_mask[..., None] * modality_oh).sum(axis=-2)
+    taken_modality = jnp.take(flat_modality, action_index)
     return ActionAxisMasks(
         switch_cells=switch_cells,
         move_cells=move_cells,
@@ -457,6 +472,11 @@ def action_axis_masks(
         has_move=has_move,
         has_both=has_switch & has_move,
         taken_switch=jnp.take(switch_cells, action_index),
+        taken_modality=taken_modality,
+        num_legal_modalities=(legal_per_modality > 0).sum(axis=-1),
+        taken_modality_count=jnp.take_along_axis(
+            legal_per_modality, taken_modality[..., None], axis=-1
+        ).squeeze(-1),
     )
 
 

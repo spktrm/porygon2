@@ -59,6 +59,9 @@ def test_train_step_player_q_smoke():
                     action_head=PlayerPolicyHeadOutput(
                         action_index=action_index,
                         log_prob=jnp.full((T, B), -1.0, dtype=jnp.float32),
+                        # Factorised objective (2026-08-27): the actor's
+                        # macro level; joint -1.0 splits as -0.4 + -0.6.
+                        macro_log_prob=jnp.full((T, B), -0.4, dtype=jnp.float32),
                         src_index=action_index // mask_width,
                         tgt_index=action_index % mask_width,
                     ),

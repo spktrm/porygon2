@@ -88,3 +88,81 @@ def test_clip_fraction_counts_rows_outside_the_band():
         policy_ratios=ratios, valid=jnp.ones(4, dtype=bool), clip_ppo=0.2
     )
     assert float(got) == 0.5
+
+
+class TestFactorisedLogProbs:
+    """The factorised objective's level split (2026-08-27): macro + micro
+    must recompose to the joint EXACTLY, level ratios must multiply to the
+    joint ratio, and each level must be blind to the other's axis."""
+
+    def _policy(self, seed, legal):
+        rng = np.random.default_rng(seed)
+        logits = jnp.where(legal, jnp.asarray(rng.normal(size=legal.shape)), -1e9)
+        return jax.nn.log_softmax(logits.astype(jnp.float32))
+
+    def _legal(self):
+        from rl.environment.data import FLAT_MODALITY_MASK
+        from rl.environment.protos.service_pb2 import ModalityEnum
+
+        flat = np.asarray(FLAT_MODALITY_MASK)
+        legal = np.zeros(flat.shape[0], dtype=bool)
+        # A few cells in two modalities: 4 moves, 3 switches.
+        legal[np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__MOVE)[:4]] = True
+        legal[np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__SWITCH)[:3]] = True
+        return jnp.asarray(legal), flat
+
+    def test_levels_recompose_and_ratios_multiply(self):
+        from rl.online.training.loss import factorised_log_probs
+
+        legal, flat = self._legal()
+        taken = int(np.flatnonzero(np.asarray(legal))[5])  # a switch cell
+        taken_modality = jnp.asarray(flat[taken])
+        pi, mu = self._policy(0, legal), self._policy(1, legal)
+        pi_joint = pi[taken]
+        mu_joint = mu[taken]
+        pi_macro, pi_micro = factorised_log_probs(pi, pi_joint, taken_modality, legal)
+        mu_macro, mu_micro = factorised_log_probs(mu, mu_joint, taken_modality, legal)
+        np.testing.assert_allclose(
+            float(pi_macro + pi_micro), float(pi_joint), atol=1e-6
+        )
+        joint_ratio = float(jnp.exp(pi_joint - mu_joint))
+        level_product = float(
+            jnp.exp(pi_macro - mu_macro) * jnp.exp(pi_micro - mu_micro)
+        )
+        np.testing.assert_allclose(level_product, joint_ratio, rtol=1e-5)
+
+    def test_levels_are_blind_to_the_other_axis(self):
+        """Positive-control pair: a constant added to a whole modality's
+        logits moves ONLY the macro level; reshuffling logits WITHIN the
+        taken modality (same total mass) moves only the micro level."""
+        from rl.environment.protos.service_pb2 import ModalityEnum
+        from rl.online.training.loss import factorised_log_probs
+
+        legal, flat = self._legal()
+        switch_idx = np.flatnonzero(
+            np.asarray(legal) & (flat == ModalityEnum.MODALITY_ENUM__SWITCH)
+        )
+        taken = int(switch_idx[0])
+        taken_modality = jnp.asarray(flat[taken])
+        base = self._policy(0, legal)
+
+        # Whole-modality shift: renormalised, micro of the taken modality
+        # is unchanged, macro moves.
+        shifted = jnp.where(jnp.asarray(flat == flat[taken]) & legal, base + 0.7, base)
+        shifted = jax.nn.log_softmax(jnp.where(legal, shifted, -1e9))
+        b_macro, b_micro = factorised_log_probs(
+            base, base[taken], taken_modality, legal
+        )
+        s_macro, s_micro = factorised_log_probs(
+            shifted, shifted[taken], taken_modality, legal
+        )
+        np.testing.assert_allclose(float(s_micro), float(b_micro), atol=1e-5)
+        assert abs(float(s_macro) - float(b_macro)) > 1e-3
+
+        # Singleton modality: micro log-prob is exactly 0 (ratio 1).
+        single = np.asarray(legal).copy()
+        single[switch_idx[1:]] = False
+        single_legal = jnp.asarray(single)
+        pol = self._policy(2, single_legal)
+        _, micro = factorised_log_probs(pol, pol[taken], taken_modality, single_legal)
+        np.testing.assert_allclose(float(micro), 0.0, atol=1e-6)

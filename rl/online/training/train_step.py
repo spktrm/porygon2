@@ -24,6 +24,7 @@ from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
+    factorised_log_probs,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
@@ -616,33 +617,57 @@ def train_step(
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # NashPG policy update (2026-08-26, arXiv:2510.18183): a
-        # PPO-clipped surrogate on the taken action's ratio pi/mu against
-        # the batch-normalised v-trace advantage, plus a DIFFERENTIATED
-        # reverse KL(pi || pi_reg) magnet toward the periodically snapped
-        # reference and a differentiated entropy bonus. Every force here
-        # runs through the composed log-softmax, whose Jacobian is
-        # zero-sum per level — the softmax-invariant mean direction
-        # receives no push — and the clip zeroes the surrogate's gradient
-        # once the ratio leaves the band in the push direction, so no
-        # force persists at a stiff equilibrium. All three terms carry a
-        # pi prefactor: there is deliberately no prefactor-free refill
-        # force any more (the NashPG bet is that the magnet cycle plus
-        # entropy keep pi interior so starvation never starts —
-        # switch_ratio through the 13k wire is the acceptance gate).
+        # FACTORISED policy update (2026-08-27): the NashPG PPO surrogate,
+        # split along the whether/which axes. log pi(a) = log pi_macro(m(a))
+        # + log pi_micro(a|m) is exact (heads.compose_action_grid), and the
+        # composed single-band clip couples the levels — macro drift between
+        # snaps consumes trust region the micro level then cannot use, which
+        # lands hardest on rare-modality rows (the which-switch gradient the
+        # collapse history shows is the scarce resource). Two ratios, two
+        # clips, SAME batch-normalised v-trace advantage on both (the level
+        # score functions sum to the joint PG — only the trust-region
+        # geometry changes). Row masks: the macro bracket needs >= 2 live
+        # modalities, the micro bracket >= 2 legal cells in the TAKEN
+        # modality (a singleton conditional has ratio exactly 1).
+        # The behaviour side pairs the actor-stored macro_log_prob with
+        # mu_micro = mu_joint - mu_macro; the learner side re-derives its
+        # marginal from log_policy by the composition identity.
         learner_log_policy = learner_action_head.log_policy
         pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
         pi_learner = pi_learner / jnp.maximum(
             pi_learner.sum(axis=-1, keepdims=True), 1e-8
         )
 
-        loss_pg = policy_gradient_loss(
-            policy_ratios=learner_actor_ratio,
+        learner_macro_log_prob, learner_micro_log_prob = factorised_log_probs(
+            learner_log_policy,
+            learner_log_prob,
+            axis.taken_modality,
+            flat_action_mask,
+        )
+        mu_macro_log_prob = player_actor_action_head.macro_log_prob.astype(jnp.float32)
+        mu_micro_log_prob = (
+            player_actor_log_prob.astype(jnp.float32) - mu_macro_log_prob
+        )
+        ratio_macro = jnp.exp(learner_macro_log_prob - mu_macro_log_prob)
+        ratio_micro = jnp.exp(learner_micro_log_prob - mu_micro_log_prob)
+        macro_valid = policy_mask & (axis.num_legal_modalities >= 2)
+        micro_valid = policy_mask & (axis.taken_modality_count >= 2)
+
+        loss_pg_macro = policy_gradient_loss(
+            policy_ratios=ratio_macro,
             advantages=pg_adv_norm,
-            valid=policy_mask,
+            valid=macro_valid,
             threshold=config.player_ppo_clip,
             objective=config.player_pg_objective,
         )
+        loss_pg_micro = policy_gradient_loss(
+            policy_ratios=ratio_micro,
+            advantages=pg_adv_norm,
+            valid=micro_valid,
+            threshold=config.player_ppo_clip,
+            objective=config.player_pg_objective,
+        )
+        loss_pg = loss_pg_macro + loss_pg_micro
         # Entropy bonus: maximise E[H(pi)] over real-choice rows.
         loss_entropy = -action_head_entropy
         # Magnet: full-distribution KL(pi || pi_reg) per row —
@@ -682,10 +707,25 @@ def train_step(
 
         pg_logs = dict(
             player_loss_pg=loss_pg,
+            player_loss_pg_macro=loss_pg_macro,
+            player_loss_pg_micro=loss_pg_micro,
             player_loss_entropy=loss_entropy,
+            # Per-level clip occupancy: the macro-consumes-the-band
+            # hypothesis is directly observable here — macro pinned high
+            # with micro starved was invisible under the composed ratio.
             player_ppo_clip_frac=clip_fraction(
                 policy_ratios=learner_actor_ratio,
                 valid=policy_mask,
+                clip_ppo=config.player_ppo_clip,
+            ),
+            player_ppo_clip_frac_macro=clip_fraction(
+                policy_ratios=ratio_macro,
+                valid=macro_valid,
+                clip_ppo=config.player_ppo_clip,
+            ),
+            player_ppo_clip_frac_micro=clip_fraction(
+                policy_ratios=ratio_micro,
+                valid=micro_valid,
                 clip_ppo=config.player_ppo_clip,
             ),
             player_policy_prob_switch=policy_prob_switch,

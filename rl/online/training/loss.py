@@ -1,7 +1,43 @@
 import jax
 import jax.numpy as jnp
 
+from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
 from rl.utils import average
+
+
+def factorised_log_probs(
+    log_policy: jax.Array,
+    log_prob: jax.Array,
+    taken_modality: jax.Array,
+    legal_mask: jax.Array,
+):
+    """(macro_log_prob, micro_log_prob) of the taken action, f32.
+
+    By the composition identity (heads.compose_action_grid: log_policy(a)
+    = composed_macro[m(a)] + centred micro) the modality-wise logsumexp of
+    the log-policy over legal cells IS the composed macro log-softmax, so
+    the two levels are exact: macro = marginal[m(a_taken)], micro =
+    log_prob - macro. Written once for the factorised policy loss; the
+    behaviour side's macro comes stored from the actor
+    (PlayerPolicyHeadOutput.macro_log_prob, same construction in
+    player_model._modality_log_marginal) and its micro is the same
+    subtraction."""
+    modality_oh = jax.nn.one_hot(
+        jnp.asarray(FLAT_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
+    )
+    marginal = jax.nn.logsumexp(
+        jnp.where(
+            legal_mask[..., None] & modality_oh,
+            log_policy.astype(jnp.float32)[..., None],
+            -1e9,
+        ),
+        axis=-2,
+    )
+    macro_log_prob = jnp.take_along_axis(
+        marginal, taken_modality[..., None], axis=-1
+    ).squeeze(-1)
+    micro_log_prob = log_prob.astype(jnp.float32) - macro_log_prob
+    return macro_log_prob, micro_log_prob
 
 
 def spo_objective(
