@@ -63,6 +63,35 @@ def factorised_entropies(
     return h_macro, h_micro_taken
 
 
+def entropy_floor_step(
+    log_alpha: jax.Array,
+    *,
+    target: float,
+    entropy_value: jax.Array,
+    rows: jax.Array,
+    alpha_lr: float,
+    alpha_min: float,
+    alpha_max: float,
+):
+    """One dual-ascent step on a per-axis entropy temperature (2026-08-28).
+
+    log alpha moves by alpha_lr * (target - H_norm): below target the
+    temperature rises, above it it relaxes — SAC's constraint form
+    max E[A] s.t. H >= target, whose equilibrium is still pi ∝ exp(A/alpha)
+    per axis, so the controller picks only the temperature and evidence
+    keeps deciding WHICH cells hold the mass. Clipped to [alpha_min,
+    alpha_max] in log space; FROZEN when the axis had no rows this batch
+    (average() reads 0.0 on an empty mask, which would otherwise register
+    as maximal entropy deficit — the NaN-EMA lesson's shape, LESSONS 2)."""
+    err = target - entropy_value.astype(jnp.float32)
+    stepped = jnp.clip(
+        log_alpha + alpha_lr * err,
+        jnp.log(alpha_min),
+        jnp.log(alpha_max),
+    )
+    return jnp.where(rows > 0, stepped, log_alpha)
+
+
 def spo_objective(
     *,
     policy_ratios: jax.Array,

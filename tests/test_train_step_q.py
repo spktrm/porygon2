@@ -126,6 +126,12 @@ def test_train_step_player_q_smoke():
         "player_loss_pg",
         "player_ppo_clip_frac",
         "player_loss_entropy",
+        # Entropy-floor controller (2026-08-28): per-axis dual temperatures
+        # and the row occupancy that gates their update.
+        "player_ent_alpha_macro",
+        "player_ent_alpha_micro",
+        "player_ent_rows_macro",
+        "player_ent_rows_micro",
         "player_pg_adv_mean",
         "player_pg_adv_std",
         "player_reg_snapped",

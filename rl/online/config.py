@@ -393,24 +393,55 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # modality shrank, and offered one budget payable wherever entropy was
     # cheapest (the measured blindness: global 0.755 while modality 0.22).
     # Unit weights are per-axis budgets; the masked average makes a rare
-    # taken-modality's term inverse-frequency amplified; and as a BONUS
-    # (not a target) it is a temperature — per axis the equilibrium is
-    # pi ∝ exp(A/coef), so live evidence beats it wherever it exists
-    # (the injection post-mortem's temperature-vs-target law). 0.05 kept
-    # across the transition; the sum's scale differs from the joint H, so
-    # read player_entropy_{macro,micro_taken} at first batches before any
-    # retune, and retune on the equilibrium condition if at all.
+    # taken-modality's term inverse-frequency amplified; and it is a
+    # temperature — per axis the equilibrium is pi ∝ exp(A/coef), so live
+    # evidence beats it wherever it exists (the injection post-mortem's
+    # temperature-vs-target law).
+    #
+    # ENTROPY FLOOR (2026-08-28): the two per-axis coefficients are now
+    # ADAPTIVE dual variables (SAC-style: alpha rises while its axis's
+    # normalised entropy sits below target, relaxes above it), stored as
+    # log-space leaves on the player TrainState — traced, so the
+    # controller varies them with NO recompile (the run-1326 rule) — and
+    # updated by loss.entropy_floor_step after each grad step, frozen on
+    # batches with no rows for an axis (average() reads 0.0 there, which
+    # would spuriously inflate alpha). player_ent_coef is the INIT of
+    # both alphas. This is the CLAUDE.md-4 prescription firing: four
+    # static-coef retunes each collapsed (0.01/0.05/0.1/0.2), so the coef
+    # gets a controller with a target-entropy set-point. The controller
+    # still only picks the TEMPERATURE — which cells hold the mass stays
+    # decided by evidence, so it cannot erase within-modality
+    # discrimination the way the mass-injection family did. Targets are
+    # NORMALISED (fraction of each level's own log k): the Nov-2025
+    # stable lineage's raw action entropy (0.5-1.4 nats lifetime,
+    # generous-sky-444) is the same band today's GLOBAL H occupies — what
+    # distinguished it is that entropy stayed distributed across BOTH
+    # axes (the modality axis never died), which only the per-axis
+    # normalised floors can see. 0.5 sits between healthy launch
+    # (normalised modality entropy 0.836) and collapse (0.23). Target
+    # 0.0 = that axis's controller OFF (alpha frozen at init — exactly
+    # the static-coef behaviour). Alpha pinned at max = the ask is
+    # infeasible against the PG at this bound — the abort instrument,
+    # never a reason to widen the bound silently.
     player_ent_coef: float = 0.05
+    player_ent_target_macro: float = 0.5
+    player_ent_target_micro: float = 0.5
+    # Dual step size on log alpha per train step: at a persistent error
+    # of 0.5 an e-fold takes ~2k steps, so 0.05 -> 0.5 (ln 10 = 2.3
+    # e-folds) in ~4.6k steps — fast against the 13k collapse wire, slow
+    # against batch noise.
+    player_ent_alpha_lr: float = 1e-3
+    player_ent_alpha_min: float = 0.005
+    player_ent_alpha_max: float = 0.5
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,
     # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every
     # mass-restoring variant either erased within-modality discrimination
     # (mode-covering targets + the snap ratchet) or taught the mean
-    # switch's losing value. Replaced by the FACTORISED objective: the
-    # PPO surrogate and the entropy bonus each split into macro (whether)
-    # and micro (which, within the taken modality) terms with their own
-    # row masks — see train_step's policy bracket and the CLAUDE.md
-    # removal ledger for the full history and revert handles.
+    # switch's losing value. Replaced by the per-level ENTROPY terms above
+    # (the PPO surrogate was split per-level in the same pass and
+    # re-joined 2026-08-28 — see that revert commit) — see train_step's
+    # policy bracket and the CLAUDE.md ledgers for history and handles.
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —

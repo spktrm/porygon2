@@ -145,6 +145,21 @@ class Porygon2PlayerTrainState(train_state.TrainState):
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
 
+    # Entropy-floor dual variables (2026-08-28): log-space per-axis entropy
+    # temperatures, updated by loss.entropy_floor_step inside train_step.
+    # Traced leaves, NOT config — a coefficient that varies during a run in
+    # static config is the run-1326 recompile bug. Init from
+    # config.player_ent_coef in create_train_state; the defaults here are
+    # log(0.05) so a state built without the config path matches it.
+    log_ent_alpha_macro: jax.Array = struct.field(
+        default_factory=lambda: jnp.log(jnp.array(0.05, dtype=jnp.float32)),
+        pytree_node=True,
+    )
+    log_ent_alpha_micro: jax.Array = struct.field(
+        default_factory=lambda: jnp.log(jnp.array(0.05, dtype=jnp.float32)),
+        pytree_node=True,
+    )
+
 
 class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
@@ -203,6 +218,12 @@ def create_train_state(
         target_params=jax.tree.map(jnp.copy, initial_player_params),
         reg_params=jax.tree.map(jnp.copy, initial_player_params),
         tx=player_optimizer,
+        log_ent_alpha_macro=jnp.log(
+            jnp.array(config.player_ent_coef, dtype=jnp.float32)
+        ),
+        log_ent_alpha_micro=jnp.log(
+            jnp.array(config.player_ent_coef, dtype=jnp.float32)
+        ),
     )
 
     builder_params_init_fn = functools.partial(

@@ -24,6 +24,7 @@ from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
+    entropy_floor_step,
     factorised_entropies,
     forward_kl_loss,
     mse_value_loss,
@@ -657,7 +658,16 @@ def train_step(
         )
         entropy_macro = average(h_macro_rows, macro_valid)
         entropy_micro_taken = average(h_micro_rows, micro_valid)
-        loss_entropy = -(entropy_macro + entropy_micro_taken)
+        # Entropy floor (2026-08-28): each axis's temperature is a dual
+        # variable off the train state (log-space; dual-ascent update after
+        # the grad step, loss.entropy_floor_step), holding its NORMALISED
+        # entropy at config.player_ent_target_{macro,micro}. Read here, not
+        # differentiated — the alphas are state leaves, not params.
+        alpha_macro = jnp.exp(player_state.log_ent_alpha_macro)
+        alpha_micro = jnp.exp(player_state.log_ent_alpha_micro)
+        loss_entropy = -(
+            alpha_macro * entropy_macro + alpha_micro * entropy_micro_taken
+        )
         # Magnet: full-distribution KL(pi || pi_reg) per row —
         # differentiated through the learner side (reg_log_policy comes
         # off the frozen reg_params, a constant).
@@ -698,6 +708,11 @@ def train_step(
             player_loss_entropy=loss_entropy,
             player_entropy_macro=entropy_macro,
             player_entropy_micro_taken=entropy_micro_taken,
+            # Row occupancy per axis: consumed by the dual update outside
+            # the closure (an axis with no rows this batch freezes its
+            # alpha — average() reads 0.0 there, a spurious full deficit).
+            player_ent_rows_macro=macro_valid.sum().astype(jnp.float32),
+            player_ent_rows_micro=micro_valid.sum().astype(jnp.float32),
             player_ppo_clip_frac=clip_fraction(
                 policy_ratios=learner_actor_ratio,
                 valid=policy_mask,
@@ -759,8 +774,10 @@ def train_step(
             # coefficient scales improvement and regularisation together.
             config.player_pg_coef
             * (
+                # loss_entropy carries the per-axis dual temperatures
+                # (player_ent_coef is their INIT, not a live multiplier).
                 loss_pg
-                + config.player_ent_coef * loss_entropy
+                + loss_entropy
                 + config.player_mag_coef * loss_mag
             )
             # v + q: the critic stack — one V on the deploy-time
@@ -848,6 +865,35 @@ def train_step(
             config.player_ema_update_rate,
         ),
     )
+    # Entropy-floor dual update (2026-08-28): BEFORE the finite gate below,
+    # so a poisoned batch reverts the alphas along with everything else.
+    # Target 0.0 is that axis's controller OFF — the alpha stays at its
+    # player_ent_coef init, which is exactly the static-coefficient
+    # behaviour (a static python branch: config is a jit-static arg).
+    if config.player_ent_target_macro > 0.0:
+        player_state = player_state.replace(
+            log_ent_alpha_macro=entropy_floor_step(
+                player_state.log_ent_alpha_macro,
+                target=config.player_ent_target_macro,
+                entropy_value=player_logs["player_entropy_macro"],
+                rows=player_logs["player_ent_rows_macro"],
+                alpha_lr=config.player_ent_alpha_lr,
+                alpha_min=config.player_ent_alpha_min,
+                alpha_max=config.player_ent_alpha_max,
+            )
+        )
+    if config.player_ent_target_micro > 0.0:
+        player_state = player_state.replace(
+            log_ent_alpha_micro=entropy_floor_step(
+                player_state.log_ent_alpha_micro,
+                target=config.player_ent_target_micro,
+                entropy_value=player_logs["player_entropy_micro_taken"],
+                rows=player_logs["player_ent_rows_micro"],
+                alpha_lr=config.player_ent_alpha_lr,
+                alpha_min=config.player_ent_alpha_min,
+                alpha_max=config.player_ent_alpha_max,
+            )
+        )
     # A non-finite loss or gradient must never reach the params or the EMA
     # scalars: one poisoned update is permanent, and the next periodic save
     # then overwrites the last good checkpoint with it. Keep the previous
@@ -867,6 +913,11 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
+            # Post-gate dual temperatures: pinned at player_ent_alpha_max =
+            # the floor is infeasible against the PG at this bound (abort
+            # instrument); back at min = the axis holds itself for free.
+            player_ent_alpha_macro=jnp.exp(player_state.log_ent_alpha_macro),
+            player_ent_alpha_micro=jnp.exp(player_state.log_ent_alpha_micro),
             # Q-head learning readouts: the three-scalar micro gate, the
             # drift-from-init of the zero-init out layers and the pointer
             # kernels, and per-subtree grad norms (pre-clip). A micro
