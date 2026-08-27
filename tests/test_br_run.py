@@ -276,6 +276,59 @@ class TestLeagueAddSuppression:
             learner._manage_league(None, step=60_000)
 
 
+class TestTrainStepBudget:
+    def test_idle_ticks_do_not_consume_num_steps(self, monkeypatch):
+        # Regression (first BR run, 2026-08-27): `for _ in range(num_steps)`
+        # burned loop iterations on idle warm-up ticks and ended the run at
+        # 1891 of 5000 train steps. num_steps must bound host_step.
+        import queue as queue_mod
+        import threading
+
+        import rl.online.training.learner as learner_mod
+        from rl.online.training.learner import Learner
+
+        monkeypatch.setattr(learner_mod, "start_workers", lambda *a, **k: None)
+        monkeypatch.setattr(learner_mod, "stop_workers", lambda *a, **k: None)
+
+        device_q = queue_mod.Queue()
+        for _ in range(3):
+            device_q.put({"x": np.zeros(1)})
+        run_state = types.SimpleNamespace(
+            host_step=0,
+            lifetime_step=0,
+            frames_trained_total=0,
+            created_at_frame=0,
+            device_q=device_q,
+            player_state=types.SimpleNamespace(frame_count=np.int32(0)),
+        )
+
+        learner = Learner.__new__(Learner)
+        learner.config = make_config(num_steps=3, br_target_ckpt=None)
+        learner.run_state = run_state
+        learner.done = False
+        learner.gpu_lock = threading.Lock()
+        learner._train_step = lambda rs, batch: {}
+        learner._handle_periodic_tasks = lambda rs, step, logs: None
+        checkpoints = []
+        learner._write_checkpoint = lambda rs, synchronous=False: checkpoints.append(
+            (run_state.host_step, synchronous)
+        )
+
+        # Idle ticks (None) interleaved with ready ones: under the old
+        # loop, 6 idle ticks + 3 batches would exhaust a budget of 3
+        # before the third train step (the positive-control half).
+        readiness = iter(
+            [None, None, run_state, None, run_state, None, None, run_state]
+        )
+        learner._ready_run_state = lambda: next(readiness)
+
+        learner.train()
+
+        assert run_state.host_step == 3
+        # Completion writes exactly one synchronous checkpoint.
+        assert checkpoints == [(3, True)]
+
+
 class TestResolveRunSetup:
     def _args(self, **overrides):
         defaults = dict(

@@ -835,7 +835,9 @@ if __name__ == "__main__":
         "--num-steps",
         type=int,
         default=None,
-        help="Override config.num_steps for this process.",
+        help="Override config.num_steps: the run's total TRAIN-step budget "
+        "(host_step, which resumes carry forward) — idle ticks don't "
+        "count, and resuming a completed run needs a larger value.",
     )
     parser.add_argument(
         "--br-target",

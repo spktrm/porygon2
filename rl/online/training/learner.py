@@ -264,7 +264,12 @@ class Learner:
         continuously and independently."""
         start_workers(self.run_state, self.config)
         try:
-            for _ in range(self.config.num_steps):
+            # num_steps bounds TRAIN steps (host_step, seeded from the
+            # restored step counter), not loop ticks: the idle/empty
+            # continues below burn iterations without training, which at
+            # a small --num-steps ended the first BR run at 1891 of 5000
+            # steps — replay warm-up alone is ~600 ticks/minute.
+            while self.run_state.host_step < self.config.num_steps:
                 if self.done:
                     break
                 run_state = self._ready_run_state()
@@ -294,6 +299,14 @@ class Learner:
                     - run_state.created_at_frame
                 )
                 self._handle_periodic_tasks(run_state, run_state.host_step, logs)
+
+            # Normal completion (num_steps reached): one synchronous full
+            # checkpoint — a completed BR run's whole lifetime sits below
+            # save_interval_steps, so without this its own tree holds no
+            # checkpoint at all and a rerun restarts from the target
+            # instead of resuming.
+            tqdm.write("num_steps reached — writing final checkpoint")
+            self._write_checkpoint(self.run_state, synchronous=True)
 
         except KeyboardInterrupt:
             # One synchronous full save so a deliberate restart loses
