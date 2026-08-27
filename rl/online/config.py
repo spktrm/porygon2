@@ -357,11 +357,23 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # never starts. switch_ratio through the 13k wire is the acceptance
     # gate; the analytic-shift form is in git history if it fails.
     player_mag_coef: float = 0.2
-    # Entropy bonus, differentiated, NashPG's ent_coef (0.05 in their
-    # yaml; paper Table 4 ran 0.1 — the pre-registered first fallback if
-    # switch mass decays). Bounded under the PPO clip; the dx65cpwp
-    # divergence was the ANALYTIC prefactor-free -eta_ent*log pi force,
-    # which does not carry over to this form.
+    # Entropy bonus, differentiated — FACTORISED 2026-08-27 (the Oct–Nov
+    # 2025 form rebuilt on the composed head): the coefficient now scales
+    # H(macro) + H(micro | taken modality), each masked-AVERAGED over its
+    # own row set (macro: >= 2 live modalities; micro: taken modality has
+    # >= 2 legal cells). The joint H it replaces decomposes as H(macro) +
+    # sum_m pi_m * H(micro|m) — its within-switch pressure died in
+    # proportion to switch mass, defunding the which-axis exactly as the
+    # modality shrank, and offered one budget payable wherever entropy was
+    # cheapest (the measured blindness: global 0.755 while modality 0.22).
+    # Unit weights are per-axis budgets; the masked average makes a rare
+    # taken-modality's term inverse-frequency amplified; and as a BONUS
+    # (not a target) it is a temperature — per axis the equilibrium is
+    # pi ∝ exp(A/coef), so live evidence beats it wherever it exists
+    # (the injection post-mortem's temperature-vs-target law). 0.05 kept
+    # across the transition; the sum's scale differs from the joint H, so
+    # read player_entropy_{macro,micro_taken} at first batches before any
+    # retune, and retune on the equilibrium condition if at all.
     player_ent_coef: float = 0.05
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,

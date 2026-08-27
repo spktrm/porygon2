@@ -285,6 +285,26 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # The factorised objective's per-level readouts
+                    # (2026-08-27): each axis has its own entropy budget
+                    # and its own trust region. micro_taken staying off
+                    # its floor on switch-heavy batches is the which-axis
+                    # plasticity signal; clip_frac_macro pinned high with
+                    # micro starved is the band-consumption signature the
+                    # composed ratio used to hide.
+                    "Factorised levels: entropy & clip per axis",
+                    [
+                        "player_entropy_macro",
+                        "player_entropy_micro_taken",
+                        "player_ppo_clip_frac_macro",
+                        "player_ppo_clip_frac_micro",
+                    ],
+                ),
+                lp(
+                    "Factorised levels: surrogate per axis",
+                    ["player_loss_pg_macro", "player_loss_pg_micro"],
+                ),
+                lp(
                     # Modality decomposition of the two throttles on any
                     # taken-action update: per-cell pi mass and the
                     # observer critic's |A|, as switch/move ratios.

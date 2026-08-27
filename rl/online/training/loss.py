@@ -40,6 +40,50 @@ def factorised_log_probs(
     return macro_log_prob, micro_log_prob
 
 
+def factorised_entropies(
+    log_policy: jax.Array,
+    taken_modality: jax.Array,
+    legal_mask: jax.Array,
+):
+    """(H_macro, H_micro_taken) per row, f32 — the Oct–Nov 2025 per-level
+    entropy form rebuilt on the composed head.
+
+    H_macro is the entropy of the modality marginal over live modalities;
+    H_micro_taken the entropy of the conditional within the TAKEN
+    modality's legal cells. Consumed as unit-weight masked AVERAGES over
+    their own row sets (train_step), which is the whole reason the form
+    exists: the joint entropy decomposes as H(macro) + sum_m pi_macro(m) *
+    H(micro|m), so its within-switch pressure dies in proportion to switch
+    mass — the regulariser defunds the which-axis exactly as the modality
+    shrinks — while the per-level form keeps unit weight on WHICH and the
+    masked average makes a rare taken-switch row's term inverse-frequency
+    amplified. A temperature opposed by live evidence, never a target: per
+    axis the equilibrium is pi ∝ exp(A/coef), so real advantages beat it
+    wherever they exist."""
+    modality_oh = jax.nn.one_hot(
+        jnp.asarray(FLAT_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
+    )
+    log_policy32 = log_policy.astype(jnp.float32)
+    marginal = jax.nn.logsumexp(
+        jnp.where(legal_mask[..., None] & modality_oh, log_policy32[..., None], -1e9),
+        axis=-2,
+    )
+    live = marginal > -1e8
+    marginal_probs = jnp.where(live, jnp.exp(marginal), 0.0)
+    h_macro = -(marginal_probs * jnp.where(live, marginal, 0.0)).sum(axis=-1)
+
+    macro_taken = jnp.take_along_axis(marginal, taken_modality[..., None], axis=-1)
+    taken_cells = legal_mask & (
+        jnp.asarray(FLAT_MODALITY_MASK) == taken_modality[..., None]
+    )
+    log_conditional = log_policy32 - macro_taken
+    conditional_probs = jnp.where(taken_cells, jnp.exp(log_conditional), 0.0)
+    h_micro_taken = -(
+        conditional_probs * jnp.where(taken_cells, log_conditional, 0.0)
+    ).sum(axis=-1)
+    return h_macro, h_micro_taken
+
+
 def spo_objective(
     *,
     policy_ratios: jax.Array,

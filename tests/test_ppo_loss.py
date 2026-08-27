@@ -166,3 +166,75 @@ class TestFactorisedLogProbs:
         pol = self._policy(2, single_legal)
         _, micro = factorised_log_probs(pol, pol[taken], taken_modality, single_legal)
         np.testing.assert_allclose(float(micro), 0.0, atol=1e-6)
+
+
+class TestFactorisedEntropies:
+    """The Oct–Nov-form per-level entropy: bookkeeping identity against the
+    joint H (documents exactly what the unit-weight form changes), and the
+    two mask-semantics edges."""
+
+    def _setup(self):
+        from rl.environment.data import FLAT_MODALITY_MASK
+        from rl.environment.protos.service_pb2 import ModalityEnum
+
+        flat = np.asarray(FLAT_MODALITY_MASK)
+        legal = np.zeros(flat.shape[0], dtype=bool)
+        move_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__MOVE)[:4]
+        switch_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__SWITCH)[:3]
+        legal[move_cells] = True
+        legal[switch_cells] = True
+        rng = np.random.default_rng(3)
+        logits = np.where(legal, rng.normal(size=legal.shape), -1e9)
+        log_policy = jnp.asarray(
+            jax.nn.log_softmax(jnp.asarray(logits, dtype=jnp.float32))
+        )
+        return flat, jnp.asarray(legal), log_policy, move_cells, switch_cells
+
+    def test_joint_entropy_decomposition(self):
+        from rl.online.training.loss import factorised_entropies
+
+        flat, legal, log_policy, move_cells, switch_cells = self._setup()
+        probs = np.where(np.asarray(legal), np.exp(np.asarray(log_policy)), 0.0)
+        h_joint = -float((probs[probs > 0] * np.log(probs[probs > 0])).sum())
+
+        h_macro_m, h_micro_move = factorised_entropies(
+            log_policy, jnp.asarray(flat[move_cells[0]]), legal
+        )
+        h_macro_s, h_micro_switch = factorised_entropies(
+            log_policy, jnp.asarray(flat[switch_cells[0]]), legal
+        )
+        # H_macro is taken-independent.
+        np.testing.assert_allclose(float(h_macro_m), float(h_macro_s), atol=1e-6)
+        p_move = float(probs[move_cells].sum())
+        p_switch = float(probs[switch_cells].sum())
+        # H_joint = H_macro + sum_m pi_m * H(micro|m): the pi_m prefactors
+        # are exactly what the unit-weight per-level form REMOVES.
+        recomposed = (
+            float(h_macro_m)
+            + p_move * float(h_micro_move)
+            + p_switch * float(h_micro_switch)
+        )
+        np.testing.assert_allclose(recomposed, h_joint, rtol=1e-5)
+        # Positive control: with pi_switch < 1 the unit-weight sum genuinely
+        # exceeds the joint's weighted one on the switch axis.
+        assert p_switch < 1.0
+        assert float(h_micro_switch) > p_switch * float(h_micro_switch)
+
+    def test_singleton_and_uniform_edges(self):
+        from rl.online.training.loss import factorised_entropies
+
+        flat, legal, log_policy, move_cells, switch_cells = self._setup()
+        # Singleton taken modality: micro entropy exactly 0.
+        single = np.asarray(legal).copy()
+        single[switch_cells[1:]] = False
+        _, h_micro = factorised_entropies(
+            log_policy, jnp.asarray(flat[switch_cells[0]]), jnp.asarray(single)
+        )
+        np.testing.assert_allclose(float(h_micro), 0.0, atol=1e-6)
+        # Uniform within the taken modality: micro entropy = log k.
+        uniform_logits = jnp.where(jnp.asarray(np.asarray(legal)), 0.0, -1e9)
+        uniform = jax.nn.log_softmax(uniform_logits.astype(jnp.float32))
+        _, h_uni = factorised_entropies(
+            uniform, jnp.asarray(flat[switch_cells[0]]), legal
+        )
+        np.testing.assert_allclose(float(h_uni), np.log(len(switch_cells)), rtol=1e-5)

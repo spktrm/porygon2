@@ -24,6 +24,7 @@ from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
+    factorised_entropies,
     factorised_log_probs,
     forward_kl_loss,
     mse_value_loss,
@@ -668,8 +669,21 @@ def train_step(
             objective=config.player_pg_objective,
         )
         loss_pg = loss_pg_macro + loss_pg_micro
-        # Entropy bonus: maximise E[H(pi)] over real-choice rows.
-        loss_entropy = -action_head_entropy
+        # Per-level entropy (2026-08-27, the Oct–Nov 2025 form): unit-weight
+        # H(macro) + H(micro | taken modality), each masked-averaged over
+        # its OWN row set. The joint entropy this replaces weighted the
+        # within-switch term by pi_macro(switch) — defunding the which-axis
+        # exactly as the modality shrank — and offered one budget the
+        # policy could pay wherever entropy was cheapest. Unit weights are
+        # per-axis budgets; the masked average is inverse-frequency
+        # amplification for rare taken modalities; and as a bonus (not a
+        # target) it is a temperature real advantages beat.
+        h_macro_rows, h_micro_rows = factorised_entropies(
+            learner_log_policy, axis.taken_modality, flat_action_mask
+        )
+        entropy_macro = average(h_macro_rows, macro_valid)
+        entropy_micro_taken = average(h_micro_rows, micro_valid)
+        loss_entropy = -(entropy_macro + entropy_micro_taken)
         # Magnet: full-distribution KL(pi || pi_reg) per row —
         # differentiated through the learner side (reg_log_policy comes
         # off the frozen reg_params, a constant).
@@ -710,6 +724,8 @@ def train_step(
             player_loss_pg_macro=loss_pg_macro,
             player_loss_pg_micro=loss_pg_micro,
             player_loss_entropy=loss_entropy,
+            player_entropy_macro=entropy_macro,
+            player_entropy_micro_taken=entropy_micro_taken,
             # Per-level clip occupancy: the macro-consumes-the-band
             # hypothesis is directly observable here — macro pinned high
             # with micro starved was invisible under the composed ratio.
