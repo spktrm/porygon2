@@ -524,6 +524,47 @@ shape). Also on the record twice now: pick the abort metric from the
 mechanism you fear — the entropy>0.85 guard watched the wrong direction
 while entropy fell to 0.025.
 
+## Probe ledger — 2026-08-27 capacity falsification (separation probe)
+
+The within-switch flatness measured on the live critic (within-row Q std
+0.0196 vs move 0.0374 @ckpt_00224773) motivated restoring the Nov-2025
+per-modality decoder depth. The pre-launch separation probe
+(`rl/offline/separation_probe.py`) was built to gate that launch — and it
+FALSIFIED the capacity hypothesis on every reading its data can support:
+
+| reading | old arch | new arch (+3 decoders, +2.8M) |
+|---|---|---|
+| probe A routing separation at init | 3.76x | 3.61x |
+| train fit (memorisation) | r=1.000 | r=1.000 |
+| held-seen species, cross-game (3 seeds) | 0.63–0.89, mean 0.75 | 0.66–0.88, mean 0.73 |
+| held-seen move ids, cross-game (122-chunk set) | 0.997 | 0.997 |
+| identity, within-game rows split | 1.000 | 1.000 |
+| RELATIONAL pair (species x opp active), rows split | 0.957 | 0.967 |
+
+**Verdict: the decoders add nothing measurable; no launch on capacity
+grounds** (pre-registered branch). By elimination the live deficit is
+SUPERVISION COVERAGE: taken-cell-only Q loss at vol_switch_rows -> 0 asks
+for within-switch ranking exactly zero times — no architecture learns from
+zero labels. The supply mechanism (phase-4 anchor) is the load-bearing fix,
+not capacity. The decoder commit stays in-tree unlaunched pending the
+resume decision (resuming the archived lineage requires reverting it — the
+manifest `action_pathway` literal correctly blocks cross-arch loads).
+
+**Instrument lessons, paid for in one afternoon instead of a lineage:**
+(1) on a FIXED batch, train fit is pure memorisation (species-slot frozen
+per row; state features fit it without routing) — held-out is the only
+capacity reading; (2) held-out labels keyed to identity are UNLEARNABLE for
+unseen ids, and randombattle species overlap across games is ~27% (moves
+~79%) — the first dramatic 0.096-vs-0.58 "architecture gap" was exactly
+this artifact; (3) at train loss ~0 the interpolator's held-out behaviour
+is rounding/seed sensitive — ±0.1 r across seeds at n=28 rows; single
+readings are noise; (4) (species x opponent) pairs NEVER recur across
+randombattle games, so cross-game relational probing is structurally
+impossible here — the rows split (hold out half of each game's timesteps)
+is the only relational reading and is an acknowledged lower bound; (5) a
+fresh-init supervised probe can only EXCLUDE capacity explanations — it
+cannot see training-dynamics pathologies, which are what remains.
+
 ## 1. Shapes, compilation, OOM
 
 **Learner batch bucketing killed three runs.** The geometric bucket family
