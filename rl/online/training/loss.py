@@ -59,7 +59,17 @@ def factorised_entropies(
     masked average makes a rare taken-switch row's term inverse-frequency
     amplified. A temperature opposed by live evidence, never a target: per
     axis the equilibrium is pi ∝ exp(A/coef), so real advantages beat it
-    wherever they exist."""
+    wherever they exist.
+
+    Both terms are NORMALISED by their own log(k) (user catch 2026-08-27:
+    raw conditional entropy caps at log k, so a move-taken row with 8
+    legal cells outweighs a 2-switch row ~3x and the 'unit budget' is
+    silently k-weighted). Normalised, each row contributes fraction-of-max
+    in [0, 1], the panels are comparable across modalities, and the
+    effective per-modality temperature is coef/log k — relatively stronger
+    regularisation for SMALL modalities, which is the direction the
+    which-axis needs. Rows with k < 2 are excluded by the caller's masks;
+    the guards here only keep the arithmetic finite on excluded rows."""
     modality_oh = jax.nn.one_hot(
         jnp.asarray(FLAT_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
     )
@@ -71,6 +81,8 @@ def factorised_entropies(
     live = marginal > -1e8
     marginal_probs = jnp.where(live, jnp.exp(marginal), 0.0)
     h_macro = -(marginal_probs * jnp.where(live, marginal, 0.0)).sum(axis=-1)
+    num_live = live.sum(axis=-1)
+    h_macro = h_macro / jnp.log(jnp.maximum(num_live, 2))
 
     macro_taken = jnp.take_along_axis(marginal, taken_modality[..., None], axis=-1)
     taken_cells = legal_mask & (
@@ -81,6 +93,8 @@ def factorised_entropies(
     h_micro_taken = -(
         conditional_probs * jnp.where(taken_cells, log_conditional, 0.0)
     ).sum(axis=-1)
+    taken_count = taken_cells.sum(axis=-1)
+    h_micro_taken = h_micro_taken / jnp.log(jnp.maximum(taken_count, 2))
     return h_macro, h_micro_taken
 
 

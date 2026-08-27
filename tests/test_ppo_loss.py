@@ -207,18 +207,20 @@ class TestFactorisedEntropies:
         np.testing.assert_allclose(float(h_macro_m), float(h_macro_s), atol=1e-6)
         p_move = float(probs[move_cells].sum())
         p_switch = float(probs[switch_cells].sum())
-        # H_joint = H_macro + sum_m pi_m * H(micro|m): the pi_m prefactors
-        # are exactly what the unit-weight per-level form REMOVES.
-        recomposed = (
-            float(h_macro_m)
-            + p_move * float(h_micro_move)
-            + p_switch * float(h_micro_switch)
-        )
+        # The helper returns NORMALISED entropies (fraction of each level's
+        # own log k — the k-weighting catch); un-normalise to state the
+        # bookkeeping identity H_joint = H_macro + sum_m pi_m * H(micro|m),
+        # whose pi_m prefactors are exactly what the unit-weight per-level
+        # form removes.
+        raw_macro = float(h_macro_m) * np.log(2)  # two live modalities
+        raw_move = float(h_micro_move) * np.log(len(move_cells))
+        raw_switch = float(h_micro_switch) * np.log(len(switch_cells))
+        recomposed = raw_macro + p_move * raw_move + p_switch * raw_switch
         np.testing.assert_allclose(recomposed, h_joint, rtol=1e-5)
         # Positive control: with pi_switch < 1 the unit-weight sum genuinely
         # exceeds the joint's weighted one on the switch axis.
         assert p_switch < 1.0
-        assert float(h_micro_switch) > p_switch * float(h_micro_switch)
+        assert raw_switch > p_switch * raw_switch
 
     def test_singleton_and_uniform_edges(self):
         from rl.online.training.loss import factorised_entropies
@@ -231,10 +233,16 @@ class TestFactorisedEntropies:
             log_policy, jnp.asarray(flat[switch_cells[0]]), jnp.asarray(single)
         )
         np.testing.assert_allclose(float(h_micro), 0.0, atol=1e-6)
-        # Uniform within the taken modality: micro entropy = log k.
+        # Uniform within the taken modality: normalised micro entropy = 1
+        # regardless of the modality's size — the k-independence the
+        # normalisation exists to provide.
         uniform_logits = jnp.where(jnp.asarray(np.asarray(legal)), 0.0, -1e9)
         uniform = jax.nn.log_softmax(uniform_logits.astype(jnp.float32))
-        _, h_uni = factorised_entropies(
+        _, h_uni_switch = factorised_entropies(
             uniform, jnp.asarray(flat[switch_cells[0]]), legal
         )
-        np.testing.assert_allclose(float(h_uni), np.log(len(switch_cells)), rtol=1e-5)
+        _, h_uni_move = factorised_entropies(
+            uniform, jnp.asarray(flat[move_cells[0]]), legal
+        )
+        np.testing.assert_allclose(float(h_uni_switch), 1.0, rtol=1e-5)
+        np.testing.assert_allclose(float(h_uni_move), 1.0, rtol=1e-5)
