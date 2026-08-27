@@ -50,10 +50,11 @@ from rl.model.constants import (
     ACTION_GROUP_SLOTS,
     ACTION_GROUP_SPLITS,
     FIELD_TOKEN_TYPES,
-    HISTORY_TOKEN_TYPES,
+    HISTORY_FIELD_TOKEN_TYPES,
     NUM_TOKEN_TYPES,
     PREV_ACTION_TOKEN_TYPES,
     PRIVATE_TOKEN_TYPES,
+    PUBLIC_READ_TOKEN_TYPES,
     PUBLIC_TOKEN_TYPES,
 )
 from rl.model.features import (
@@ -1535,12 +1536,22 @@ class Encoder(nn.Module):
         # critic only, and is not called on the RL path so history_pool
         # holds no RL params (265k dead leaves + their Adam state before
         # 2026-08-24; merge_params drops them from older checkpoints).
-        history_tokens = jnp.concatenate(
-            (history_row_states, history_field_state[None]), axis=0
-        ).astype(self.cfg.dtype)
-        history_valid = jnp.concatenate(
-            (history_row_valid, jnp.ones(1, dtype=jnp.bool_)), axis=0
+        # History row i IS public entity i's diary — Encoder.__call__ has
+        # already re-aligned the two with PUBLIC_ORDER — so it enters as that
+        # entity's 11th attribute token and inherits its entity / pos+side /
+        # group biases. As its own group the 12 rows shared ONE entity_bias
+        # row and ONE HISTORY_SLOT type, which made them mutually
+        # exchangeable and threw the re-alignment away. The field history
+        # state belongs to no entity and stays its own group.
+        public_read_tokens = jnp.concatenate(
+            (public_tokens, history_row_states[:, None].astype(public_tokens.dtype)),
+            axis=1,
         )
+        public_read_mask = jnp.concatenate(
+            (public_token_mask, history_row_valid[:, None]), axis=1
+        )
+        history_field_tokens = history_field_state[None, None].astype(self.cfg.dtype)
+        history_field_valid = jnp.ones((1, 1), dtype=jnp.bool_)
 
         typed_action_valids = tuple(
             output_state_mask[slot_indices]
@@ -1549,29 +1560,30 @@ class Encoder(nn.Module):
         value_tokens = self.value_embeddings_table.astype(self.cfg.dtype)
 
         # The public read: K latents over the flat token set of my own
-        # information set -- 168 entity attribute tokens + field 3 +
-        # prev-action 2 + history 13 -- become the trunk's state rows.
+        # information set -- 12 public x 11 (attributes + that slot's
+        # history state) + 6 private x 8 + field 3 + prev-action 2 +
+        # history field 1 -- become the trunk's state rows.
         public_latents = self.latent_input_read(
             (
-                public_tokens,
+                public_read_tokens,
                 private_tokens,
                 field_embeddings[None],
                 prev_action_tokens[None],
-                history_tokens[None],
+                history_field_tokens,
             ),
             (
-                public_token_mask,
+                public_read_mask,
                 private_token_mask,
                 field_valid[None],
                 prev_action_doubles_mask[None],
-                history_valid[None],
+                history_field_valid,
             ),
             (
-                PUBLIC_TOKEN_TYPES,
+                PUBLIC_READ_TOKEN_TYPES,
                 PRIVATE_TOKEN_TYPES,
                 FIELD_TOKEN_TYPES,
                 PREV_ACTION_TOKEN_TYPES,
-                HISTORY_TOKEN_TYPES,
+                HISTORY_FIELD_TOKEN_TYPES,
             ),
             (public_bias, private_bias, None, None, None),
         )

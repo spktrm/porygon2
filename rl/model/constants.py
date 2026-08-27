@@ -96,21 +96,29 @@ PRIVATE_TOKEN_TYPES = np.array(
 )
 FIELD_TOKEN_TYPES = np.array(3 * [TokenType.FIELD], dtype=np.int32)
 PREV_ACTION_TOKEN_TYPES = np.array(2 * [TokenType.PREV_ACTION], dtype=np.int32)
-HISTORY_TOKEN_TYPES = np.array(
-    NUM_PUBLIC_SLOTS * [TokenType.HISTORY_SLOT] + [TokenType.HISTORY_FIELD],
-    dtype=np.int32,
+# The per-slot recurrent history state is an ATTRIBUTE of the entity it
+# describes, so it rides that entity's token group (2026-08-28). As its own
+# group all 12 slot rows shared one entity_bias row and one HISTORY_SLOT type
+# — mutually exchangeable — which discarded the public_order re-alignment
+# Encoder.__call__ performs before the read. Folded in, history row i
+# inherits public entity i's entity/pos/side/group biases for free.
+PUBLIC_READ_TOKEN_TYPES = np.concatenate(
+    (PUBLIC_TOKEN_TYPES, np.array([TokenType.HISTORY_SLOT], dtype=np.int32))
 )
+# The field history state belongs to no entity and stays its own group.
+HISTORY_FIELD_TOKEN_TYPES = np.array([TokenType.HISTORY_FIELD], dtype=np.int32)
 
 # The flat input token count the latent read cross-attends, ASSERTED rather
-# than commented: 12 public x 10 + 6 private x 8 + field 3 + prev-action 2
-# + history 13 = 186. A group changing width silently changes the read's
-# key count, and the arithmetic was previously only a comment in config.py.
+# than commented: 12 public x 11 (10 attributes + that slot's history state)
+# + 6 private x 8 + field 3 + prev-action 2 + history field 1 = 186. A group
+# changing width silently changes the read's key count, and the arithmetic
+# was previously only a comment in config.py.
 NUM_INPUT_TOKENS = (
-    NUM_PUBLIC_SLOTS * len(PUBLIC_TOKEN_TYPES)
+    NUM_PUBLIC_SLOTS * len(PUBLIC_READ_TOKEN_TYPES)
     + 6 * len(PRIVATE_TOKEN_TYPES)
     + len(FIELD_TOKEN_TYPES)
     + len(PREV_ACTION_TOKEN_TYPES)
-    + len(HISTORY_TOKEN_TYPES)
+    + len(HISTORY_FIELD_TOKEN_TYPES)
 )
 assert NUM_INPUT_TOKENS == 186, NUM_INPUT_TOKENS
 

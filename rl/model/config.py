@@ -116,9 +116,10 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.intra_entity_pool.init_residual_scale = 1.0
 
     # Perceiver-style latent input read (2026-08-21): K learned latents
-    # cross-attend ONE flat token set -- 168 current-board attribute
-    # tokens (12 public x 10 + 6 private x 8) + field 3 + prev-action 2 +
-    # raw history 13 = 186 keys -- and become the trunk's state rows. It
+    # cross-attend ONE flat token set -- 12 public x 11 (10 attributes plus
+    # that slot's recurrent history state, folded in 2026-08-28) + 6 private
+    # x 8 + field 3 + prev-action 2 + history field 1 = 186 keys -- and
+    # become the trunk's state rows. It
     # replaces the cross-entity pool + per-entity pooling + per-substream
     # input MLPs on that path: the board no longer collapses to one
     # vector per entity before the trunk sees it, and substream identity
