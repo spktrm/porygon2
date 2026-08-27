@@ -76,9 +76,7 @@ class Porygon2PlayerModel(nn.Module):
         (heads.compose_action_grid: log_policy(a) = composed_macro[m(a)] +
         centred micro) this marginal IS the composed macro log-softmax —
         recovered here by marginalisation so neither the head signature nor
-        the actor payload has to carry the full distribution. Written once:
-        the modality-entropy metric and the factorised loss's
-        `macro_log_prob` both read it."""
+        the actor payload has to carry the full distribution."""
         modality_oh = jax.nn.one_hot(
             FLAT_MODALITY_MASK,
             NUM_MODALITY_FEATURES,
@@ -192,9 +190,6 @@ class Porygon2PlayerModel(nn.Module):
         modality_log_probs, valid_per_modality = self._modality_log_marginal(
             metrics.log_policy, scores.flat_valid
         )
-        taken_modality = jnp.take(
-            jnp.asarray(FLAT_MODALITY_MASK), action_index, axis=-1
-        )
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
@@ -207,7 +202,6 @@ class Porygon2PlayerModel(nn.Module):
             normalized_modality_entropy=self._calculate_entropy_metrics(
                 modality_log_probs, valid_per_modality
             ),
-            macro_log_prob=jnp.take(modality_log_probs, taken_modality, axis=-1),
         )
 
     def _apply_choice_collision(self, valid_mask: jax.Array, action_index: jax.Array):

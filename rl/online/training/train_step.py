@@ -25,7 +25,6 @@ from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
     factorised_entropies,
-    factorised_log_probs,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
@@ -618,57 +617,32 @@ def train_step(
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # FACTORISED policy update (2026-08-27): the NashPG PPO surrogate,
-        # split along the whether/which axes. log pi(a) = log pi_macro(m(a))
-        # + log pi_micro(a|m) is exact (heads.compose_action_grid), and the
-        # composed single-band clip couples the levels — macro drift between
-        # snaps consumes trust region the micro level then cannot use, which
-        # lands hardest on rare-modality rows (the which-switch gradient the
-        # collapse history shows is the scarce resource). Two ratios, two
-        # clips, SAME batch-normalised v-trace advantage on both (the level
-        # score functions sum to the joint PG — only the trust-region
-        # geometry changes). Row masks: the macro bracket needs >= 2 live
-        # modalities, the micro bracket >= 2 legal cells in the TAKEN
-        # modality (a singleton conditional has ratio exactly 1).
-        # The behaviour side pairs the actor-stored macro_log_prob with
-        # mu_micro = mu_joint - mu_macro; the learner side re-derives its
-        # marginal from log_policy by the composition identity.
+        # JOINT PPO surrogate (2026-08-28, reverting the 2026-08-27
+        # per-level split): one pi/mu ratio on the taken action, one clip.
+        # The factorised-PPO lineage answered its own gate — two trust
+        # regions did not slow the collapse (type_scale_switch trained
+        # NEGATIVE, prob_switch 0.131 -> 0.02 by 77k) — and the 77638 BR
+        # probe located the deficit in evidence supply, not trust-region
+        # geometry. The per-level ENTROPY terms below STAY: they are the
+        # axis handles the entropy-floor controllers act on, and their row
+        # masks (macro >= 2 live modalities, micro >= 2 legal cells in the
+        # taken modality) are theirs now.
         learner_log_policy = learner_action_head.log_policy
         pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
         pi_learner = pi_learner / jnp.maximum(
             pi_learner.sum(axis=-1, keepdims=True), 1e-8
         )
 
-        learner_macro_log_prob, learner_micro_log_prob = factorised_log_probs(
-            learner_log_policy,
-            learner_log_prob,
-            axis.taken_modality,
-            flat_action_mask,
-        )
-        mu_macro_log_prob = player_actor_action_head.macro_log_prob.astype(jnp.float32)
-        mu_micro_log_prob = (
-            player_actor_log_prob.astype(jnp.float32) - mu_macro_log_prob
-        )
-        ratio_macro = jnp.exp(learner_macro_log_prob - mu_macro_log_prob)
-        ratio_micro = jnp.exp(learner_micro_log_prob - mu_micro_log_prob)
         macro_valid = policy_mask & (axis.num_legal_modalities >= 2)
         micro_valid = policy_mask & (axis.taken_modality_count >= 2)
 
-        loss_pg_macro = policy_gradient_loss(
-            policy_ratios=ratio_macro,
+        loss_pg = policy_gradient_loss(
+            policy_ratios=learner_actor_ratio,
             advantages=pg_adv_norm,
-            valid=macro_valid,
+            valid=policy_mask,
             threshold=config.player_ppo_clip,
             objective=config.player_pg_objective,
         )
-        loss_pg_micro = policy_gradient_loss(
-            policy_ratios=ratio_micro,
-            advantages=pg_adv_norm,
-            valid=micro_valid,
-            threshold=config.player_ppo_clip,
-            objective=config.player_pg_objective,
-        )
-        loss_pg = loss_pg_macro + loss_pg_micro
         # Per-level entropy (2026-08-27, the Oct–Nov 2025 form): unit-weight
         # H(macro) + H(micro | taken modality), each masked-averaged over
         # its OWN row set. The joint entropy this replaces weighted the
@@ -721,27 +695,12 @@ def train_step(
 
         pg_logs = dict(
             player_loss_pg=loss_pg,
-            player_loss_pg_macro=loss_pg_macro,
-            player_loss_pg_micro=loss_pg_micro,
             player_loss_entropy=loss_entropy,
             player_entropy_macro=entropy_macro,
             player_entropy_micro_taken=entropy_micro_taken,
-            # Per-level clip occupancy: the macro-consumes-the-band
-            # hypothesis is directly observable here — macro pinned high
-            # with micro starved was invisible under the composed ratio.
             player_ppo_clip_frac=clip_fraction(
                 policy_ratios=learner_actor_ratio,
                 valid=policy_mask,
-                clip_ppo=config.player_ppo_clip,
-            ),
-            player_ppo_clip_frac_macro=clip_fraction(
-                policy_ratios=ratio_macro,
-                valid=macro_valid,
-                clip_ppo=config.player_ppo_clip,
-            ),
-            player_ppo_clip_frac_micro=clip_fraction(
-                policy_ratios=ratio_micro,
-                valid=micro_valid,
                 clip_ppo=config.player_ppo_clip,
             ),
             player_policy_prob_switch=policy_prob_switch,
