@@ -524,6 +524,43 @@ shape). Also on the record twice now: pick the abort metric from the
 mechanism you fear — the entropy>0.85 guard watched the wrong direction
 while entropy fell to 0.025.
 
+## Removal + addition ledger — 2026-08-27 factorised objective, anchor retired
+
+**REMOVED: the support-anchor family** (`targets.support_kl`/`support_target`/
+`centre_within_modality`, `player_support_{coef,temperature,adv_temperature}`,
+`loss_support`, all `player_support_*` panels). Four phases, one through-line:
+every mass-restoring variant either ERASED within-modality discrimination
+(T>1's mode-covering target + the snap ratchet: type_scale_switch 0.0122 →
+0.0003 in phase 1) or pointed the anchor DOWN (raw tilt, phase 3: the
+modality-level Q^π sign inverted force_switch by 223k) or ratcheted down
+against the PG (centred tilt + T 1.2, phase 4: ask 0.0131 → 0.0031 across
+the 230k snap) — and behaviour-side injection teaches the MEAN switch's
+losing value, so the modality-level lesson each era wrote was "switching is
+bad", correct for the policy the injection created. Revert handles: the
+phase commits and this file's 2026-08-26/27 ledgers.
+
+**ADDED: the factorised policy objective** — the Oct–Nov 2025
+training-signal structure rebuilt natively on the composed head, plus the
+same split pushed into the PG itself:
+
+| piece | what | why |
+|---|---|---|
+| `loss.factorised_log_probs` + actor-stored `PlayerPolicyHeadOutput.macro_log_prob` | exact level split via the composition identity (modality logsumexp of log_policy == composed_macro; micro = joint − macro); μ_macro stored at act time, μ_micro derived | per-level PPO: two ratios, two clips, SAME normalised v-trace advantage (level score functions sum to the joint PG — only trust-region geometry changes). The composed single band let macro drift consume trust region the micro level needed on exactly the rare-modality rows; `player_ppo_clip_frac_{macro,micro}` makes that observable |
+| `loss.factorised_entropies` | unit-weight H(macro) + H(micro\|taken modality), each masked-averaged over its OWN row set (macro: ≥2 live modalities; micro: taken modality ≥2 legal cells), each NORMALISED by its own log k (raw H caps at log k — an 8-cell move row outweighed a 2-switch row ~3x) | the joint H decomposes as H(macro) + Σ_m π_m·H(micro\|m): its which-axis pressure died with modality mass and one budget was payable wherever cheapest. Unit weights = per-axis budgets; masked average = inverse-frequency amplification; normalisation = k-independent temperature coef/log k. A temperature evidence beats (eq. π ∝ exp(A/coef) per axis), never a target — the injection post-mortem's law |
+
+Magnet stays joint (factorised magnet is the recorded follow-up). Fresh
+lineage from step 0 (6ta9hmp6 archived at 243.5k,
+`ckpts/archive/gen9_phase4_6ta9hmp6_final_20260827`): the which-axis terms
+act on taken-switch rows, so the clean test is organic early switching
+feeding them — the Oct–Nov replication read. Pre-registered acceptance
+(judged against 6ta9hmp6's own early curve): type_scale_switch ≥0.01
+through the 13k wire and NOT unwinding ≥50% by 33k (6ta9hmp6 lost 53%);
+wr vs SimpleHeuristic ≥0.167 @30k; offline within-switch spread read at
+~20k. Abort: head param rms >0.07; clip_frac_micro pinned ~1; entropy
+panels cliffing. Fallback ladder: per-level clip epsilons, factorised
+magnet, then the engine-fork counterfactual-labels workstream (scoped
+independently — it is the evidence fix regardless).
+
 ## Probe ledger — 2026-08-27 capacity falsification (separation probe)
 
 The within-switch flatness measured on the live critic (within-row Q std
