@@ -96,11 +96,19 @@ _TARGET_ENTITY_SLOTS = {
 _OTHER = ModalityEnum.MODALITY_ENUM__OTHER
 
 
-def cell_identities(env) -> np.ndarray:
+def cell_identities(env, mode: str = "identity") -> np.ndarray:
     """(T, B, A*A) int64: the candidate identity behind each cell — species
     id for switch cells (battle: tgt reserve; preview: src reserve) and
     entity-backed target cells, move id for regular move cells; -1 where no
-    identity applies (wildcard, pass, structural)."""
+    identity applies (wildcard, pass, structural).
+
+    mode "pair" keys every identity-carrying cell by (candidate id,
+    OPPONENT ACTIVE species) instead: the label then changes when the
+    opponent changes, so a lookup of the candidate alone cannot fit it —
+    only RELATIONAL routing (candidate x opponent, the matchup shape the
+    deployment task actually needs) generalises. Lookup labels measured
+    2026-08-27: both architectures ~0.73-0.75 held-seen — lookup does not
+    discriminate them."""
     priv_species = np.asarray(env.private_team)[..., _SPECIES_PRIV]
     rev_species = np.asarray(env.revealed_team)[..., _SPECIES_REV]
     move_ids = np.asarray(env.my_moveset)[..., _MOVE_ID]
@@ -121,6 +129,11 @@ def cell_identities(env) -> np.ndarray:
     for slot, rev_row in _TARGET_ENTITY_SLOTS.items():
         cells = (_FLAT == _OTHER) & (_CELL_TGT == slot)
         ids[..., cells] = rev_species[..., rev_row : rev_row + 1]
+    if mode == "pair":
+        # Opponent side is revealed rows 6-11, actives first — row 6 is
+        # the opponent's active. 8192 clears every id enum's range.
+        opp_active = rev_species[..., 6:7]
+        ids = np.where(ids >= 0, ids * 8192 + opp_active, -1)
     return ids
 
 
@@ -144,12 +157,12 @@ GROUPS = (
 )
 
 
-def build_labels(env, seed: int, label_scale: float):
+def build_labels(env, seed: int, label_scale: float, mode: str = "identity"):
     """Per-cell labels y and the eval mask: identity-keyed z, centred
     WITHIN each group over the row's legal identity-carrying cells; rows
     contribute a group only when it has >= 2 such cells."""
     flat_mask = np.asarray(env.action_mask).reshape(*env.done.shape, -1)
-    ids = cell_identities(env)
+    ids = cell_identities(env, mode)
     z = hash_normal(ids, seed)
     y = np.zeros_like(z, dtype=np.float32)
     eval_mask = np.zeros_like(flat_mask, dtype=bool)
@@ -161,7 +174,7 @@ def build_labels(env, seed: int, label_scale: float):
         mean = np.where(cells, z, 0.0).sum(-1, keepdims=True) / np.maximum(count, 1)
         y = np.where(cells, (z - mean) * label_scale, y)
         eval_mask |= cells
-    return jnp.asarray(y), jnp.asarray(eval_mask)
+    return jnp.asarray(y), jnp.asarray(eval_mask), ids
 
 
 def make_apply(net):
@@ -177,12 +190,39 @@ def actor_input_of(batch):
     )
 
 
-def group_stats(adv: np.ndarray, y: np.ndarray, eval_mask: np.ndarray):
-    """Per group: mean within-row Pearson r and pred-std/label-std over
-    rows with >= 3 eval cells."""
+def group_masks(eval_mask: np.ndarray, ids: np.ndarray, seen_ids=None):
+    """Per-group eval-cell masks; with `seen_ids` (a {group: id-set}),
+    restrict to cells whose identity appeared on the TRAINING batch's eval
+    cells of the same group. Identity spaces are per-group (species vs move
+    ids share integers), so the restriction must be per-group too.
+
+    Why the restriction exists (measured 2026-08-27): held-out labels are
+    hashes of identity, so a species never seen in training is UNLEARNABLE
+    by any architecture — and randombattle teams barely overlap across
+    games (seen-frac 0.267 for switch cells vs 0.793 for move cells on the
+    12-game cache), so unrestricted held-out r is overlap-capped and reads
+    as an architecture gap that is actually a data artefact."""
     out = {}
     for name, group_cells in GROUPS:
         cells = eval_mask & group_cells
+        if seen_ids is not None:
+            cells = cells & np.isin(ids, sorted(seen_ids[name]))
+        out[name] = cells
+    return out
+
+
+def seen_id_sets(eval_mask: np.ndarray, ids: np.ndarray):
+    return {
+        name: set(np.unique(ids[eval_mask & group_cells]))
+        for name, group_cells in GROUPS
+    }
+
+
+def group_stats(adv: np.ndarray, y: np.ndarray, masks: dict[str, np.ndarray]):
+    """Per group: mean within-row Pearson r and pred-std/label-std over
+    rows with >= 3 eval cells."""
+    out = {}
+    for name, cells in masks.items():
         report_rs, report_ratios = [], []
         t_idx, b_idx = np.nonzero(cells.sum(-1) >= 3)
         for t, b in zip(t_idx, b_idx):
@@ -208,7 +248,19 @@ def group_stats(adv: np.ndarray, y: np.ndarray, eval_mask: np.ndarray):
     return out
 
 
-def run_probe_b(net, variables, batch, held, steps, lr, eval_every, seed, label_scale):
+def run_probe_b(
+    net,
+    variables,
+    batch,
+    held,
+    steps,
+    lr,
+    eval_every,
+    seed,
+    label_scale,
+    mode,
+    split="batch",
+):
     """The gate metric is the HELD-OUT read. On a fixed training batch the
     species<->slot assignment is frozen per row, so a full-param overfit can
     memorise per-row-per-slot values through state features without ever
@@ -220,13 +272,41 @@ def run_probe_b(net, variables, batch, held, steps, lr, eval_every, seed, label_
     apply = make_apply(net)
     actor_input = actor_input_of(batch)
     actor_output = batch.player_transitions.agent_output.actor_output
-    y, eval_mask = build_labels(batch.player_transitions.env_output, seed, label_scale)
+    y, eval_mask, train_ids = build_labels(
+        batch.player_transitions.env_output, seed, label_scale, mode
+    )
     held_input = actor_input_of(held)
     held_output = held.player_transitions.agent_output.actor_output
-    held_y, held_eval = build_labels(
-        held.player_transitions.env_output, seed, label_scale
+    held_y, held_eval, held_ids = build_labels(
+        held.player_transitions.env_output, seed, label_scale, mode
     )
-    weight = eval_mask.astype(jnp.float32)
+    if split == "rows":
+        # Row-level split: hold out a random half of the TRAIN batch's own
+        # rows instead of a disjoint game set. (species x opponent-active)
+        # pairs essentially never recur across different games' team
+        # draws, so a game-level split leaves the pair mode with no
+        # scoreable held-seen cells at all; within a game the same matchup
+        # persists across evolving states (hp, field, reveals), which is
+        # the weakest generalisation that still requires reading the pair.
+        # Caveat on record: temporally-adjacent states are similar, so
+        # this bar is easier than cross-game — read it as a lower bound.
+        row_rng = np.random.default_rng(seed + 7919)
+        train_rows = (row_rng.random(np.asarray(eval_mask).shape[:2]) < 0.5)[..., None]
+        eval_np = np.asarray(eval_mask)
+        train_eval = eval_np & train_rows
+        held_eval_np = eval_np & ~train_rows
+        train_masks = group_masks(train_eval, train_ids)
+        seen = seen_id_sets(train_eval, train_ids)
+        held_masks = group_masks(held_eval_np, train_ids)
+        held_seen_masks = group_masks(held_eval_np, train_ids, seen_ids=seen)
+        held_input, held_output, held_y = actor_input, actor_output, y
+        weight = jnp.asarray(train_eval).astype(jnp.float32)
+    else:
+        train_masks = group_masks(np.asarray(eval_mask), train_ids)
+        seen = seen_id_sets(np.asarray(eval_mask), train_ids)
+        held_masks = group_masks(np.asarray(held_eval), held_ids)
+        held_seen_masks = group_masks(np.asarray(held_eval), held_ids, seen_ids=seen)
+        weight = eval_mask.astype(jnp.float32)
     denom = jnp.maximum(weight.sum(), 1.0)
 
     def loss_fn(params):
@@ -244,17 +324,15 @@ def run_probe_b(net, variables, batch, held, steps, lr, eval_every, seed, label_
         return optax.apply_updates(params, updates), opt_state, loss
 
     def evaluate(params, step_no, loss):
-        splits = {}
-        for split, (inp, outp, labels, mask) in {
-            "train": (actor_input, actor_output, y, eval_mask),
-            "held": (held_input, held_output, held_y, held_eval),
-        }.items():
-            pred = apply(params, inp, outp, HeadParams())
-            splits[split] = group_stats(
-                np.asarray(pred.advantage, dtype=np.float32),
-                np.asarray(labels),
-                np.asarray(mask),
-            )
+        train_pred = apply(params, actor_input, actor_output, HeadParams())
+        held_pred = apply(params, held_input, held_output, HeadParams())
+        train_adv = np.asarray(train_pred.advantage, dtype=np.float32)
+        held_adv = np.asarray(held_pred.advantage, dtype=np.float32)
+        splits = {
+            "train": group_stats(train_adv, np.asarray(y), train_masks),
+            "held": group_stats(held_adv, np.asarray(held_y), held_masks),
+            "held-seen": group_stats(held_adv, np.asarray(held_y), held_seen_masks),
+        }
         parts = [f"step {step_no:4d} loss {float(loss):.5f}"]
         for split, stats in splits.items():
             for name, (rows, pearson, ratio) in stats.items():
@@ -274,13 +352,19 @@ def run_probe_b(net, variables, batch, held, steps, lr, eval_every, seed, label_
     # AND std ratio >= 0.8 at any eval. Printed, not enforced — the
     # decision table (baseline fails / new arch passes -> launch) lives
     # with the plan; this line just makes the reading unambiguous.
+    # Pre-registered gate, corrected 2026-08-27 to the SEEN-identity slice:
+    # held-out switch-group r >= 0.9 AND std ratio >= 0.8 at any eval,
+    # scored only on cells whose species appeared in training (unseen
+    # hashes are unlearnable by any architecture — see group_masks).
     scored = [
-        (s["held"]["switch"][1], s["held"]["switch"][2])
+        (s["held-seen"]["switch"][1], s["held-seen"]["switch"][2])
         for s in history
-        if s["held"]["switch"][0] > 0
+        if s["held-seen"]["switch"][0] > 0
     ]
     if not scored:
-        print("probe B gate: no held-out switch rows — no reading", flush=True)
+        print(
+            "probe B gate: no seen-identity held switch rows — no reading", flush=True
+        )
         return history
     best_r, best_ratio = max(scored, key=lambda pair: pair[0])
     if best_r >= 0.9 and best_ratio >= 0.8:
@@ -288,7 +372,7 @@ def run_probe_b(net, variables, batch, held, steps, lr, eval_every, seed, label_
     else:
         verdict = "FAIL"
     print(
-        f"probe B gate (held/switch, best eval): r={best_r:.3f} "
+        f"probe B gate (held-seen/switch, best eval): r={best_r:.3f} "
         f"sr={best_ratio:.3f} -> {verdict}",
         flush=True,
     )
@@ -387,6 +471,10 @@ def main(argv=None):
     parser.add_argument("--eval-every", type=int, default=100)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--label-scale", type=float, default=0.2)
+    parser.add_argument(
+        "--label-mode", choices=("identity", "pair"), default="identity"
+    )
+    parser.add_argument("--split", choices=("batch", "rows"), default="batch")
     parser.add_argument("--out", default=None, help="pickle the eval history here")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
@@ -418,6 +506,8 @@ def main(argv=None):
             args.eval_every,
             args.seed,
             args.label_scale,
+            args.label_mode,
+            args.split,
         )
     if args.out and history is not None:
         with open(args.out, "wb") as handle:
