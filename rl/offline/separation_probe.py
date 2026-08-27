@@ -51,7 +51,9 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
+    ALLY_SWITCH_INDICES,
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     FLAT_MODALITY_MASK,
@@ -62,6 +64,7 @@ from rl.environment.data import (
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
+    EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
     MovesetFeature,
 )
@@ -72,6 +75,7 @@ from rl.model.player_model import get_player_model
 from rl.model.utils import open_zero_init_paths
 from rl.offline import harness
 from rl.offline.overfit_probe import pick_batches, trainable_rows
+from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +88,8 @@ _MOVE_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__MOVE
 _SPECIES_PRIV = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
 _SPECIES_REV = EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
 _MOVE_ID = MovesetFeature.MOVESET_FEATURE__MOVE_ID
+_HP_RATIO = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
+_FAINTED = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
 # Entity-backed target cells: ally targets key revealed rows 0/1, enemy
 # targets revealed rows 6/7; the learned TARGET_*/PASS slots carry no
 # entity and are excluded from identity labels.
@@ -460,11 +466,220 @@ def fresh_variables(net, batch, seed):
     )
 
 
+def _ridge_r(features: np.ndarray, labels: np.ndarray, train: np.ndarray, alpha=1.0):
+    """Held-out Pearson r of a ridge readout. Train fit is memorisation on a
+    fixed batch (2026-08-27 probe lesson 1), so only held-out is reported."""
+    held = ~train
+    if train.sum() < 32 or held.sum() < 32:
+        return float("nan"), int(held.sum())
+    x_train = features[train]
+    mean = x_train.mean(axis=0)
+    scale = x_train.std(axis=0) + 1e-6
+    x_train = (x_train - mean) / scale
+    x_held = (features[held] - mean) / scale
+    y_train = labels[train] - labels[train].mean()
+    gram = x_train.T @ x_train + alpha * np.eye(x_train.shape[1], dtype=np.float64)
+    weights = np.linalg.solve(gram, x_train.T @ y_train)
+    pred = x_held @ weights
+    y_held = labels[held]
+    if pred.std() < 1e-9 or y_held.std() < 1e-9:
+        return 0.0, int(held.sum())
+    return float(np.corrcoef(pred, y_held)[0, 1]), int(held.sum())
+
+
+def _encode_fn(module, actor_input):
+    return module.encoder(
+        actor_input.env, actor_input.packed_history, actor_input.history
+    )
+
+
+def _slot_condition_rows(env, batch_index: int):
+    """Per (t, b) and reserve slot j: the matched public row, that row's hp
+    ratio and fainted flag, and whether switching to j is legal.
+
+    The match is by SPECIES, which is a unique key across a team in
+    gen9randombattle. Ambiguous or absent matches are dropped — the probe
+    measures routing, not the matcher.
+    """
+    private = np.asarray(env.private_team)
+    revealed = np.asarray(env.revealed_team)
+    public = np.asarray(env.public_team)
+    action_mask = np.asarray(env.action_mask)
+    num_t = private.shape[0]
+
+    rows = []
+    for t in range(num_t):
+        priv_species = private[t, batch_index, :, _SPECIES_PRIV]
+        pub_species = revealed[t, batch_index, :6, _SPECIES_REV]
+        equal = priv_species[:, None] == pub_species[None, :]
+        matched = equal.sum(axis=1) == 1
+        public_row = equal.argmax(axis=1)
+        for j in range(6):
+            if not matched[j]:
+                continue
+            row = public[t, batch_index, public_row[j]]
+            rows.append(
+                dict(
+                    t=t,
+                    j=j,
+                    hp=float(row[_HP_RATIO]) / MAX_RATIO_TOKEN,
+                    fainted=float(row[_FAINTED]),
+                    legal=bool(
+                        action_mask[t, batch_index, :, RESERVE_ENTITY_INDICES[j]].any()
+                    ),
+                )
+            )
+    return rows
+
+
+def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float):
+    """Does a switch candidate's CURRENT condition reach its RESERVE_j action
+    embedding?
+
+    `EntityPrivateNodeFeature` carries no hp / status / fainted / boosts, so
+    RESERVE_j's warm start is a static set descriptor and the condition can
+    only arrive through the trunk, retrieved from the candidate's PUBLIC row.
+    This measures whether it does.
+
+    Three readouts, all ridge on the same trunk, so the comparison is of
+    ROUTING and not of readout capacity:
+
+      test     RESERVE_j embedding    -> candidate j's hp / fainted
+      control  ALLY_1_SWITCH, ENEMY_1_TARGET -> their OWN mon's hp / fainted
+               (slots warm-started from an entity whose tokens include
+               HP_RATIO, so the data is local — the positive control that
+               proves the probe can read a condition at all)
+      floor    RESERVE_j embedding    -> the same labels, shuffled
+
+    Held out by CHUNK, so train and held rows come from different games. The
+    labels are continuous / binary rather than identity hashes, so unlike the
+    species probe a cross-game split is valid here (2026-08-27 lesson 2).
+    """
+    apply_encoder = jax.jit(
+        jax.vmap(
+            lambda variables, actor_input: net.apply(
+                variables, actor_input, method=_encode_fn
+            ),
+            in_axes=(None, 1),
+            out_axes=1,
+        )
+    )
+    dev_variables = jax.device_put(variables)
+
+    reserve = {"features": [], "hp": [], "fainted": [], "legal": [], "chunk": []}
+    controls = {
+        "ally_1_switch": (int(ALLY_SWITCH_INDICES[0]), 0),
+        "enemy_1_target": (int(ENEMY_TARGET_INDICES[0]), 6),
+    }
+    control_rows = {
+        name: {"features": [], "hp": [], "fainted": [], "chunk": []}
+        for name in controls
+    }
+
+    for start in range(0, len(chunks), batch_size):
+        group = chunks[start : start + batch_size]
+        stacked = stack_batch(group)
+        actor_input = actor_input_of(stacked)
+        action_embeddings, _ = apply_encoder(dev_variables, actor_input)
+        action_embeddings = np.asarray(action_embeddings, dtype=np.float32)
+        env = stacked.player_transitions.env_output
+        public = np.asarray(env.public_team)
+        for b in range(len(group)):
+            chunk_id = start + b
+            for entry in _slot_condition_rows(env, b):
+                slot = int(RESERVE_ENTITY_INDICES[entry["j"]])
+                reserve["features"].append(action_embeddings[entry["t"], b, slot])
+                reserve["hp"].append(entry["hp"])
+                reserve["fainted"].append(entry["fainted"])
+                reserve["legal"].append(entry["legal"])
+                reserve["chunk"].append(chunk_id)
+            for name, (slot, public_row) in controls.items():
+                for t in range(action_embeddings.shape[0]):
+                    row = public[t, b, public_row]
+                    control_rows[name]["features"].append(action_embeddings[t, b, slot])
+                    control_rows[name]["hp"].append(
+                        float(row[_HP_RATIO]) / MAX_RATIO_TOKEN
+                    )
+                    control_rows[name]["fainted"].append(float(row[_FAINTED]))
+                    control_rows[name]["chunk"].append(chunk_id)
+
+    rng = np.random.default_rng(seed)
+    held_chunks = set(
+        rng.choice(
+            np.arange(len(chunks)), size=max(1, len(chunks) // 3), replace=False
+        ).tolist()
+    )
+
+    readouts = {
+        "RESERVE_j": reserve,
+        "ally_1_switch (ctl)": control_rows["ally_1_switch"],
+        "enemy_1_target (ctl)": control_rows["enemy_1_target"],
+    }
+    for entry in readouts.values():
+        for key, value in list(entry.items()):
+            entry[key] = np.asarray(value)
+        entry["alive"] = entry["hp"] > 0.0
+
+    print("\n=== probe C: does RESERVE_j carry the candidate's condition? ===")
+    print(
+        "Subsets are matched on the TARGET mon: an unmatched control reads the\n"
+        "alive/dead contrast rather than the condition. 'legal' rows are alive by\n"
+        "construction, so `fainted` has no variance there and its r is vacuous —\n"
+        "read the y-std column before reading any r.\n"
+    )
+    header = (
+        f"{'readout':<22} {'subset':<9} {'label':<8} "
+        f"{'held r':>7} {'y std':>7} {'n_held':>7}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    results = {}
+    for name, entry in readouts.items():
+        subsets = {
+            "all": np.ones(len(entry["hp"]), dtype=bool),
+            "alive": entry["alive"],
+        }
+        if "legal" in entry:
+            subsets["legal"] = entry["legal"]
+        for subset_name, subset in subsets.items():
+            if subset.sum() < 128:
+                continue
+            train = np.array(
+                [c not in held_chunks for c in entry["chunk"][subset]], dtype=bool
+            )
+            for label_name in ("hp", "fainted"):
+                labels = entry[label_name][subset].astype(np.float64)
+                value, n_held = _ridge_r(
+                    entry["features"][subset].astype(np.float64), labels, train, alpha
+                )
+                held_std = labels[~train].std() if (~train).any() else float("nan")
+                print(
+                    f"{name:<22} {subset_name:<9} {label_name:<8} "
+                    f"{value:>7.3f} {held_std:>7.3f} {n_held:>7}"
+                )
+                results[f"{name}/{subset_name}/{label_name}"] = value
+        train = np.array([c not in held_chunks for c in entry["chunk"]], dtype=bool)
+        shuffled = entry["hp"][rng.permutation(len(entry["hp"]))].astype(np.float64)
+        value, n_held = _ridge_r(
+            entry["features"].astype(np.float64), shuffled, train, alpha
+        )
+        print(
+            f"{name:<22} {'shuffled':<9} {'hp':<8} {value:>7.3f} "
+            f"{shuffled[~train].std():>7.3f} {n_held:>7}"
+        )
+        results[f"{name}/shuffled/hp"] = value
+    return results
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--games-pkl", default="runtime/discrim_sides_ckpt224773.pkl")
     parser.add_argument("--ckpt", default=None, help="trained params; default fresh")
-    parser.add_argument("--probe", choices=("a", "b", "both"), default="both")
+    parser.add_argument("--probe", choices=("a", "b", "c", "both"), default="both")
+    parser.add_argument(
+        "--ridge-alpha", type=float, default=1.0, help="probe C ridge penalty"
+    )
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -491,6 +706,10 @@ def main(argv=None):
         opened = open_zero_init_paths(variables, ("advantage_head",), seed=args.seed)
         source = "fresh init (advantage head opened for probe A)"
     print(f"params: {source}", flush=True)
+
+    if args.probe == "c":
+        run_probe_c(net, variables, chunks, args.batch, args.seed, args.ridge_alpha)
+        return
 
     if args.probe in ("a", "both"):
         run_probe_a(net, opened, batch, args.seed)
