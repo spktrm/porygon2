@@ -238,11 +238,16 @@ def create_train_state(
     return player_train_state, builder_train_state
 
 
-def _ckpt_root(learner_config: Porygon2LearnerConfig) -> str:
-    """Root directory for this process's checkpoints. Flat: one training
-    run means one resumable checkpoint tree, with no namespacing needed to
-    keep two from colliding."""
-    return f"./ckpts/gen{learner_config.generation}/"
+def ckpt_root(learner_config: Porygon2LearnerConfig) -> str:
+    """Root directory for this process's checkpoints. One training run
+    means one resumable checkpoint tree; a child run (ckpt_subdir set,
+    e.g. a best-response run) gets its own full subtree under the same
+    generation root — invisible to the parent's most-recent scan, which
+    is non-recursive by design."""
+    root = f"./ckpts/gen{learner_config.generation}/"
+    if learner_config.ckpt_subdir is not None:
+        root = os.path.join(root, learner_config.ckpt_subdir)
+    return root
 
 
 def save_train_state_locally(
@@ -254,7 +259,7 @@ def save_train_state_locally(
 ):
     save_path = os.path.abspath(
         os.path.join(
-            _ckpt_root(learner_config),
+            ckpt_root(learner_config),
             f"ckpt_{player_state.step_count:08}",
         )
     )
@@ -346,7 +351,7 @@ def write_checkpoint_components(
 
 def _get_checkpoint_path(learner_config: Porygon2LearnerConfig) -> str | None:
     """Finds the most recent checkpoint folder under this process's root."""
-    save_path = _ckpt_root(learner_config)
+    save_path = ckpt_root(learner_config)
     os.makedirs(save_path, exist_ok=True)
     return checkpoint.most_recent_ckpt_dir(save_path)
 
@@ -355,7 +360,7 @@ WANDB_RUNS_NAME = "wandb_runs.json"
 
 
 def _wandb_run_info_path(learner_config: Porygon2LearnerConfig) -> str:
-    return os.path.join(_ckpt_root(learner_config), WANDB_RUNS_NAME)
+    return os.path.join(ckpt_root(learner_config), WANDB_RUNS_NAME)
 
 
 def save_wandb_run_info(
@@ -612,22 +617,38 @@ def load_train_state(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
+    ckpt_path: str | None = None,
 ) -> tuple[
     Porygon2PlayerTrainState,
     Porygon2BuilderTrainState,
     League,
     bytes | None,
 ]:
-    """Loads the train state on a process (re)start. One checkpoint tree,
-    no fork_from_ckpt/run_subdir indirection: every league snapshot is
-    already a normal, permanent PlayerRef in the persisted League by the
-    time this runs.
-    """
-    latest_ckpt = _get_checkpoint_path(learner_config)
+    """Loads the train state on a process (re)start.
 
+    ckpt_path names an EXPLICIT source checkpoint (a best-response run
+    initialising from its target, a cross-tree fork) and fails loudly if
+    it is missing — the silent fall-back-to-scratch below is only for the
+    implicit most-recent lookup, where "no checkpoint yet" is a normal
+    first launch.
+    """
     # 1. Force Scratch
     if mode == "scratch":
+        if ckpt_path is not None:
+            raise ValueError(
+                f"ckpt_path={ckpt_path!r} given but mode='scratch' — an "
+                "explicit source with a mode that ignores it is a mistake"
+            )
         return load_from_scratch(learner_config, player_state, builder_state)
+
+    if ckpt_path is not None:
+        if not os.path.isdir(ckpt_path):
+            raise FileNotFoundError(
+                f"explicit init checkpoint {ckpt_path!r} does not exist"
+            )
+        latest_ckpt = ckpt_path
+    else:
+        latest_ckpt = _get_checkpoint_path(learner_config)
 
     # 2. No checkpoint found -> fall back to scratch, loudly. A bare print()
     # here is how 1335's ~300k-step lineage and its league got lost between
@@ -640,7 +661,7 @@ def load_train_state(
             "LOAD_STATE_MODE=%r but no checkpoint found under %s "
             "— starting from scratch.",
             mode,
-            _ckpt_root(learner_config),
+            ckpt_root(learner_config),
         )
         return load_from_scratch(learner_config, player_state, builder_state)
 

@@ -22,6 +22,7 @@ from rl.environment.utils import next_tqdm_position
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
+    ckpt_root,
     write_checkpoint_components,
 )
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -38,6 +39,7 @@ from rl.online.training.league_ops import (
     get_league_winrate_heatmap,
     get_league_winrates,
     get_usage_counts,
+    publish_br_snapshot,
     should_add_new_player,
 )
 from rl.online.training.run_state import RunState
@@ -322,6 +324,21 @@ class Learner:
             # would mask the real outcome, turning e.g. a clean Ctrl-C into
             # a crash. Resets keep strict=True.
             stop_workers(self.run_state, strict=False)
+            if self.config.br_target_ckpt is not None:
+                # Publish on EVERY stop (completion, Ctrl-C, crash): the
+                # parent's players/ entry for this target always holds the
+                # BR's latest params. Best-effort — a failure (e.g. the
+                # train state was donated mid-step) leaves the previous
+                # entry standing; resuming the BR and stopping it again
+                # retries.
+                try:
+                    published = publish_br_snapshot(self.run_state, self.config)
+                    tqdm.write(f"Published BR snapshot to {published}")
+                except Exception:
+                    logger.exception(
+                        "BR snapshot publish failed — the parent keeps the "
+                        "previous entry for this target."
+                    )
             tqdm.write("Training Finished.")
 
     def register_actor_threads(self, threads: list[threading.Thread]) -> None:
@@ -504,7 +521,7 @@ class Learner:
         )
         save_path = os.path.abspath(
             os.path.join(
-                f"./ckpts/gen{self.config.generation}",
+                ckpt_root(self.config),
                 f"ckpt_{int(np.asarray(host_player_state.step_count)):08}",
             )
         )
@@ -534,6 +551,12 @@ class Learner:
 
     def _manage_league(self, run_state: RunState, step: int):
         """Checks whether a new snapshot should be added to the league."""
+        if self.config.br_target_ckpt is not None:
+            # A best-response run keeps exactly one league member — its
+            # frozen target. Left ungated, "dominant" fires as soon as the
+            # BR beats the target >0.7 and self-snapshots dilute both the
+            # 100%-pin premise and the payoff readout.
+            return
         reason = should_add_new_player(run_state, self.league, self.config)
         if reason is not None:
             tqdm.write(f"Adding new player to league @ {step} ({reason})")

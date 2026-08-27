@@ -6,8 +6,10 @@ Learner, and the pacing gate in particular is the piece worth testing on
 its own (tests/test_learner_gate.py).
 """
 
+import json
 import logging
 import os
+import re
 
 import jax
 import numpy as np
@@ -16,6 +18,7 @@ import wandb
 from rl import checkpoint
 from rl.environment.data import STOI
 from rl.model.utils import ParamsContainer
+from rl.online.artifact import ckpt_root
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.league import LIVE_KEYS, MAIN_KEY, League, PlayerRef
 from rl.online.training.run_state import AddReason, RunState
@@ -90,7 +93,7 @@ def add_player_to_league(
     league holds the lightweight ref and materialises the params
     lazily when this player is actually drawn as an opponent."""
     league_step = step
-    players_root = f"./ckpts/gen{config.generation}/players"
+    players_root = os.path.join(ckpt_root(config), "players")
     snapshot_dir = os.path.abspath(f"{players_root}/p_{league_step:08}")
     checkpoint.save_param_snapshot(
         snapshot_dir,
@@ -120,6 +123,164 @@ def add_player_to_league(
     )
 
 
+# Best-response child runs (2026-08-27). A BR run trains in its own
+# checkpoint subtree (config.ckpt_subdir) against one frozen target and
+# publishes its latest params into the PARENT run's players/ dir on every
+# stop. The offset keeps the published key clear of any step main itself
+# will ever reach (~2e5-step runs; int32-safe to 2.1e9), so a BR entry can
+# never overwrite a main snapshot dir or roster slot.
+BR_STEP_OFFSET = 100_000_000
+BR_PROVENANCE_NAME = "provenance.json"
+
+
+def target_step_count(target_ckpt: str) -> int:
+    """The frozen target's own step count: from its scalars component when
+    present (full checkpoints), else the trailing digits of its dirname
+    (params-only snapshots, ``p_00050010``)."""
+    if checkpoint.has_component(target_ckpt, "player", "scalars"):
+        scalars = checkpoint.load_component(target_ckpt, "player", "scalars")
+        return int(np.asarray(scalars["step_count"]))
+    match = re.search(r"(\d+)$", os.path.basename(os.path.normpath(target_ckpt)))
+    if match is None:
+        raise ValueError(
+            f"cannot derive a step count for BR target {target_ckpt!r}: no "
+            "player/scalars component and no trailing digits in the dirname"
+        )
+    return int(match.group(1))
+
+
+def register_br_target(
+    league: League, config: Porygon2LearnerConfig
+) -> ParamsContainer:
+    """Register the frozen BR target as this run's sole league member and
+    build the pinned-opponent container from the same params.
+
+    Registration is load-bearing, not bookkeeping: update_payoff silently
+    drops games whose participants are neither live nor in the roster, so
+    an unregistered target means an empty exploitability curve with no
+    error. Registered, get_league_winrates renders
+    league_main_v_{target_step}_winrate in the BR run's own wandb run —
+    that panel IS the exploitability instrument."""
+    target_ckpt = config.br_target_ckpt
+    step = target_step_count(target_ckpt)
+    player_params = checkpoint.load_component(target_ckpt, "player", "params")
+    builder_params = checkpoint.load_component(target_ckpt, "builder", "params")
+    players_root = os.path.join(ckpt_root(config), "players")
+    snapshot_dir = os.path.abspath(f"{players_root}/p_{step:08}")
+    # A resumed BR restores its league (target ref included) from its own
+    # checkpoint — re-registering would only rewrite identical files.
+    if step not in league.players:
+        checkpoint.save_param_snapshot(
+            snapshot_dir,
+            player_components=dict(params=player_params),
+            builder_components=dict(params=builder_params),
+        )
+        league.add_player(
+            PlayerRef(
+                step_count=step,
+                snapshot_dir=snapshot_dir,
+                player_frame_count=0,
+                builder_frame_count=0,
+                player_key="params",
+                builder_key="params",
+                origin="target",
+            )
+        )
+    return ParamsContainer(
+        player_frame_count=0,
+        builder_frame_count=0,
+        step_count=step,
+        player_params=player_params,
+        builder_params=builder_params,
+    )
+
+
+def publish_br_snapshot(run_state: RunState, config: Porygon2LearnerConfig) -> str:
+    """Publish this BR run's latest params into the PARENT run's players/
+    dir, overwriting this BR's previous entry — the key is stable (offset
+    + target step), so the parent's league always holds the latest version
+    of the best response to a given target. Called on every stop, both
+    completion and Ctrl-C: an interrupted BR is immediately useful, and a
+    resumed one refreshes the same entry when it next stops. Component
+    files are individually write-then-rename; the provenance file lands
+    last, so an import scan never sees a marker without params."""
+    target_step = target_step_count(config.br_target_ckpt)
+    parent_config = config.replace(ckpt_subdir=None)
+    players_root = os.path.join(ckpt_root(parent_config), "players")
+    league_step = BR_STEP_OFFSET + target_step
+    snapshot_dir = os.path.abspath(f"{players_root}/p_{league_step:08}")
+    checkpoint.save_param_snapshot(
+        snapshot_dir,
+        player_components=dict(
+            params=jax.device_get(run_state.player_state.params),
+            target_params=jax.device_get(run_state.player_state.target_params),
+        ),
+        builder_components=dict(
+            params=jax.device_get(run_state.builder_state.params),
+            target_params=jax.device_get(run_state.builder_state.target_params),
+        ),
+    )
+    provenance = dict(
+        origin="br",
+        target_ckpt=config.br_target_ckpt,
+        target_step=target_step,
+        br_steps=int(np.asarray(jax.device_get(run_state.player_state.step_count))),
+        player_frame_count=int(
+            np.asarray(jax.device_get(run_state.player_state.frame_count))
+        ),
+        builder_frame_count=int(
+            np.asarray(jax.device_get(run_state.builder_state.frame_count))
+        ),
+        run_tag=config.ckpt_subdir,
+    )
+    provenance_path = os.path.join(snapshot_dir, BR_PROVENANCE_NAME)
+    tmp_path = f"{provenance_path}.tmp.{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        json.dump(provenance, f, indent=2)
+    os.replace(tmp_path, provenance_path)
+    return snapshot_dir
+
+
+def import_br_snapshots(league: League, config: Porygon2LearnerConfig) -> list[str]:
+    """Scan this run's players/ dir for best-response snapshots published
+    by child BR runs and register any not already in the roster.
+
+    Idempotent; dirs without a provenance file (main's own snapshots,
+    orphans) are ignored. origin="br" keeps the refs out of main's
+    snapshot-pacing clock (get_latest_player's origin filter) while PFSP
+    and the verification branch draw them like any historical member —
+    which is the whole point: the BR makes main's blind spots costly
+    through existing matchmaking."""
+    players_root = os.path.join(ckpt_root(config), "players")
+    if not os.path.isdir(players_root):
+        return []
+    imported = []
+    for name in sorted(os.listdir(players_root)):
+        snapshot_dir = os.path.join(players_root, name)
+        provenance_path = os.path.join(snapshot_dir, BR_PROVENANCE_NAME)
+        match = re.fullmatch(r"p_(\d+)", name)
+        if match is None or not os.path.exists(provenance_path):
+            continue
+        league_step = int(match.group(1))
+        if league_step in league.players:
+            continue
+        with open(provenance_path) as f:
+            provenance = json.load(f)
+        league.add_player(
+            PlayerRef(
+                step_count=league_step,
+                snapshot_dir=os.path.abspath(snapshot_dir),
+                player_frame_count=int(provenance.get("player_frame_count", 0)),
+                builder_frame_count=int(provenance.get("builder_frame_count", 0)),
+                player_key="params",
+                builder_key="params",
+                origin="br",
+            )
+        )
+        imported.append(snapshot_dir)
+    return imported
+
+
 def get_usage_counts(run_state: RunState):
     result = {}
     for key, counts in [
@@ -142,7 +303,12 @@ def winrate_tracked_opponents(league: League) -> list[PlayerRef]:
 
 
 def ref_label(ref: PlayerRef) -> str:
-    """Payoff-table label: the snapshot's own step count."""
+    """Payoff-table label: the snapshot's own step count; imported
+    best-response refs render as br-{target_step} so the panel keys are
+    self-describing (still matching wandb_views'
+    ^league_main_v_.*_winrate$)."""
+    if ref.origin == "br":
+        return f"br-{ref.step_count - BR_STEP_OFFSET}"
     return f"{ref.step_count}"
 
 

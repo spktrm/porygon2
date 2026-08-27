@@ -65,6 +65,7 @@ class PlayerActor:
         rng_seed: int = 42,
         is_eval: bool = False,
         inference_client: InferenceServer | None = None,
+        pinned_opponent: ParamsContainer | None = None,
     ):
         self._agent = agent
         self._env = env
@@ -84,6 +85,11 @@ class PlayerActor:
         # Eval actors must never contribute to training data, nor consume the
         # builder replay buffer's reuse budget. This flag gates both.
         self._is_eval = is_eval
+        # Best-response runs: when set, EVERY game is played against this
+        # frozen container — get_match short-circuits before the
+        # PFSP/verification/mirror split, so the pin is 100%, and the
+        # opponent side is never trainable.
+        self._pinned_opponent = pinned_opponent
 
     def clip_actor_history(self, timestep: PlayerActorInput, min_length: int = 64):
         return PlayerActorInput(
@@ -412,6 +418,9 @@ class PlayerActor:
         return league.materialize(concerning_players[pick_idx])
 
     def get_match(self) -> tuple[ParamsContainer, bool]:
+        if self._pinned_opponent is not None:
+            return self._pinned_opponent, False
+
         # 50% PFSP / 15% verification / 35% mirror self-play, matching
         # AlphaStar's MainPlayer split.
         coin_toss = np.random.random()

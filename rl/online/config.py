@@ -177,6 +177,25 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     league_cache_size: int = 16
     league_ucb_c: float = 1.0
 
+    # Best-response child runs (process-level: the parent run exits, the BR
+    # trains as its own process, parent resumes and imports the result —
+    # runs form a tree of directories under the generation root).
+    # Subdirectory under ./ckpts/gen{N}/ holding THIS process's checkpoint
+    # tree ("br/<tag>" for a best-response child). None = the flat parent
+    # root, today's behaviour. The parent's most-recent-checkpoint scan is
+    # non-recursive, so a child subtree is structurally invisible to the
+    # parent's resume.
+    ckpt_subdir: str | None = None
+    # Frozen target checkpoint this run best-responds to. None = a normal
+    # main run. When set: params-mode init from this path (fresh
+    # optimiser), ALL matchmaking pinned against it (a stationary MDP —
+    # the self-play self-confirming loop is broken for the run's
+    # duration), league self-adds suppressed, and on every stop the
+    # latest params are published into the parent's players/ dir,
+    # overwriting this BR's own previous entry (the parent's league
+    # always holds the latest version of the BR for a given target).
+    br_target_ckpt: str | None = None
+
     # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
     # through main's periodic wandb logs: process RSS + OS-vs-python thread
     # census + exact replay-buffer/league-cache byte counts. Added after

@@ -19,6 +19,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
+from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import BattleError, SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
@@ -29,6 +30,7 @@ from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent
 from rl.online.artifact import (
+    ckpt_root,
     create_train_state,
     load_train_state,
     load_wandb_run_info,
@@ -39,6 +41,7 @@ from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.inference import InferenceServer
 from rl.online.player_actor import ActorStopped, PlayerActor
 from rl.online.training import Learner, OOMGuardTriggered
+from rl.online.training.league_ops import import_br_snapshots, register_br_target
 
 logger = logging.getLogger(__name__)
 
@@ -364,12 +367,53 @@ def _stop_stale_wandb_runs(
             )
 
 
+def resolve_run_setup(
+    learner_config: Porygon2LearnerConfig, args: argparse.Namespace
+) -> tuple[Porygon2LearnerConfig, str, str | None, str]:
+    """CLI → (config, load mode, explicit init ckpt, wandb job name).
+
+    A --br-target run derives everything itself: its own checkpoint
+    subtree under br/<tag>, checkpoint-mode resume when that subtree
+    already holds a checkpoint, otherwise params-mode init from the
+    target (fresh optimiser, zeroed counters, fresh league)."""
+    if args.num_steps is not None:
+        learner_config = learner_config.replace(num_steps=args.num_steps)
+
+    if args.br_target is None:
+        mode = args.load_mode or os.environ.get("LOAD_STATE_MODE", "checkpoint")
+        return learner_config, mode, args.init_ckpt, "main"
+
+    if args.load_mode or args.init_ckpt:
+        raise SystemExit(
+            "--br-target derives its own load mode and init source; "
+            "--load-mode/--init-ckpt cannot be combined with it"
+        )
+    target = os.path.abspath(args.br_target)
+    if not os.path.isdir(target):
+        raise SystemExit(f"--br-target {target!r} does not exist")
+    if args.run_tag is not None:
+        run_tag = args.run_tag
+    else:
+        run_tag = os.path.basename(os.path.normpath(target))
+    learner_config = learner_config.replace(
+        br_target_ckpt=target,
+        ckpt_subdir=os.path.join("br", run_tag),
+    )
+    root = ckpt_root(learner_config)
+    os.makedirs(root, exist_ok=True)
+    if checkpoint.most_recent_ckpt_dir(root) is not None:
+        return learner_config, "checkpoint", None, f"br-{run_tag}"
+    return learner_config, "params", target, f"br-{run_tag}"
+
+
 def main(args: argparse.Namespace):
     """Launches one persistent process: the actor pool, the inference
     server, and the learner. Everything after initial setup is driven by a
     single call to Learner.train(), which runs for the life of the
     process."""
-    learner_config = get_learner_config()
+    learner_config, load_mode, init_ckpt, job_name = resolve_run_setup(
+        get_learner_config(), args
+    )
     debug = args.debug
     if debug:
         os.environ["WANDB_MODE"] = "disabled"
@@ -433,12 +477,29 @@ def main(args: argparse.Namespace):
     inference_server.start()
 
     logger.info("Loading train state...")
-    mode = os.environ.get("LOAD_STATE_MODE", "checkpoint")
+    mode = load_mode
     player_state, builder_state, league, controller_bytes = load_train_state(
-        learner_config, player_state, builder_state, mode=mode
+        learner_config, player_state, builder_state, mode=mode, ckpt_path=init_ckpt
     )
     player_state = jax.device_put(player_state)
     builder_state = jax.device_put(builder_state)
+
+    pinned_opponent: ParamsContainer | None = None
+    if learner_config.br_target_ckpt is not None:
+        # BR run: the frozen target becomes this run's sole league member
+        # (payoff rows silently drop unregistered participants) and every
+        # game is pinned against it via the actor-pool short-circuit.
+        pinned_opponent = register_br_target(league, learner_config)
+        logger.info(
+            "BR run: all games pinned against %s (target step %d)",
+            learner_config.br_target_ckpt,
+            pinned_opponent.step_count,
+        )
+    elif mode == "checkpoint":
+        # Parent resume: pick up snapshots published by child BR runs
+        # since the league was last serialized.
+        for imported in import_br_snapshots(league, learner_config):
+            logger.info("Imported BR snapshot %s into the league", imported)
 
     # A checkpoint-mode restart reuses the previous session's group and
     # run id (persisted next to the checkpoints), so the run stays
@@ -451,6 +512,16 @@ def main(args: argparse.Namespace):
     if wandb_resume is not None:
         wandb_group = wandb_resume["group"]
         logger.info("Resuming previous wandb session %s", wandb_group)
+    elif learner_config.br_target_ckpt is not None:
+        # Fresh BR child: join the PARENT's wandb group so its curves sit
+        # beside main's (read-only — a child never writes the parent's
+        # session file); a parent without a session falls through to a
+        # fresh group.
+        parent_info = load_wandb_run_info(learner_config.replace(ckpt_subdir=None))
+        if parent_info is not None:
+            wandb_group = parent_info["group"]
+        else:
+            wandb_group = f"session-{int(time.time())}"
     else:
         wandb_group = f"session-{int(time.time())}"
     resume_run_ids: dict[str, str] = (wandb_resume or {}).get("runs", {})
@@ -469,18 +540,22 @@ def main(args: argparse.Namespace):
     _stop_stale_wandb_runs(skip_ids=set(resume_run_ids.values()))
 
     logger.info("Initializing WandB...")
-    run_id = resume_run_ids.get("main")
+    if learner_config.br_target_ckpt is not None:
+        job_type = "br"
+    else:
+        job_type = "main"
+    run_id = resume_run_ids.get(job_name)
     wandb_run = wandb.init(
         project="pokemon-rl",
         group=wandb_group,
-        job_type="main",
-        name=f"{wandb_group}-main",
+        job_type=job_type,
+        name=f"{wandb_group}-{job_name}",
         id=run_id,
         # "allow", not "must": resume the run when it still exists
         # server-side, otherwise recreate it under the same id — a
         # wandb-side deletion should never block a training restart.
         resume="allow" if run_id else None,
-        tags=["main"],
+        tags=[job_type],
         config=model_config_payload,
     )
     # Default x-axis = the monotonic lifetime_step (logged with every
@@ -497,10 +572,10 @@ def main(args: argparse.Namespace):
     )
 
     # Written every session (fresh or resumed): the next checkpoint-mode
-    # restart reads this to resume this exact run. Kept as a dict keyed by
-    # "main" so a runtime file written before the single-population
-    # collapse still loads.
-    save_wandb_run_info(learner_config, wandb_group, {"main": wandb_run.id})
+    # restart reads this to resume this exact run. Keyed by job name and
+    # written under THIS run's ckpt root, so a BR child's session file
+    # lives in its own subtree and can never clobber the parent's.
+    save_wandb_run_info(learner_config, wandb_group, {job_name: wandb_run.id})
 
     env_func = functools.partial(
         SinglePlayerSyncEnvironment,
@@ -560,6 +635,7 @@ def main(args: argparse.Namespace):
                         learner=learner,
                         rng_seed=len(new_threads) + salt + slot,
                         inference_client=inference_server,
+                        pinned_opponent=pinned_opponent,
                     )
                 )
             new_threads.append(
@@ -740,6 +816,41 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the RL learner.")
     parser.add_argument(
         "--debug", action="store_true", help="Enable debug mode", default=False
+    )
+    parser.add_argument(
+        "--load-mode",
+        choices=["scratch", "checkpoint", "params"],
+        default=None,
+        help="Train-state init mode; default is the LOAD_STATE_MODE env "
+        "var, then 'checkpoint'.",
+    )
+    parser.add_argument(
+        "--init-ckpt",
+        default=None,
+        help="Explicit source checkpoint for checkpoint/params mode "
+        "(default: most recent under this run's root). A missing explicit "
+        "path fails loudly instead of falling back to scratch.",
+    )
+    parser.add_argument(
+        "--num-steps",
+        type=int,
+        default=None,
+        help="Override config.num_steps for this process.",
+    )
+    parser.add_argument(
+        "--br-target",
+        default=None,
+        help="Best-response mode: train against this frozen checkpoint — "
+        "own checkpoint subtree under br/<tag>, params-mode init from the "
+        "target (fresh optimiser) on first launch and a normal resume "
+        "after, every game pinned against the target, latest params "
+        "published into the parent's players/ dir on every stop.",
+    )
+    parser.add_argument(
+        "--run-tag",
+        default=None,
+        help="Name for the BR child dir and wandb run "
+        "(default: the target checkpoint's basename).",
     )
     args = parser.parse_args()
     main(args)
