@@ -678,29 +678,6 @@ class Encoder(nn.Module):
             in_axes=nn.broadcast,
             length=self.num_rounds,
         )(self.cfg, name="round_trunk")
-        # Per-group action decoders (2026-08-27): private per-modality
-        # depth between the shared trunk and the head-facing out-norms —
-        # each group's slice re-reads the trunk's FINAL state latents
-        # through its OWN 2-layer decoder, so "which switch" is computed
-        # by parameters no other modality touches (the Nov-2025 capacity;
-        # separation-probe baseline on the shared stream: held-out
-        # identity-ranking r 0.096 for switches vs 0.58 for moves).
-        # Rematted nothing_saveable like the trunk — TransformerDecoder
-        # internally forces checkpoint_dots at num_layers > 1, which the
-        # house policy rejects for wide FFWs; the outer boundary governs,
-        # and these q streams are <= 17 x 256 so either way is
-        # memory-trivial. Residual gates at 0.05 via the config, never 0.
-        action_decoder = nn.checkpoint(
-            TransformerDecoder,
-            policy=jax.checkpoint_policies.nothing_saveable,
-        )
-        self.action_decoders = tuple(
-            action_decoder(
-                name=f"{group_name}_action_decoder",
-                **self.cfg.action_decoder.to_dict(),
-            )
-            for group_name, _ in ACTION_DECODER_SLOT_GROUPS
-        )
         # Head-facing output norms, hoisted out of the trunk so it carries
         # raw residual streams; applied once to the final round's action
         # stream, keeping the move/switch/target slices in their own
@@ -1592,29 +1569,10 @@ class Encoder(nn.Module):
                 )
             )
         )
-        (final_latents, action_queries, value_queries), _ = self.round_trunk(
+        (_, action_queries, value_queries), _ = self.round_trunk(
             (public_latents, action_tokens, value_tokens),
             state_valid,
             *typed_action_valids,
-        )
-
-        # Per-group private depth (2026-08-27): each slice queries the
-        # final state latents through its own decoder before the
-        # out-norms. Invalid rows are masked out of the attention and
-        # zeroed positionwise by the decoder, matching the trunk's
-        # hard-zero convention.
-        decoded_slices = tuple(
-            decoder(
-                q=action_slice,
-                kv=final_latents,
-                q_mask=group_valid,
-                kv_mask=state_valid,
-            )
-            for decoder, action_slice, group_valid in zip(
-                self.action_decoders,
-                jnp.split(action_queries, ACTION_GROUP_SPLITS, axis=0),
-                typed_action_valids,
-            )
         )
 
         # Head-facing embeddings from the final round's raw action
@@ -1625,7 +1583,11 @@ class Encoder(nn.Module):
         action_embeddings = (
             jnp.zeros_like(output_state_sequence)
             .at[ACTION_GROUP_SLOTS]
-            .set(self.action_out_norm(decoded_slices))
+            .set(
+                self.action_out_norm(
+                    tuple(jnp.split(action_queries, ACTION_GROUP_SPLITS, axis=0))
+                )
+            )
         )
         value_embeddings = value_queries.reshape(-1)
 
