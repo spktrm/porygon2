@@ -195,6 +195,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # overwriting this BR's own previous entry (the parent's league
     # always holds the latest version of the BR for a given target).
     br_target_ckpt: str | None = None
+    # BR winrate stop: end the run once the payoff-table winrate against
+    # the target clears this with >= exploit_ctrl_min_games_per_opponent
+    # games behind it (n=20 puts the SE at ~0.11, so 0.7 is a ~1.8 SE
+    # signal — the old promotion-bar lesson). 0.0 = off; the CLI defaults
+    # a BR launched WITHOUT --num-steps to 0.7 so "train until the target
+    # is beaten" is the no-flags behaviour.
+    br_stop_winrate: float = 0.0
 
     # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
     # through main's periodic wandb logs: process RSS + OS-vs-python thread

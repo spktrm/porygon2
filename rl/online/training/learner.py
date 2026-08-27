@@ -300,12 +300,13 @@ class Learner:
                 )
                 self._handle_periodic_tasks(run_state, run_state.host_step, logs)
 
-            # Normal completion (num_steps reached): one synchronous full
+            # Normal completion (num_steps reached, or a stop condition —
+            # the BR winrate stop — set self.done): one synchronous full
             # checkpoint — a completed BR run's whole lifetime sits below
             # save_interval_steps, so without this its own tree holds no
             # checkpoint at all and a rerun restarts from the target
             # instead of resuming.
-            tqdm.write("num_steps reached — writing final checkpoint")
+            tqdm.write("training loop complete — writing final checkpoint")
             self._write_checkpoint(self.run_state, synchronous=True)
 
         except KeyboardInterrupt:
@@ -562,13 +563,47 @@ class Learner:
         run_state.ckpt_q.put(payload)
         return save_path
 
+    def _check_br_stop(self, step: int) -> None:
+        """Winrate stop for best-response runs: once the payoff-table
+        winrate against the frozen target clears br_stop_winrate with
+        enough games to trust the reading (the exploit_ctrl reliability
+        floor — a fresh pair reads 0.5 by construction under the Laplace
+        prior), the best response is found and the run ends through the
+        normal completion path (final synchronous checkpoint + publish)."""
+        threshold = self.config.br_stop_winrate
+        if threshold <= 0.0 or self.done:
+            return
+        targets = [
+            ref for ref in self.league.players.values() if ref.origin == "target"
+        ]
+        if not targets:
+            return
+        target = targets[0]
+        games = self.league.games.get(
+            (MAIN_KEY, target.step_count), 0.0
+        ) + self.league.games.get((target.step_count, MAIN_KEY), 0.0)
+        if games < self.config.exploit_ctrl_min_games_per_opponent:
+            return
+        live = self.league.get_live(MAIN_KEY)
+        winrate = float(np.atleast_1d(self.league.get_winrate((live, [target])))[0])
+        if winrate >= threshold:
+            tqdm.write(
+                f"BR winrate {winrate:.3f} >= {threshold} vs target "
+                f"{target.step_count} after {games:.0f} games @ step {step} "
+                "— stopping"
+            )
+            self.done = True
+
     def _manage_league(self, run_state: RunState, step: int):
         """Checks whether a new snapshot should be added to the league."""
         if self.config.br_target_ckpt is not None:
             # A best-response run keeps exactly one league member — its
             # frozen target. Left ungated, "dominant" fires as soon as the
             # BR beats the target >0.7 and self-snapshots dilute both the
-            # 100%-pin premise and the payoff readout.
+            # 100%-pin premise and the payoff readout. The same cadence
+            # (every manage_league_interval steps) drives the winrate
+            # stop instead.
+            self._check_br_stop(step)
             return
         reason = should_add_new_player(run_state, self.league, self.config)
         if reason is not None:

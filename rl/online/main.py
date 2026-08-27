@@ -395,9 +395,21 @@ def resolve_run_setup(
         run_tag = args.run_tag
     else:
         run_tag = os.path.basename(os.path.normpath(target))
+    # Stop condition: an explicit --br-winrate always applies; with
+    # NEITHER budget flag given, "train until the target is reliably
+    # beaten" (0.7) is the default, with config.num_steps (5e6) as the
+    # effectively-unbounded backstop. An explicit --num-steps alone keeps
+    # the pure step-budget behaviour.
+    if args.br_winrate is not None:
+        stop_winrate = args.br_winrate
+    elif args.num_steps is None:
+        stop_winrate = 0.7
+    else:
+        stop_winrate = 0.0
     learner_config = learner_config.replace(
         br_target_ckpt=target,
         ckpt_subdir=os.path.join("br", run_tag),
+        br_stop_winrate=stop_winrate,
     )
     root = ckpt_root(learner_config)
     os.makedirs(root, exist_ok=True)
@@ -853,6 +865,15 @@ if __name__ == "__main__":
         default=None,
         help="Name for the BR child dir and wandb run "
         "(default: the target checkpoint's basename).",
+    )
+    parser.add_argument(
+        "--br-winrate",
+        type=float,
+        default=None,
+        help="BR stop condition: end the run once the winrate against the "
+        "target clears this (with the min-games reliability floor). "
+        "Defaults to 0.7 when --num-steps is not given; whichever of the "
+        "two conditions fires first stops the run.",
     )
     args = parser.parse_args()
     main(args)

@@ -7,11 +7,13 @@
 # players/ dir on every stop. Resuming an interrupted BR is re-running
 # the SAME command; resuming main afterwards is plain `bash start.sh`.
 #
-# Usage: bash start_br.sh <target_ckpt_dir> <num_steps> [run_tag]
+# Usage: bash start_br.sh <target_ckpt_dir> [num_steps] [run_tag]
+#   num_steps omitted -> train until winrate vs the target clears 0.7
+#   (the --br-winrate default), unbounded step budget.
 set -euo pipefail
 
-TARGET=${1:?usage: start_br.sh <target_ckpt_dir> <num_steps> [run_tag]}
-STEPS=${2:?usage: start_br.sh <target_ckpt_dir> <num_steps> [run_tag]}
+TARGET=${1:?usage: start_br.sh <target_ckpt_dir> [num_steps] [run_tag]}
+STEPS=${2:-}
 TAG=${3:-}
 
 if [ ! -d "$TARGET" ]; then
@@ -19,7 +21,10 @@ if [ ! -d "$TARGET" ]; then
   exit 1
 fi
 
-ARGS=(--br-target "$TARGET" --num-steps "$STEPS")
+ARGS=(--br-target "$TARGET")
+if [ -n "$STEPS" ]; then
+  ARGS+=(--num-steps "$STEPS")
+fi
 if [ -n "$TAG" ]; then
   ARGS+=(--run-tag "$TAG")
 fi

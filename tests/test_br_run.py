@@ -276,6 +276,63 @@ class TestLeagueAddSuppression:
             learner._manage_league(None, step=60_000)
 
 
+class TestBrWinrateStop:
+    def _learner(self, threshold: float):
+        from rl.online.league import PlayerRef
+        from rl.online.training.learner import Learner
+
+        learner = Learner.__new__(Learner)
+        learner.config = make_config(
+            br_target_ckpt="/some/ckpt", br_stop_winrate=threshold
+        )
+        learner.league = League(main_player=make_container(MAIN_KEY), players=[])
+        learner.league.add_player(
+            PlayerRef(
+                step_count=123,
+                snapshot_dir="/nonexistent/p_00000123",
+                player_frame_count=0,
+                builder_frame_count=0,
+                origin="target",
+            )
+        )
+        learner.done = False
+        return learner
+
+    def _play(self, learner, wins: int, losses: int):
+        own = learner.league.get_live(MAIN_KEY)
+        target = make_container(123)
+        for _ in range(wins):
+            learner.league.update_payoff(own, target, payoff=1.0)
+        for _ in range(losses):
+            learner.league.update_payoff(own, target, payoff=-1.0)
+
+    def test_stops_on_reliable_winrate(self):
+        learner = self._learner(0.7)
+        self._play(learner, wins=25, losses=0)
+        learner._manage_league(None, step=100)
+        assert learner.done is True
+
+    def test_holds_below_games_floor(self):
+        # Control: a perfect record on too few games must not stop —
+        # the Laplace-prior reliability floor is the point.
+        learner = self._learner(0.7)
+        self._play(learner, wins=5, losses=0)
+        learner._manage_league(None, step=100)
+        assert learner.done is False
+
+    def test_holds_below_threshold(self):
+        learner = self._learner(0.7)
+        self._play(learner, wins=13, losses=12)
+        learner._manage_league(None, step=100)
+        assert learner.done is False
+
+    def test_zero_threshold_is_off(self):
+        learner = self._learner(0.0)
+        self._play(learner, wins=50, losses=0)
+        learner._manage_league(None, step=100)
+        assert learner.done is False
+
+
 class TestTrainStepBudget:
     def test_idle_ticks_do_not_consume_num_steps(self, monkeypatch):
         # Regression (first BR run, 2026-08-27): `for _ in range(num_steps)`
@@ -338,6 +395,7 @@ class TestResolveRunSetup:
             num_steps=None,
             br_target=None,
             run_tag=None,
+            br_winrate=None,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -376,6 +434,39 @@ class TestResolveRunSetup:
             make_config(), self._args(br_target=target_dir, run_tag="tagged")
         )
         assert (mode, init_ckpt, job_name) == ("checkpoint", None, "br-tagged")
+
+    def test_br_without_num_steps_defaults_winrate_stop(self, tmp_path, monkeypatch):
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        target_dir = write_target_ckpt(tmp_path, step=123)
+        config, _, _, _ = resolve_run_setup(
+            make_config(), self._args(br_target=target_dir)
+        )
+        assert config.br_stop_winrate == 0.7
+        # num_steps keeps the effectively-unbounded config default.
+        assert config.num_steps == Porygon2LearnerConfig().num_steps
+
+    def test_br_with_num_steps_keeps_winrate_stop_off(self, tmp_path, monkeypatch):
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        target_dir = write_target_ckpt(tmp_path, step=123)
+        config, _, _, _ = resolve_run_setup(
+            make_config(), self._args(br_target=target_dir, num_steps=50)
+        )
+        assert config.br_stop_winrate == 0.0
+
+    def test_explicit_br_winrate_wins(self, tmp_path, monkeypatch):
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        target_dir = write_target_ckpt(tmp_path, step=123)
+        config, _, _, _ = resolve_run_setup(
+            make_config(),
+            self._args(br_target=target_dir, num_steps=50, br_winrate=0.8),
+        )
+        assert config.br_stop_winrate == 0.8
 
     def test_br_rejects_conflicting_flags(self, tmp_path):
         from rl.online.main import resolve_run_setup
