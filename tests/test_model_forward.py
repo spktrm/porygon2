@@ -203,7 +203,7 @@ def _encoder_entity_biases(network, params, actor_input):
     actually builds them for the latent read, on one timestep."""
 
     def call(module, env_step):
-        (_, _, _, public_bias), (_, _, _, private_bias), _, _ = (
+        (_, _, _, public_bias), (_, _, _, private_bias) = (
             module.encoder._current_entity_tokens(env_step)
         )
         return public_bias, private_bias
@@ -298,3 +298,73 @@ def test_field_side_tokens_do_not_read_the_active_status_table(
     assert not np.allclose(np.asarray(base[2]), np.asarray(moved_side[2]))
     # The global field token carries no side, so it must be untouched.
     np.testing.assert_allclose(np.asarray(base[0]), np.asarray(moved_side[0]), atol=0)
+
+
+def _slot_queries(network, params, actor_input):
+    """The 12 entity-slot queries, in ACTION_SLOT_READ_INDICES order."""
+
+    def call(module, env_step):
+        public, private = module.encoder._current_entity_tokens(env_step)
+        return module.encoder._action_slot_queries(public[0], private[0])
+
+    env_step = jax.tree.map(lambda x: x[0], actor_input.env)
+    return np.asarray(
+        jax.jit(lambda p, e: network.apply(p, e, method=call))(params, env_step),
+        dtype=np.float32,
+    )
+
+
+def test_entity_slot_queries_name_distinct_things(real_model_and_trajectory):
+    """Each entity-derived action slot must ask for a different thing.
+
+    ALLY_i_SWITCH and ALLY_i_TARGET name the SAME mon, so species + side
+    alone makes them the same query and the readout could not tell "switch
+    this mon out" from "target it". The role bias separates them once
+    trained — but it is ZERO-INIT, so at step 0 the separation is carried
+    entirely by ActionSlotRead's learned per-slot position term. That is the
+    contract this pins: the queries the read actually consumes are pairwise
+    distinct from step 0.
+    """
+    network, params, actor_input, _ = real_model_and_trajectory
+    content = _slot_queries(network, params, actor_input)
+    assert content.shape[0] == 12
+
+    position = np.asarray(
+        params["params"]["encoder"]["action_slot_read"]["slot_position"],
+        dtype=np.float32,
+    )
+    effective = content + position
+    for i in range(12):
+        for j in range(i + 1, 12):
+            assert not np.allclose(effective[i], effective[j]), (i, j)
+
+    # The control that shows position is doing that work at init: without it
+    # the two roles for the same mon collapse onto each other.
+    np.testing.assert_allclose(content[0:2], content[2:4], atol=2e-2)
+
+
+def test_reserve_queries_are_content_derived(real_model_and_trajectory):
+    """A reserve slot asks for the mon that occupies it, not for its index:
+    swapping two sheet rows' species must swap their queries. This is the key
+    the read matches against the same species tag on that mon's PUBLIC row —
+    the route probe C measured as absent before the redesign."""
+    network, params, actor_input, _ = real_model_and_trajectory
+    base = _slot_queries(network, params, actor_input)
+
+    from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
+
+    species = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
+    env = actor_input.env
+    private = jnp.asarray(env.private_team)
+    first, second = private[:, 0, species], private[:, 1, species]
+    swapped = private.at[:, 0, species].set(second).at[:, 1, species].set(first)
+    moved = _slot_queries(
+        network, params, actor_input.replace(env=env.replace(private_team=swapped))
+    )
+
+    reserve = slice(6, 12)
+    assert not np.allclose(base[reserve][0], moved[reserve][0])
+    np.testing.assert_allclose(base[reserve][0], moved[reserve][1], atol=2e-2)
+    np.testing.assert_allclose(base[reserve][1], moved[reserve][0], atol=2e-2)
+    # Slots for mons that did not move are untouched.
+    np.testing.assert_allclose(base[reserve][2:], moved[reserve][2:], atol=2e-2)

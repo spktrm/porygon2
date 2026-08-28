@@ -14,6 +14,7 @@ building two instances -- and is pinned by tests/test_value_ladder.py.
 import jax
 import jax.numpy as jnp
 import numpy as np
+from flax import linen as nn
 from flax.traverse_util import flatten_dict
 
 from rl.model.config import get_player_model_config
@@ -24,7 +25,7 @@ from rl.model.constants import (
     PRIVATE_TOKEN_TYPES,
     PUBLIC_READ_TOKEN_TYPES,
 )
-from rl.model.encoder import LatentInputRead
+from rl.model.encoder import InputTokenSet, LatentInputRead
 
 NUM_PUBLIC = 12
 NUM_PRIVATE = 6
@@ -66,9 +67,22 @@ def _inputs(seed=0):
     return cfg, groups, masks, types, biases
 
 
+class _AssembleAndRead(nn.Module):
+    """The two halves under test as the encoder composes them: one token set
+    (identity biases, masking) feeding one latent read. They are separate
+    modules because the action slots read the SAME set (2026-08-28)."""
+
+    cfg: object
+
+    @nn.compact
+    def __call__(self, groups, masks, types, biases):
+        tokens, token_mask = InputTokenSet(self.cfg)(groups, masks, types, biases)
+        return LatentInputRead(self.cfg, self.cfg.num_latents)(tokens, token_mask)
+
+
 def _build(seed=0):
     cfg, groups, masks, types, biases = _inputs(seed)
-    module = LatentInputRead(cfg, cfg.num_latents)
+    module = _AssembleAndRead(cfg)
     params = module.init(jax.random.key(seed), groups, masks, types, biases)
     return module, params, groups, masks, types, biases
 
@@ -188,7 +202,7 @@ def test_a_shared_history_group_could_not_tell_them_apart():
     masks = masks[:4] + (jnp.ones(legacy_history.shape[:2], dtype=bool),)
     types = types[:4] + (legacy_types,)
 
-    module = LatentInputRead(cfg, cfg.num_latents)
+    module = _AssembleAndRead(cfg)
     params = module.init(jax.random.key(0), groups, masks, types, biases)
     base = module.apply(params, groups, masks, types, biases)
     swapped = tuple(

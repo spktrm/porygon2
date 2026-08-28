@@ -27,7 +27,11 @@ from enum import IntEnum
 import numpy as np
 
 from rl.environment.data import (
+    ALLY_SWITCH_INDICES,
+    ALLY_TARGET_INDICES,
+    ENEMY_TARGET_INDICES,
     MOVE_SLOT_INDICES,
+    RESERVE_ENTITY_INDICES,
     SWITCH_SLOT_INDICES,
     TARGET_SLOT_INDICES,
 )
@@ -148,3 +152,21 @@ ACTION_GROUP_SLOTS = np.concatenate(
 ACTION_GROUP_SPLITS = np.cumsum(
     [len(slot_indices) for _, slot_indices in ACTION_DECODER_SLOT_GROUPS]
 )[:-1]
+
+# The action slots that stand for an ENTITY, in the order ActionSlotRead
+# emits them: my two actives as switch sources, the same two as ally targets,
+# the opposing actives, then my six switch candidates. Each is a query for
+# "the mon occupying this slot", so this order is the order of the species
+# tokens the encoder builds those queries from. Every other slot (moves,
+# pass, TARGET_*) stands for an option rather than a mon and keeps its own
+# embedding.
+ACTION_SLOT_READ_INDICES = np.concatenate(
+    (
+        ALLY_SWITCH_INDICES,
+        ALLY_TARGET_INDICES,
+        ENEMY_TARGET_INDICES,
+        RESERVE_ENTITY_INDICES,
+    )
+)
+NUM_ACTION_SLOT_READS = len(ACTION_SLOT_READ_INDICES)
+assert NUM_ACTION_SLOT_READS == 12, NUM_ACTION_SLOT_READS
