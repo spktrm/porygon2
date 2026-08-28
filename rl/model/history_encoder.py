@@ -353,11 +353,13 @@ class PerSlotHistoryEncoder(nn.Module):
         )[:-1]
         touched = counts > 0
 
-        # Keep each touched slot's LATEST node snapshot verbatim. The GRU
-        # state integrates history; this preserves the entity's current
-        # state (hp/fainted/status) unmixed — empirically the GRU-only
-        # readout loses it (a raw hand rule over snapshots beat the model
-        # on late-game states).
+        # Keep each touched slot's node snapshot for this step, unmixed by
+        # GRU gating -- the entity's current state (hp/fainted/status) as a
+        # hand evaluator reads it, which the GRU-only readout loses (a raw
+        # hand rule over snapshots beat the model on late-game states).
+        # A slot touched by SEVERAL edges in one step gets their MEAN, not
+        # the last of them: a step's edges reach here through segment_sum,
+        # which keeps no order, so "latest" is not available at this point.
         node_means = jax.ops.segment_sum(
             node_embs, seg, num_segments=NUM_PUBLIC_SLOTS + 1
         )[:-1] / counts.clip(min=1)[..., None].astype(node_embs.dtype)

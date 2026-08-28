@@ -361,7 +361,6 @@ ALLY_2_INDICES = np.array(
 def calculate_flat_modality_mask():
     action_indices = np.arange(NUM_ACTION_FEATURES**2)
     src_indices = action_indices // NUM_ACTION_FEATURES
-    action_indices % NUM_ACTION_FEATURES
 
     is_move = (
         (src_indices >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1)

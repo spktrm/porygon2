@@ -123,6 +123,15 @@ enum EntityEdgeFeature {
     ENTITY_EDGE_FEATURE__FROM_SOURCE_TOKEN4 = 19; // Represents the source of the move or action
     ENTITY_EDGE_FEATURE__DAMAGE_RATIO = 20; // floor(1024 * hpRatio)
     ENTITY_EDGE_FEATURE__HEAL_RATIO = 21; // floor(1024 * hpRatio)
+    // DEAD COLUMN (audited 2026-08-28): nothing in service/ ever writes
+    // this, so it is always 0 on the wire and the encoder does not read it.
+    // Kept rather than removed because the enum is contiguously numbered and
+    // the buffers are SIZED by len(keys()) while INDEXED by enum value —
+    // deleting 22 forces 23-33 to renumber, which shifts every packed edge
+    // row and invalidates the replay shards in replays/shards that
+    // rl/offline/dataset.py reads by column. Delete it the next time those
+    // shards are regenerated anyway. The live "from" effect is carried by
+    // FROM_SOURCE_TOKEN0-4, which the encoder does read.
     ENTITY_EDGE_FEATURE__EFFECT_TOKEN = 22; // Represents the effect applied
     ENTITY_EDGE_FEATURE__BOOST_ATK_VALUE = 23; // Boost to Attack stat
     ENTITY_EDGE_FEATURE__BOOST_DEF_VALUE = 24; // Boost to Defense stat

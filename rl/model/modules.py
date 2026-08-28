@@ -40,9 +40,9 @@ def activation_fn(array: jax.Array) -> jax.Array:
 
 
 def layer_norm(array: jax.Array) -> jax.Array:
-    """
-    Apply layer normalization with RMS Norm.
-    """
+    """Apply layer normalisation. (Named for the operation, not the class:
+    this is nn.LayerNorm, not the RMSNorm above — the docstring claimed RMS
+    for months while the code did not.)"""
     return nn.LayerNorm(dtype=array.dtype)(array)
 
 
@@ -544,8 +544,6 @@ class MLP(nn.Module):
 
         if isinstance(layer_sizes, int):
             layer_sizes = (layer_sizes,)
-        else:
-            layer_sizes = self.layer_sizes
 
         for _, size in enumerate(layer_sizes):
             if self.use_layer_norm:
