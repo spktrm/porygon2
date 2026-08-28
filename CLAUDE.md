@@ -620,6 +620,115 @@ instrument — a BR probe against the ~77k ckpt reading ≤ the 0.57–0.58 the
 0 (mass without discrimination — the phase-1 shape, watched on the
 mechanism actually feared, per the twice-paid abort-instrument lesson).
 
+## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
+
+A full read of `rl/model/` against `service/src/server/state.ts`, treating
+comments as claims to check. Everything below is one fresh lineage.
+
+**Two my-side/opp-side tagging bugs, both live for months.** The service
+writes `ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(n, playerIndex)`
+(`state.ts:487, 1068`), so **side_bias row 1 is MINE and row 0 is theirs**.
+(1) `_current_entity_tokens` tagged my private sheet `side_bias(0)` — the
+opponent's row — putting 48 of the read's keys under the wrong side in a
+permutation-invariant attention where that additive tag IS the identity
+signal. (2) `_embed_field` used `pos_bias` rows 1/0 as the my/opp side tag,
+but `pos_bias` is indexed by `ACTIVE` (= `scoreOrder`, {0,2} in singles), so
+row 0 meant "benched pokemon" AND "opponent side conditions" — and it was the
+only thing separating my hazards from theirs, since both share
+`side_condition_linear`. Both now own dedicated params
+(`private_side_bias`, `field_side_bias`), and the SIDE convention is written
+once.
+
+**`PUBLIC_ORDER` was a no-op on the RL path.** `Encoder.__call__` re-aligns
+history-slot order to public-row order per request — and then the read gave
+all 12 resulting rows the same `entity_bias` and the same `HISTORY_SLOT`
+type, i.e. a multiset of identically-biased keys, discarding the alignment.
+History row i is now public entity i's **11th attribute token**, inheriting
+its entity/pos+side/group biases. Test: swapping two slots' history states
+must move the latents, with the control that the same swap under the OLD
+layout is bitwise inert.
+
+**PROBE C — the switch axis is starved by construction, not just by
+supervision.** `EntityPrivateNodeFeature` has NO hp/status/fainted/boosts, so
+`RESERVE_j`'s warm start was a STATIC set descriptor and a candidate's
+condition could only arrive through the trunk. It did not.
+`separation_probe --probe c` on the entropy-floor lineage @28540:
+
+| readout | subset | held r |
+|---|---|---|
+| `RESERVE_j` | alive | **-0.004** |
+| `RESERVE_j` | legal switch targets | **-0.127** |
+| `RESERVE_j` | shuffled (floor) | -0.007 |
+| `ally_1_switch` (control) | alive | 0.351 |
+| `enemy_1_target` (control) | alive | 0.440 |
+
+The trunk routes "is this mon dead" and nothing about hp among ALIVE
+candidates — exactly the set a switch decision discriminates over. **Two
+instrument lessons, both nearly cost the verdict**: the unconditioned
+reading is 0.447 and is ENTIRELY the alive/dead contrast (it vanishes once
+conditioned on alive); and `fainted` has zero variance on the alive/legal
+subsets — you cannot switch to a fainted mon — so its r there is vacuous,
+not a result. Read the y-std column before reading any r.
+
+**The board was encoded TWICE and now is not.** Once as read tokens, again as
+entity-local pooled vectors warm-starting the action slots. The 12
+entity-derived slots now QUERY the same token set (`ActionSlotRead`), keyed
+by **species + side + role**, reading the RAW tokens rather than the latents
+— no compression loss, near-exact species match, each entity's folded history
+token for free, and cheaper than the twelve [10-token self-attention +
+pooling decoder] runs it replaces. `LatentInputRead` split into
+`InputTokenSet` + `LatentInputRead` + `ActionSlotRead`; the set is assembled
+twice per forward from ONE instance (prev-action tokens are gathered FROM the
+finished action sequence, so they cannot be keys of the read that builds it).
+`tag_with_species` adds each entity's species embedding to all of its tokens
+— without it a species query retrieves the species token only, since hp lives
+on a state token with no species content and the sole shared component is
+`entity_bias`, which is positional and not content-addressable.
+
+**Two things the design pays for explicitly.** The role bias in the query is
+REQUIRED (`ALLY_i_SWITCH` and `ALLY_i_TARGET` name the same mon) but is
+zero-init, so at step 0 the separation is carried by `ActionSlotRead`'s
+per-slot position term. Position also covers where species is NOT a stable
+key: `publicBattle` carries the disguise until `|replace|` (`state.ts:2080`),
+so a **my-side** Illusion shows the disguise on the public row while the
+sheet shows the truth — a *wrong* match, not a missing one. Opponent-side
+Illusion is self-consistent and correctly fools the model, as it fools a
+human.
+
+**Inputs that were on the wire and never read**, now wired:
+`FIELD_FEATURE__TURN_ORDER_VALUE` (the within-turn edge sequence index — the
+ONLY observable of relative speed, since `segment_sum` in `_observe_step`
+destroys the order of a step's edges; `_embed_field` read it, returned it,
+and both callers dropped it), `ENTITY_EDGE_FEATURE__HIT_COUNT`, and a request
+info token carrying `REQUEST_TYPE` + `NUM_ACTIVE` (InfoFeatures, so they
+cannot ride `_embed_field`, which is shared with history rows). The history
+field state splits into (global, mine, theirs) with side-filtered messages —
+hazards are side-differenced and one collapsed vector could only hold their
+mixture. `NUM_INPUT_TOKENS` 186 -> 189, params 27.26M -> 28.71M.
+
+**`ENTITY_EDGE_FEATURE__EFFECT_TOKEN` is never written by the service** —
+always 0 on the wire. NOT deleted: the enum is contiguously numbered and the
+buffers are sized by `len(keys())` but indexed by enum value, so removing 22
+forces 23-33 to renumber, shifting every packed edge row and invalidating the
+19 shards in `replays/shards`. Documented in the proto; delete it when those
+shards are next rebuilt.
+
+**Verified sound, do not re-litigate**: src-major grid indexing agrees across
+`FLAT_MODALITY_MASK` / `MicroHead` / `src_index` / the service's `setRowCol`;
+`my_moveset` row -> `MOVE_INDICES[k]` and `RESERVE_j` <-> `private_team[j]`;
+public rows 0-5 mine / 6-11 theirs actives-first; unrevealed opponent mons are
+`SPECIES_ENUM___UNK` not `_UNSPECIFIED`, so all 12 public rows are always live
+keys and the read CAN count remaining mons (keep deliberate); masking is
+NaN-safe end to end. Eval runs at `temp=0.5` and `ActionScoreHead` divides
+BOTH levels by temp, so eval roughly squares the modality marginal — the
+headline winrates measure a policy that switches less than the trained one.
+Left as-is, recorded as a confound.
+
+**Acceptance**: `entropy_macro` / `prob_switch` through 33k, wr vs
+SimpleHeuristic at 30k, a BR probe at ~77k against the 0.57-0.58 the 77638
+probe read, and `separation_probe --probe c` re-run at a matched step —
+`RESERVE_j/alive/hp` should move off ~0.00 toward the controls' 0.35-0.44.
+
 ## Probe ledger — 2026-08-27 capacity falsification (separation probe)
 
 The within-switch flatness measured on the live critic (within-row Q std
