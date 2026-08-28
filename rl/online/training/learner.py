@@ -22,7 +22,9 @@ from rl.environment.utils import next_tqdm_position
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
+    builder_scalar_components,
     ckpt_root,
+    player_scalar_components,
     write_checkpoint_components,
 )
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -519,19 +521,13 @@ class Learner:
             target_params=host_player_state.target_params,
             reg_params=host_player_state.reg_params,
             opt_state=host_player_state.opt_state,
-            scalars=dict(
-                step_count=host_player_state.step_count,
-                frame_count=host_player_state.frame_count,
-            ),
+            scalars=player_scalar_components(host_player_state),
         )
         builder_components = dict(
             params=host_builder_state.params,
             target_params=host_builder_state.target_params,
             opt_state=host_builder_state.opt_state,
-            scalars=dict(
-                step_count=host_builder_state.step_count,
-                frame_count=host_builder_state.frame_count,
-            ),
+            scalars=builder_scalar_components(host_builder_state),
         )
         save_path = os.path.abspath(
             os.path.join(

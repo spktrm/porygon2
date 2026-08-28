@@ -294,6 +294,65 @@ def save_train_state_locally(
     )
 
 
+def player_scalar_components(
+    player_state: Porygon2PlayerTrainState,
+) -> dict[str, Any]:
+    """The player's non-parameter state leaves, assembled ONCE.
+
+    Both save paths (save_state here, and the learner's background
+    checkpoint writer) go through this, so a leaf added to the TrainState
+    cannot be persisted by one path and silently dropped by the other —
+    which is exactly how the entropy-floor dual temperatures went unsaved
+    from the day they landed.
+
+    The temperatures belong here rather than in `params`: they are
+    controller state, not parameters. Resuming without them resets the
+    dual ascent to config init — measured on ckpt_00067000, that is
+    alpha_macro 0.075 → 0.05 and alpha_micro 0.005 → 0.05, a 10x jump on
+    the axis the controller had deliberately driven to its floor.
+    """
+    return dict(
+        step_count=player_state.step_count,
+        frame_count=player_state.frame_count,
+        log_ent_alpha_macro=player_state.log_ent_alpha_macro,
+        log_ent_alpha_micro=player_state.log_ent_alpha_micro,
+    )
+
+
+def builder_scalar_components(
+    builder_state: Porygon2BuilderTrainState,
+) -> dict[str, Any]:
+    """The builder's non-parameter state leaves. Same contract as
+    `player_scalar_components`; the builder carries no controller state."""
+    return dict(
+        step_count=builder_state.step_count,
+        frame_count=builder_state.frame_count,
+    )
+
+
+def apply_player_scalars(
+    player_state: Porygon2PlayerTrainState,
+    scalars: dict[str, Any],
+) -> Porygon2PlayerTrainState:
+    """Inverse of `player_scalar_components`: put a checkpoint's scalar
+    block back onto a live TrainState.
+
+    A key the checkpoint does not carry keeps the LIVE state's value, so a
+    checkpoint written before the dual temperatures were persisted resumes
+    at config init — the old behaviour — instead of raising.
+    """
+    return player_state.replace(
+        step_count=scalars["step_count"],
+        frame_count=scalars["frame_count"],
+        log_ent_alpha_macro=scalars.get(
+            "log_ent_alpha_macro", player_state.log_ent_alpha_macro
+        ),
+        log_ent_alpha_micro=scalars.get(
+            "log_ent_alpha_micro", player_state.log_ent_alpha_micro
+        ),
+    )
+
+
 def save_state(
     save_path: str,
     learner_config: Porygon2LearnerConfig,
@@ -307,19 +366,13 @@ def save_state(
         target_params=player_state.target_params,
         reg_params=player_state.reg_params,
         opt_state=player_state.opt_state,
-        scalars=dict(
-            step_count=player_state.step_count,
-            frame_count=player_state.frame_count,
-        ),
+        scalars=player_scalar_components(player_state),
     )
     builder_components = dict(
         params=builder_state.params,
         target_params=builder_state.target_params,
         opt_state=builder_state.opt_state,
-        scalars=dict(
-            step_count=builder_state.step_count,
-            frame_count=builder_state.frame_count,
-        ),
+        scalars=builder_scalar_components(builder_state),
     )
     return write_checkpoint_components(
         save_path,
@@ -510,9 +563,8 @@ def load_from_checkpoint(
             "reg_params", jax.tree.map(jnp.copy, ckpt_player_state["target_params"])
         ),
         opt_state=ckpt_player_state["opt_state"],
-        step_count=player_scalars["step_count"],
-        frame_count=player_scalars["frame_count"],
     )
+    player_state = apply_player_scalars(player_state, player_scalars)
 
     builder_state = builder_state.replace(
         params=ckpt_builder_state["params"],

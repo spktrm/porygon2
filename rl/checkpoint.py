@@ -8,9 +8,9 @@ component is stored as its own file:
         player/params
         player/target_params      # ema params — loadable without opt_state
         player/opt_state
-        player/alpha_params
-        player/alpha_opt_state
-        player/scalars            # step_count, frame_count, ema_adv_*
+        player/scalars            # step_count, frame_count, entropy-floor
+                                  # dual temperatures (see
+                                  # artifact.player_scalar_components)
         builder/params
         builder/target_params
         builder/opt_state
