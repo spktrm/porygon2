@@ -278,6 +278,26 @@ class LatentInputRead(nn.Module):
         )
 
 
+def tag_with_species(tokens: jax.Array) -> jax.Array:
+    """Add each entity's own species embedding to every one of its tokens.
+
+    Attention is q.k, so a species-shaped query matches species-shaped KEYS —
+    and an entity's condition (hp / status / fainted) lives on a state token
+    whose content has nothing to do with its species. The only thing an
+    entity's tokens otherwise share is `entity_bias`, a POSITIONAL parameter
+    that a content-derived query has no way to address. This tag is what lets
+    one species query retrieve a whole entity rather than just its species
+    token.
+
+    Free: token 0 of every entity group already IS that entity's species
+    embedding, so the tag is a broadcast add, and an entity whose species is
+    NULL/PAD/UNSPECIFIED embeds to zero and is therefore untagged.
+
+    (..., num_entities, num_tokens, dim) in, same shape out.
+    """
+    return tokens + tokens[..., :1, :]
+
+
 class RoundBlock(nn.Module):
     """One trunk round over the public LATENTS (the state stream: K rows
     produced by LatentInputRead over the flat input token set, 2026-08-21
@@ -1547,6 +1567,11 @@ class Encoder(nn.Module):
             (public_tokens, history_row_states[:, None].astype(public_tokens.dtype)),
             axis=1,
         )
+        # Content-derived entity key, alongside the positional entity_bias —
+        # tagged AFTER the fold so a slot's diary is retrievable by the same
+        # species query as the rest of its entity.
+        public_read_tokens = tag_with_species(public_read_tokens)
+        private_read_tokens = tag_with_species(private_tokens)
         public_read_mask = jnp.concatenate(
             (public_token_mask, history_row_valid[:, None]), axis=1
         )
@@ -1566,7 +1591,7 @@ class Encoder(nn.Module):
         public_latents = self.latent_input_read(
             (
                 public_read_tokens,
-                private_tokens,
+                private_read_tokens,
                 field_embeddings[None],
                 prev_action_tokens[None],
                 history_field_tokens,

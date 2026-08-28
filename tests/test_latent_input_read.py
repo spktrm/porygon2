@@ -197,3 +197,43 @@ def test_a_shared_history_group_could_not_tell_them_apart():
     )
     out = module.apply(params, swapped, masks, types, biases)
     np.testing.assert_array_equal(np.asarray(out), np.asarray(base))
+
+
+def test_species_tag_is_a_shared_per_entity_component():
+    """Every token of an entity must carry that entity's species direction.
+
+    Without it a species-shaped query retrieves only the species token, and
+    the condition it is asking for (hp / status / fainted) lives on a state
+    token with no species content — the entity's only other shared component
+    is entity_bias, which is positional and not content-addressable.
+    """
+    from rl.model.encoder import tag_with_species
+
+    rng = np.random.default_rng(3)
+    tokens = jnp.asarray(rng.normal(size=(4, 6, 8)), dtype=jnp.float32)
+    tagged = tag_with_species(tokens)
+
+    for entity in range(tokens.shape[0]):
+        species = np.asarray(tokens[entity, 0])
+        for token in range(tokens.shape[1]):
+            np.testing.assert_allclose(
+                np.asarray(tagged[entity, token] - tokens[entity, token]),
+                species,
+                atol=1e-6,
+            )
+        # Distinct entities must contribute distinct tags, or the tag is not
+        # an identity at all.
+        assert not np.allclose(species, np.asarray(tokens[(entity + 1) % 4, 0]))
+
+
+def test_species_tag_is_inert_for_an_unembedded_entity():
+    """Control: _embed_species zeroes NULL/PAD/UNSPECIFIED species, so a row
+    with no species is left exactly as it was rather than tagged with noise."""
+    from rl.model.encoder import tag_with_species
+
+    rng = np.random.default_rng(4)
+    tokens = jnp.asarray(rng.normal(size=(2, 5, 8)), dtype=jnp.float32)
+    tokens = tokens.at[1, 0].set(0.0)
+    tagged = tag_with_species(tokens)
+    np.testing.assert_array_equal(np.asarray(tagged[1]), np.asarray(tokens[1]))
+    assert not np.allclose(np.asarray(tagged[0]), np.asarray(tokens[0]))
