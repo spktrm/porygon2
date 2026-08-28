@@ -21,6 +21,7 @@ from rl.environment.data import (
     ENTITY_PRIVATE_MAX_VALUES,
     ENTITY_PUBLIC_MAX_VALUES,
     FIELD_MAX_VALUES,
+    INFO_MAX_VALUES,
 )
 from rl.environment.protos.enums_pb2 import SpeciesEnum
 from rl.environment.protos.features_pb2 import (
@@ -93,6 +94,7 @@ encode_one_hot_private_entity = partial(
 encode_one_hot_action = partial(encode_one_hot, max_values=ACTION_MAX_VALUES)
 encode_one_hot_edge = partial(encode_one_hot, max_values=ENTITY_EDGE_MAX_VALUES)
 encode_one_hot_field = partial(encode_one_hot, max_values=FIELD_MAX_VALUES)
+encode_one_hot_info = partial(encode_one_hot, max_values=INFO_MAX_VALUES)
 encode_sqrt_one_hot_public_entity = partial(
     encode_sqrt_one_hot, max_values=ENTITY_PUBLIC_MAX_VALUES
 )

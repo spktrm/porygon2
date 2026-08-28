@@ -55,8 +55,9 @@ class TokenType(IntEnum):
     default-valued vector.
 
     NON-ENTITY TOKENS (2026-08-21): field / side conditions, the two
-    prev-action slots, the per-slot recurrent history states and the field
-    history state.
+    prev-action slots, the per-slot recurrent history states, the field
+    history states, and the request info token (2026-08-28: request type and
+    active count, which are InfoFeatures and so cannot ride _embed_field).
 
     No UNSPECIFIED/PAD/UNK sentinels: these are table rows, not a
     vocabulary with an "unknown" case, so a reserved id is a never-indexed
@@ -79,6 +80,7 @@ class TokenType(IntEnum):
     PREV_ACTION = 9
     HISTORY_SLOT = 10
     HISTORY_FIELD = 11
+    INFO = 12
 
 
 NUM_TOKEN_TYPES = len(TokenType)
@@ -116,10 +118,13 @@ NUM_HISTORY_FIELD_ROWS = 3
 HISTORY_FIELD_TOKEN_TYPES = np.array(
     NUM_HISTORY_FIELD_ROWS * [TokenType.HISTORY_FIELD], dtype=np.int32
 )
+# One token for "what am I being asked": request type and active count.
+INFO_TOKEN_TYPES = np.array([TokenType.INFO], dtype=np.int32)
 
 # The flat input token count the latent read cross-attends, ASSERTED rather
 # than commented: 12 public x 11 (10 attributes + that slot's history state)
-# + 6 private x 8 + field 3 + prev-action 2 + history field 3 = 188. A group
+# + 6 private x 8 + field 3 + prev-action 2 + history field 3 + info 1 =
+# 189. A group
 # changing width silently changes the read's key count, and the arithmetic
 # was previously only a comment in config.py.
 NUM_INPUT_TOKENS = (
@@ -128,8 +133,9 @@ NUM_INPUT_TOKENS = (
     + len(FIELD_TOKEN_TYPES)
     + len(PREV_ACTION_TOKEN_TYPES)
     + len(HISTORY_FIELD_TOKEN_TYPES)
+    + len(INFO_TOKEN_TYPES)
 )
-assert NUM_INPUT_TOKENS == 188, NUM_INPUT_TOKENS
+assert NUM_INPUT_TOKENS == 189, NUM_INPUT_TOKENS
 
 _MOVE_SLOTS = np.asarray(MOVE_SLOT_INDICES)
 _SWITCH_SLOTS = np.asarray(SWITCH_SLOT_INDICES)

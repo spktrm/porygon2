@@ -35,9 +35,11 @@ from rl.environment.protos.features_pb2 import (
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
     FieldFeature,
+    InfoFeature,
     MovesetFeature,
     MovesetHasPP,
     PackedSetFeature,
+    RequestType,
 )
 from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentBatch, ModalityEnum
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
@@ -102,6 +104,8 @@ ENTITY_EDGE_MAX_VALUES = {
     EntityEdgeFeature.ENTITY_EDGE_FEATURE__DAMAGE_RATIO: MAX_RATIO_TOKEN,
     EntityEdgeFeature.ENTITY_EDGE_FEATURE__HEAL_RATIO: MAX_RATIO_TOKEN,
     EntityEdgeFeature.ENTITY_EDGE_FEATURE__STATUS_TOKEN: NUM_STATUS,
+    # 1 on a damage event, the parsed count on |-hitcount|.
+    EntityEdgeFeature.ENTITY_EDGE_FEATURE__HIT_COUNT: 6,
 }
 
 
@@ -119,6 +123,23 @@ FIELD_MAX_VALUES = {
     FieldFeature.FIELD_FEATURE__OPP_SPIKES: 4,
     FieldFeature.FIELD_FEATURE__MY_TOXIC_SPIKES: 2,
     FieldFeature.FIELD_FEATURE__OPP_TOXIC_SPIKES: 2,
+    # Within-turn edge sequence index (Edge.addEdge increments it, the turn
+    # boundary resets it). The ONLY observable of relative speed: the model
+    # sees a turn's edges through segment_sum, which destroys their order,
+    # and getField() never writes this column so the current-state row
+    # contributes a constant bucket. Cap clips (encode_one_hot), so it is a
+    # free tunable.
+    FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE: 16,
+}
+
+# The scalars the read's info token carries. REQUEST_TYPE is not
+# derivable from the action mask alone (a forced switch and a move turn on
+# which every move is disabled mask alike), and NUM_ACTIVE is the doubles
+# handle; neither is a FieldFeature, so neither can ride _embed_field, which
+# is shared with history rows that have no info array.
+INFO_MAX_VALUES = {
+    InfoFeature.INFO_FEATURE__REQUEST_TYPE: len(RequestType.keys()) - 1,
+    InfoFeature.INFO_FEATURE__NUM_ACTIVE: 2,
 }
 
 ACTION_MAX_VALUES = {

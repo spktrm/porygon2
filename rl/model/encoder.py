@@ -52,6 +52,7 @@ from rl.model.constants import (
     ACTION_SLOT_READ_INDICES,
     FIELD_TOKEN_TYPES,
     HISTORY_FIELD_TOKEN_TYPES,
+    INFO_TOKEN_TYPES,
     NUM_ACTION_SLOT_READS,
     NUM_TOKEN_TYPES,
     PREV_ACTION_TOKEN_TYPES,
@@ -66,6 +67,7 @@ from rl.model.features import (
     encode_one_hot_action,
     encode_one_hot_edge,
     encode_one_hot_field,
+    encode_one_hot_info,
     encode_one_hot_private_entity,
     encode_one_hot_public_entity,
     encode_reg_boosts,
@@ -738,6 +740,12 @@ class Encoder(nn.Module):
         self.side_condition_linear = nn.Dense(
             name="side_condition_linear", use_bias=False, **dense_kwargs
         )
+        # "What am I being asked": request type and active count. Both are
+        # InfoFeatures, so neither can ride _embed_field (shared with history
+        # rows, which carry no info array). REQUEST_TYPE is not derivable
+        # from the action mask alone — a forced switch and a move turn whose
+        # every move is disabled mask alike.
+        self.info_linear = nn.Dense(name="info_linear", use_bias=False, **dense_kwargs)
 
         # Recurrent history encoder over history edges. Twelve GRU states
         # (one per public slot) scanned along the history axis; per request we
@@ -1245,6 +1253,10 @@ class Encoder(nn.Module):
                     edge,
                     EntityEdgeFeature.ENTITY_EDGE_FEATURE__STATUS_TOKEN,
                 ),
+                encode_one_hot_edge(
+                    edge,
+                    EntityEdgeFeature.ENTITY_EDGE_FEATURE__HIT_COUNT,
+                ),
             ],
             dtype=self.cfg.dtype,
         )
@@ -1386,6 +1398,10 @@ class Encoder(nn.Module):
                 encode_one_hot_field(
                     field,
                     FieldFeature.FIELD_FEATURE__PSEUDOWEATHER_MIN_DURATION,
+                ),
+                encode_one_hot_field(
+                    field,
+                    FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE,
                 ),
             ],
             dtype=self.cfg.dtype,
@@ -1599,6 +1615,21 @@ class Encoder(nn.Module):
         history_field_valid = jnp.ones((1, NUM_FIELD_ROWS), dtype=jnp.bool_)
         field_valid = jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool)
 
+        info_tokens = self.info_linear(
+            one_hot_concat_jax(
+                [
+                    encode_one_hot_info(
+                        env_step.info, InfoFeature.INFO_FEATURE__REQUEST_TYPE
+                    ),
+                    encode_one_hot_info(
+                        env_step.info, InfoFeature.INFO_FEATURE__NUM_ACTIVE
+                    ),
+                ],
+                dtype=self.cfg.dtype,
+            )
+        )[None, None]
+        info_valid = jnp.ones((1, len(INFO_TOKEN_TYPES)), dtype=jnp.bool_)
+
         def assemble(prev_action_tokens, prev_action_mask):
             """The flat key set, ONE module instance, ONE set of biases."""
             return self.input_token_set(
@@ -1608,6 +1639,7 @@ class Encoder(nn.Module):
                     field_embeddings[None],
                     prev_action_tokens[None],
                     history_field_tokens,
+                    info_tokens,
                 ),
                 (
                     public_read_mask,
@@ -1615,6 +1647,7 @@ class Encoder(nn.Module):
                     field_valid[None],
                     prev_action_mask[None],
                     history_field_valid,
+                    info_valid,
                 ),
                 (
                     PUBLIC_READ_TOKEN_TYPES,
@@ -1622,8 +1655,9 @@ class Encoder(nn.Module):
                     FIELD_TOKEN_TYPES,
                     PREV_ACTION_TOKEN_TYPES,
                     HISTORY_FIELD_TOKEN_TYPES,
+                    INFO_TOKEN_TYPES,
                 ),
-                (public_bias, private_bias, None, None, None),
+                (public_bias, private_bias, None, None, None, None),
             )
 
         # ---- the entity-derived action slots, read off those tokens -------
@@ -1715,8 +1749,8 @@ class Encoder(nn.Module):
         # ---- the latent read ---------------------------------------------
         # K latents over the flat token set of my own information set --
         # 12 public x 11 (attributes + that slot's history state) + 6 private
-        # x 8 + field 3 + prev-action 2 + history field 3 -- become the
-        # trunk's state rows.
+        # x 8 + field 3 + prev-action 2 + history field 3 + info 1 -- become
+        # the trunk's state rows.
         public_latents = self.latent_input_read(
             *assemble(prev_action_tokens, prev_action_doubles_mask)
         )
