@@ -310,7 +310,13 @@ class Porygon2OfflineCritic(nn.Module):
         self, actor_input: PlayerActorInput, tokens: jax.Array, field_state: jax.Array
     ) -> CategoricalValueHeadOutput:
         slot_sides = self.encoder.history_slot_sides(actor_input.packed_history)
-        field_token = jnp.ones(1, dtype=jnp.bool_)
+        # The field history is THREE states since 2026-08-28 (global, mine,
+        # theirs). Each side pools the global row and its OWN side's row: the
+        # antisymmetry Phi(mirror) = -Phi requires that mirroring swaps which
+        # side row a perspective sees, which a shared "all three" mask would
+        # break.
+        my_field = jnp.array([True, True, False])
+        opp_field = jnp.array([True, False, True])
         if self.rating_conditioning:
             # One embedded rating token per side, pooled with that side's
             # slots. Mirroring swaps the perspectives — and with them the
@@ -336,10 +342,10 @@ class Porygon2OfflineCritic(nn.Module):
         else:
             my_extra = jnp.zeros(0, dtype=jnp.bool_)
             opp_extra = jnp.zeros(0, dtype=jnp.bool_)
-        # pool_history appends the field token last: mask order is
-        # [12 slots, (my_rt, opp_rt), field].
-        my_mask = jnp.concatenate((slot_sides == 1, my_extra, field_token))
-        opp_mask = jnp.concatenate((slot_sides == 0, opp_extra, field_token))
+        # pool_history appends the field tokens last: mask order is
+        # [12 slots, (my_rt, opp_rt), global, mine, theirs].
+        my_mask = jnp.concatenate((slot_sides == 1, my_extra, my_field))
+        opp_mask = jnp.concatenate((slot_sides == 0, opp_extra, opp_field))
         my_latents = self.encoder.pool_history(tokens, field_state, my_mask)
         opp_latents = self.encoder.pool_history(tokens, field_state, opp_mask)
         num_steps = tokens.shape[0]
