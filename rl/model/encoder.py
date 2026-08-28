@@ -74,6 +74,7 @@ from rl.model.features import (
     get_public_entity_mask,
 )
 from rl.model.history_encoder import (
+    NUM_FIELD_ROWS,
     NUM_PUBLIC_SLOTS,
     HistoryAttentionPool,
     NodeHistoryRead,
@@ -1575,8 +1576,15 @@ class Encoder(nn.Module):
         public_read_mask = jnp.concatenate(
             (public_token_mask, history_row_valid[:, None]), axis=1
         )
-        history_field_tokens = history_field_state[None, None].astype(self.cfg.dtype)
-        history_field_valid = jnp.ones((1, 1), dtype=jnp.bool_)
+        # (global, mine, theirs), matching _embed_field's own triple and
+        # tagged with the same field_side_bias, so "whose side" reads the
+        # same way on a current field token and on its recurrent memory.
+        history_field_tokens = history_field_state[None].astype(self.cfg.dtype)
+        field_side = self.field_side_bias.astype(self.cfg.dtype)
+        history_field_tokens = (
+            history_field_tokens.at[0, 1].add(field_side[1]).at[0, 2].add(field_side[0])
+        )
+        history_field_valid = jnp.ones((1, NUM_FIELD_ROWS), dtype=jnp.bool_)
 
         typed_action_valids = tuple(
             output_state_mask[slot_indices]
@@ -1694,10 +1702,17 @@ class Encoder(nn.Module):
             edge_slot_ids=edge_slot_ids,
             node_sides=node_sides,
             field_step_embeddings=step_field_vec,
+            field_row_embeddings=step_field_embeddings,
             step_request_count=step_request_count,
             step_valid=step_valid.squeeze(-1),
         )
-        return history_output, edge_slot_ids, node_sides, step_field_vec
+        return (
+            history_output,
+            edge_slot_ids,
+            node_sides,
+            step_field_vec,
+            step_field_embeddings,
+        )
 
     def encode_history(
         self,
@@ -1747,9 +1762,13 @@ class Encoder(nn.Module):
         encode_history, (announced slot states, announced field state,
         pre-turn node snapshots)), each per request.
         """
-        history_output, edge_slot_ids, node_sides, step_field_vec = (
-            self._run_history_encoder(packed_history_step, history_step)
-        )
+        (
+            history_output,
+            edge_slot_ids,
+            node_sides,
+            step_field_vec,
+            step_field_rows,
+        ) = self._run_history_encoder(packed_history_step, history_step)
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         states = self.history_encoder.state_at_requests(history_output, request_count)
 
@@ -1765,6 +1784,7 @@ class Encoder(nn.Module):
             node_sides=node_sides,
             row_is_announcement=row_is_announcement,
             field_step_embeddings=step_field_vec,
+            field_row_embeddings=step_field_rows,
             request_counts=request_count,
         )
         return states, announced
@@ -1787,10 +1807,10 @@ class Encoder(nn.Module):
         token_mask: jax.Array | None = None,
     ) -> jax.Array:
         """Pools the per-request history states into learned latent
-        summaries: (T, 12, D), (T, D) -> (T, num_latents, D). token_mask
-        (13,) optionally restricts which tokens are readable (constant
+        summaries: (T, 12, D), (T, 3, D) -> (T, num_latents, D). token_mask
+        (15,) optionally restricts which tokens are readable (constant
         across T)."""
-        tokens = jnp.concatenate((slot_states, field_state[..., None, :]), axis=-2)
+        tokens = jnp.concatenate((slot_states, field_state), axis=-2)
         if token_mask is None:
             return jax.vmap(self.history_pool)(tokens)
         return jax.vmap(self.history_pool, in_axes=(0, None))(tokens, token_mask)

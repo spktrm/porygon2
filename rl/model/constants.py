@@ -105,12 +105,17 @@ PREV_ACTION_TOKEN_TYPES = np.array(2 * [TokenType.PREV_ACTION], dtype=np.int32)
 PUBLIC_READ_TOKEN_TYPES = np.concatenate(
     (PUBLIC_TOKEN_TYPES, np.array([TokenType.HISTORY_SLOT], dtype=np.int32))
 )
-# The field history state belongs to no entity and stays its own group.
-HISTORY_FIELD_TOKEN_TYPES = np.array([TokenType.HISTORY_FIELD], dtype=np.int32)
+# The field history belongs to no entity and stays its own group: three
+# states (global, mine, theirs) mirroring the env-step field triple, told
+# apart by the same field_side_bias the current field tokens use.
+NUM_HISTORY_FIELD_ROWS = 3
+HISTORY_FIELD_TOKEN_TYPES = np.array(
+    NUM_HISTORY_FIELD_ROWS * [TokenType.HISTORY_FIELD], dtype=np.int32
+)
 
 # The flat input token count the latent read cross-attends, ASSERTED rather
 # than commented: 12 public x 11 (10 attributes + that slot's history state)
-# + 6 private x 8 + field 3 + prev-action 2 + history field 1 = 186. A group
+# + 6 private x 8 + field 3 + prev-action 2 + history field 3 = 188. A group
 # changing width silently changes the read's key count, and the arithmetic
 # was previously only a comment in config.py.
 NUM_INPUT_TOKENS = (
@@ -120,7 +125,7 @@ NUM_INPUT_TOKENS = (
     + len(PREV_ACTION_TOKEN_TYPES)
     + len(HISTORY_FIELD_TOKEN_TYPES)
 )
-assert NUM_INPUT_TOKENS == 186, NUM_INPUT_TOKENS
+assert NUM_INPUT_TOKENS == 188, NUM_INPUT_TOKENS
 
 _MOVE_SLOTS = np.asarray(MOVE_SLOT_INDICES)
 _SWITCH_SLOTS = np.asarray(SWITCH_SLOT_INDICES)

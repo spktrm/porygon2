@@ -30,6 +30,16 @@ from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_no
 # FLOP-bound; unrolling fuses steps per launch.
 SCAN_UNROLL = 8
 
+# The field history carries THREE states, mirroring the env-step field triple
+# that _embed_field already produces (2026-08-28). Hazards are side-differenced
+# — spikes on my side and spikes on theirs are opposite facts — and collapsing
+# them into one vector with a Dense meant the recurrent field memory could only
+# hold their mixture. Row order matches _embed_field's stack.
+NUM_FIELD_ROWS = 3
+FIELD_ROW_GLOBAL, FIELD_ROW_MINE, FIELD_ROW_THEIRS = 0, 1, 2
+# ENTITY_PUBLIC_NODE_FEATURE__SIDE == 1 is mine (service isMySide).
+SIDE_MINE = 1
+
 _RELEVANT_ENTITY_FEATURES = np.array(
     [
         FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0,
@@ -131,8 +141,8 @@ class HistoryAttentionPool(nn.Module):
     """Cross-attention pooling of the recurrent history states into a fixed
     bank of learned latent summaries.
 
-    A set of num_latents learned queries attends over the 13 history tokens
-    (12 slot states + field state), yielding (num_latents, D) latents.
+    A set of num_latents learned queries attends over the 15 history tokens
+    (12 slot states + the 3 field states), yielding (num_latents, D) latents.
     Shared module code, separately trained instances: the offline critic
     reads the flattened latents through its linear probe; the RL trunk
     reads its own instance's latents as extra history-context tokens,
@@ -196,9 +206,9 @@ class NodeHistoryRead(nn.Module):
         slot_states: jax.Array,
         field_state: jax.Array,
     ) -> jax.Array:
-        """(12, D) snapshots, (12, D) slot states, (D,) field -> (12, D)."""
+        """(12, D) snapshots, (12, D) slot states, (3, D) field -> (12, D)."""
         pcfg = self.cfg.history_pool
-        kv = jnp.concatenate((slot_states, field_state[None]), axis=0)
+        kv = jnp.concatenate((slot_states, field_state), axis=0)
         gate = self.param("gate", nn.initializers.zeros_init(), (1,)).astype(
             node_states.dtype
         )
@@ -234,7 +244,7 @@ class PerSlotHistoryEncoder(nn.Module):
             "initial_slot_state", init, (1, entity_size)
         )
         self.initial_field_state = self.param(
-            "initial_field_state", init, (entity_size,)
+            "initial_field_state", init, (NUM_FIELD_ROWS, entity_size)
         )
         # Projects [node snapshot ; edge ; field] into a slot message.
         self.message_projection = nn.Dense(
@@ -263,15 +273,23 @@ class PerSlotHistoryEncoder(nn.Module):
         touched: jax.Array,
         field_vec: jax.Array,
         valid: jax.Array,
+        field_rows: jax.Array,
+        side_messages: jax.Array,
     ) -> tuple[jax.Array, jax.Array]:
         """Advance the slot bank one step.
 
         Args:
-            h_slots: (..., 12, D), h_field: (..., D).
+            h_slots: (..., 12, D), h_field: (..., 3, D).
             slot_messages: (..., 12, D) per-slot message (zero if untouched).
             touched: (..., 12) float gates in [0, 1].
-            field_vec: (..., D) field embedding for this step.
+            field_vec: (..., D) pooled field embedding for this step — the
+                message/slot-input view of the field.
             valid: (...,) float step-validity gate.
+            field_rows: (..., 3, D) the (global, mine, theirs) field token
+                triple, one input per field state.
+            side_messages: (..., 3, D) this step's slot messages summed over
+                (all, my-side, their-side) edges — so the two side states
+                integrate only their own side's events.
         """
         # Battle gestalt so a slot update can condition on the other slots,
         # plus the persistent field state for global memory.
@@ -280,8 +298,19 @@ class PerSlotHistoryEncoder(nn.Module):
         def per_slot(x: jax.Array) -> jax.Array:
             return jnp.broadcast_to(x[..., None, :], h_slots.shape)
 
+        # All three field states reach every slot: a slot update should see
+        # its own side's hazards and the opponent's alike.
+        flat_field = h_field.reshape(*h_field.shape[:-2], -1)
         slot_inputs = jnp.concatenate(
-            (slot_messages, per_slot(field_vec), per_slot(ctx), per_slot(h_field)),
+            (
+                slot_messages,
+                per_slot(field_vec),
+                per_slot(ctx),
+                jnp.broadcast_to(
+                    flat_field[..., None, :],
+                    h_slots.shape[:-1] + flat_field.shape[-1:],
+                ),
+            ),
             axis=-1,
         )
         # GRUCell applies its Dense layers to the last axis, so the 12 slots
@@ -290,18 +319,27 @@ class PerSlotHistoryEncoder(nn.Module):
         slot_gate = (touched * valid[..., None])[..., None]
         h_slots = slot_gate * new_slots + (1 - slot_gate) * h_slots
 
+        # One cell over the 3 field rows: shared weights, separate carries.
         new_field, _ = self.field_cell(
-            h_field,
-            jnp.concatenate((field_vec, slot_messages.sum(axis=-2)), axis=-1),
+            h_field, jnp.concatenate((field_rows, side_messages), axis=-1)
         )
-        field_gate = valid[..., None]
+        field_gate = valid[..., None, None]
         h_field = field_gate * new_field + (1 - field_gate) * h_field
         return h_slots, h_field
 
     def _observe_step(self, carry, xs):
         """One real history step: scatter edges into the slot bank."""
         h_slots, h_field, latest_nodes = carry
-        field_vec, messages, node_embs, slot_ids, edge_mask, valid = xs
+        (
+            field_vec,
+            messages,
+            node_embs,
+            slot_ids,
+            edge_mask,
+            valid,
+            field_rows,
+            edge_is_mine,
+        ) = xs
 
         # Padded / invalid edges scatter into a 13th bin that is dropped.
         seg = jnp.where(edge_mask & valid, slot_ids, NUM_PUBLIC_SLOTS)
@@ -327,6 +365,18 @@ class PerSlotHistoryEncoder(nn.Module):
             touched[..., None], node_means.astype(latest_nodes.dtype), latest_nodes
         )
 
+        # (all, mine, theirs) message sums for the three field states.
+        live = (edge_mask & valid).astype(messages.dtype)[..., None]
+        mine = live * edge_is_mine.astype(messages.dtype)[..., None]
+        side_messages = jnp.stack(
+            (
+                (messages * live).sum(axis=-2),
+                (messages * mine).sum(axis=-2),
+                (messages * (live - mine)).sum(axis=-2),
+            ),
+            axis=-2,
+        )
+
         h_slots, h_field = self._advance(
             h_slots,
             h_field,
@@ -334,6 +384,8 @@ class PerSlotHistoryEncoder(nn.Module):
             touched.astype(h_slots.dtype),
             field_vec,
             valid.astype(h_slots.dtype),
+            field_rows.astype(h_slots.dtype),
+            side_messages,
         )
         carry = (h_slots, h_field, latest_nodes)
         return carry, carry
@@ -346,6 +398,7 @@ class PerSlotHistoryEncoder(nn.Module):
         edge_slot_ids: jax.Array,
         node_sides: jax.Array,
         field_step_embeddings: jax.Array,
+        field_row_embeddings: jax.Array,
         step_request_count: jax.Array,
         step_valid: jax.Array,
     ) -> PerSlotHistoryOutput:
@@ -357,7 +410,10 @@ class PerSlotHistoryEncoder(nn.Module):
             edge_embedding_cache: (P, D) embedded edge cache rows.
             edge_slot_ids: (P,) ENTITY_EDGE_FEATURE__ENTITY_IDX per cache row.
             node_sides: (P,) relative side (1 = mine) per cache row.
-            field_step_embeddings: (H, D) pooled field embedding per step.
+            field_step_embeddings: (H, D) pooled field embedding per step —
+                the message/slot-input view.
+            field_row_embeddings: (H, 3, D) the (global, mine, theirs) field
+                token triple per step, one input per field state.
             step_request_count: (H,) request count of each history step.
             step_valid: (H,) bool.
         """
@@ -377,9 +433,11 @@ class PerSlotHistoryEncoder(nn.Module):
         # rows are perspective-blind). The outcome is inherently a
         # side-differenced quantity, so hand each message an explicit
         # "mine / theirs" tag instead of making the model excavate it.
+        edge_sides = jnp.take(node_sides, relevant, axis=0)  # (H, K)
         side_onehot = jax.nn.one_hot(
-            jnp.take(node_sides, relevant, axis=0), 2, dtype=node_embeddings.dtype
+            edge_sides, 2, dtype=node_embeddings.dtype
         )  # (H, K, 2)
+        edge_is_mine = edge_sides == SIDE_MINE
 
         messages = self.message_projection(
             jnp.concatenate(
@@ -415,6 +473,8 @@ class PerSlotHistoryEncoder(nn.Module):
                 slot_ids,
                 edge_mask,
                 step_valid,
+                field_row_embeddings,
+                edge_is_mine,
             ),
         )
 
@@ -467,6 +527,7 @@ class PerSlotHistoryEncoder(nn.Module):
         node_sides: jax.Array,
         row_is_announcement: jax.Array,
         field_step_embeddings: jax.Array,
+        field_row_embeddings: jax.Array,
         request_counts: jax.Array,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """Announced state per request: both players' revealed choices, no
@@ -514,9 +575,9 @@ class PerSlotHistoryEncoder(nn.Module):
         )
         announced = jnp.take(row_is_announcement, relevant, axis=0)  # (H, K)
         edge_ok = edge_mask & announced & history_output.step_valid[:, None]
-        side_onehot = jax.nn.one_hot(
-            jnp.take(node_sides, relevant, axis=0), 2, dtype=edge_embeddings.dtype
-        )
+        edge_sides = jnp.take(node_sides, relevant, axis=0)
+        side_onehot = jax.nn.one_hot(edge_sides, 2, dtype=edge_embeddings.dtype)
+        edge_is_mine = edge_sides == SIDE_MINE
 
         # message_projection is bias-free, hence linear over its
         # [node ; edge ; field ; side] input blocks: the edge+side part is
@@ -550,6 +611,18 @@ class PerSlotHistoryEncoder(nn.Module):
         )(
             edge_ok, seg
         )  # (H, 12)
+        # (all, mine, theirs) sums for the three field states, same partition
+        # as _observe_step.
+        live = edge_ok.astype(edge_messages.dtype)[..., None]
+        mine = live * edge_is_mine.astype(edge_messages.dtype)[..., None]
+        step_side_messages = jnp.stack(
+            (
+                (edge_messages * live).sum(axis=-2),
+                (edge_messages * mine).sum(axis=-2),
+                (edge_messages * (live - mine)).sum(axis=-2),
+            ),
+            axis=-2,
+        )  # (H, 3, D)
 
         h0_slots, h0_field = self.initial_state()
         step_indices = jnp.arange(history_output.step_valid.shape[0])
@@ -579,17 +652,39 @@ class PerSlotHistoryEncoder(nn.Module):
                 field_step_embeddings[safe_idx],
                 jnp.zeros_like(field_step_embeddings[0]),
             )
+            field_rows = jnp.where(
+                has_history,
+                field_row_embeddings[safe_idx],
+                jnp.zeros_like(field_row_embeddings[0]),
+            )
             turn = (
                 history_output.step_valid
                 & (history_output.step_request_count == request_count)
             ).astype(msg_dtype)
             slot_messages = jnp.einsum("h,hsd->sd", turn, step_slot_messages)
+            side_messages = jnp.einsum("h,hsd->sd", turn, step_side_messages)
             counts = jnp.einsum("h,hs->s", turn, step_counts.astype(msg_dtype))
-            return slots, field, nodes, field_vec, slot_messages, counts
+            return (
+                slots,
+                field,
+                nodes,
+                field_vec,
+                field_rows,
+                slot_messages,
+                side_messages,
+                counts,
+            )
 
-        pre_slots, pre_field, pre_nodes, pre_field_vec, slot_messages, counts = (
-            jax.vmap(gather_one)(request_counts)
-        )
+        (
+            pre_slots,
+            pre_field,
+            pre_nodes,
+            pre_field_vec,
+            pre_field_rows,
+            slot_messages,
+            side_messages,
+            counts,
+        ) = jax.vmap(gather_one)(request_counts)
 
         zeros_tsd = jnp.zeros_like(pre_nodes)
         zeros_side = jnp.zeros(pre_nodes.shape[:-1] + (2,), dtype=pre_nodes.dtype)
@@ -616,5 +711,7 @@ class PerSlotHistoryEncoder(nn.Module):
             touched.astype(pre_slots.dtype),
             pre_field_vec,
             valid.astype(pre_slots.dtype),
+            pre_field_rows,
+            side_messages,
         )
         return ann_slots, ann_field, pre_nodes

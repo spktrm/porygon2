@@ -88,7 +88,7 @@ def test_output_is_the_latent_array():
     out = module.apply(params, groups, masks, types, biases)
     assert out.shape == (module.cfg.num_latents, module.cfg.entity_size)
     assert bool(jnp.isfinite(out.astype(jnp.float32)).all())
-    assert 12 * 11 + 6 * 8 + 3 + 2 + 1 == sum(g.shape[0] * g.shape[1] for g in groups)
+    assert 12 * 11 + 6 * 8 + 3 + 2 + 3 == sum(g.shape[0] * g.shape[1] for g in groups)
 
 
 def test_read_is_live_at_init_and_opponent_moves_reach_the_latents():
