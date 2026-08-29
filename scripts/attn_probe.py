@@ -3,16 +3,16 @@
 Loads a saved player checkpoint, runs ONE forward pass on the bundled
 example step with COLLECT_INTERMEDIATES=1 so MultiHeadAttention sows its
 weights, then attributes each attention module's mass to the encoder's
-substreams (state = [state] -- the latent array since 2026-08-21, one
-group; action = [move, switch, target]).
+SEQUENCE GROUPS (rl/model/constants.SEQUENCE_SLICES).
 
-Since the latent read, the state rows are learned latents rather than
-per-entity slots, so the old headline ("when a SWITCH row reads the state
-stream, how much lands on the opponent's public entities?") is answered
-one level up: read the `latent_input_read/read` attention, whose KEYS are
-the 186 raw tokens (public 120 | private 48 | field 3 | prev 2 | history
-13), to see which token groups each latent attends. Run with the learner
-stopped — it wants the GPU.
+Since 2026-08-29 there is one sequence and one kind of attention, so the
+layout is STATIC and this probe no longer has to read part sizes the trunk
+sowed: row 0 is CLS, then 12 public entities, 6 sheet rows, 16 candidate
+moves, 17 target slots, the two field triples, prev-action and info. The
+headline question is answerable directly again -- "when a SHEET row (a
+switch candidate) attends, how much mass lands on the opponent's public
+entities?" -- because a sheet row IS a row of the sequence. Run with the
+learner stopped: it wants the GPU.
 
     COLLECT_INTERMEDIATES=1 env/bin/python scripts/attn_probe.py \
         [--ckpt ckpts/gen9/ckpt_00040000] [--out runtime/attn_probe.html]
@@ -24,16 +24,13 @@ import pickle
 
 import numpy as np
 
-STATE_PARTS = ["state"]
-# Key layout of the latent read's attention (tokens, in concat order).
-READ_TOKEN_PARTS = [
-    ("public", 12 * 10),
-    ("private", 6 * 8),
-    ("field", 3),
-    ("prev_action", 2),
-    ("history", 13),
+from rl.model.constants import SEQUENCE_SLICES  # noqa: E402
+
+# (name, start, stop) per sequence group -- the same static layout the model
+# indexes, so a group can never be mislabelled here.
+SEQUENCE_EDGES = [
+    (group.name.lower(), sl.start, sl.stop) for group, sl in SEQUENCE_SLICES.items()
 ]
-ACTION_PARTS = ["move", "switch", "target"]
 
 
 def _latest_ckpt(root="ckpts/gen9"):
@@ -57,15 +54,6 @@ def collect(tree, path="", out=None):
     elif hasattr(tree, "shape"):
         out[path] = np.asarray(tree)
     return out
-
-
-def bounds(sizes):
-    """[(name, lo, hi)] from part sizes."""
-    edges, acc = [], 0
-    for n, s in zip(sizes[0], sizes[1]):
-        edges.append((n, acc, acc + int(s)))
-        acc += int(s)
-    return edges
 
 
 def mass_by_part(w, key_edges, query_edges=None):
@@ -126,17 +114,8 @@ def main():
     for k, v in sorted(inter.items()):
         print(f"#   {k:72s} {tuple(v.shape)}")
 
-    sp = next((v for k, v in inter.items() if "state_part_sizes" in k), None)
-    apz = next((v for k, v in inter.items() if "action_part_sizes" in k), None)
-    if sp is None or apz is None:
-        print("!! part sizes not sown — is COLLECT_INTERMEDIATES=1 set?")
-        return
-    sp = np.asarray(sp).reshape(-1, len(STATE_PARTS))[0]
-    apz = np.asarray(apz).reshape(-1, len(ACTION_PARTS))[0]
-    s_edges = bounds((STATE_PARTS, sp))
-    a_edges = bounds((ACTION_PARTS, apz))
-    print(f"\n# state parts {list(zip(STATE_PARTS, sp))}")
-    print(f"# action parts {list(zip(ACTION_PARTS, apz))}")
+    n_rows = SEQUENCE_EDGES[-1][2]
+    print(f"\n# sequence groups {[(g, a, b) for g, a, b in SEQUENCE_EDGES]}")
 
     sections = []
     for path, w in sorted(inter.items()):
@@ -144,10 +123,11 @@ def main():
             continue
         name = path.split("/")[-2]
         n_q, n_k = w.shape[-2], w.shape[-1]
-        q_edges = a_edges if n_q == sum(apz) else (s_edges if n_q == sum(sp) else None)
-        k_edges = a_edges if n_k == sum(apz) else (s_edges if n_k == sum(sp) else None)
-        if k_edges is None:
+        if n_q != n_rows or n_k != n_rows:
+            # Not a trunk attention (the entity pools run over one entity's
+            # attribute tokens, which are a different axis entirely).
             continue
+        q_edges = k_edges = SEQUENCE_EDGES
         rows = mass_by_part(w, k_edges, q_edges)
         sections.append((name, tuple(w.shape), k_edges, rows))
         print(f"\n## {name}  shape={tuple(w.shape)}  (q={n_q}, k={n_k})")

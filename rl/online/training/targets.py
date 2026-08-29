@@ -40,7 +40,6 @@ def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
     isr: jax.Array,
-    adv_taken: jax.Array,
     config: Porygon2LearnerConfig,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes Retrace VALUE targets on the win/loss channel plus the
@@ -56,10 +55,6 @@ def compute_player_targets(
     estimates the target policy's values with off-policy correction — stable
     under replay reuse because the fast target tracks the learner within ~1k
     steps.
-
-    ``adv_taken`` is the target critic's advantage at the action actually
-    taken, which turns the estimator into Retrace over the COMPOSED Q — see
-    the baseline comment below.
 
     config.player_lambda (0.8, AlphaStar's TD(lambda) value) shapes the
     value targets.
@@ -94,28 +89,13 @@ def compute_player_targets(
     v_tm1 = jnp.exp(value_log_probs.astype(jnp.float32)) @ support
     v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
 
-    # Retrace over the COMPOSED Q (2026-08-25): the subtracted baseline is
-    # Q(s, a) = V(s) + A(s, a), not V(s) alone — in scalar space the
-    # baseline shift IS adv_taken. E_pi[Q(s', .)] = V(s') EXACTLY by
-    # heads.compose_q's centring, so the bootstrap is untouched and only
-    # the baseline moves — and E_pi[A] = 0 means the doubly-robust
-    # correction adds nothing back, it only takes the taken cell out.
-    #
-    # What that buys: with the baseline at V, the truncated rho attenuates
-    # the WHOLE residual, including the action-conditional part the critic
-    # already predicts. rho-bar = 1 therefore targets min(pi, mu)
-    # renormalised — it pulls the value toward the BEHAVIOUR policy exactly
-    # on the rows where pi has fallen below mu, which is the collapse's own
-    # signature (LESSONS 6, player_isr_below1_switch_voluntary). With the
-    # baseline at Q the model term enters at full pi weight and rho
-    # attenuates only the environment noise: a bias reduction as much as a
-    # variance one.
-    #
-    # A is zero-init (flat-at-init contract), so this is the identity at
-    # launch and adv_taken = 0 is the exact revert.
-    td_errors = (
-        rho_t * mask * (r_t + discount_t * v_t - v_tm1 - adv_taken.astype(jnp.float32))
-    )
+    # Plain v-trace: the subtracted baseline is V(s). Between 2026-08-25 and
+    # 2026-08-29 it was the COMPOSED Q = V(s) + A(s, a), i.e. this residual
+    # also subtracted the target critic's advantage at the taken action, so
+    # rho attenuated only environment noise rather than the whole residual.
+    # That went with the advantage head; the file's own note promised
+    # adv_taken = 0 was the exact revert, and this is it.
+    td_errors = rho_t * mask * (r_t + discount_t * v_t - v_tm1)
 
     errors = vtrace(td_errors, discount_t, c_t * config.player_lambda)
     scalar_returns = (errors + v_tm1) * mask

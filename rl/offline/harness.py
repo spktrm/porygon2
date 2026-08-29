@@ -189,10 +189,11 @@ def forward(
     generation: int = 9,
 ) -> Iterator[tuple[PlayerActorOutput, object]]:
     """Yields (prediction, stacked batch) over `chunks` in batches, using
-    the learner-side model (train=True, so advantage/q are populated). Batch axis
-    is 1, matching the learner's apply_fn. Leaves are host numpy-able jax
-    arrays; decode Q_all with decode_q(pred, flat_action_mask) and V as
-    pred.value_head.expectation."""
+    the learner-side model (train=True, so the full-support log_policy is
+    populated). Batch axis is 1, matching the learner's apply_fn. Leaves are
+    host numpy-able jax arrays; read the action grid with
+    decode_log_policy(pred, flat_action_mask) and V as
+    pred.value_head.expectation.""" ""
     net = get_player_model(get_player_model_config(generation, train=True))
     apply = jax.jit(jax.vmap(net.apply, in_axes=(None, 1, 1, None), out_axes=1))
     dev_params = jax.device_put(params)
@@ -209,10 +210,16 @@ def forward(
         ), b
 
 
-def decode_q(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
-    """Q = sg(V) + centred A, (T, B, A) — composed in the model since
-    2026-08-25 (heads.compose_q), so this is now just a masked read."""
-    return np.asarray(jnp.where(jnp.asarray(flat_action_mask, bool), pred.q, 0.0))
+def decode_log_policy(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
+    """The full-support log-policy over the flat src x tgt grid, (T, B, A),
+    masked to legal cells.
+
+    Replaces decode_q on 2026-08-29. The Q readout it decoded went with the
+    advantage head; the action grid the policy itself scores is what is left,
+    and it is what the separation probe now regresses onto."""
+    return np.asarray(
+        jnp.where(jnp.asarray(flat_action_mask, bool), pred.action_head.log_policy, 0.0)
+    )
 
 
 def gpu_headroom_env(fraction: float = 0.12) -> None:

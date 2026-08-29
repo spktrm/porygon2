@@ -50,15 +50,23 @@ TypeScript game service speaking protobuf over websockets.
 - `rl/environment/` — `interfaces.py` (all pytree dataclasses),
   `utils.py` (`process_state` proto→numpy decode, geometric buckets for the
   inference path, `clip_history_windows_tail` joint tail-windowing).
-- `rl/model/` — `encoder.py`: `Encoder` + `RoundBlock` (residual streams:
-  state, action, value; attention block masks ARE the information routing).
-  `history_encoder.py`: per-slot GRU scan over history, aligned to requests
-  by REQUEST_COUNT VALUE (trailing windows are therefore safe).
-  `player_model.py`: four modules — `policy_head` and `advantage_head` are
-  both `ActionScoreHead` over the same action grid (differing only in
-  `reduce`), `v_head` is the one critic, plus the encoder. `heads.py`:
-  `compose_q` owns the `Q = sg(V) + A - E_sg(pi)[A]` identity; micro params
-  are keyed by slot group and macro params by modality, none shared.
+- `rl/model/` — ONE sequence of 61 rows, one row per THING (2026-08-29).
+  `constants.py`: the layout — `SEQUENCE_LAYOUT` is the single source, every
+  offset and named slice derives from it, and a head never carries a literal.
+  `encoder.py`: the feature embedders, the entity-local pools (the same ones
+  the packed history cache uses), and `_assemble_sequence`, split out from
+  `_batched_forward` so a test can read the rows as they go IN — every
+  identity a row carries is additive and applied there. `trunk.py`: N
+  unshared pre-RMSNorm blocks over that sequence, no gates and no block
+  masks; `RMSNorm`'s zeros-init scale makes it identity at step 0, so it is
+  live at init by construction. `history_encoder.py`: per-slot GRU scan over
+  history, aligned to requests by REQUEST_COUNT VALUE (trailing windows are
+  therefore safe). `player_model.py`: three modules — encoder, action
+  readout, critic. `heads.py`: `FlatActionReadout` — a scalar per sheet row
+  for switching, ONE bilinear for moves x targets, a scalar per target row
+  for the standalone actions; `query` zero-init and `key` not, so the zero
+  factor's gradient is a rank-1 outer product of live rows rather than the
+  two-factor stall. The critic reads the CLS row and nothing else.
   `modules.py`: generic primitives only — architecture lives next to its wiring.
 - `rl/online/training/` — the learner, split by what each piece needs to
   run. `train_step.py`: the jitted update (losses, EMA target, non-finite
@@ -619,6 +627,131 @@ instrument — a BR probe against the ~77k ckpt reading ≤ the 0.57–0.58 the
 (the floor is a pure tax); entropy AT target while `type_scale_switch` →
 0 (mass without discrimination — the phase-1 shape, watched on the
 mechanism actually feared, per the twice-paid abort-instrument lesson).
+
+## Removal + addition ledger — 2026-08-29 flat trunk, flat readout, Q retired
+
+Everything below existed at tag **`pre-flat-trunk-2026-08-29`** (on `main`).
+Same restore recipe as the other passes. **28.72M -> 13.47M parameters (-53%),
+`encoder.py` 1998 -> ~1230 lines, 189 input tokens -> a 61-row sequence.**
+
+The through-line: almost none of the structure was load-bearing for the
+INFORMATION the model needs. The block masks, the residual-stream gates, the
+Perceiver bottleneck and the macro/micro composition each solved a routing
+problem that plain self-attention over one short sequence solves by
+construction — and at 61 rows an all-pairs attention is 3.7k cells against the
+~24k the masked routing plus its two feeding cross-attention reads paid. The
+masks were buying their own complexity.
+
+| mechanism | paths / symbols deleted | why it went |
+|---|---|---|
+| Round trunk + three residual streams | `encoder.RoundBlock`, `GroupNorm`, `action_input_norm`/`action_out_norm`, `attend`, every `*_gate` param, `LatentInputRead` + `cfg.encoder.num_latents`/`latent_read`, `ActionSlotRead` + `_action_slot_queries` + `slot_position`, `InputTokenSet`, `tag_with_species`, `_current_entity_tokens`, `value_embeddings_table`, `cfg.encoder.num_rounds`/`round.*`, `rl/offline/gate_contribution.py` | 14.76M params (51% of the model) for five block-masked gated attentions per round over 3 streams, fed by a 48-latent bottleneck. Replaced by `rl/model/trunk.py`: 6 ungated pre-RMSNorm blocks over ONE sequence, 6.32M. The 2026-08-24 gate-contribution finding (all six FFWs contributing <= 5e-4 of their stream) is retired STRUCTURALLY — there are no gates — rather than tuned around |
+| Attribute-token input layout | 189 raw tokens (10-11 per entity) -> 61 rows, one per THING | see the caveat below: this re-adopts entity-local pooling, deliberately |
+| Hierarchical action head | `heads.{calculate_hierarchical_prior, MicroHead, ActionAdapter, MacroHead, MacroMicroHead, ActionScores, ActionScoreHead, compose_action_grid}`, `cfg.{policy_head, advantage_head}` | 2.65M params over two instantiations became 0.13M over three small readouts (`FlatActionReadout`): a scalar per sheet row for switching, ONE bilinear for moves x targets, a scalar per target row for pass/default |
+| Q/advantage observer | `advantage_head`, `heads.compose_q`, `PlayerActorOutput.{advantage,q}`, `loss_q`, `player_q_coef`, the Retrace baseline in `targets.compute_player_targets` (`adv_taken`), `telemetry.{q_fit_telemetry, modality_means}` + the Q/policy head-leaf tables, `rl/offline/overfit_probe.py`, `tests/test_{q_identity,train_step_q}.py`, and every `player_{loss_q, q_r2*, q_mse, q_action_var*, adv_rms*, adv_type_scale*, q_pivotal_*, q_switch_move_gap, q_saturation_frac, q_calibration_r2_*, q_label_var_*, retrace_baseline_*, policy_absadv_*, q_loss_share_*, mv_*_gap_critic, policy_micro_local_*, policy_adapter_rms, policy_type_scale_*, q_grad_norm_*}` panel | the policy stopped reading it at the NashPG switch (2026-08-26), which left it a matched control for an architecture that no longer exists. **Last readings, banked before deletion** (qb8b82oi @ lifetime_step 289235): `q_r2` 0.8817, `q_r2_switch_voluntary` 0.9162, `adv_rms_move` 0.0339, `adv_rms_switch` 0.1016, `adv_rms_target` 0 (never trained — singles has no target modality), `policy_absadv_ratio` 4.509, `q_action_var_uniform_p90` 0.00705, `retrace_baseline_abs` 0.0197, `q_switch_move_gap` -0.1386, `q_support_vol_switch_rows` 9. So the critic fit well and *preferred* switch cells 3.0x on |A| against a 0.032 switch mass — the same signature that has stood since the 157k 2026-08-20 lineage — and the value targets it shifted moved by 0.0197. The v-trace baseline reverts to V, which `targets.py`'s own note already promised was the exact revert |
+| Packed 1681-bit action mask | `EnvironmentState.bytes action_mask` on the write path (the field survives, renamed `packed_action_mask`, ONLY so the 8.8GB of `replays/shards` still parse), `state.ts`'s four hand-copied enum tables, `runner.ts::getShowdownTargetFormat` + `CHOOSABLE_TARGETS` + the whole parallel decoder, `isStruggling`, `getActionMask`'s unused `format` arg | 211 bytes carried a ~10-element choice set over a grid of which ~84% is unreachable in ANY format. See the addition row |
+
+**Two §13 lessons were deliberately set aside. They are decisions, not
+oversights, and both are recorded so a future reader sees the choice:**
+
+1. *"Deep, modality-separated action decoders are empirically necessary"* (the
+   Nov-2025 hierarchical head beat the flat gram head). **Judged confounded.**
+   The flat readout goes in and the pre-registered gate below judges it.
+2. *"Cross-entity pooling exists because matchup reasoning is a species-token x
+   move-token comparison across two mons, and with entity-local pooling there
+   is no layer where those two tokens coexist"* — and the 2026-08-28 audit,
+   which moved AWAY from pooled entity vectors toward raw token reads.
+   One-token-per-entity re-adopts the pooling. **Partial mitigation, by
+   construction:** my 16 candidate moves stay their own rows and the four
+   entity-derived target rows carry the opposing actives, so *my move x their
+   mon* — the direction a decision actually turns on — keeps both operands as
+   separate rows. What is given up is THEIR individual revealed moves. If
+   matchup reasoning proves to be the deficit, the fix is explicit matchup rows
+   (each of my mons x each of theirs, the 24 tokens the reference design uses),
+   NOT re-unpacking attributes.
+
+**Additions.**
+
+| mechanism | what it is | why |
+|---|---|---|
+| `rl/model/trunk.py` (`Trunk`, `TrunkBlock`) | 6 unshared pre-RMSNorm blocks, self-attention + one SHARED SwiGLU MLP, plain residual, `nothing_saveable` remat, over the 61-row sequence | no gates and no masks: `RMSNorm` is `normed * (1 + scale)` with `scale` zeros-init, i.e. exactly identity at init, and the residual adds are ungated, so the trunk is live at step 0 by construction and an "is it wired" test needs no gate opening |
+| `heads.FlatActionReadout` | three readouts over named rows; the bilinear survives ONLY for moves x targets | **init contract: every logit is exactly 0, so the policy starts UNIFORM over legal cells** and `compute_policy_metrics(prior=None)` is the anchor. Reaching that without re-creating the two-factor stall is the subtlety: `query` is zero-init and `key` is not, so the zero factor's gradient is a rank-1 outer product of LIVE rows (it moves at step 1, key unfreezes at step 2) — one zero factor over a live input, not a scalar times a random grid. **No qk layer-norm on this head**: its input is identically zero at init and its Jacobian goes as 1/sqrt(eps) straight into the zero-init kernel |
+| `loss.uniform_kl_rows` + `player_uniform_kl_coef` 0.05 | forward KL from UNIFORM over legal cells, inside the pg bracket | per-logit gradient is exactly **pi_b - 1/k**: bounded by 1 for any pi, zero-sum, **no pi prefactor** — the three properties every mass-restoring mechanism this project tried has lacked. Note the DIRECTION: reverse KL(pi ‖ u) is, up to a constant, the entropy bonus already in the objective. And unlike the four support-anchor phases the reference is a CONSTANT, so it cannot collapse, cannot be ratcheted flat by re-snapping from an already-collapsing policy, and cannot invert on the modality-level sign of Q^pi. 0.0 is a bit-identical off |
+| `proto.ActionMask` + `ActionRequestKind` | a structured mask shaped like the DECISION: 6 switch bits, 16 move slots x 17 target bits, a standalone-action mask, the request kind and the ally half | the 41x41 grid was a model-side artefact that leaked onto the wire. The service now builds the mask and the Showdown choice string TOGETHER, as one `cell -> choice` map, and `choiceFromAction` is a lookup in it |
+| `player_pointer_*` / `player_trunk_*` panels | rms of each readout leaf against its known init, plus per-subtree grad norms | required, not decoration: the dx65cpwp runaway lived entirely in head params and was invisible on wandb. The flat readout's failure mode is the SAME shape (a two-factor product with one zero-init factor), so `query` must leave 0 within ~200 steps and `key` must leave lecun 0.0625 shortly after. src/tgt stay split — the 7.5x asymmetry was itself the diagnostic |
+
+**THREE MASK BUGS the one-table refactor made unrepresentable**, all live for
+months and all invisible because nothing asserted the mask and the decoder
+agreed and the sim's rejections were logged rather than counted:
+
+1. **The wildcard suffix was hardcoded to `" terastallize"`** while the mask
+   legalised a wildcard for mega evolution, Ultra Burst and Z-moves too, so
+   those cells decoded to a choice Showdown rejects.
+2. **Move targets were resolved through a different move list than the mask
+   indexed**: the mask read `active.maxMoves.maxMoves` under Dynamax, the
+   decoder `request.active[i].moves[j]`.
+3. **Team preview lit one cell per REMAINING POSITION — up to 7 — while the
+   decoder ignored the target entirely.** Up to 42 grid cells stood for 6 real
+   choices, so the policy spread its mass over exact duplicates and the
+   micro-entropy cell count was inflated to match. One cell per candidate now.
+
+Also fixed: `switch_slots` alone cannot say WHICH active a switch replaces, so
+the message carries `active_slot`; without it a singles battle legalises
+`ALLY_2_SWITCH` and the model can pick a cell the service cannot decode. Caught
+by the new invariant, not by reasoning.
+
+**Instruments.** `service/src/tests/harness.ts` now asserts that the wire mask
+and the decoder name exactly the same cells (with an independent second
+implementation of the derivation, because the thing under test is that the two
+LANGUAGES agree), that a request carrying a choice never legalises nothing, and
+that the sim rejected no choice at all — `invalidChoiceCount`, counted rather
+than logged. **3810 soak battles, zero violations.** Python side:
+`tests/test_action_mask.py` round-trips the message through
+`_grid_from_structured_mask`, with the positive control that `kind` genuinely
+selects which HALF of the grid names the incoming mon.
+
+**Pre-registered acceptance** (fresh lineage from step 0; baselines banked from
+qb8b82oi before deletion, since the gate as written is one the CURRENT lineage
+FAILS — it dips before the dual controller recovers it):
+
+| lifetime_step | H_macro | alpha_macro | prob_switch |
+|---|---|---|---|
+| 12952 | 0.4888 | 0.0050 (at the MIN) | 0.0368 |
+| 32865 | 0.3123 | 0.0431 | 0.0196 |
+| 76998 | 0.4229 | 0.0755 | 0.0249 |
+
+So the honest bar is **beat 0.3123 / 0.0196 at 33k**, with 0.45 / 0.02 as the
+aspiration rather than a pass/fail line. Plus: eval wr vs SimpleHeuristic **at
+temp = 1.0** (the new arm — see below) at 30k; a BR probe against the ~77k
+checkpoint reading <= the 0.57-0.58 the 77638 probe read; `separation_probe
+--probe c` at a matched step, `RESERVE_j`/alive/hp moving off ~0.00 toward the
+0.35-0.44 controls (READ THE Y-STD COLUMN FIRST); and steps/sec above the
+current lineage, which is the point of the change.
+
+**Abort:** `player_pointer_query_rms` or `..._key_rms` still at init by 2k (the
+two-factor stall, live); alphas pinned at max with eval wr falling; entropy at
+target while `prob_switch` -> 0 (mass without discrimination — the phase-1
+shape, watched on the mechanism actually feared).
+
+**EVAL TEMPERATURE IS NOT COMPARABLE ACROSS THIS BOUNDARY.** `ActionScoreHead`
+divided BOTH levels by `temp`, so eval at 0.5 sharpened the modality marginal
+as well as the within-modality choice; the flat head's single division does
+not. The two differ by a per-modality reweighting that relatively down-weights
+the concentrated switch modality, so the SAME policy reads as switching more
+under the new head — which would look like a free improvement and is pure
+parameterisation. `rl/online/main.py` now runs the last eval slot at temp = 1.0
+(identical under both), named `EvalActor-simpleheuristic-t1-*`, and that is the
+cross-lineage number. temp = 0.5 stays as the within-lineage trend.
+
+**Scoped out deliberately, recorded as the follow-up:** collapsing the action
+space itself to the three blocks end to end. Modality would become block
+membership and `FLAT_MODALITY_MASK` would go, but it moves the stored
+trajectory shapes and the chunk contract, so it wants its own commit. Also
+still open: `EntityPrivateNodeFeature` has no hp/status/fainted/boosts, so the
+switch readout depends on the trunk routing a candidate's condition from its
+PUBLIC row — a two-hop path over 61 rows now rather than a maze, which is the
+reason to EXPECT probe C to move, but it is an expectation and probe C is the
+instrument either way.
+
 
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 
@@ -1235,7 +1368,9 @@ value cannot work.
 
 ## 13. Architecture notes worth keeping *(live)*
 
-- **Deep, modality-separated action decoders are empirically necessary.** Make
+- **SET ASIDE 2026-08-29 as confounded** (the flat readout went in on that
+  reading; the ledger above carries the gate that judges it). *Deep,
+  modality-separated action decoders are empirically necessary.* Make
   that depth cheaper; do not remove it. RESTORED 2026-08-25 after a
   three-week regression: every micro parameter is now keyed by slot group
   (`SRC_GROUP_MASK`) and every macro parameter by modality, with no sharing.
@@ -1262,7 +1397,13 @@ value cannot work.
   lecun noise posing as action preferences for CE to unlearn or for the
   policy loss to misread. Exception: the cross-entity pool read gate starts at 1.0, because
   token content can only reach the entity vector through that read.
-- **Cross-entity pooling exists because matchup reasoning is a species-token ×
+- **SET ASIDE 2026-08-29, partially and knowingly** — one token per entity
+  re-adopts entity-local pooling. My 16 candidate moves and the four
+  entity-derived target rows keep BOTH operands of *my move x their mon*,
+  which is the direction a decision turns on; what is given up is their
+  individual revealed moves. The fix if it bites is explicit matchup rows,
+  not re-unpacking attributes. *Cross-entity pooling exists because matchup
+  reasoning is a species-token ×
   move-token comparison across two mons**, and with entity-local pooling there
   is no layer where those two tokens coexist. Cost is only the attention
   probability matrix (168² versus 12·10² + 6·8² per timestep).
@@ -1282,7 +1423,8 @@ value cannot work.
   the per-group/per-modality restoration above; judge it on
   `player_adv_rms_{move,switch,target}` all moving separately and on the
   three `type_scale` entries leaving zero.
-- **One readout, two compositions.** The policy and the advantage score the
+- **RETIRED 2026-08-29** with the advantage head — there is one readout and
+  no second composition. *One readout, two compositions.* The policy and the advantage score the
   SAME src x tgt grid and differ only in `reduce` — `ActionScoreHead`. Before
   2026-08-25 the sequence (adapter -> src_valid -> macro/micro -> compose)
   was open-coded three times (singles policy, doubles stage, Q head) and had

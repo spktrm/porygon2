@@ -9,10 +9,10 @@ checkpoint — the collapse's representational reading).
 Probe A — routing. Swap the SPECIES feature of two legal reserves in one
 batch column (species -> embedding is computed at forward time, legality
 untouched, history caches join by index not species) and compare per-cell
-|delta advantage|: the swapped reserves' own cells vs sibling switch cells.
+|delta log pi|: the swapped reserves' own cells vs sibling switch cells.
 A shared pooled representation moves siblings as much as the perturbed
 cell; genuine per-candidate routing separates them. Read at fresh init with
-the advantage head's zero-init paths OPENED (else the composition is
+the action readout's zero-init paths OPENED (else the grid is
 exactly 0 and everything is vacuous), and on trained params as-is.
 
 Probe B — overfit separation (THE GATE). Synthetic per-cell labels keyed to
@@ -22,7 +22,7 @@ modality over the row's legal cells and scaled by --label-scale. Centring
 removes all state-level and between-modality signal, and identity keying
 removes the positional shortcut (a per-cell bias fits position-keyed
 labels with zero input reading) — only within-modality discrimination of
-the actual candidates can fit these. Direct f32 MSE on out.advantage over
+the actual candidates can fit these. Direct f32 MSE on the log-policy grid over
 the eval cells, full-param Adam, jitted; per-modality within-row Pearson r
 and pred-std/label-std every --eval-every steps.
 
@@ -61,7 +61,7 @@ from rl.environment.data import (
     NUM_ACTION_FEATURES,
     RESERVE_ENTITY_INDICES,
 )
-from rl.environment.interfaces import PlayerActorInput
+from rl.environment.interfaces import PlayerActorInput, Trajectory
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
@@ -74,10 +74,65 @@ from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.model.utils import open_zero_init_paths
 from rl.offline import harness
-from rl.offline.overfit_probe import pick_batches, trainable_rows
 from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
+
+# Batch selection, moved here from rl/offline/overfit_probe.py when that
+# file retired with the Q head on 2026-08-29. This probe was its only
+# remaining consumer.
+_FLAT = np.asarray(FLAT_MODALITY_MASK)
+_SWITCH_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__SWITCH
+_MOVE_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__MOVE
+
+
+def trainable_rows(done: np.ndarray) -> np.ndarray:
+    """The learner's q_mask along the time axis: rows up to and including
+    the first done row (the terminal-copy padding after it repeats the
+    terminal row with done=0), minus the bootstrap-only final row unless
+    it is the game's own terminal, minus done rows themselves."""
+    done = done.astype(bool)
+    before_or_at_done = (np.cumsum(done, axis=0) - done) == 0
+    rows = before_or_at_done.copy()
+    rows[-1] &= done[-1]
+    return rows & ~done
+
+
+def voluntary_switch_rows(chunk: Trajectory) -> int:
+    """Rows where a switch was taken with a legal move available, over the
+    chunk's trainable rows (not done, not the bootstrap-only final row)."""
+    env = chunk.player_transitions.env_output
+    mask = np.asarray(env.action_mask)
+    flat = mask.reshape(mask.shape[0], -1)
+    idx = np.asarray(
+        chunk.player_transitions.agent_output.actor_output.action_head.action_index
+    )
+    rows = trainable_rows(np.asarray(env.done).astype(bool))
+    taken_switch = _SWITCH_CELLS[idx]
+    has_move = (flat & _MOVE_CELLS).any(-1)
+    return int((rows & taken_switch & has_move).sum())
+
+
+def pick_batches(chunks: list[Trajectory], batch: int, pool: int = 1):
+    """Top `pool * batch` chunks by voluntary-switch rows, dealt round-robin
+    into `pool` training batches (so every batch is switch-rich), the next
+    `batch` as the held-out batch (also switch-rich, so the held-out
+    voluntary panels have rows). Returns (train_batches, held_batch)."""
+    ranked = sorted(chunks, key=voluntary_switch_rows, reverse=True)
+    if len(ranked) < (pool + 1) * batch:
+        raise ValueError(
+            f"{len(ranked)} chunks < {(pool + 1) * batch} needed (pool {pool})"
+        )
+    train = [ranked[i : pool * batch : pool] for i in range(pool)]
+    held = ranked[pool * batch : (pool + 1) * batch]
+    logger.info(
+        "pool %d: batch-0 voluntary rows %s; held-out %s",
+        pool,
+        [voluntary_switch_rows(c) for c in train[0]],
+        [voluntary_switch_rows(c) for c in held],
+    )
+    return [stack_batch(b) for b in train], stack_batch(held)
+
 
 _A = NUM_ACTION_FEATURES
 _CELL_SRC = np.arange(_A * _A) // _A
@@ -317,7 +372,7 @@ def run_probe_b(
 
     def loss_fn(params):
         pred = apply(params, actor_input, actor_output, HeadParams())
-        adv = pred.advantage.astype(jnp.float32)
+        adv = pred.action_head.log_policy.astype(jnp.float32)
         return jnp.sum(weight * (adv - y) ** 2) / denom
 
     opt = optax.adam(lr)
@@ -332,8 +387,8 @@ def run_probe_b(
     def evaluate(params, step_no, loss):
         train_pred = apply(params, actor_input, actor_output, HeadParams())
         held_pred = apply(params, held_input, held_output, HeadParams())
-        train_adv = np.asarray(train_pred.advantage, dtype=np.float32)
-        held_adv = np.asarray(held_pred.advantage, dtype=np.float32)
+        train_adv = np.asarray(train_pred.action_head.log_policy, dtype=np.float32)
+        held_adv = np.asarray(held_pred.action_head.log_policy, dtype=np.float32)
         splits = {
             "train": group_stats(train_adv, np.asarray(y), train_masks),
             "held": group_stats(held_adv, np.asarray(held_y), held_masks),
@@ -419,16 +474,16 @@ def run_probe_a(net, variables, batch, seed):
 
     swapped_env = dataclasses.replace(env, private_team=jnp.asarray(swapped_team))
 
-    def advantage(env_in):
+    def action_grid(env_in):
         batch_input = PlayerActorInput(
             env=env_in,
             packed_history=batch.player_packed_history,
             history=batch.player_history,
         )
         pred = apply(variables, batch_input, actor_output, HeadParams())
-        return np.asarray(pred.advantage, dtype=np.float32)
+        return np.asarray(pred.action_head.log_policy, dtype=np.float32)
 
-    delta = np.abs(advantage(swapped_env) - advantage(env))
+    delta = np.abs(action_grid(swapped_env) - action_grid(env))
     own_deltas, sibling_deltas, move_deltas = [], [], []
     for b, pair in enumerate(swap_pairs):
         if pair is None:
@@ -703,8 +758,8 @@ def main(argv=None):
         source = args.ckpt
     else:
         variables = fresh_variables(net, batch, args.seed)
-        opened = open_zero_init_paths(variables, ("advantage_head",), seed=args.seed)
-        source = "fresh init (advantage head opened for probe A)"
+        opened = open_zero_init_paths(variables, ("action_head",), seed=args.seed)
+        source = "fresh init (action head opened for probe A)"
     print(f"params: {source}", flush=True)
 
     if args.probe == "c":

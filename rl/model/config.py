@@ -130,61 +130,29 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # land BELOW the pre-pool entity-local baseline (182.5MB at T=64);
     # measure before merge. The read's residual starts at 1.0: token
     # content reaches the latents only through it.
-    cfg.encoder.num_latents = 48
-    cfg.encoder.latent_read = ConfigDict()
-    set_attributes(cfg.encoder.latent_read, **transformer_decoder_kwargs)
-    cfg.encoder.latent_read.need_pos = False
-    cfg.encoder.latent_read.num_layers = 1
-    cfg.encoder.latent_read.init_residual_scale = 1.0
-
-    # Round trunk over the unified [state | action | value] sequence: each
-    # round is masked self-attention over the state latents, the action
-    # self-attention plus the state<->action exchange, the value rows'
-    # read of the state stream, then group-level FFWs (attention sublayers
-    # are attention-only, canonical decoder-layer shape). History reaches
-    # the trunk only through the latent input read, not through a
-    # per-round cross-read. nn.scan-ned
-    # num_rounds times with stacked params, so every round has its own
-    # weights and rounds can specialize instead of iterating one shared
-    # refinement operator. All residual gates are zero-init, so extra
-    # rounds are stable to add; each round adds parameters as well as
-    # compute. 4 rounds matches the Nov 2025 everything-transformer depth.
-    # Attention pooling of the recurrent history states into a fixed bank of
-    # learned latents. Shared between the RL trunk (extra history-context
-    # tokens) and the offline outcome critic (flattened latents -> linear
-    # probe), so outcome-readout capacity lands in warm-startable params.
     cfg.encoder.history_pool = ConfigDict()
     cfg.encoder.history_pool.num_latents = 4
     cfg.encoder.history_pool.num_heads = num_heads
     cfg.encoder.history_pool.qk_size = encoder_qkv_size
     cfg.encoder.history_pool.use_bias = encoder_use_bias
 
-    cfg.encoder.num_rounds = 4
-    cfg.encoder.round = ConfigDict()
-    cfg.encoder.round.num_heads = num_heads
-    cfg.encoder.round.qk_size = encoder_qkv_size
-    cfg.encoder.round.v_size = encoder_qkv_size
-    cfg.encoder.round.model_size = entity_size
-    cfg.encoder.round.hidden_size = encoder_hidden_size
-    cfg.encoder.round.use_bias = encoder_use_bias
-    cfg.encoder.round.qk_layer_norm = encoder_qk_layer_norm
-    # Init of every RoundBlock residual gate (2026-08-24; was a hard-coded
-    # zeros_init). Offline gate-contribution read on ckpt_00074597
-    # (rl/offline/gate_contribution.py): all six FFWs (48% of the params)
-    # and the state self-attention contributed <= 5e-4 of their stream in
-    # every round -- gates at |g| ~ 1e-3, a random walk -- while every
-    # ones-init scale and every cross-stream READ gate trained. ReZero's
-    # alpha = 0 needs <f_random(x), delta> to carry a consistent sign; it
-    # does not here (RL noise, and the reads open first and make the FFW's
-    # random features redundant), and the block's own gradient is exactly
-    # 0 until alpha moves. Any non-zero constant hands the block a
-    # direction-consistent gradient from step 0 under Adam; 0.05 keeps the
-    # init contribution at ~1% of the state/action streams (~5% of the
-    # tiny value streams). The head's flat-at-init contract is untouched
-    # (type_scale, the zero-init micro_local_src/tgt routes and the
-    # zero-init macro out layers all live in the head).
-    # Acceptance: FFW contribution >= 0.01 at the 20k read.
-    cfg.encoder.round.init_gate = 0.05
+    # The trunk: `num_blocks` standard pre-RMSNorm blocks over ONE sequence
+    # of NUM_SEQUENCE_ROWS (61) rows -- see rl/model/trunk.py. Replaces the
+    # four-round, three-stream, five-masked-attention RoundBlock on
+    # 2026-08-29: at 61 rows an all-pairs attention is 3.7k cells, so the
+    # block masks that encoded the routing were buying nothing but their own
+    # complexity, and the 48 latents they fed were a bottleneck between rows
+    # the trunk can now simply carry. Depth is the knob: a block costs ~1.05M
+    # params and almost no attention at this sequence length.
+    cfg.encoder.trunk = ConfigDict()
+    cfg.encoder.trunk.num_blocks = 6
+    cfg.encoder.trunk.num_heads = num_heads
+    cfg.encoder.trunk.qk_size = encoder_qkv_size
+    cfg.encoder.trunk.v_size = encoder_qkv_size
+    cfg.encoder.trunk.model_size = entity_size
+    cfg.encoder.trunk.hidden_size = encoder_hidden_size
+    cfg.encoder.trunk.use_bias = encoder_use_bias
+    cfg.encoder.trunk.qk_layer_norm = encoder_qk_layer_norm
 
     # Within-modality (micro) readout: NO config block — the head is a
     # parameter-less dot grid over the typed trunk streams (2026-08-17)
@@ -193,55 +161,20 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # (move/switch/target residual streams with per-type gates), not in
     # per-modality head stacks.
 
-    # The two action-axis readouts (2026-08-25). Both are ActionScoreHead
-    # over the same src x tgt grid — adapter -> macro/micro -> composition —
-    # and differ only in `reduce`, set at the call site in player_model:
-    # the policy multiplies softmaxes in log space, the advantage adds macro
-    # onto the legality-centred micro. Same shape of config for both, so the
-    # asymmetries between them are visible as config diffs rather than buried
-    # in two hand-written forward passes.
+    # The action readout (2026-08-29). Three small heads over named trunk
+    # rows -- a scalar per sheet row for switching, ONE bilinear for
+    # moves x targets, a scalar per target row for pass/default -- replacing
+    # the hierarchical macro/micro stack that was instantiated twice, for a
+    # policy and for an advantage head the policy did not read. 2.65M
+    # parameters became 0.13M.
     #
-    # Each owns a zero-init residual ADAPTER onto the trunk's action
-    # embeddings: exact identity at init and at a params-mode fresh reload,
-    # so adding one is policy-preserving, and the advantage head's loss
-    # cannot reshape the policy's micro geometry directly.
-    #
-    # num_logits 1 on both: a SCALAR per cell. For the advantage that is
-    # A(s, a), with Q = sg(V) + A centred under pi (heads.compose_q) — the
-    # categorical per-cell readout it replaced (2026-08-23, Step 3 of
-    # docs/critic-weakness-analysis.md) let the head fit taken-cell labels
-    # through a state-only route (Step 6 probe: label floor reached with
-    # within-state action variance collapsing 5x).
-    def _action_score_head() -> ConfigDict:
-        head = ConfigDict()
-        head.adapter = ConfigDict()
-        head.adapter.mlp = ConfigDict()
-        head.adapter.mlp.layer_sizes = entity_size
-        head.macro_micro = ConfigDict()
-        head.macro_micro.num_logits = 1
-        # Per-slot-group micro projections (2026-08-25): qk_size is the
-        # width EACH group gets, so the Dense is entity_size x (3 * qk_size)
-        # and the three groups own disjoint coordinates. Set explicitly —
-        # the num_heads default would have silently split entity_size three
-        # ways and shrunk every group to 85.
-        head.macro_micro.micro_qk = ConfigDict()
-        head.macro_micro.micro_qk.qk_size = entity_size
-        head.macro_micro.micro_qk.use_bias = True
-        head.macro_micro.micro_qk.qk_layer_norm = True
-        # Modality-level head: per-modality attention pooling over src-slot
-        # embeddings, MLP, zero-init output layer (keeps the init policy
-        # anchored to calculate_hierarchical_prior).
-        head.macro_micro.macro = ConfigDict()
-        head.macro_micro.macro.qk_logits = ConfigDict()
-        head.macro_micro.macro.qk_logits.num_heads = 1
-        head.macro_micro.macro.qk_logits.use_bias = True
-        head.macro_micro.macro.qk_logits.qk_layer_norm = True
-        head.macro_micro.macro.mlp = ConfigDict()
-        head.macro_micro.macro.mlp.layer_sizes = entity_size
-        return head
-
-    cfg.policy_head = _action_score_head()
-    cfg.advantage_head = _action_score_head()
+    # qk_size is the bilinear's projection width. It is the ONLY dimension
+    # here: there is no adapter (the head reads the trunk's rows directly),
+    # no per-group projection (a move row and a target row are already
+    # different kinds of thing), and no per-modality block (modality is a
+    # function of the src half, so `local_src` carries it).
+    cfg.action_head = ConfigDict()
+    cfg.action_head.qk_size = entity_size
 
     # Deep value readout (Aug 2026): the previous single linear layer made
     # the value head the thinnest module in the model while the action

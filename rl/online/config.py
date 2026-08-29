@@ -323,15 +323,25 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
 
-    # All-action Q critic (docs/q-critic-plan.md) — STRUCTURAL since
-    # 2026-08-20 (no enable flag): the hierarchical advantage head is
-    # part of the model, its loss always trains, and every consumer
-    # assumes it exists. Singles only (asserted in
-    # get_player_model_config).
-    # Huber weight — deliberately modest, per the grad-norm
-    # lesson from the integrated-critic era: a heavy auxiliary gradient globally clips
-    # everything (CLAUDE.md 5).
-    player_q_coef: float = 0.5
+    # Zero-avoiding term: forward KL from UNIFORM to the policy, over legal
+    # cells, inside the pg bracket beside the entropy bonus and the magnet.
+    # Per-logit gradient is exactly pi_b - 1/k -- bounded by 1, zero-sum, and
+    # with NO pi prefactor, which is what makes it the only force here still
+    # acting on a cell at pi = 1e-6. Its reference is a CONSTANT, so unlike
+    # the four retired support-anchor phases it cannot collapse, cannot be
+    # ratcheted flat by re-snapping from an already-collapsing policy, and
+    # cannot invert on the modality-level sign of Q^pi.
+    #
+    # Sized against the entropy duals rather than against the surrogate: both
+    # act on every legal cell of every row, and alpha lives in
+    # [0.005, 0.5]. Set 0.0 for a control arm -- that is bit-identical to
+    # having no term at all.
+    #
+    # (player_q_coef, the all-action Q critic's Huber weight, sat here until
+    # 2026-08-29. It went with the advantage head: the policy stopped reading
+    # it at the NashPG switch, leaving it a matched control for an
+    # architecture that no longer exists.)
+    player_uniform_kl_coef: float = 0.05
     # No trace parameter since 2026-08-23 (Step 3): the residual critic
     # regresses on the TD(0) label r + gamma*V_win_target(s'). Retrace at
     # q_lambda 1.0 / pi lambda 0.8 (the outcome chain within the chunk)

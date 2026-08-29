@@ -57,27 +57,24 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         smogon_format=learner_config.smogon_format,
         entity_size=int(model_cfg.entity_size),
         num_decision_slots=int(model_cfg.num_decision_slots),
-        pi_head="action_score_grouped_micro",
-        # The advantage head is structural — always present, so the
-        # manifest records the ARCHITECTURE variant, and a checkpoint whose
-        # variant string differs must go through load-mode "params"
-        # (fresh-inits the head, carries everything else).
+        # "flat_bilinear_readout" (2026-08-29) = FlatActionReadout over ONE
+        # 61-row sequence: a scalar per sheet row for switching, one bilinear
+        # for moves x targets, a scalar per target row for pass/default, and
+        # a flat pre-RMSNorm trunk behind it. Predecessors:
+        # "action_score_grouped_micro" (2026-08-25, ActionScoreHead with
+        # per-slot-group micro and per-modality macro, Q composed in
+        # heads.compose_q), "hierarchical_two_rung" (2026-08-20) and
+        # "privileged_two_rung" (2026-08-17).
         #
-        # "action_score_grouped_micro" (2026-08-25) = ActionScoreHead —
-        # per-slot-group micro q/k + per-group zero-init type_scale and
-        # local src/tgt routes, per-MODALITY macro MLP and out layer, ONE
-        # rung, Q composed in heads.compose_q. Predecessors:
-        # "hierarchical_two_rung" (2026-08-20, owned ActionAdapter +
-        # shared flat MacroMicroHead, plus a second privileged rung) and
-        # "privileged_two_rung" (2026-08-17, flat cond-MLP bilinear grid).
+        # BUMPING THIS IS NOT COSMETIC: the literal was left stale through
+        # the 2026-08-25 redesign, so a pre-redesign checkpoint passed
+        # check_manifest STRICT and would have been restored onto a
+        # structurally different param tree. The manifest exists precisely to
+        # stop that, and it only works if the literal moves with the head.
         #
-        # BUMPING THESE IS NOT COSMETIC: both literals were left stale
-        # through the 2026-08-25 redesign, so a pre-redesign checkpoint
-        # passed check_manifest STRICT and would have been restored onto a
-        # structurally different param tree. The manifest exists precisely
-        # to stop that, and it only works if the literal moves with the
-        # head class.
-        q_head="advantage_grouped_micro",
+        # `q_head` sat beside it until 2026-08-29 and went with the advantage
+        # head itself.
+        pi_head="flat_bilinear_readout",
     )
 
 

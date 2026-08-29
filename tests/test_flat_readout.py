@@ -1,0 +1,262 @@
+"""Contracts of the flat action readout and the one-sequence trunk.
+
+Each test carries the control that proves it could fail: zero-init paths and
+masked routes make invariance tests pass vacuously, which is the trap the
+2026-08-25 privileged-critic work paid for twice.
+"""
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+from ml_collections import ConfigDict
+
+from rl.environment.data import (
+    ALLY_SWITCH_INDICES,
+    MOVE_INDICES,
+    NUM_ACTION_FEATURES,
+    RESERVE_ENTITY_INDICES,
+    TARGET_SLOT_INDICES,
+)
+from rl.model.constants import (
+    CLS_ROW,
+    MOVE_ROWS,
+    NUM_SEQUENCE_ROWS,
+    PRIVATE_ROWS,
+    SEQUENCE_GROUP_IDS,
+    SEQUENCE_SLICES,
+    TARGET_ROWS,
+    SequenceGroup,
+)
+from rl.model.heads import FlatActionReadout
+from rl.model.trunk import Trunk
+
+WIDTH = 32
+
+
+def _readout():
+    return FlatActionReadout(ConfigDict(dict(qk_size=WIDTH)))
+
+
+def _rows(key):
+    keys = jax.random.split(key, 3)
+    return (
+        jax.random.normal(keys[0], (len(RESERVE_ENTITY_INDICES), WIDTH)),
+        jax.random.normal(keys[1], (len(MOVE_INDICES), WIDTH)),
+        jax.random.normal(keys[2], (len(TARGET_SLOT_INDICES), WIDTH)),
+    )
+
+
+def _full_mask():
+    mask = np.zeros((NUM_ACTION_FEATURES, NUM_ACTION_FEATURES), bool)
+    mask[np.ix_(MOVE_INDICES, TARGET_SLOT_INDICES)] = True
+    mask[np.ix_(ALLY_SWITCH_INDICES, RESERVE_ENTITY_INDICES)] = True
+    return jnp.asarray(mask)
+
+
+def _init():
+    head = _readout()
+    rows = _rows(jax.random.key(0))
+    mask = _full_mask()
+    params = head.init(jax.random.key(1), *rows, mask)
+    return head, params, rows, mask
+
+
+# --- layout ---------------------------------------------------------------
+
+
+def test_sequence_layout_is_derived_and_contiguous():
+    assert NUM_SEQUENCE_ROWS == 61
+    assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
+    covered = []
+    for group, sl in SEQUENCE_SLICES.items():
+        covered.extend(range(sl.start, sl.stop))
+        assert (SEQUENCE_GROUP_IDS[sl] == int(group)).all()
+    assert covered == list(range(NUM_SEQUENCE_ROWS))
+    assert SEQUENCE_SLICES[SequenceGroup.CLS].start == CLS_ROW
+    # The three slices the readout owns are disjoint -- an off-by-one would
+    # hand a head someone else's rows and nothing else would notice.
+    assert PRIVATE_ROWS.stop == MOVE_ROWS.start
+    assert MOVE_ROWS.stop == TARGET_ROWS.start
+
+
+# --- the readout's init contract ------------------------------------------
+
+
+def test_every_logit_is_exactly_zero_at_init():
+    """The policy starts UNIFORM over legal cells, so
+    compute_policy_metrics(prior=None) is the consistent anchor and the PG
+    has no lecun noise posing as an action preference to unlearn."""
+    head, params, rows, mask = _init()
+    logits = head.apply(params, *rows, mask)
+    np.testing.assert_array_equal(np.asarray(logits), 0.0)
+
+
+def test_zero_init_query_gets_live_gradient_and_the_key_unfreezes():
+    """The two-factor stall guard (CLAUDE.md 13: a learned grid behind a
+    zero-init scale sat at lecun init for 60k steps).
+
+    `query` is the zero factor, but its gradient is a rank-1 outer product
+    of LIVE rows, so it moves at step 1. `key`'s gradient is proportional to
+    query and is therefore exactly zero for one step -- and the control
+    below is that nudging query off zero unfreezes it, i.e. this is a
+    one-step unfreeze and not a stalled product.
+    """
+    head, params, rows, mask = _init()
+
+    def total(p):
+        return jnp.sum(head.apply(p, *rows, mask))
+
+    grads = jax.grad(total)(params)["params"]
+    assert np.abs(np.asarray(grads["query"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["local_src"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["local_tgt"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["switch"]["kernel"])).max() > 0
+    np.testing.assert_array_equal(np.asarray(grads["key"]["kernel"]), 0.0)
+
+    nudged = jax.tree.map(lambda x: x, params)
+    nudged["params"]["query"]["kernel"] = nudged["params"]["query"]["kernel"] + 1e-2
+    key_grad = jax.grad(total)(nudged)["params"]["key"]["kernel"]
+    assert np.abs(np.asarray(key_grad)).max() > 0
+
+
+def test_the_pointer_is_not_symmetric():
+    """A move-src/target-tgt cell is not a target-src/move-tgt cell, so
+    query and key must not share one projection."""
+    head, params, rows, mask = _init()
+    p = jax.tree.map(lambda x: x, params)
+    p["params"]["query"]["kernel"] = jax.random.normal(
+        jax.random.key(3), p["params"]["query"]["kernel"].shape
+    )
+    _, move_rows, target_rows = rows
+    logits = np.asarray(head.apply(p, rows[0], move_rows, target_rows, mask))
+    grid = logits.reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    block = grid[np.ix_(MOVE_INDICES, TARGET_SLOT_INDICES)]
+    square = min(block.shape)
+    assert not np.allclose(
+        block[:square, :square], block[:square, :square].T, atol=1e-6
+    )
+
+
+# --- the readout writes only the cells its modality owns -------------------
+
+
+def _open(params, seed=5):
+    """Non-zero every zero-init leaf, so the grid actually varies."""
+    keys = iter(jax.random.split(jax.random.key(seed), 8))
+    return jax.tree.map(lambda x: x + jax.random.normal(next(keys), x.shape), params)
+
+
+@pytest.mark.parametrize("reserve", [0, 3])
+def test_a_sheet_row_moves_only_the_cells_naming_that_reserve(reserve):
+    head, params, rows, mask = _init()
+    params = _open(params)
+    private_rows, move_rows, target_rows = rows
+
+    bumped = private_rows.at[reserve].add(1.0)
+    base = np.asarray(head.apply(params, *rows, mask)).reshape(
+        NUM_ACTION_FEATURES, NUM_ACTION_FEATURES
+    )
+    moved = np.asarray(
+        head.apply(params, bumped, move_rows, target_rows, mask)
+    ).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+
+    changed = ~np.isclose(base, moved, atol=1e-6)
+    expected = np.zeros_like(changed)
+    expected[RESERVE_ENTITY_INDICES[reserve], :] = True
+    expected[ALLY_SWITCH_INDICES, RESERVE_ENTITY_INDICES[reserve]] = True
+    np.testing.assert_array_equal(changed, expected)
+
+
+def test_a_move_row_moves_only_its_own_grid_row():
+    head, params, rows, mask = _init()
+    params = _open(params)
+    private_rows, move_rows, target_rows = rows
+
+    bumped = move_rows.at[2].add(1.0)
+    base = np.asarray(head.apply(params, *rows, mask)).reshape(
+        NUM_ACTION_FEATURES, NUM_ACTION_FEATURES
+    )
+    moved = np.asarray(
+        head.apply(params, private_rows, bumped, target_rows, mask)
+    ).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+
+    changed = ~np.isclose(base, moved, atol=1e-6)
+    expected = np.zeros_like(changed)
+    expected[MOVE_INDICES[2], TARGET_SLOT_INDICES] = True
+    np.testing.assert_array_equal(changed, expected)
+    # Control: it did change something, so the invariance above is not the
+    # readout simply ignoring its move rows.
+    assert changed.any()
+
+
+# --- the trunk ------------------------------------------------------------
+
+
+def _trunk_cfg(num_blocks=2):
+    return ConfigDict(
+        dict(
+            num_blocks=num_blocks,
+            num_heads=2,
+            qk_size=WIDTH // 2,
+            v_size=WIDTH // 2,
+            model_size=WIDTH,
+            qk_layer_norm=True,
+            use_bias=True,
+            hidden_size=2 * WIDTH,
+        )
+    )
+
+
+def test_every_block_has_its_own_weights():
+    trunk = Trunk(_trunk_cfg(num_blocks=3))
+    sequence = jnp.zeros((NUM_SEQUENCE_ROWS, WIDTH))
+    valid = jnp.ones(NUM_SEQUENCE_ROWS, bool)
+    params = trunk.init(jax.random.key(0), sequence, valid)
+    leaves = jax.tree.leaves(params)
+    assert leaves, "trunk has no params"
+    for leaf in leaves:
+        assert leaf.shape[0] == 3, leaf.shape
+
+
+def test_the_cls_row_survives_a_fully_masked_step():
+    """A terminal step masks every action row off. Masked attention uses a
+    -1e9 floor rather than -inf, so an empty key set is finite either way --
+    what the unconditionally-valid CLS row actually buys is that the value
+    head still reads a real vector there instead of the hard zero every
+    masked row is set to.
+    """
+    trunk = Trunk(_trunk_cfg())
+    sequence = jax.random.normal(jax.random.key(0), (NUM_SEQUENCE_ROWS, WIDTH))
+    valid = jnp.zeros(NUM_SEQUENCE_ROWS, bool).at[CLS_ROW].set(True)
+    params = trunk.init(jax.random.key(1), sequence, valid)
+
+    out = np.asarray(trunk.apply(params, sequence, valid))
+    assert np.isfinite(out).all()
+    assert np.abs(out[CLS_ROW]).max() > 0
+
+    # Control: mask the CLS row too and the value head's input is exactly
+    # zero -- a constant, carrying nothing about the state.
+    empty = jnp.zeros(NUM_SEQUENCE_ROWS, bool)
+    blanked = np.asarray(trunk.apply(params, sequence, empty))
+    assert np.isfinite(blanked).all()
+    np.testing.assert_array_equal(blanked[CLS_ROW], 0.0)
+
+
+def test_an_invalid_row_is_inert():
+    trunk = Trunk(_trunk_cfg())
+    sequence = jax.random.normal(jax.random.key(0), (NUM_SEQUENCE_ROWS, WIDTH))
+    valid = jnp.ones(NUM_SEQUENCE_ROWS, bool).at[5].set(False)
+    params = trunk.init(jax.random.key(1), sequence, valid)
+
+    perturbed = sequence.at[5].add(10.0)
+    base = np.asarray(trunk.apply(params, sequence, valid))
+    moved = np.asarray(trunk.apply(params, perturbed, valid))
+    np.testing.assert_allclose(base, moved, atol=0)
+
+    # Control: mark it valid and the same perturbation reaches the others.
+    live = jnp.ones(NUM_SEQUENCE_ROWS, bool)
+    assert not np.allclose(
+        np.asarray(trunk.apply(params, sequence, live)),
+        np.asarray(trunk.apply(params, perturbed, live)),
+    )

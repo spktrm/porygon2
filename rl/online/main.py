@@ -474,6 +474,23 @@ def main(args: argparse.Namespace):
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
+    # The CROSS-LINEAGE eval arm (2026-08-29). temp=0.5 is not comparable
+    # across the flat-readout rewrite: the hierarchical head divided BOTH
+    # levels by temp, so eval sharpened the modality marginal as well as the
+    # within-modality choice, and the flat head's single division does not.
+    # The two differ by a per-modality reweighting that relatively
+    # down-weights the concentrated switch modality -- so the same policy
+    # reads as switching more under the new head, which would look like a
+    # free improvement and is pure parameterisation. temp=1.0 is identical
+    # under both, so it is the arm to compare across the boundary; temp=0.5
+    # stays as the within-lineage trend.
+    eval_agent_untempered = Agent(
+        actor_player_network.apply,
+        actor_builder_network.apply,
+        gpu_lock=gpu_lock,
+        player_head_params=HeadParams(temp=1.0),
+        builder_head_params=HeadParams(temp=1.0),
+    )
     # One batched-inference server for ALL training PlayerActors
     # (rl/online/inference.py). Same apply_fn and
     # default HeadParams as learning_agent — eval actors stay on
@@ -666,8 +683,18 @@ def main(args: argparse.Namespace):
         )
         for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
             baseline_name = EVAL_BASELINE_NAMES[baseline_index]
+            # The last slot runs untempered, and says so in its thread name --
+            # metric identity comes from that name, so the two arms land on
+            # separate wandb series.
+            untempered = eval_id == len(learner_config.eval_baselines) - 1
+            if untempered:
+                slot_agent = eval_agent_untempered
+                slot_suffix = "-t1"
+            else:
+                slot_agent = eval_agent
+                slot_suffix = ""
             actor = PlayerActor(
-                agent=eval_agent,
+                agent=slot_agent,
                 # The username MUST start with "eval-heuristic" (the
                 # service routes such clients into games against a
                 # baseline bot by that prefix,
@@ -693,7 +720,7 @@ def main(args: argparse.Namespace):
                         wandb_run,
                         learner_config,
                     ),
-                    name=f"EvalActor-{baseline_name}-{eval_id}",
+                    name=f"EvalActor-{baseline_name}{slot_suffix}-{eval_id}",
                     daemon=True,
                 )
             )

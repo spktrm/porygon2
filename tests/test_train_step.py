@@ -1,7 +1,14 @@
-"""Jitted train_step smoke for the single-rung advantage head -- the wiring
-test for docs/q-critic-plan.md: model advantage readout -> Q = V + A -> TD(0)
-labels -> Huber loss -> gradients, end to end on the bundled ex.bin
-trajectory (randombattle config, so the builder branch self-skips).
+"""Jitted train_step smoke: the whole learner update, end to end.
+
+The forward through the flat readout, the v-trace and one-step targets, the
+NashPG bracket (surrogate + entropy duals + magnet + the zero-avoiding KL),
+the value loss and the gradients, on the bundled ex.bin trajectory
+(randombattle config, so the builder branch self-skips). This is the ONLY
+test that compiles the real train_step, so it is what catches a panel that
+went stale or a shape that stopped matching.
+
+Was tests/test_train_step_q.py until 2026-08-29, when the Q head it was
+named for retired.
 
 Runs on the GPU like the rest of the slow suite (it was CPU-pinned to sit
 beside a live learner, but the slow suite already cannot: host-RAM
@@ -17,7 +24,7 @@ import pytest
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-def test_train_step_player_q_smoke():
+def test_train_step_smoke():
     from rl.environment.interfaces import (
         Batch,
         CategoricalValueHeadOutput,
@@ -85,19 +92,27 @@ def test_train_step_player_q_smoke():
 
     assert int(new_player_state.step_count) == 1
     for key in (
-        "player_loss_q",
-        "player_q_r2",
-        "player_q_saturation_frac",
-        "player_q_mse",
+        # NashPG policy update: the PPO surrogate, its clip occupancy, the
+        # differentiated entropy/magnet terms, the zero-avoiding KL and the
+        # batch-advantage statistics.
+        "player_loss_pg",
+        "player_ppo_clip_frac",
+        "player_loss_entropy",
         "player_ref_kl",
-        "player_q_switch_move_gap",
-        # Gap discriminators: per-context calibration + data coverage +
-        # head-independent conditional Retrace means.
-        "player_q_r2_move",
-        "player_q_r2_switch_forced",
-        "player_q_r2_switch_voluntary",
-        "player_q_switch_target_frac",
-        "player_q_voluntary_switch_target_frac",
+        "player_loss_uniform_kl",
+        "player_pg_adv_mean",
+        "player_pg_adv_std",
+        "player_reg_snapped",
+        "player_loss_v_win",
+        "player_loss_kl",
+        # Entropy-floor controller: per-axis dual temperatures and the row
+        # occupancy that gates their update.
+        "player_ent_alpha_macro",
+        "player_ent_alpha_micro",
+        "player_ent_rows_macro",
+        "player_ent_rows_micro",
+        "player_entropy_macro",
+        "player_entropy_micro_taken",
         # Modality-resolved staleness: de-averaged actor KL and the
         # off-policy attenuation audit (isr = pi_target/mu_actor).
         "player_learner_actor_forward_kl_switch",
@@ -107,77 +122,39 @@ def test_train_step_player_q_smoke():
         "player_isr_move",
         "player_isr_below1_switch_voluntary",
         "player_isr_below1_move",
+        # Switch evidence, head-independent: coverage and the one-step
+        # label's conditional means.
+        "player_q_switch_target_frac",
+        "player_q_voluntary_switch_target_frac",
         "player_q_target_voluntary_switch",
         "player_q_target_move",
-        # Pivotal-state decision panel: tail statistics conditioned on the
-        # critic-flagged switch-worthy states, not the taken action.
-        "player_q_pivotal_frac",
-        "player_q_pivotal_pi_switch_mass",
-        "player_q_pivotal_taken_switch_frac",
-        "player_q_pivotal_ret_switch",
-        "player_q_pivotal_ret_stay",
-        # The per-module grad-norm loop picks the new modules up by
-        # itself; nonzero norm proves the CE loss actually reaches the
-        # Q family's MacroMicroHead params.
-        "player_advantage_head_gradient_norm",
-        # NashPG policy update: the PPO surrogate, its clip occupancy,
-        # the differentiated entropy/magnet terms and the batch-advantage
-        # statistics.
-        "player_loss_pg",
-        "player_ppo_clip_frac",
-        "player_loss_entropy",
-        # Entropy-floor controller (2026-08-28): per-axis dual temperatures
-        # and the row occupancy that gates their update.
-        "player_ent_alpha_macro",
-        "player_ent_alpha_micro",
-        "player_ent_rows_macro",
-        "player_ent_rows_micro",
-        "player_pg_adv_mean",
-        "player_pg_adv_std",
-        "player_reg_snapped",
-        # Modality decomposition of the taken-action update's two
-        # throttles: pi mass and the observer critic's |A|.
+        # Policy mass by modality.
         "player_policy_prob_switch",
         "player_policy_prob_move",
         "player_policy_prob_ratio",
-        "player_policy_absadv_switch",
-        "player_policy_absadv_move",
-        "player_policy_absadv_ratio",
-        # Loss-free critic-quality diagnostics. (Calibration r2
-        # fresh/replay needs batch.reuse_count, absent in this minimal
-        # batch.)
-        "player_q_action_var",
-        "player_q_action_var_p90",
-        # Within/between-modality split + Q-head learning readouts
-        # (2026-08-24): the within route is the pointer micro grid
-        # behind a zero-init gate, so at init within == 0 exactly.
-        "player_q_action_var_within_modality",
-        "player_q_action_var_between_modality",
-        "player_adv_rms",
-        "player_adv_rms_move",
-        "player_adv_rms_switch",
-        "player_adv_rms_target",
-        "player_adv_type_scale_move",
-        "player_adv_type_scale_switch",
-        "player_q_micro_kernel_rms",
-        "player_q_micro_local_rms",
-        "player_q_macro_out_rms",
-        "player_q_adapter_out_rms",
-        "player_q_grad_norm_micro",
-        "player_q_grad_norm_macro",
+        # The flat readout's drift-from-init panels. These are the ONLY
+        # forensics on the two-factor stall, so a rename that silently drops
+        # them must fail here.
+        "player_pointer_query_rms",
+        "player_pointer_key_rms",
+        "player_pointer_local_src_rms",
+        "player_pointer_local_tgt_rms",
+        "player_switch_head_rms",
+        "player_other_head_rms",
+        "player_trunk_attn_out_rms",
+        "player_trunk_mlp_out_rms",
+        "player_action_head_grad_norm",
+        "player_trunk_grad_norm",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
+
     # Step-1 panels: present (NaN allowed where this one-game batch has no
     # rows in a slice), support counts finite.
     for key in (
-        "player_q_label_var_outcome_move",
-        "player_q_label_var_onestep_move",
         "player_mv_bin0_gap_realised",
-        "player_mv_pooled_gap_critic",
         "player_v_outcome_r2_all",
         "player_v_onestep_r2",
-        "player_q_loss_share_move",
     ):
         assert key in logs, key
     for key in (
@@ -186,9 +163,11 @@ def test_train_step_player_q_smoke():
         "player_q_target_edge_frac",
     ):
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
-    assert float(logs["player_advantage_head_gradient_norm"]) > 0.0
 
-    # PG term finite at the base coefficients; coef 0 is a scalar
-    # multiply (surrogate semantics are test_ppo_loss's unit tests),
-    # and a second static config would be a second full compile.
-    assert np.isfinite(np.asarray(logs["player_loss_pg"], dtype=np.float32))
+    # The gradient actually reaches both halves of the model.
+    assert float(logs["player_action_head_grad_norm"]) > 0.0
+    assert float(logs["player_trunk_grad_norm"]) > 0.0
+
+    # At init every logit is exactly 0, so the policy is uniform over legal
+    # cells and the reference it just snapped from is the same distribution.
+    assert float(logs["player_ref_kl"]) == pytest.approx(0.0, abs=1e-5)

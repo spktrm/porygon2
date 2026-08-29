@@ -434,6 +434,14 @@ TARGET_SLOT_INDICES = np.setdiff1d(
     np.arange(NUM_ACTION_FEATURES),
     np.concatenate([MOVE_SLOT_INDICES, SWITCH_SLOT_INDICES]),
 )
+# Team preview asks "which mon", full stop -- the position being filled is
+# always the next one, so it carries no choice. The service writes the chosen
+# reserve at this single canonical column and this side reads it there; before
+# 2026-08-29 the mask lit one cell per remaining position (up to 7) while the
+# decoder ignored the target entirely, so the policy spread its mass over up to
+# 7 exact duplicates of one choice.
+TEAM_PREVIEW_TGT = ActionEnum.ACTION_ENUM__TARGET_AUTO
+
 NUM_ACTION_SLOT_GROUPS = 3
 # Per-src-slot group id (0 = move, 1 = switch, 2 = target) and its
 # per-grid-cell broadcast: modality — and therefore group — is a function

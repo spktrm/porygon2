@@ -387,7 +387,6 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
     const enemyActive = player.publicBattle.sides[1 - playerIndex].active;
     const { actionMask } = stateHandler.getActionMask({
         request,
-        format: battle.gameType,
         allyActive,
         enemyActive,
     });

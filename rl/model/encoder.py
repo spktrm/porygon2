@@ -8,20 +8,13 @@ from ml_collections import ConfigDict
 
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
-    ALLY_SWITCH_INDICES,
-    ALLY_TARGET_INDICES,
-    ENEMY_TARGET_INDICES,
     MOVE_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
-    PASS_INDICES,
-    REGULAR_MOVE_INDICES,
-    RESERVE_ENTITY_INDICES,
-    TARGET_INDICES,
-    WILDCARD_MOVE_INDICES,
+    TARGET_SLOT_INDICES,
 )
 from rl.environment.interfaces import (
     PlayerEnvOutput,
@@ -46,19 +39,19 @@ from rl.environment.protos.features_pb2 import (
     MovesetFeature,
 )
 from rl.model.constants import (
-    ACTION_DECODER_SLOT_GROUPS,
-    ACTION_GROUP_SLOTS,
-    ACTION_GROUP_SPLITS,
-    ACTION_SLOT_READ_INDICES,
-    FIELD_TOKEN_TYPES,
-    HISTORY_FIELD_TOKEN_TYPES,
-    INFO_TOKEN_TYPES,
-    NUM_ACTION_SLOT_READS,
+    ALLY_TARGET_ROWS,
+    ENEMY_TARGET_ROWS,
+    IS_WILDCARD_MOVE_SLOT,
+    MY_ACTIVE_PUBLIC_ROWS,
+    NUM_FIELD_ROWS,
+    NUM_PUBLIC_SLOTS,
+    NUM_SEQUENCE_GROUPS,
+    NUM_SEQUENCE_ROWS,
     NUM_TOKEN_TYPES,
-    PREV_ACTION_TOKEN_TYPES,
+    OPP_ACTIVE_PUBLIC_ROWS,
     PRIVATE_TOKEN_TYPES,
-    PUBLIC_READ_TOKEN_TYPES,
     PUBLIC_TOKEN_TYPES,
+    SEQUENCE_GROUP_IDS,
 )
 from rl.model.features import (
     binary_scale_encoding,
@@ -78,8 +71,6 @@ from rl.model.features import (
     get_public_entity_mask,
 )
 from rl.model.history_encoder import (
-    NUM_FIELD_ROWS,
-    NUM_PUBLIC_SLOTS,
     HistoryAttentionPool,
     NodeHistoryRead,
     PerSlotHistoryEncoder,
@@ -87,16 +78,12 @@ from rl.model.history_encoder import (
 )
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
-    FFWMLP,
-    MLP,
-    MultiHeadAttention,
     SumEmbeddings,
     TransformerDecoder,
     TransformerEncoder,
-    create_attention_mask,
-    layer_norm,
     one_hot_concat_jax,
 )
+from rl.model.trunk import Trunk
 
 # Typed action-slot groups (canonical partition lives in
 # rl/environment/data.py next to the modality masks): move slots are
@@ -191,383 +178,6 @@ class EntityAttentionPool(nn.Module):
         return jnp.squeeze(pooled, axis=0)
 
 
-class InputTokenSet(nn.Module):
-    """The one flat key set every read consumes (2026-08-21; split out of
-    LatentInputRead 2026-08-28 when the action slots became a second reader).
-
-    Replaces per-entity pooling + per-substream input MLPs: the board used to
-    collapse to one vector per entity before anything saw it, so a matchup was
-    something the trunk reconstructed from summaries. Here every attribute
-    token (species / ability / item / moves / state / that slot's history),
-    the field, the prev-action slots and the field history states are keys of
-    the same set, and the readers decide what to keep.
-
-    Identity is purely additive -- there is no substream slicing left to carry
-    it. Every token gets the caller's per-entity bias (the public embedder's
-    pos + side, the sheet's "mine"), a per-token-TYPE bias, a zero-init
-    per-ROW bias (public rows are side-partitioned actives-first, so a row
-    index is a rank identity worth learning) and a non-zero-init per-GROUP
-    bias so e.g. a sheet row and a public row of the same mon are told apart
-    from step 0. `tag_with_species` adds the one CONTENT-derived key, which is
-    what a species query can actually address.
-
-    Groups arrive as (num_entities, num_tokens, dim) blocks with their own
-    token-type ids; non-entity inputs are passed as ONE entity with N tokens
-    (field: 1 x 3, prev-action: 1 x 2, history field: 1 x 3). Masked tokens
-    are absent keys, so a masked entity is inert.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(
-        self,
-        groups: tuple[jax.Array, ...],
-        masks: tuple[jax.Array, ...],
-        types: tuple[np.ndarray, ...],
-        biases: tuple[jax.Array | None, ...] | None = None,
-    ) -> tuple[jax.Array, jax.Array]:
-        embedding_init = nn.initializers.variance_scaling(
-            1.0, "fan_in", "normal", out_axis=0
-        )
-        dtype = groups[0].dtype
-        model_size = groups[0].shape[-1]
-        num_entities = sum(group.shape[0] for group in groups)
-
-        token_bias = self.param(
-            "token_bias",
-            nn.initializers.zeros_init(),
-            (NUM_TOKEN_TYPES, model_size),
-        )
-        entity_bias = self.param(
-            "entity_bias", nn.initializers.zeros_init(), (num_entities, model_size)
-        )
-        group_bias = self.param("group_bias", embedding_init, (len(groups), model_size))
-        if biases is None:
-            biases = (None,) * len(groups)
-
-        flat_tokens = []
-        flat_masks = []
-        offset = 0
-        for group_index, (group, mask, token_types, bias) in enumerate(
-            zip(groups, masks, types, biases, strict=True)
-        ):
-            num, num_tokens = group.shape[:2]
-            entity_ids = np.arange(offset, offset + num)
-            # token_types may arrive traced (nn.checkpoint traces its
-            # args), so index with it directly rather than via numpy.
-            group = (
-                group.astype(dtype)
-                + token_bias[token_types].astype(dtype)[None]
-                + entity_bias[entity_ids].astype(dtype)[:, None]
-                + group_bias[group_index].astype(dtype)
-            )
-            if bias is not None:
-                group = group + bias.astype(dtype)[:, None]
-            flat_tokens.append(group.reshape(num * num_tokens, model_size))
-            flat_masks.append(mask.reshape(num * num_tokens))
-            offset += num
-
-        return jnp.concatenate(flat_tokens, axis=0), jnp.concatenate(flat_masks, axis=0)
-
-
-class LatentInputRead(nn.Module):
-    """Perceiver-style input read: a learned latent array cross-attends the
-    flat input token set and becomes the trunk's state rows.
-
-    The read's residual starts at 1.0 (cfg.latent_read.init_residual_scale):
-    token content can only reach the latents through it, so it must not start
-    as a no-op -- which also means a leak test exercises this path without
-    gate opening. ONE instance since 2026-08-25: the read over the player's
-    own information set, which is the whole information set there is (the
-    privileged second instance went with the opponent sheet).
-    """
-
-    cfg: ConfigDict
-    num_latents: int
-
-    @nn.compact
-    def __call__(self, tokens: jax.Array, token_mask: jax.Array) -> jax.Array:
-        embedding_init = nn.initializers.variance_scaling(
-            1.0, "fan_in", "normal", out_axis=0
-        )
-        latents = self.param(
-            "latents", embedding_init, (self.num_latents, tokens.shape[-1])
-        )
-        return TransformerDecoder(name="read", **self.cfg.latent_read.to_dict())(
-            q=latents.astype(tokens.dtype), kv=tokens, kv_mask=token_mask
-        )
-
-
-class ActionSlotRead(nn.Module):
-    """The entity-derived action slots, read off the SAME token set
-    (2026-08-28).
-
-    Before this the board was encoded twice: as read tokens, and again as
-    entity-local pooled vectors that warm-started ALLY_i_SWITCH,
-    ALLY_i_TARGET, ENEMY_i_TARGET and RESERVE_j. The second encoding was a
-    STATIC set descriptor for the reserves -- EntityPrivateNodeFeature has no
-    hp, status, fainted or boosts -- so a switch candidate's condition could
-    only arrive through the trunk, and probe C measured that it does not:
-    RESERVE_j/alive/hp read -0.004 against a -0.007 shuffled floor while
-    ally_1_switch and enemy_1_target read 0.351/0.440 at matched label
-    variance. Here each slot instead QUERIES for the mon that occupies it.
-
-    Reading the raw tokens rather than the latents avoids the 188 -> K
-    compression entirely, makes the species match near-exact, picks up that
-    entity's folded history token for free, and is cheaper than the 12
-    entity pools it replaces (one 12 x 188 attention against twelve
-    [10-token self-attention + pooling decoder] runs).
-
-    The query is species + side + role, plus a learned per-slot POSITION
-    term. Position is not redundant: most of the correspondences are fixed
-    (ALLY_i -> public row i, ENEMY_i -> public row 6+i, RESERVE_j -> private
-    row j) and resolve exactly through entity_bias regardless of species,
-    which matters because species is NOT a stable key under Illusion. The
-    public battle carries the disguise for both sides until |replace|
-    (state.ts), so a MY-SIDE Zoroark's query -- built from the true species
-    on the private sheet -- fails to match its own public row and would match
-    the teammate it is disguised as. Opponent-side Illusion is self-
-    consistent and correctly fools the model, exactly as it fools a human.
-    """
-
-    cfg: ConfigDict
-    num_slots: int
-
-    @nn.compact
-    def __call__(
-        self, queries: jax.Array, tokens: jax.Array, token_mask: jax.Array
-    ) -> jax.Array:
-        embedding_init = nn.initializers.variance_scaling(
-            1.0, "fan_in", "normal", out_axis=0
-        )
-        position = self.param(
-            "slot_position", embedding_init, (self.num_slots, queries.shape[-1])
-        )
-        return TransformerDecoder(name="read", **self.cfg.latent_read.to_dict())(
-            q=queries + position.astype(queries.dtype), kv=tokens, kv_mask=token_mask
-        )
-
-
-def tag_with_species(tokens: jax.Array) -> jax.Array:
-    """Add each entity's own species embedding to every one of its tokens.
-
-    Attention is q.k, so a species-shaped query matches species-shaped KEYS —
-    and an entity's condition (hp / status / fainted) lives on a state token
-    whose content has nothing to do with its species. The only thing an
-    entity's tokens otherwise share is `entity_bias`, a POSITIONAL parameter
-    that a content-derived query has no way to address. This tag is what lets
-    one species query retrieve a whole entity rather than just its species
-    token.
-
-    Free: token 0 of every entity group already IS that entity's species
-    embedding, so the tag is a broadcast add, and an entity whose species is
-    NULL/PAD/UNSPECIFIED embeds to zero and is therefore untagged.
-
-    (..., num_entities, num_tokens, dim) in, same shape out.
-    """
-    return tokens + tokens[..., :1, :]
-
-
-class RoundBlock(nn.Module):
-    """One trunk round over the public LATENTS (the state stream: K rows
-    produced by LatentInputRead over the flat input token set, 2026-08-21
-    -- before that, the concat [private | public | field | prev_action |
-    history] of pooled per-entity vectors with per-substream gates), the
-    concatenated ACTION stream [move | switch | target] and the value
-    stream. Action substream
-    identity survives via per-substream input norms, static slice
-    boundaries (derived from the typed valid masks) and PER-SUBSTREAM GATE
-    VECTORS — each write to the action stream is scaled by its type's own
-    zero-init scalar, broadcast over that type's rows; the state stream is
-    one group with one gate per write. Per round:
-
-        1. state self-attention: one module over the state concat,
-           per-substream gate vector. Within-type pairs are a subset of
-           this all-pairs attention, so there are no intra self-attn
-           modules
-        2. action self-attention: one module over the action concat,
-           per-type gate vector — option comparison, within- and
-           cross-type, in one all-pairs attention; then the EXCHANGE:
-           state -> action decode (q = action, kv = state rows),
-           per-type gate vector, followed by action -> state decode
-           (q = state, kv = the updated action), per-substream gate
-           vector
-        3. value read: the value rows read the state stream. ONE rung
-           (2026-08-25): the privileged `all` rung and its opponent-sheet
-           latents are gone, and so is the raw-history `public` rung —
-           every stream now sees exactly the deploy-time information set,
-           so there is no ladder left to mask
-        4. group-level FFWs: one state FFW, one action FFW (per-token,
-           applied to the group stream under its per-substream gate
-           vector); the value stream sits outside both groups and keeps
-           its own FFW
-
-    Every residual write stays behind a SMALL-CONSTANT gate
-    (cfg.round.init_gate = 0.05, deliberately NOT zero — see gate() below
-    for the 2026-08-24 read that found zero-init gates never train), so a
-    round starts near-identity rather than as an exact no-op;
-    nn.scan-ned num_rounds times with stacked params so every
-    round has its own weights. A query row whose key set is entirely
-    invalid (e.g. a terminal row, where no action slot is legal) receives
-    a ZERO attention output, not NaN: MultiHeadAttention masks the
-    attention probs back to 0 after the -1e9-masked softmax.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(
-        self,
-        streams: tuple[jax.Array, jax.Array, jax.Array],
-        state_valid: jax.Array,
-        move_valid: jax.Array,
-        switch_valid: jax.Array,
-        target_valid: jax.Array,
-    ):
-        state, action, value = streams
-        rcfg = self.cfg.round
-        mha_kwargs = dict(
-            num_heads=rcfg.num_heads,
-            qk_size=rcfg.qk_size,
-            v_size=rcfg.v_size,
-            model_size=rcfg.model_size,
-            qk_layer_norm=rcfg.qk_layer_norm,
-            use_bias=rcfg.use_bias,
-            dtype=state.dtype,
-            collect_intermediates=COLLECT_INTERMEDIATES,
-        )
-        n_value = value.shape[0]
-        value_valid = jnp.ones(n_value, dtype=jnp.bool_)
-
-        # Substream boundaries come from the (static) valid-mask shapes;
-        # the concat order is fixed by the encoder. The state stream is
-        # one group (the latents).
-        state_parts = (("state", state_valid.shape[0]),)
-        action_parts = (
-            ("move", move_valid.shape[0]),
-            ("switch", switch_valid.shape[0]),
-            ("target", target_valid.shape[0]),
-        )
-        if COLLECT_INTERMEDIATES:
-            # Self-describing capture: the probe needs the concat layout to
-            # attribute attention mass to substreams.
-            self.sow(
-                "intermediates",
-                "state_part_sizes",
-                jnp.asarray([n for _, n in state_parts], dtype=jnp.int32),
-            )
-            self.sow(
-                "intermediates",
-                "action_part_sizes",
-                jnp.asarray([n for _, n in action_parts], dtype=jnp.int32),
-            )
-
-        action_valid = jnp.concatenate((move_valid, switch_valid, target_valid), axis=0)
-
-        def gate(name: str) -> jax.Array:
-            # Constant init from cfg.round.init_gate (0.05), NOT zero
-            # (2026-08-24 gate-contribution read, ckpt_00074597): with
-            # alpha = 0 the block's own parameters get gradient
-            # alpha.(df/dtheta)'.delta = exactly 0 until the gate moves,
-            # and the gate's gradient <f_random(x), delta> has no
-            # consistent sign under RL noise once the parallel cross-
-            # stream reads have opened -- every FFW and the state
-            # self-attention sat at |g| ~ 1e-3 (a random walk) for 74.6k
-            # steps, contributing <= 5e-4 of their stream. Any non-zero
-            # constant gives f a direction-consistent gradient from step
-            # 0 (Adam normalises the magnitude); 0.05 keeps the init
-            # contribution at ~1% of the state/action streams.
-            return self.param(
-                name, nn.initializers.constant(rcfg.init_gate), (1,)
-            ).astype(state.dtype)
-
-        def group_gate(parts, pattern: str) -> jax.Array:
-            """Per-substream small-constant scalars broadcast to a (rows, 1)
-            gate vector over the group concat."""
-            return jnp.concatenate(
-                [
-                    jnp.broadcast_to(gate(pattern.format(name)), (n,))
-                    for name, n in parts
-                ]
-            )[:, None]
-
-        def attend(name: str, q, q_valid, kv, kv_valid):
-            mask = create_attention_mask(q_valid, kv_valid)
-            return MultiHeadAttention(name=name, **mha_kwargs)(
-                q=layer_norm(q), kv=layer_norm(kv), mask=mask
-            )
-
-        # 1. State self-attention over the group concat, per-substream
-        # gate vector.
-        state = state + group_gate(state_parts, "{}_global_gate") * attend(
-            "state_global_attn", state, state_valid, state, state_valid
-        )
-
-        # 2. Action self-attention over the group concat (per-type gate
-        # vector), then the state<->action exchange: state -> action
-        # decode, action -> state decode reading the updated options back.
-        action = action + group_gate(action_parts, "{}_global_gate") * attend(
-            "action_global_attn", action, action_valid, action, action_valid
-        )
-        action = action + group_gate(action_parts, "state_to_{}_gate") * attend(
-            "state_to_action", action, action_valid, state, state_valid
-        )
-        state = state + group_gate(state_parts, "action_to_{}_gate") * attend(
-            "action_to_state", state, state_valid, action, action_valid
-        )
-
-        # 3. Value read over the state stream — one rung, one key set.
-        value = value + gate("value_read_gate") * attend(
-            "value_read", value, value_valid, state, state_valid
-        )
-
-        # 4. Group-level FFWs with per-substream gate vectors; the value
-        # stream keeps its own FFW and scalar gate.
-        def ffw(name: str):
-            return FFWMLP(
-                hidden_size=rcfg.hidden_size, use_bias=rcfg.use_bias, name=name
-            )
-
-        state = state + group_gate(state_parts, "{}_ffw_gate") * ffw("state_ffw")(
-            layer_norm(state)
-        )
-        action = action + group_gate(action_parts, "{}_ffw_gate") * ffw("action_ffw")(
-            layer_norm(action)
-        )
-        value = value + gate("value_ffw_gate") * ffw("value_ffw")(layer_norm(value))
-
-        # Hard-zero invalid rows so padded tokens never accumulate content.
-        state = jnp.where(state_valid[..., None], state, 0)
-        action = jnp.where(action_valid[..., None], action, 0)
-        return (state, action, value), None
-
-
-class GroupNorm(nn.Module):
-    """Per-substream norm+MLP projections at a trunk-group boundary:
-    each named substream gets its own MLP, and the results are
-    concatenated in order into (or back out of) the group stream
-    RoundBlock carries. One class serves both action-stream boundaries — the action INPUT norms (each substream comes from a different generative
-    process, so each needs its own projection into trunk space) and the
-    action OUTPUT norms (the head-facing per-group spaces over the final
-    round's slices) — so all group-boundary projections are built
-    identically. The substream order fixes the slice boundaries
-    RoundBlock derives from the valid masks."""
-
-    substream_names: tuple[str, ...]
-    layer_sizes: tuple[int, ...] | None = None
-
-    @nn.compact
-    def __call__(self, substreams: tuple[jax.Array, ...]) -> jax.Array:
-        return jnp.concatenate(
-            [
-                MLP(self.layer_sizes, name=f"{name}_norm")(tokens)
-                for name, tokens in zip(self.substream_names, substreams, strict=True)
-            ],
-            axis=0,
-        )
-
-
 class Encoder(nn.Module):
     """
     Encoder model for processing environment steps and history to generate embeddings.
@@ -594,15 +204,29 @@ class Encoder(nn.Module):
         embedding_init = nn.initializers.variance_scaling(
             1.0, "fan_in", "normal", out_axis=0
         )
+        bias_init = nn.initializers.zeros_init()
 
         self.side_bias = nn.Embed(2, name="side_bias", **embed_kwargs)
         self.pos_bias = nn.Embed(3, name="pos_bias", **embed_kwargs)
 
-        self.pass_embeddings = self.param(
-            "pass_embeddings", embedding_init, (2, entity_size)
+        # One learned identity per target slot. Replaces the separate
+        # pass_embeddings / target_embeddings tables (2026-08-29): those two
+        # plus the four entity-derived targets were three ways of saying "a
+        # thing a move can be aimed at", and the readout wants them as one
+        # contiguous block it can score against.
+        self.target_slot_embeddings = self.param(
+            "target_slot_embeddings",
+            embedding_init,
+            (len(TARGET_SLOT_INDICES), entity_size),
         )
-        self.target_embeddings = self.param(
-            "target_embeddings", embedding_init, (len(TARGET_INDICES), entity_size)
+        # The previous action's two slot ids, looked up directly. Before the
+        # rewrite these were GATHERED out of the built action stream, which
+        # made the token set circular and forced it to be assembled twice.
+        self.prev_action_embeddings = nn.Embed(
+            num_embeddings=NUM_ACTION_FEATURES,
+            embedding_init=embedding_init,
+            name="prev_action_embeddings",
+            **embed_kwargs,
         )
         # My own private sheet's identity tag. NOT side_bias(0): the service
         # writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so row 1 of
@@ -632,18 +256,11 @@ class Encoder(nn.Module):
         )
 
         # Action biases
-        bias_init = nn.initializers.zeros_init()
         self.regular_move_bias = self.param(
             "regular_move_bias", bias_init, (1, entity_size)
         )
         self.wildcard_move_bias = self.param(
             "wildcard_move_bias", bias_init, (1, entity_size)
-        )
-        self.switch_src_bias = self.param(
-            "switch_src_bias", bias_init, (1, entity_size)
-        )
-        self.switch_tgt_bias = self.param(
-            "switch_tgt_bias", bias_init, (1, entity_size)
         )
         self.ally_target_bias = self.param(
             "ally_target_bias", bias_init, (1, entity_size)
@@ -652,12 +269,24 @@ class Encoder(nn.Module):
             "enemy_target_bias", bias_init, (1, entity_size)
         )
 
-        # Value queries: 4 rows read by the single critic (2026-08-25 —
-        # the all/private/public ladder is gone; every stream now sees
-        # exactly the deploy-time information set, so there is nothing
-        # left to be privileged relative to).
-        self.value_embeddings_table = self.param(
-            "value_embeddings_table", embedding_init, (4, entity_size)
+        # The CLS row. The value head reads THIS ROW AND ONLY THIS ROW, so
+        # loss_v_win's gradient reaches the trunk through it and it is the row
+        # that has to aggregate the board. It is also unconditionally valid,
+        # which is what stops a terminal step -- every action row masked off --
+        # from attending over an empty key set and returning NaN. Replaces the
+        # 4-row value_embeddings_table and its (4 * entity_size,) concat.
+        self.cls_embedding = self.param(
+            "cls_embedding", embedding_init, (1, entity_size)
+        )
+        # The sequence's own identity: one bias per row group, one per row.
+        # Group says WHAT KIND of thing a row is, row says WHICH -- and the row
+        # bias is what separates two slots naming the same mon (ALLY_i_TARGET
+        # and reserve i) before anything else has trained.
+        self.sequence_group_bias = self.param(
+            "sequence_group_bias", bias_init, (NUM_SEQUENCE_GROUPS, entity_size)
+        )
+        self.sequence_row_bias = self.param(
+            "sequence_row_bias", embedding_init, (NUM_SEQUENCE_ROWS, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -694,29 +323,6 @@ class Encoder(nn.Module):
             EntityAttentionPool,
             policy=jax.checkpoint_policies.nothing_saveable,
         )(self.cfg, name="entity_attention_pool")
-        # Perceiver-style input reads (2026-08-21). ONE flat token set --
-        # both sides' public attribute tokens (each carrying that slot's
-        # recurrent history state), my private sheet's, the field, the
-        # prev-action slots and the field history states -- feeds TWO
-        # readers: K learned latents that become the trunk's state rows, and
-        # the 12 entity-derived action slots (2026-08-28), which query it for
-        # the mon that occupies them instead of being warm-started from a
-        # second, pooled encoding of the same board. The entity-local pool
-        # above now survives only for the packed history cache (~2 orders of
-        # magnitude more rows, and no per-request state to fold in).
-        # Rematted like its neighbours.
-        remat = functools.partial(
-            nn.checkpoint, policy=jax.checkpoint_policies.nothing_saveable
-        )
-        self.input_token_set = remat(InputTokenSet)(self.cfg, name="input_token_set")
-        self.latent_input_read = remat(LatentInputRead)(
-            self.cfg, self.cfg.num_latents, name="latent_input_read"
-        )
-        # The entity-derived action slots read the same token set: they are a
-        # readout of the board, not a second encoding of it.
-        self.action_slot_read = remat(ActionSlotRead)(
-            self.cfg, NUM_ACTION_SLOT_READS, name="action_slot_read"
-        )
         self.public_persistent_linear = nn.Dense(
             name="public_persistent_linear", use_bias=False, **dense_kwargs
         )
@@ -759,59 +365,11 @@ class Encoder(nn.Module):
             name="history_field_step_linear", use_bias=False, **dense_kwargs
         )
 
-        # Per-type input projections for the action stream (the state
-        # stream is the latent read's output and needs none). The
-        # prev-action tokens used to need theirs too -- they are borrowed
-        # mixed-provenance action-slot embeddings -- and now get identity
-        # from the read's token-type/group biases instead.
-        input_mlp_shape = (4 * self.entity_size, self.entity_size)
-        self.action_input_norm = GroupNorm(
-            substream_names=tuple(
-                group_name for group_name, _ in ACTION_DECODER_SLOT_GROUPS
-            ),
-            layer_sizes=input_mlp_shape,
-            name="action_input_norm",
-        )
-
-        # Round trunk: one RoundBlock over the public latents (state), the
-        # concatenated action stream [move | switch | target] and the value
-        # stream, scanned num_rounds times with stacked params, so every
-        # round has its own weights and rounds can specialize instead of
-        # iterating one shared refinement operator.
-        # Every residual gate inits at cfg.round.init_gate (0.05, NOT zero
-        # — see gate() above): each round starts at ~1% of the state and
-        # action streams, not as a no-op. Zero-init was measured dead.
-        # Rematted with nothing_saveable — checkpoint_dots would save the
-        # very matmul outputs (the wide FFW hiddens) that dominate trunk
-        # activation memory, while recomputing a round on the backward pass
-        # is cheap.
-        self.num_rounds = self.cfg.num_rounds
-        round_block = nn.checkpoint(
-            RoundBlock,
-            policy=jax.checkpoint_policies.nothing_saveable,
-        )
-        variable_axes = {"params": 0}
-        if COLLECT_INTERMEDIATES:
-            variable_axes["intermediates"] = 0
-        self.round_trunk = nn.scan(
-            round_block,
-            variable_axes=variable_axes,
-            variable_broadcast=False,
-            split_rngs={"params": True},
-            in_axes=nn.broadcast,
-            length=self.num_rounds,
-        )(self.cfg, name="round_trunk")
-        # Head-facing output norms, hoisted out of the trunk so it carries
-        # raw residual streams; applied once to the final round's action
-        # stream, keeping the move/switch/target slices in their own
-        # spaces for the readout and macro heads. Same GroupNorm class as
-        # the input side (identity-size MLPs).
-        self.action_out_norm = GroupNorm(
-            substream_names=tuple(
-                group_name for group_name, _ in ACTION_DECODER_SLOT_GROUPS
-            ),
-            name="action_out_norm",
-        )
+        # The trunk. One sequence, `num_blocks` standard pre-RMSNorm blocks,
+        # no gates and no block masks -- see rl/model/trunk.py for why the
+        # three gated streams and their two feeding cross-attention reads all
+        # collapse into this at 61 rows.
+        self.trunk = Trunk(self.cfg.trunk, name="trunk")
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1461,33 +1019,6 @@ class Encoder(nn.Module):
         )
         return field_embeddings, mask, request_count, turn_order_value
 
-    def _current_entity_tokens(self, env_step: PlayerEnvOutput):
-        """Attribute tokens of every entity of the CURRENT board -- both
-        sides' public rows and my own private sheet -- plus the per-entity
-        identity biases they carry into the reads. The token set is exactly
-        the player's own legal information set.
-
-        No entity-local pooling on this path since 2026-08-28: the action
-        slots that stand for a mon now QUERY these same tokens
-        (ActionSlotRead) instead of being warm-started from a second,
-        pooled encoding of them."""
-        public_tokens, public_token_mask, public_mask, public_bias = (
-            _lifted_entity_vmap(Encoder._public_entity_tokens)(
-                self, env_step.public_team, env_step.revealed_team
-            )
-        )
-        private_tokens, private_token_mask, private_mask = _lifted_entity_vmap(
-            Encoder._private_entity_tokens
-        )(self, env_step.private_team)
-        private_bias = jnp.broadcast_to(
-            self.private_side_bias.astype(private_tokens.dtype),
-            private_tokens.shape[:1] + private_tokens.shape[-1:],
-        )
-        return (
-            (public_tokens, public_token_mask, public_mask, public_bias),
-            (private_tokens, private_token_mask, private_mask, private_bias),
-        )
-
     def _embed_private_entities(self, private_team: jax.Array):
         return _lifted_entity_vmap(Encoder._embed_private_entity)(self, private_team)
 
@@ -1529,93 +1060,106 @@ class Encoder(nn.Module):
     def _embed_moves(self, moveset: jax.Array) -> jax.Array:
         return _lifted_entity_vmap(Encoder._embed_action)(self, moveset)
 
-    def _action_slot_queries(
-        self, public_tokens: jax.Array, private_tokens: jax.Array
-    ) -> jax.Array:
-        """The 12 entity-slot queries, in ACTION_SLOT_READ_INDICES order.
-
-        Query = species + side + role.
-
-        species: token 0 of an entity group IS its species embedding, taken
-        UNTAGGED (tag_with_species doubles it on the key side).
-        side: the SIDE convention the keys carry (1 mine, 0 theirs), so query
-        and key agree rather than merely coexist.
-        role: REQUIRED. ALLY_i_SWITCH and ALLY_i_TARGET name the same mon, so
-        without it they are the same query and the readout could not tell
-        "switch this mon out" from "target it".
-
-        ActionSlotRead adds a learned per-slot POSITION term on top, which is
-        what keeps the fixed correspondences exact when species is not a
-        reliable key (a my-side Illusion shows the disguise on the public row
-        while the sheet shows the truth).
-        """
-        dtype = self.cfg.dtype
-        mine = self.side_bias(jnp.ones((), dtype=jnp.int32)).astype(dtype)
-        theirs = self.side_bias(jnp.zeros((), dtype=jnp.int32)).astype(dtype)
-        public_species = public_tokens[:, 0]
-        private_species = private_tokens[:, 0]
-        return jnp.concatenate(
-            (
-                public_species[:2] + mine + self.switch_src_bias.astype(dtype),
-                public_species[:2] + mine + self.ally_target_bias.astype(dtype),
-                public_species[6:8] + theirs + self.enemy_target_bias.astype(dtype),
-                private_species + mine + self.switch_tgt_bias.astype(dtype),
-            ),
-            axis=0,
-        )
-
-    def _batched_forward(
+    def _assemble_sequence(
         self,
         env_step: PlayerEnvOutput,
         history_row_states: jax.Array,
         history_row_valid: jax.Array,
         history_field_state: jax.Array,
     ):
-        # Attribute tokens of the current board (the latent read's keys)
-        # and the entity-local pooled vectors that warm-start the typed
-        # action slots.
-        (
-            (public_tokens, public_token_mask, revealed_entity_mask, public_bias),
-            (private_tokens, private_token_mask, private_entity_mask, private_bias),
-        ) = self._current_entity_tokens(env_step)
-        field_embeddings, *_ = self._embed_field(env_step.field)
+        """One row per thing -> (sequence, row_valid), BEFORE the trunk.
 
-        # My moveset embeddings carry per-move battle state (pp, disabled,
-        # wildcard availability); they warm-start the move action stream
-        # below and reach the value stream via the action->state readbacks.
-        my_move_embeddings, _ = self._embed_moves(env_step.my_moveset)
+        61 rows: a CLS row, 12 public entities, my 6 sheet rows, my 16
+        candidate move slots, the 17 target slots, the field triple, the
+        recurrent field triple, the two previous-action rows, and the request
+        info row. Every identity a row carries is additive, and the layout
+        itself lives in `rl/model/constants.py` so the offsets exist once.
+        """
+        dtype = self.cfg.dtype
 
-        # ---- the read's token groups -------------------------------------
-        # History row i IS public entity i's diary — Encoder.__call__ has
-        # already re-aligned the two with PUBLIC_ORDER — so it enters as that
-        # entity's 11th attribute token and inherits its entity / pos+side /
-        # group biases. As its own group the 12 rows shared ONE entity_bias
-        # row and ONE HISTORY_SLOT type, which made them mutually
-        # exchangeable and threw the re-alignment away.
-        public_read_tokens = jnp.concatenate(
-            (public_tokens, history_row_states[:, None].astype(public_tokens.dtype)),
-            axis=1,
+        # ---- the entities, one pooled vector each -------------------------
+        # `_embed_public_entity` / `_embed_private_entity` are the SAME
+        # entity-local pools the packed history cache runs on; before
+        # 2026-08-29 the current board took a second path that emitted 10-11
+        # raw attribute tokens per entity instead.
+        public_rows, public_valid = _lifted_entity_vmap(Encoder._embed_public_entity)(
+            self, env_step.public_team, env_step.revealed_team
         )
-        # Content-derived entity key, alongside the positional entity_bias —
-        # tagged AFTER the fold so a slot's diary is retrievable by the same
-        # species query as the rest of its entity.
-        public_read_tokens = tag_with_species(public_read_tokens)
-        private_read_tokens = tag_with_species(private_tokens)
-        public_read_mask = jnp.concatenate(
-            (public_token_mask, history_row_valid[:, None]), axis=1
+        # History row i IS public entity i's diary -- `Encoder.__call__` has
+        # already re-aligned the two through PUBLIC_ORDER -- so it is summed
+        # into that entity's row and inherits its pos/side identity for free.
+        public_rows = public_rows + jnp.where(
+            history_row_valid[:, None], history_row_states, 0
+        ).astype(public_rows.dtype)
+
+        private_rows, private_valid = self._embed_private_entities(
+            env_step.private_team
         )
+        private_rows = private_rows + self.private_side_bias.astype(private_rows.dtype)
+
+        # ---- my candidate moves, one row per action slot ------------------
+        # Row k IS action slot MOVE_INDICES[k], carrying that slot's pp,
+        # disabled and wildcard-availability state -- the only route those
+        # features have into the model.
+        move_rows, move_revealed = self._embed_moves(env_step.my_moveset)
+        move_rows = move_rows + jnp.where(
+            jnp.asarray(IS_WILDCARD_MOVE_SLOT)[:, None],
+            self.wildcard_move_bias.astype(dtype),
+            self.regular_move_bias.astype(dtype),
+        )
+
+        # ---- the target slots ---------------------------------------------
+        # Every target slot has a learned identity; the four that NAME a mon
+        # add that mon's entity row, so a move is scored against the actual
+        # pokemon it would hit rather than against a bare positional slot.
+        target_rows = self.target_slot_embeddings.astype(dtype)
+        target_rows = target_rows.at[jnp.asarray(ALLY_TARGET_ROWS)].add(
+            public_rows[jnp.asarray(MY_ACTIVE_PUBLIC_ROWS)]
+            + self.ally_target_bias.astype(dtype)
+        )
+        target_rows = target_rows.at[jnp.asarray(ENEMY_TARGET_ROWS)].add(
+            public_rows[jnp.asarray(OPP_ACTIVE_PUBLIC_ROWS)]
+            + self.enemy_target_bias.astype(dtype)
+        )
+
+        # ---- field, now and remembered ------------------------------------
+        field_rows, *_ = self._embed_field(env_step.field)
         # (global, mine, theirs), matching _embed_field's own triple and
-        # tagged with the same field_side_bias, so "whose side" reads the
-        # same way on a current field token and on its recurrent memory.
-        history_field_tokens = history_field_state[None].astype(self.cfg.dtype)
-        field_side = self.field_side_bias.astype(self.cfg.dtype)
-        history_field_tokens = (
-            history_field_tokens.at[0, 1].add(field_side[1]).at[0, 2].add(field_side[0])
+        # tagged with the same field_side_bias, so "whose side" reads the same
+        # way on a current field row and on its recurrent memory.
+        field_side = self.field_side_bias.astype(dtype)
+        history_field_rows = (
+            history_field_state.astype(dtype)
+            .at[1]
+            .add(field_side[1])
+            .at[2]
+            .add(field_side[0])
         )
-        history_field_valid = jnp.ones((1, NUM_FIELD_ROWS), dtype=jnp.bool_)
-        field_valid = jnp.ones_like(field_embeddings[..., 0], dtype=jnp.bool)
 
-        info_tokens = self.info_linear(
+        # ---- the previous action ------------------------------------------
+        # An embedding lookup on the two slot ids, NOT a gather out of a built
+        # action stream. That gather is why `InputTokenSet.assemble` had to run
+        # twice before 2026-08-29: the previous action's rows were read off a
+        # sequence that was itself built from a read over those rows.
+        prev_action_rows = self.prev_action_embeddings(
+            jnp.stack(
+                (
+                    env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC],
+                    env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT],
+                )
+            )
+        ) + jnp.concatenate(
+            (
+                self.prev_action_src_bias.astype(dtype),
+                self.prev_action_tgt_bias.astype(dtype),
+            ),
+            axis=0,
+        )
+        has_prev_action = env_step.info[
+            InfoFeature.INFO_FEATURE__HAS_PREV_ACTION
+        ].astype(jnp.bool_)
+
+        info_row = self.info_linear(
             one_hot_concat_jax(
                 [
                     encode_one_hot_info(
@@ -1625,175 +1169,75 @@ class Encoder(nn.Module):
                         env_step.info, InfoFeature.INFO_FEATURE__NUM_ACTIVE
                     ),
                 ],
-                dtype=self.cfg.dtype,
+                dtype=dtype,
             )
-        )[None, None]
-        info_valid = jnp.ones((1, len(INFO_TOKEN_TYPES)), dtype=jnp.bool_)
+        )[None]
 
-        def assemble(prev_action_tokens, prev_action_mask):
-            """The flat key set, ONE module instance, ONE set of biases."""
-            return self.input_token_set(
-                (
-                    public_read_tokens,
-                    private_read_tokens,
-                    field_embeddings[None],
-                    prev_action_tokens[None],
-                    history_field_tokens,
-                    info_tokens,
-                ),
-                (
-                    public_read_mask,
-                    private_token_mask,
-                    field_valid[None],
-                    prev_action_mask[None],
-                    history_field_valid,
-                    info_valid,
-                ),
-                (
-                    PUBLIC_READ_TOKEN_TYPES,
-                    PRIVATE_TOKEN_TYPES,
-                    FIELD_TOKEN_TYPES,
-                    PREV_ACTION_TOKEN_TYPES,
-                    HISTORY_FIELD_TOKEN_TYPES,
-                    INFO_TOKEN_TYPES,
-                ),
-                (public_bias, private_bias, None, None, None, None),
-            )
+        # ---- the sequence --------------------------------------------------
+        # A slot is live if the mask can reach it either way round, exactly as
+        # the action stream's validity was computed before the rewrite.
+        slot_valid = env_step.action_mask.any(axis=0) | env_step.action_mask.any(axis=1)
+        slot_valid = slot_valid & jnp.logical_not(env_step.done)
 
-        # ---- the entity-derived action slots, read off those tokens -------
-        # The prev-action tokens are GATHERED from the finished action
-        # sequence, so they cannot be keys of the read that builds it. They
-        # are masked out here and supplied to the latent read below — the
-        # same module, the same biases, assembled twice rather than two
-        # instances that could drift.
-        no_prev_action = jnp.zeros(
-            (len(PREV_ACTION_TOKEN_TYPES), self.entity_size), dtype=self.cfg.dtype
-        )
-        slot_tokens, slot_token_mask = assemble(
-            no_prev_action, jnp.zeros(len(PREV_ACTION_TOKEN_TYPES), dtype=jnp.bool)
-        )
-
-        slot_queries = self._action_slot_queries(public_tokens, private_tokens)
-        slot_embeddings = self.action_slot_read(
-            slot_queries, slot_tokens, slot_token_mask
-        )
-
-        # ---- the action sequence -----------------------------------------
-        output_state_sequence = jnp.zeros(
-            (NUM_ACTION_FEATURES, self.entity_size), dtype=self.cfg.dtype
-        )
-        pass_embeddings = self.pass_embeddings.astype(self.cfg.dtype)
-        target_embeddings = self.target_embeddings.astype(self.cfg.dtype)
-
-        # Entity slots come from the read; the rest stand for an OPTION
-        # rather than a mon and keep their own embedding. My moveset carries
-        # per-move battle state (pp, disabled, wildcard availability) and is
-        # not a key of the read, so this is its only route in — it reaches
-        # the state stream via the action->state readbacks.
-        for indices, accumulator in [
-            (MOVE_INDICES, my_move_embeddings),
-            (PASS_INDICES, pass_embeddings),
-            (TARGET_INDICES, target_embeddings),
-            (ACTION_SLOT_READ_INDICES, slot_embeddings.astype(self.cfg.dtype)),
-        ]:
-            output_state_sequence = output_state_sequence.at[indices].add(accumulator)
-
-        # Add modality biases. Battle switches read (ALLY_i_SWITCH src,
-        # RESERVE_j tgt): the src carries the outgoing active entity, the
-        # reserve slots carry the incoming candidates.
-        for indices, accumulator in [
-            (REGULAR_MOVE_INDICES, self.regular_move_bias.astype(self.cfg.dtype)),
-            (WILDCARD_MOVE_INDICES, self.wildcard_move_bias.astype(self.cfg.dtype)),
-            (ALLY_SWITCH_INDICES, self.switch_src_bias.astype(self.cfg.dtype)),
-            (RESERVE_ENTITY_INDICES, self.switch_tgt_bias.astype(self.cfg.dtype)),
-            (ALLY_TARGET_INDICES, self.ally_target_bias.astype(self.cfg.dtype)),
-            (ENEMY_TARGET_INDICES, self.enemy_target_bias.astype(self.cfg.dtype)),
-        ]:
-            output_state_sequence = output_state_sequence.at[indices].add(accumulator)
-
-        prev_action_src = jnp.take(
-            output_state_sequence,
-            env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC],
-            axis=0,
-        )
-        prev_action_tgt = jnp.take(
-            output_state_sequence,
-            env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT],
-            axis=0,
-        )
-        prev_action_tokens = jnp.concatenate(
+        sequence = jnp.concatenate(
             (
-                prev_action_src + self.prev_action_src_bias.astype(self.cfg.dtype),
-                prev_action_tgt + self.prev_action_tgt_bias.astype(self.cfg.dtype),
+                self.cls_embedding.astype(dtype),
+                public_rows.astype(dtype),
+                private_rows.astype(dtype),
+                move_rows.astype(dtype),
+                target_rows,
+                field_rows.astype(dtype),
+                history_field_rows,
+                prev_action_rows,
+                info_row.astype(dtype),
             ),
             axis=0,
         )
-        prev_action_doubles_mask = jnp.array(
-            [
-                env_step.info[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION],
-                env_step.info[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION],
-            ],
-            dtype=jnp.bool,
-        )
-
-        output_state_mask = env_step.action_mask.any(axis=0) | env_step.action_mask.any(
-            axis=1
-        )
-        output_state_mask = output_state_mask & jnp.logical_not(env_step.done)
-        typed_action_valids = tuple(
-            output_state_mask[slot_indices]
-            for _, slot_indices in ACTION_DECODER_SLOT_GROUPS
-        )
-        value_tokens = self.value_embeddings_table.astype(self.cfg.dtype)
-
-        # ---- the latent read ---------------------------------------------
-        # K latents over the flat token set of my own information set --
-        # 12 public x 11 (attributes + that slot's history state) + 6 private
-        # x 8 + field 3 + prev-action 2 + history field 3 + info 1 -- become
-        # the trunk's state rows.
-        public_latents = self.latent_input_read(
-            *assemble(prev_action_tokens, prev_action_doubles_mask)
-        )
-        state_valid = jnp.ones(public_latents.shape[0], dtype=jnp.bool_)
-
-        # The action stream is built as before: per-type norm+MLP
-        # projections over the typed slices gathered from the warm-started
-        # slot-aligned sequence, carried through the scan as-is.
-        action_tokens = self.action_input_norm(
-            tuple(
-                jnp.split(
-                    output_state_sequence[ACTION_GROUP_SLOTS],
-                    ACTION_GROUP_SPLITS,
-                    axis=0,
-                )
+        row_valid = jnp.concatenate(
+            (
+                # The CLS row is ALWAYS valid. The value head reads it, and it
+                # is also what guarantees every query row has a non-empty key
+                # set -- a terminal step, where every action row is masked off,
+                # would otherwise attend over nothing and return NaN.
+                jnp.ones(1, dtype=jnp.bool_),
+                public_valid,
+                private_valid,
+                move_revealed & slot_valid[jnp.asarray(MOVE_INDICES)],
+                slot_valid[jnp.asarray(TARGET_SLOT_INDICES)],
+                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
+                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
+                jnp.full(2, has_prev_action),
+                jnp.ones(1, dtype=jnp.bool_),
             )
         )
-        (_, action_queries, value_queries), _ = self.round_trunk(
-            (public_latents, action_tokens, value_tokens),
-            state_valid,
-            *typed_action_valids,
-        )
 
-        # Head-facing embeddings from the final round's raw action
-        # stream: the GroupNorm out-norms keep the move/switch/target
-        # slices in their own spaces, scattered back slot-aligned so the
-        # flat src x tgt grid contract (action indexing, Q head, learner
-        # metrics) is untouched.
-        action_embeddings = (
-            jnp.zeros_like(output_state_sequence)
-            .at[ACTION_GROUP_SLOTS]
-            .set(
-                self.action_out_norm(
-                    tuple(jnp.split(action_queries, ACTION_GROUP_SPLITS, axis=0))
-                )
-            )
+        sequence = (
+            sequence
+            + self.sequence_group_bias.astype(dtype)[jnp.asarray(SEQUENCE_GROUP_IDS)]
+            + self.sequence_row_bias.astype(dtype)
         )
-        value_embeddings = value_queries.reshape(-1)
+        sequence = jnp.where(row_valid[:, None], sequence, 0)
+        return sequence, row_valid
 
-        # (NUM_ACTION_FEATURES, entity_size) and one (4 * entity_size,)
-        # value readout off the final round — the critic's state vector,
-        # on the same information set the policy acts from.
-        return action_embeddings, value_embeddings
+    def _batched_forward(
+        self,
+        env_step: PlayerEnvOutput,
+        history_row_states: jax.Array,
+        history_row_valid: jax.Array,
+        history_field_state: jax.Array,
+    ):
+        """The whole per-timestep forward: assemble, then run the trunk.
+
+        Split from `_assemble_sequence` so a test can read the rows as they
+        go IN. Every identity a row carries is additive and applied there, so
+        that is where an identity bug is visible; after the trunk every row
+        has mixed with every other and the reading is behavioural rather than
+        structural.
+        """
+        sequence, row_valid = self._assemble_sequence(
+            env_step, history_row_states, history_row_valid, history_field_state
+        )
+        return self.trunk(sequence, row_valid)
 
     def _run_history_encoder(
         self,
@@ -1991,8 +1435,7 @@ class Encoder(nn.Module):
             axis=1,
         )
 
-        action_embeddings, value_embeddings = _forward_vmap()(
-            self, env_step, row_states, order_valid, field_state
-        )
-
-        return action_embeddings, value_embeddings
+        # (T, NUM_SEQUENCE_ROWS, entity_size). The heads slice the rows they
+        # own by name (rl/model/constants.py), so no offset is ever written
+        # twice.
+        return _forward_vmap()(self, env_step, row_states, order_valid, field_state)

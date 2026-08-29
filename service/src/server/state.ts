@@ -44,6 +44,13 @@ import {
     numPublicEntityNodeFeatures,
     numRevealedEntityNodeFeatures,
     sampleTeams,
+    MOVE_SLOT_INDICES,
+    RESERVE_SLOT_INDICES,
+    ALLY_SWITCH_SRC_INDICES,
+    TARGET_SLOT_INDICES,
+    TEAM_PREVIEW_TGT,
+    showdownTargetSuffix,
+    chooseWildcardKeyword,
 } from "./data";
 import { Battle, NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, BoostID } from "@pkmn/dex-types";
@@ -67,7 +74,13 @@ import {
     RequestType,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
-import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
+import {
+    EnvironmentState,
+    ActionEnum,
+    ActionMask,
+    ActionRequestKind,
+    ActionRequestKindMap,
+} from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
@@ -3797,21 +3810,49 @@ export class StateHandler {
         this.player = player;
     }
 
+    /**
+     * The legal-action set, built ONCE as (cell -> the Showdown choice string
+     * that cell means).
+     *
+     * Before 2026-08-29 this method only set bits, and `choiceFromAction`
+     * re-derived the choice string from (src, tgt) by a parallel hand-written
+     * decoder. The two drifted, in three ways that all cost real legality:
+     * the decoder appended " terastallize" to every wildcard while the mask
+     * legalised a wildcard for mega / ultra burst / Z-move too; the decoder
+     * resolved a move's target through `request.active[i].moves[j]` while the
+     * mask indexed `maxMoves.maxMoves`, so under Dynamax the two read
+     * different moves; and team preview lit one cell per remaining position
+     * while the decoder ignored the target entirely, so up to 7 duplicate
+     * cells stood for one choice. Emitting the string where the bit is set
+     * makes all three unrepresentable.
+     */
     getActionMask(args: {
         request?: AnyObject | null;
-        format?: string;
         allyActive: (Pokemon | null)[];
         enemyActive: (Pokemon | null)[];
     }): {
         actionMask: OneDBoolean;
-        isStruggling: boolean;
+        choiceByCell: Map<number, string>;
+        structuredMask: ActionMask;
     } {
-        const { request, format, allyActive, enemyActive } = args;
+        const { request, allyActive, enemyActive } = args;
 
         const arrWidth = numActionFeatures;
         const arrLength = arrWidth ** 2;
         const actionMask = new OneDBoolean(arrLength, Uint8Array, arrWidth);
-        let isStruggling = false;
+        const choiceByCell = new Map<number, string>();
+        let kind: ActionRequestKindMap[keyof ActionRequestKindMap] =
+            ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED;
+
+        // Which ally half this sub-decision is for. Both branches that ask
+        // per-active gate on `i != this.player.choices.length`, so exactly one
+        // half is ever populated and this is that half.
+        let activeSlot = 0;
+
+        const legalise = (src: number, tgt: number, choice: string) => {
+            actionMask.setRowCol(src, tgt, true);
+            choiceByCell.set(src * arrWidth + tgt, choice);
+        };
 
         const moveIndices = [
             [
@@ -3841,14 +3882,6 @@ export class StateHandler {
                 ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
             ],
         ];
-        const reserveIndices = [
-            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-        ];
         const allyTargets = [
             !!allyActive[0] ? ActionEnum.ACTION_ENUM__ALLY_1_TARGET : undefined,
             !!allyActive[1] ? ActionEnum.ACTION_ENUM__ALLY_2_TARGET : undefined,
@@ -3871,11 +3904,16 @@ export class StateHandler {
         setAll(false);
 
         if (request === undefined || request === null) {
+            // Nothing is being asked. Keep every cell legal so downstream
+            // masked averages never see an empty row; the decoder answers
+            // "default" for any cell on a kind that carries no choice map.
             setAll(true);
         } else {
             if (request.wait) {
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__WAIT;
                 setAll(true);
             } else if (request.forceSwitch) {
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__FORCE_SWITCH;
                 const pokemon = request.side
                     .pokemon as Protocol.Request.SideInfo["pokemon"];
 
@@ -3883,6 +3921,7 @@ export class StateHandler {
                     if (i != this.player.choices.length) {
                         continue;
                     }
+                    activeSlot = i;
 
                     const rowColValPassValue = [
                         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
@@ -3890,10 +3929,10 @@ export class StateHandler {
                     ][i];
 
                     if (!mustSwitch) {
-                        actionMask.setRowCol(
+                        legalise(
                             rowColValPassValue,
                             rowColValPassValue,
-                            true,
+                            "pass",
                         );
                         continue;
                     }
@@ -3912,10 +3951,10 @@ export class StateHandler {
                         },
                     );
                     if (canSwitch.length === 0) {
-                        actionMask.setRowCol(
+                        legalise(
                             rowColValPassValue,
                             rowColValPassValue,
-                            true,
+                            "pass",
                         );
                         continue;
                     }
@@ -3925,14 +3964,15 @@ export class StateHandler {
                         ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
                     ][i];
                     for (const [j, _] of canSwitch) {
-                        actionMask.setRowCol(
+                        legalise(
                             forcedSwitchSrc,
-                            reserveIndices[j],
-                            true,
+                            RESERVE_SLOT_INDICES[j],
+                            `switch ${j + 1}`,
                         );
                     }
                 }
             } else if (request.active) {
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__MOVE;
                 let [
                     canMegaEvo,
                     canUltraBurst,
@@ -3948,6 +3988,7 @@ export class StateHandler {
                     if (i != this.player.choices.length) {
                         continue;
                     }
+                    activeSlot = i;
 
                     const rowColValPassValue = [
                         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
@@ -3957,10 +3998,10 @@ export class StateHandler {
                         pokemon[i].condition.endsWith(` fnt`) ||
                         pokemon[i].commanding
                     ) {
-                        actionMask.setRowCol(
+                        legalise(
                             rowColValPassValue,
                             rowColValPassValue,
-                            true,
+                            "pass",
                         );
                         continue;
                     }
@@ -4116,10 +4157,16 @@ export class StateHandler {
                                     }`,
                                 );
                             }
-                            const srcIndex = moveIndices[i][j];
-                            actionMask.setRowCol(srcIndex, tgtIndex, true);
+                            // The target suffix is resolved from THIS move
+                            // object, which is the max move when maxMoves is in
+                            // play -- the decoder used to re-resolve it through
+                            // request.active[i].moves[j] and read a different
+                            // move under Dynamax.
+                            const moveChoice = `move ${
+                                j + 1
+                            } ${showdownTargetSuffix(move, tgtIndex)}`.trim();
+                            legalise(moveIndices[i][j], tgtIndex, moveChoice);
 
-                            const wildCardSrcIndex = wildCardIndices[i][j];
                             const wildCardChosenAlready = this.player.choices
                                 .map((x) =>
                                     WILDCARDS.map((wildcard) =>
@@ -4127,18 +4174,25 @@ export class StateHandler {
                                     ).some((x) => x),
                                 )
                                 .some((x) => x);
-                            const canWildCard =
-                                (!!canMegaEvo ||
-                                    !!canUltraBurst ||
-                                    !!canZMove ||
-                                    !!canTerastallize) &&
-                                !wildCardChosenAlready;
+                            // Which wildcard, not merely whether: the decoder
+                            // hardcoded " terastallize", so a mega- or Z-move-
+                            // legal cell decoded to a choice Showdown rejects.
+                            const wildCardKeyword = wildCardChosenAlready
+                                ? undefined
+                                : chooseWildcardKeyword({
+                                      canMegaEvo,
+                                      canUltraBurst,
+                                      canZMove,
+                                      canTerastallize,
+                                  });
 
-                            actionMask.setRowCol(
-                                wildCardSrcIndex,
-                                tgtIndex,
-                                canWildCard,
-                            );
+                            if (wildCardKeyword !== undefined) {
+                                legalise(
+                                    wildCardIndices[i][j],
+                                    tgtIndex,
+                                    `${moveChoice} ${wildCardKeyword}`,
+                                );
+                            }
                         }
                     }
 
@@ -4163,81 +4217,98 @@ export class StateHandler {
 
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            actionMask.setRowCol(
+                            legalise(
                                 switchSrcIndex,
-                                reserveIndices[j],
-                                true,
+                                RESERVE_SLOT_INDICES[j],
+                                `switch ${j + 1}`,
                             );
                         }
                     }
                 }
             } else if (request.teamPreview) {
-                const reserveSources = [
-                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-                ];
-
-                const activeTargets: number[] = [
-                    ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
-                ];
-
-                if (this.player.privateBattle.gameType === "doubles") {
-                    activeTargets.push(ActionEnum.ACTION_ENUM__ALLY_2_TARGET);
-                }
-
-                const reserveTargets: number[] = [
-                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-                ];
-
-                if (!this.player.privateBattle.tier.includes("VGC")) {
-                    // Both 6v6 Singles and 6v6 Doubles need at least Reserve 3 and 4
-                    reserveTargets.push(
-                        ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-                        ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-                    );
-
-                    // ONLY 6v6 Singles needs Reserve 5 (1 Active + 5 Reserves = 6 Total)
-                    if (this.player.privateBattle.gameType !== "doubles") {
-                        reserveTargets.push(
-                            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-                        );
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW;
+                // Team preview is "which mon", full stop: the position being
+                // filled is always the next one (this.player.choices.length),
+                // so it carries no choice. Until 2026-08-29 the mask lit one
+                // cell per REMAINING position -- up to 7 -- while
+                // choiceFromAction ignored the target entirely, so the policy
+                // spread its mass over up to 7 exact duplicates of one choice
+                // and the micro-entropy cell count was inflated to match. One
+                // cell per candidate now, at the canonical column.
+                const alreadyChosen = new Set(
+                    this.player.choices
+                        .filter((choice) => choice.startsWith("switch "))
+                        .map((choice) => parseInt(choice.split(" ")[1]) - 1),
+                );
+                for (const [j, src] of RESERVE_SLOT_INDICES.entries()) {
+                    if (alreadyChosen.has(j)) {
+                        continue;
                     }
-                }
-
-                const allTargets = [...activeTargets, ...reserveTargets].slice(
-                    this.player.choices.length,
-                );
-                const alreadyChosenSources = this.player.choices.map(
-                    (choice) => {
-                        if (choice.startsWith("switch ")) {
-                            const idx = parseInt(choice.split(" ")[1]) - 1;
-                            return reserveSources[idx];
-                        }
-                        return null;
-                    },
-                );
-                const filteredSources = reserveSources.filter(
-                    (value, index) => {
-                        return (
-                            value !== null &&
-                            !alreadyChosenSources.includes(value)
-                        );
-                    },
-                );
-                for (const src of filteredSources) {
-                    for (const target of allTargets) {
-                        actionMask.setRowCol(src, target, true);
-                    }
+                    legalise(src, TEAM_PREVIEW_TGT, `switch ${j + 1}`);
                 }
             }
         }
 
-        return { actionMask, isStruggling };
+        // The wire form. Derived from choiceByCell rather than set alongside
+        // it, so there is exactly one place a cell becomes legal and the
+        // message cannot disagree with the map the decoder reads.
+        const structuredMask = new ActionMask();
+        structuredMask.setKind(kind);
+
+        let switchSlots = 0;
+        let otherSrcs = 0;
+        const moveTargets = new Array<number>(MOVE_SLOT_INDICES.length).fill(0);
+
+        for (const cell of choiceByCell.keys()) {
+            const src = Math.floor(cell / arrWidth);
+            const tgt = cell % arrWidth;
+
+            const moveBit = MOVE_SLOT_INDICES.indexOf(src);
+            if (moveBit >= 0) {
+                const targetBit = TARGET_SLOT_INDICES.indexOf(tgt);
+                if (targetBit < 0) {
+                    throw new Error(
+                        `Move src ${src} legalised against non-target ${tgt}`,
+                    );
+                }
+                moveTargets[moveBit] |= 1 << targetBit;
+                continue;
+            }
+
+            // A battle switch names the incoming mon in the TGT half; team
+            // preview names it in the SRC half. `kind` is what tells the model
+            // which, so both collapse to one bit per reserve here.
+            const allySwitchBit = ALLY_SWITCH_SRC_INDICES.indexOf(src);
+            if (allySwitchBit >= 0) {
+                switchSlots |= 1 << RESERVE_SLOT_INDICES.indexOf(tgt);
+                continue;
+            }
+            const previewBit = RESERVE_SLOT_INDICES.indexOf(src);
+            if (previewBit >= 0) {
+                switchSlots |= 1 << previewBit;
+                continue;
+            }
+
+            if (src !== tgt) {
+                throw new Error(
+                    `Standalone action ${src} must sit on the diagonal, got tgt ${tgt}`,
+                );
+            }
+            otherSrcs |= 1 << TARGET_SLOT_INDICES.indexOf(src);
+        }
+
+        structuredMask.setSwitchSlots(switchSlots);
+        structuredMask.setMoveTargetsList(moveTargets);
+        structuredMask.setOtherSrcs(otherSrcs);
+        structuredMask.setActiveSlot(activeSlot);
+
+        // Publish here, not at the call site: the baselines build a mask on
+        // their own StateHandler and never reach StateHandler.build, so an
+        // assignment there would leave them decoding against an empty map.
+        // One assignment, at the one place a cell becomes legal.
+        this.player.legalChoiceByCell = choiceByCell;
+
+        return { actionMask, choiceByCell, structuredMask };
     }
 
     getMyMoveset(): Uint8Array {
@@ -4715,13 +4786,12 @@ export class StateHandler {
         const allyActive = this.player.publicBattle.sides[playerIndex].active;
         const enemyActive =
             this.player.publicBattle.sides[1 - playerIndex].active;
-        const { actionMask } = this.getActionMask({
+        const { structuredMask } = this.getActionMask({
             request,
-            format: this.player.privateBattle.gameType,
             allyActive,
             enemyActive,
         });
-        state.setActionMask(actionMask.buffer);
+        state.setStructuredActionMask(structuredMask);
 
         state.setHistoryEntityPublicCache(historyEntityPublic);
         state.setHistoryEntityRevealedCache(historyEntityRevealed);

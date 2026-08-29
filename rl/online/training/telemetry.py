@@ -7,7 +7,6 @@ from typing import Any, NamedTuple, TypeVar
 import chex
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 
 from rl.environment.data import (
@@ -26,7 +25,6 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import ActionEnum, ModalityEnum
 from rl.online.config import Porygon2LearnerConfig
-from rl.utils import average
 
 T = TypeVar("T")
 
@@ -251,108 +249,77 @@ def calculate_r2(
 MATCHED_V_EDGES = (-1.0, -0.6, -0.2, 0.2, 0.6, 1.0 + 1e-6)
 
 
-def modality_means(q: jax.Array, legal_mask: jax.Array) -> jax.Array:
-    """Per-cell broadcast of the legal-cell mean of `q` within each
-    action MODALITY (move / switch / wildcard / other, FLAT_MODALITY_MASK):
-    (..., A) -> (..., A). Illegal cells read their modality's mean too
-    (callers mask). f32."""
-    mods = jnp.asarray(np.asarray(FLAT_MODALITY_MASK), jnp.int32)
-    onehot = jax.nn.one_hot(
-        mods, int(np.max(FLAT_MODALITY_MASK)) + 1, dtype=jnp.float32
-    )
-    legal = legal_mask.astype(jnp.float32)
-    counts = legal @ onehot
-    sums = (legal * q.astype(jnp.float32)) @ onehot
-    means = sums / jnp.maximum(counts, 1.0)
-    return means[..., mods]
-
-
-_ADV = ("advantage_head", "macro_micro")
-_Q_HEAD_LEAVES = {
-    # Per-group q/k: one (entity_size, G * qk) kernel whose G blocks are the
-    # three groups' disjoint projections. Drift from the lecun init (0.0625
-    # at fan-in 256) says the grid is training at all.
-    "player_q_micro_kernel_rms": (
-        (*_ADV, "micro", "micro_qk", "Dense_0", "kernel"),
-        (*_ADV, "micro", "micro_qk", "Dense_1", "kernel"),
-    ),
-    # Zero-init single-factor routes, per group — the ones that must move
-    # first (the gated grid alone stalled for 60k steps).
-    "player_q_micro_local_rms": (
-        (*_ADV, "micro", "micro_local_src", "kernel"),
-        (*_ADV, "micro", "micro_local_tgt", "kernel"),
-    ),
-    # Averaged over the five per-modality output layers (2026-08-25: macro
-    # no longer has one shared out Dense).
-    "player_q_macro_out_rms": tuple(
-        (*_ADV, "macro", f"out_{m}", "kernel") for m in range(NUM_MODALITY_FEATURES)
-    ),
-    "player_q_adapter_out_rms": (("advantage_head", "adapter", "Dense_0", "kernel"),),
-}
-_Q_HEAD_GRAD_SUBTREES = {
-    "player_q_grad_norm_micro": (*_ADV, "micro"),
-    "player_q_grad_norm_macro": (*_ADV, "macro"),
-}
-
-# Policy-head mirrors (2026-08-26). The dx65cpwp micro runaway lived
-# entirely in these params — micro_local_tgt 0.0028 -> 0.070 rms, the
-# adapter out kernel 0.0058 -> 0.105 — and was invisible on wandb: the
-# diagnosis needed checkpoint forensics. src/tgt split deliberately: the
-# 7.5x tgt-over-src growth asymmetry (a tgt column is read by every legal
-# move cell of a row) was itself the diagnostic.
-_POLICY = ("policy_head", "macro_micro")
-_POLICY_HEAD_LEAVES = {
-    "player_policy_micro_local_src_rms": (
-        (*_POLICY, "micro", "micro_local_src", "kernel"),
-    ),
-    "player_policy_micro_local_tgt_rms": (
-        (*_POLICY, "micro", "micro_local_tgt", "kernel"),
-    ),
-    "player_policy_adapter_rms": (
-        ("policy_head", "adapter", "Dense_0", "kernel"),
-        ("policy_head", "adapter", "MLP_0", "Dense_0", "bias"),
-    ),
-}
-_POLICY_HEAD_GRAD_SUBTREES = {
-    "player_policy_grad_norm_micro": (*_POLICY, "micro"),
-    "player_policy_grad_norm_macro": (*_POLICY, "macro"),
-}
-
-
 def _get(tree, path):
-    for k in path:
-        tree = tree[k]
+    for key in path:
+        tree = tree[key]
     return tree
 
 
+# The action readout's leaves, and what each must DO.
+#
+# These panels are not decoration. The dx65cpwp micro runaway lived entirely
+# in head params -- micro_local_tgt 0.0028 -> 0.070 rms, the adapter out
+# kernel 0.0058 -> 0.105 -- and was invisible on wandb; diagnosing it needed
+# checkpoint forensics. The head that grew those numbers is gone, but the
+# flat readout has its own way to fail and it is the same shape: the bilinear
+# is a two-factor product with ONE zero-init factor, and CLAUDE.md 13 records
+# a learned grid behind a zero-init scale sitting at lecun init for 60k steps.
+#
+# Expected at init and what to watch:
+#   query        0, must leave 0 within ~200 steps (its gradient is a rank-1
+#                outer product of live rows, so it moves at step 1)
+#   key          lecun 0.0625 at fan-in 256; its gradient is proportional to
+#                query, so it is frozen for exactly one step and must then
+#                drift. Still 0.0625 at 2k = the stall.
+#   local_src    0, must leave 0 from step 1. This is also where a per-
+#   local_tgt    MODALITY force lives now that the macro head is gone
+#                (modality is a function of the src half), so a flat
+#                local_src beside a failing entropy_macro floor is the
+#                signal to promote it to an MLP.
+#   switch/other 0, single-factor, must leave 0 from step 1.
+#
+# src/tgt stay SPLIT deliberately: the 7.5x tgt-over-src growth asymmetry --
+# a tgt column is read by every legal move cell of a row -- was itself the
+# dx65cpwp diagnostic.
+_ACTION_HEAD_LEAVES = {
+    "player_pointer_query_rms": (("action_head", "query", "kernel"),),
+    "player_pointer_key_rms": (("action_head", "key", "kernel"),),
+    "player_pointer_local_src_rms": (("action_head", "local_src", "kernel"),),
+    "player_pointer_local_tgt_rms": (("action_head", "local_tgt", "kernel"),),
+    "player_switch_head_rms": (("action_head", "switch", "kernel"),),
+    "player_other_head_rms": (("action_head", "other", "kernel"),),
+}
+# Trunk leaves carry a leading axis of cfg.trunk.num_blocks (nn.scan stacks
+# them), so an rms over the whole leaf is the across-block mean by
+# construction -- which is what we want: a per-block panel would be six lines
+# saying the same thing until one block diverges, and the rms catches that.
+_TRUNK_LEAVES = {
+    "player_trunk_attn_out_rms": (
+        ("encoder", "trunk", "blocks", "attention", "out_proj", "kernel"),
+    ),
+    "player_trunk_mlp_out_rms": (
+        ("encoder", "trunk", "blocks", "ffw", "Dense_1", "kernel"),
+    ),
+}
+_GRAD_SUBTREES = {
+    "player_action_head_grad_norm": ("action_head",),
+    "player_trunk_grad_norm": ("encoder", "trunk"),
+}
+
+
 def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
-    """Learner-side readouts of BOTH action heads' learning: the
-    three-scalar zero-init micro gates (move / switch / target slot
-    groups), rms of the zero-init out layers, local routes and pointer
-    q/k kernels (drift from init: 0 / 0 / 0.0625 lecun at fan-in 256),
-    and pre-clip grad norms per subtree. Q-head leaves 2026-08-24;
-    policy-head mirrors 2026-08-26 after the dx65cpwp micro runaway grew
-    25x in params no panel watched. `params`/`grads` are the flax
-    variable dicts (top-level "params" collection)."""
+    """Learner-side readouts of the action readout and the trunk actually
+    learning: rms of each head leaf against its known init, and pre-clip
+    grad norms per subtree. `params`/`grads` are the flax variable dicts
+    (top-level "params" collection)."""
     p, g = params["params"], grads["params"]
     logs = {}
-    gate = jnp.asarray(_get(p, (*_ADV, "micro", "type_scale")), jnp.float32)
-    for i, name in enumerate(("move", "switch", "target")):
-        logs[f"player_adv_type_scale_{name}"] = gate[i, 0]
-    # Policy micro type_scale (2026-08-25): with the gram rms-normalised
-    # this IS the micro logit scale — watch it regrow from the crushed
-    # 1e-4 without the gradient blowing up.
-    pol = jnp.asarray(
-        _get(p, ("policy_head", "macro_micro", "micro", "type_scale")), jnp.float32
-    )
-    for i, name in enumerate(("move", "switch", "target")):
-        logs[f"player_policy_type_scale_{name}"] = pol[i, 0]
-    for key, paths in {**_Q_HEAD_LEAVES, **_POLICY_HEAD_LEAVES}.items():
+    for key, paths in {**_ACTION_HEAD_LEAVES, **_TRUNK_LEAVES}.items():
         leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
         logs[key] = jnp.mean(
             jnp.stack([jnp.sqrt(jnp.mean(jnp.square(x))) for x in leaves])
         )
-    for key, path in {**_Q_HEAD_GRAD_SUBTREES, **_POLICY_HEAD_GRAD_SUBTREES}.items():
+    for key, path in _GRAD_SUBTREES.items():
         logs[key] = optax.global_norm(_get(g, path))
     return logs
 
@@ -378,30 +345,6 @@ def masked_r2(pred: jax.Array, target: jax.Array, mask: jax.Array) -> jax.Array:
     mean_t = jnp.mean(target, where=mask)
     ss_total = jnp.sum(jnp.square(target - mean_t), where=mask)
     return jnp.where(m & (ss_total > 1e-4), calculate_r2(pred, target, mask), jnp.nan)
-
-
-def q_fit_telemetry(
-    *,
-    q_err_rows: jax.Array,
-    q_taken_pred: jax.Array,
-    q_label: jax.Array,
-    q_mask: jax.Array,
-    context_masks: dict[str, jax.Array],
-) -> dict[str, jax.Array]:
-    """How the Q fit is DISTRIBUTED across move / forced / voluntary rows.
-
-    The share each context contributes to the total Huber loss is the
-    acceptance measure for any row weighting — sampled-chunk counts are a
-    replay diagnostic and say nothing about what the optimiser actually
-    spent its gradient on.
-    """
-    total = jnp.maximum(jnp.sum(q_err_rows, where=q_mask), 1e-8)
-    logs = {
-        f"player_q_loss_share_{name}": jnp.sum(q_err_rows, where=m) / total
-        for name, m in context_masks.items()
-    }
-    logs["player_q_mse"] = average(jnp.square(q_taken_pred - q_label), q_mask)
-    return logs
 
 
 class ActionAxisMasks(NamedTuple):
@@ -487,9 +430,6 @@ def critic_outcome_telemetry(
     game_step_offset: jax.Array,
     v_target: jax.Array,
     onestep_label: jax.Array,
-    q_label: jax.Array,
-    q_taken: jax.Array,
-    q_all: jax.Array,
     flat_action_mask: jax.Array,
     masks: ActionAxisMasks,
     q_mask: jax.Array,
@@ -499,13 +439,14 @@ def critic_outcome_telemetry(
     JOINT statistics wandb's pooled means could not give, computed from
     the completed-game outcome carried on every chunk (Trajectory.
     game_outcome). Shapes: game_* (1, B); v_target / onestep_label /
-    q_label / q_taken / q_mask / value_mask / action_index (T, B);
-    q_all / flat_action_mask (T, B, A). Every panel is NaN, not 0, when
-    its slice is empty in this batch.
+    onestep_label / q_mask / value_mask (T, B); flat_action_mask
+    (T, B, A). Every panel is NaN, not 0, when its slice is empty in this
+    batch.
 
-    - q_label_var_{outcome,onestep}_{move,forced,voluntary}: residual
-      variance of the two candidate Q labels around the target Q —
-      the offline 18.7x ratio, live.
+    The label-variance panels and the CRITIC half of the matched-V table
+    retired with the advantage head on 2026-08-29 -- both read the Q
+    readout. What is left is the half that never needed it: the REALISED
+    outcome gap, which is a property of the games, not of any critic.
     - mv_bin{i}_*: matched-V table on real-choice rows (a move and a
       switch both legal), binned by the target V head's own V(s):
       realised outcome of voluntary switches vs moves, the critic's
@@ -531,37 +472,12 @@ def critic_outcome_telemetry(
     G = jnp.where(valid_g, G, 0.0)
     v_target = v_target.astype(f32)
     onestep_label = onestep_label.astype(f32)
-    q_taken = q_taken.astype(f32)
-    q_all = q_all.astype(f32)
 
     vol_mask = q_mask & masks.taken_switch & masks.has_move
     forced_mask = q_mask & masks.taken_switch & jnp.logical_not(masks.has_move)
-    move_mask = q_mask & jnp.logical_not(masks.taken_switch)
+    q_mask & jnp.logical_not(masks.taken_switch)
 
     logs: dict[str, jax.Array] = {}
-    for name, m in (
-        ("move", move_mask),
-        ("forced", forced_mask),
-        ("voluntary", vol_mask),
-    ):
-        logs[f"player_q_label_var_outcome_{name}"] = masked_var(
-            G - q_taken, m & valid_g
-        )
-        logs[f"player_q_label_var_onestep_{name}"] = masked_var(
-            onestep_label - q_taken, m
-        )
-    logs["player_q_label_var_ratio_voluntary"] = (
-        logs["player_q_label_var_outcome_voluntary"]
-        / logs["player_q_label_var_onestep_voluntary"]
-    )
-
-    # Critic gap as the OFFLINE check defined it: mean over legal switch
-    # cells minus mean over legal move cells (not best-vs-best).
-    def mean_over(cells):
-        w = cells.astype(f32)
-        return (q_all * w).sum(-1) / jnp.maximum(w.sum(-1), 1.0)
-
-    critic_gap = mean_over(masks.valid_switch) - mean_over(masks.valid_move)
     rows = q_mask & valid_g & masks.has_both
     for i, (lo, hi) in enumerate(zip(MATCHED_V_EDGES[:-1], MATCHED_V_EDGES[1:])):
         b = rows & (v_target >= lo) & (v_target < hi)
@@ -574,11 +490,9 @@ def critic_outcome_telemetry(
         logs[f"player_mv_bin{i}_g_vol"] = g_vol
         logs[f"player_mv_bin{i}_g_move"] = g_move
         logs[f"player_mv_bin{i}_gap_realised"] = g_vol - g_move
-        logs[f"player_mv_bin{i}_gap_critic"] = masked_mean(critic_gap, b)
     logs["player_mv_pooled_gap_realised"] = masked_mean(
         G, rows & masks.taken_switch
     ) - masked_mean(G, rows & jnp.logical_not(masks.taken_switch))
-    logs["player_mv_pooled_gap_critic"] = masked_mean(critic_gap, rows)
     logs["player_mv_v_at_vol_switch"] = masked_mean(v_target, rows & masks.taken_switch)
     logs["player_mv_v_at_move"] = masked_mean(
         v_target, rows & jnp.logical_not(masks.taken_switch)
@@ -622,8 +536,11 @@ def critic_outcome_telemetry(
         )
     logs["player_v_onestep_r2"] = masked_r2(v_target, onestep_label, q_mask)
 
+    # How often the one-step V label is pinned at the reward support's edge.
+    # `onestep_label` IS what q_label was -- the same array was passed under
+    # both names -- so the panel is unchanged and stays comparable.
     logs["player_q_target_edge_frac"] = masked_mean(
-        (jnp.abs(q_label.astype(f32)) >= 0.999).astype(f32), q_mask
+        (jnp.abs(onestep_label) >= 0.999).astype(f32), q_mask
     )
     logs["player_q_support_chunk_vol_switch_frac"] = (
         vol_mask.any(axis=0).astype(f32).mean()

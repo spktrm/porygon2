@@ -67,17 +67,12 @@ def _rows(T=4, B=2):
 def test_critic_outcome_telemetry_counts_and_splits():
     T, B = 4, 2
     flat, action, q_mask, v = _rows(T, B)
-    q_all = np.zeros((T, B, A), np.float32)
-    q_all[..., SWITCH] = -0.1  # a flat switch offset, as on the collapsed run
     logs = critic_outcome_telemetry(
         game_outcome=jnp.array([[1.0, -1.0]]),
         game_length=jnp.array([[9, 9]]),
         game_step_offset=jnp.array([[0, 6]]),
         v_target=jnp.asarray(v),
         onestep_label=jnp.asarray(v) * 0.5,
-        q_label=jnp.asarray(v),
-        q_taken=jnp.zeros((T, B)),
-        q_all=jnp.asarray(q_all),
         flat_action_mask=jnp.asarray(flat),
         masks=action_axis_masks(jnp.asarray(flat), jnp.asarray(action)),
         q_mask=jnp.asarray(q_mask),
@@ -99,13 +94,14 @@ def test_critic_outcome_telemetry_counts_and_splits():
     assert (
         n_mv == 4.0
     )  # chunk 0 rows 0,2 + chunk 1 rows 1,2 (row 0 there has no legal move)
-    # the critic's gap is the flat offset on every populated bin
+    # Every bin is either populated on both sides, and then carries a
+    # realised gap, or empty, and then reports NaN rather than a 0.0 that
+    # would read as a measurement.
     for i in range(len(MATCHED_V_EDGES) - 1):
-        if logs[f"player_mv_bin{i}_n_vol"] + logs[f"player_mv_bin{i}_n_move"] > 0:
-            assert logs[f"player_mv_bin{i}_gap_critic"] == pytest.approx(-0.1, abs=1e-6)
-        else:
-            assert np.isnan(logs[f"player_mv_bin{i}_gap_critic"])
-    assert logs["player_mv_pooled_gap_critic"] == pytest.approx(-0.1, abs=1e-6)
+        populated = (
+            logs[f"player_mv_bin{i}_n_vol"] > 0 and logs[f"player_mv_bin{i}_n_move"] > 0
+        )
+        assert populated != bool(np.isnan(logs[f"player_mv_bin{i}_gap_realised"]))
     # the voluntary switch is in the won game (+1); the four real-choice
     # move rows split 2 won / 2 lost (mean 0) -> realised gap +1
     assert logs["player_mv_pooled_gap_realised"] == pytest.approx(1.0)
@@ -121,8 +117,6 @@ def test_critic_outcome_telemetry_counts_and_splits():
     # row 1 (after the forced switch) -> 2 rows, enough for a finite value
     assert not np.isnan(logs["player_v_outcome_bias_prev_switch"])
     # label variance on the empty-ish voluntary slice is NaN, not 0
-    assert np.isnan(logs["player_q_label_var_outcome_voluntary"])
-    assert not np.isnan(logs["player_q_label_var_onestep_move"])
 
 
 def test_truncated_game_outcome_nan_drops_outcome_panels_only():
@@ -134,9 +128,6 @@ def test_truncated_game_outcome_nan_drops_outcome_panels_only():
         game_step_offset=jnp.array([[0, 6]]),
         v_target=jnp.asarray(v),
         onestep_label=jnp.asarray(v),
-        q_label=jnp.asarray(v),
-        q_taken=jnp.zeros((T, B)),
-        q_all=jnp.zeros((T, B, A)),
         flat_action_mask=jnp.asarray(flat),
         masks=action_axis_masks(jnp.asarray(flat), jnp.asarray(action)),
         q_mask=jnp.asarray(q_mask),

@@ -1,3 +1,5 @@
+import functools
+import math
 from typing import NamedTuple
 
 import flax.linen as nn
@@ -6,12 +8,11 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.data import (
-    FLAT_MODALITY_MASK,
-    FLAT_SRC_GROUP_MASK,
-    NUM_ACTION_SLOT_GROUPS,
-    NUM_MODALITY_FEATURES,
-    SRC_GROUP_MASK,
-    SRC_MODALITY_MASK,
+    ALLY_SWITCH_INDICES,
+    MOVE_INDICES,
+    NUM_ACTION_FEATURES,
+    RESERVE_ENTITY_INDICES,
+    TARGET_SLOT_INDICES,
 )
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
@@ -32,25 +33,6 @@ class PolicyMetrics(NamedTuple):
     entropy: jax.Array
     normalized_entropy: jax.Array
     magnet_kl: jax.Array
-
-
-def calculate_hierarchical_prior(flat_valid_mask: jax.Array) -> jax.Array:
-    """Uniform over valid modalities times uniform within each modality.
-
-    This is the init policy of the hierarchically composed action head
-    (the macro head's zero-initialised output layer and the zero square
-    logits both give zero logits at init), so it is the consistent anchor
-    for the magnet/exploration KLs. Supports any leading batch dims.
-    """
-    modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
-    valid_per_modality = flat_valid_mask[..., :, None] & modality_oh
-    modality_counts = valid_per_modality.sum(axis=-2)
-    num_valid_modalities = jnp.maximum(
-        (modality_counts > 0).sum(axis=-1, keepdims=True), 1
-    )
-    counts_per_cell = jnp.maximum(modality_counts, 1)[..., FLAT_MODALITY_MASK]
-    prior = 1.0 / (num_valid_modalities * counts_per_cell)
-    return jnp.where(flat_valid_mask, prior, 0.0)
 
 
 def compute_policy_metrics(
@@ -94,363 +76,6 @@ def compute_policy_metrics(
 
 def sample_categorical(logits: jax.Array, rng_key: jax.Array):
     return jax.random.categorical(rng_key, logits, axis=-1)
-
-
-class MicroHead(nn.Module):
-    """Within-modality (micro) readout over the flat src x tgt grid, with
-    NO parameter shared between slot groups (2026-08-25).
-
-    Every parameter here is indexed by the SRC slot's group (move / switch /
-    target — SRC_GROUP_MASK, the same partition the encoder's typed residual
-    streams use). A cell's group is a function of its src half alone, so
-    "this cell's group" is always well defined, and `local_tgt` is read under
-    the CELL's group: the same target token scores differently depending on
-    which modality is choosing it ("how good is this target for a move" vs
-    "for a switch"), which is the point of separating them.
-
-    What this replaces: one parameter-free dot grid (policy) or one shared
-    PointerLogits (advantage), with the three groups distinguished ONLY by a
-    scalar. That scalar was the group's entire parameterisation, and on the
-    2026-08-25 read of the 84.9k-step run the target group's scalar was still
-    BITWISE ZERO on both families — the group had no trained readout at all
-    (docs/qva-redesign-step0-reference.md). CLAUDE.md section 13 already
-    recorded that the Nov-2025 per-modality head beat the flat gram head and
-    that flattening it was a known regression; this restores the separation.
-
-    Implementation note: G disjoint projections are one Dense with G*qk
-    outputs — attention heads own disjoint output coordinates, so there is
-    genuinely no weight sharing between groups, and the per-group select is
-    a one-hot contraction over the group axis.
-
-    Two structural properties are preserved exactly:
-
-    FLAT-AT-INIT. `type_scale` is zero-init, so every micro logit is exactly
-    0 at init and calculate_hierarchical_prior stays the exact init-policy
-    anchor.
-
-    SINGLE-FACTOR GRADIENT. A learned grid behind a zero-init scale is a
-    gate x grid PRODUCT, and that product is what stalled: the gate's
-    gradient is a random grid's correlation with the residual, the grid's is
-    proportional to the gate, and neither moved in 60k steps (gate 0.03-0.06,
-    q/k kernels still at lecun init — docs/critic-weakness-analysis.md Step-3
-    post-mortem). So each group also carries zero-init `micro_local_src` /
-    `micro_local_tgt` routes: ONE zero-init factor over a LIVE input, whose
-    gradient is consistent from step 0. The grid supplies interaction terms
-    behind the scale; the local routes carry the early signal.
-
-    The per-group rms normalisation (2026-08-25, 473ba77) stays and matters
-    MORE with learned kernels, not less: without it the loss pins the PRODUCT
-    scale.grid at the band, so growing kernel norms crush the scale (0.026 ->
-    1e-4 was measured) while the raw grid grows, the gradient to the scale
-    (= the grid) explodes, and the micro route dies mid-run. Dividing by the
-    group's stop-grad rms gauges that away, leaving type_scale as the one
-    live factor with an O(w) gradient.
-    """
-
-    num_logits: int = 1
-    qk_size: int = None
-    use_bias: bool = True
-    qk_layer_norm: bool = True
-
-    @nn.compact
-    def __call__(self, action_embeddings: jax.Array) -> jax.Array:
-        num_slots = action_embeddings.shape[-2]
-        lead = action_embeddings.shape[:-2]
-        # Every per-group projection is packed into one Dense's output;
-        # attention heads own disjoint output coordinates, so the groups
-        # share no weights.
-        packed_width = NUM_ACTION_SLOT_GROUPS * self.num_logits
-        # (N, G) one-hot of each SRC slot's group: the per-group select.
-        group_oh = jax.nn.one_hot(
-            jnp.asarray(SRC_GROUP_MASK), NUM_ACTION_SLOT_GROUPS, dtype=jnp.float32
-        )
-
-        # Per-group q/self.num_logits projections -> (..., N, N, G * K) -> (..., N, N, G, K)
-        grid = PointerLogits(
-            qk_size=self.qk_size,
-            num_heads=packed_width,
-            use_bias=self.use_bias,
-            qk_layer_norm=self.qk_layer_norm,
-            name="micro_qk",
-        )(action_embeddings, action_embeddings)
-        grid = grid.reshape(
-            *lead, num_slots, num_slots, NUM_ACTION_SLOT_GROUPS, self.num_logits
-        ).astype(jnp.float32)
-        # Select each cell's group by its SRC slot.
-        flat = jnp.einsum("...ijgk,ig->...ijk", grid, group_oh)
-        flat = flat.reshape(*lead, num_slots * num_slots, self.num_logits)
-
-        # Per-group rms over the grid cells (f32, eps-guarded, all cells:
-        # legality lives downstream), stop-grad so the normaliser is a
-        # gauge, not a trainable route.
-        flat_group_oh = jax.nn.one_hot(
-            jnp.asarray(FLAT_SRC_GROUP_MASK), NUM_ACTION_SLOT_GROUPS, dtype=jnp.float32
-        )
-        sq = jnp.square(flat)
-        group_ms = (
-            jnp.einsum("...ck,cg->...gk", sq, flat_group_oh)
-            / jnp.maximum(flat_group_oh.sum(axis=0), 1.0)[:, None]
-        )
-        group_rms = jax.lax.stop_gradient(
-            jnp.sqrt(group_ms + 1e-12)[..., FLAT_SRC_GROUP_MASK, :]
-        )
-        normed = flat / group_rms
-
-        type_scale = self.param(
-            "type_scale",
-            nn.initializers.zeros_init(),
-            (NUM_ACTION_SLOT_GROUPS, self.num_logits),
-        ).astype(jnp.float32)
-        out = normed * type_scale[FLAT_SRC_GROUP_MASK, :]
-
-        # Single-factor per-group local routes over live inputs.
-        local_src = nn.Dense(
-            packed_width,
-            use_bias=False,
-            kernel_init=nn.initializers.zeros,
-            dtype=action_embeddings.dtype,
-            name="micro_local_src",
-        )(action_embeddings).reshape(
-            *lead, num_slots, NUM_ACTION_SLOT_GROUPS, self.num_logits
-        )
-        local_tgt = nn.Dense(
-            packed_width,
-            use_bias=False,
-            kernel_init=nn.initializers.zeros,
-            dtype=action_embeddings.dtype,
-            name="micro_local_tgt",
-        )(action_embeddings).reshape(
-            *lead, num_slots, NUM_ACTION_SLOT_GROUPS, self.num_logits
-        )
-        src_term = jnp.einsum("...igk,ig->...ik", local_src, group_oh)
-        # The TGT token read under the CELL's group, i.e. the src's.
-        tgt_term = jnp.einsum("...jgk,ig->...ijk", local_tgt, group_oh)
-        local = (src_term[..., :, None, :] + tgt_term).reshape(
-            *lead, num_slots * num_slots, self.num_logits
-        )
-
-        out = out + local
-        if self.num_logits == 1:
-            return out.squeeze(-1)
-        return out
-
-
-class ActionAdapter(nn.Module):
-    """Owned residual MLP between the trunk's action embeddings and one
-    head family's MacroMicroHead (2026-08-20).
-
-    Both families' micro readouts train on the same trunk embeddings, so
-    without an owned adapter the advantage head's loss would reshape the
-    live policy geometry directly. Each ActionScoreHead reads the trunk
-    through its own instance — the policy's plain, the advantage's with
-    the projected value conditioning concatenated in, so the critic's
-    state information reaches every CELL and not just the modality level
-    — and the trunk still receives both gradients while the head-specific
-    geometry stays decoupled.
-
-    ZERO-INIT output layer: the adapter is an exact identity at init, so
-    calculate_hierarchical_prior stays the exact init-policy anchor and a
-    fresh-initted adapter perturbs nothing — it learns from zero.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(self, x: jax.Array, cond: jax.Array | None = None) -> jax.Array:
-        hidden = x
-        if cond is not None:
-            hidden = jnp.concatenate(
-                [
-                    x,
-                    jnp.broadcast_to(
-                        cond[..., None, :], (*x.shape[:-1], cond.shape[-1])
-                    ),
-                ],
-                axis=-1,
-            )
-        hidden = MLP(**self.cfg.mlp.to_dict())(hidden)
-        return x + nn.Dense(
-            x.shape[-1], kernel_init=nn.initializers.zeros, dtype=x.dtype
-        )(hidden)
-
-
-class MacroHead(nn.Module):
-    """Modality-level (macro) readout from per-modality pooled src slots.
-
-    One learned query per modality attention-pools that modality's live
-    src-slot embeddings — each modality's srcs live in exactly one typed
-    trunk stream (move+wildcard → move, switch → switch, other → target),
-    so the pools read typed spaces — then that modality's OWN MLP and OWN
-    zero-initialised output layer map the pooled vector to out_features
-    outputs (default 1: the modality logits, squeezed).
-
-    No parameter is shared between modalities (2026-08-25). Before that the
-    MLP and out layer were shared and only the pooling query differed, so
-    every modality's level was read by one function of a pooled vector.
-    Owning the modality contest with dedicated parameters keeps the
-    (per-modality shift-invariant) micro gradient from moving the macro
-    decision through dot-logit magnitude. Zero output init keeps macro
-    outputs exactly zero at init, so calculate_hierarchical_prior remains
-    the exact init-policy anchor (and a fresh-initted Q macro starts as a
-    pure level-free micro readout).
-
-    Optional cond: a pooled per-state conditioning vector, broadcast and
-    concatenated into the MLP input (the advantage head's state conditioning); the
-    policy instantiation passes none, so its param tree and math are
-    unchanged. Handles arbitrary leading batch dims — the policy calls it
-    per timestep under vmap, the advantage head calls it with T leading.
-    """
-
-    cfg: ConfigDict
-    out_features: int = 1
-
-    @nn.compact
-    def __call__(
-        self,
-        src_embeddings: jax.Array,
-        src_valid: jax.Array,
-        cond: jax.Array | None = None,
-    ):
-        queries = self.param(
-            "modality_queries",
-            nn.initializers.lecun_normal(),
-            (NUM_MODALITY_FEATURES, src_embeddings.shape[-1]),
-        ).astype(src_embeddings.dtype)
-        queries = jnp.broadcast_to(
-            queries, (*src_embeddings.shape[:-2], *queries.shape)
-        )
-
-        attn_logits = PointerLogits(**self.cfg.qk_logits.to_dict())(
-            queries, src_embeddings
-        ).squeeze(-1)
-
-        valid_src_per_modality = (
-            SRC_MODALITY_MASK[None, :] == jnp.arange(NUM_MODALITY_FEATURES)[:, None]
-        ) & src_valid[..., None, :]
-        attn = jax.nn.softmax(
-            jnp.where(valid_src_per_modality, attn_logits, -1e9), axis=-1
-        )
-        # A modality with no live src would otherwise softmax a uniform
-        # row over every slot (invalid ones included); pool nothing.
-        attn = jnp.where(valid_src_per_modality.any(axis=-1, keepdims=True), attn, 0.0)
-        pooled = attn @ src_embeddings
-
-        if cond is not None:
-            pooled = jnp.concatenate(
-                [
-                    pooled,
-                    jnp.broadcast_to(
-                        cond[..., None, :], (*pooled.shape[:-1], cond.shape[-1])
-                    ),
-                ],
-                axis=-1,
-            )
-        # PER-MODALITY MLP and output layer (2026-08-25): each modality gets
-        # its own parameters, not a shared MLP distinguished only by the
-        # learned query above. M is 5, so an explicit loop is clearer than a
-        # vmap over a size-5 axis and costs the same FLOPs (each MLP now runs
-        # on one row instead of one MLP running on five).
-        per_modality = [
-            nn.Dense(
-                self.out_features,
-                kernel_init=nn.initializers.zeros,
-                dtype=pooled.dtype,
-                name=f"out_{modality}",
-            )(
-                MLP(**self.cfg.mlp.to_dict(), name=f"mlp_{modality}")(
-                    pooled[..., modality, :]
-                )
-            )
-            for modality in range(NUM_MODALITY_FEATURES)
-        ]
-        logits = jnp.stack(per_modality, axis=-2)
-        # Modalities with no live src pool zeros and read the out bias;
-        # callers still mask them (legal_log_policy for the policy, the
-        # flat action mask for the Q grid).
-        if self.out_features == 1:
-            return logits.squeeze(-1)
-        return logits
-
-
-class MacroMicroHead(nn.Module):
-    """The shared two-level action-grid readout (2026-08-20): one module
-    owns the macro/micro scoring of the flat src x tgt grid for BOTH
-    ActionScoreHead instantiations, the policy and the advantage — the
-    composition the Nov-2025 competition
-    result and the 2026-08-17 policy head paid for, now applied to any
-    head family that scores actions.
-
-    cfg.num_logits is the output width PER CELL/MODALITY. Both families
-    pass 1 — a scalar per cell. (The advantage head once passed the
-    categorical bin count; that per-cell distributional readout was
-    abandoned 2026-08-23 because it let the head fit taken-cell labels
-    through a state-only route.) micro scores every grid cell through
-    MicroHead — per-slot-group
-    q/k projections, per-group zero-init scale and per-group zero-init
-    local routes (2026-08-25: the 'dot' / 'pointer' split is gone, both
-    families use the one readout). macro scores each modality via
-    MacroHead over per-modality pooled src slots at the same width, with
-    that modality's own MLP and zero-init out layer; optional cond threads
-    to those MLPs (the critic's information set). Every output is EXACTLY
-    0 at init, so each instantiation starts flat — the policy at its
-    hierarchical prior, the advantage at 0 everywhere.
-
-    Returns the (macro, micro) pair RAW — composition belongs to the
-    caller, because that is where the two families genuinely differ: the
-    policy multiplies softmaxes in log space (macro owns the modality
-    contest, micro is per-modality shift-invariant), the advantage readout adds
-    macro onto the legality-centred micro (compose_action_grid: dueling
-    identifiability), and Q is formed later by compose_q.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(
-        self,
-        action_embeddings: jax.Array,
-        src_valid: jax.Array,
-        cond: jax.Array | None = None,
-    ):
-        num_logits = self.cfg.get("num_logits", 1)
-        micro = MicroHead(
-            num_logits=num_logits,
-            **self.cfg.get("micro_qk", ConfigDict()).to_dict(),
-            name="micro",
-        )(action_embeddings)
-        macro = MacroHead(self.cfg.macro, out_features=num_logits, name="macro")(
-            action_embeddings, src_valid, cond=cond
-        )
-        return macro, micro
-
-
-class SlotConditioning(nn.Module):
-    """Injects slot 1's chosen action into the action embeddings for
-    slot 2's head pass (doubles).
-
-    The trunk runs ONCE per turn; conditioning the second active mon's
-    decision on the first happens here at head level: the chosen action's
-    src/tgt embeddings (already computed by the same trunk forward) map
-    through a zero-initialised projection onto every action embedding, so
-    at init slot 2's policy is exactly the unconditioned one and the
-    conditioning pathway is learned from zero. This replaces the old
-    two-request scheme where the second decision re-encoded the full state
-    with prev-action tokens (a second trunk pass per doubles turn).
-    """
-
-    @nn.compact
-    def __call__(
-        self, action_embeddings: jax.Array, src_index: jax.Array, tgt_index: jax.Array
-    ) -> jax.Array:
-        chosen = jnp.concatenate(
-            [action_embeddings[src_index], action_embeddings[tgt_index]], axis=-1
-        )
-        delta = nn.Dense(
-            action_embeddings.shape[-1],
-            kernel_init=nn.initializers.zeros,
-            dtype=action_embeddings.dtype,
-        )(chosen)
-        return action_embeddings + delta[None, :]
 
 
 class PolicyQKHead(nn.Module):
@@ -503,211 +128,175 @@ class PolicyQKHead(nn.Module):
         )
 
 
-class ActionScores(NamedTuple):
-    """One action-axis readout's outputs.
+# Alive-mon differential support: margins -6..+6, matching the offline
+# critic's 13-bin distributional target.
+NUM_MARGIN_BINS = 13
 
-    `logits` is the composed src x tgt grid. `macro` / `micro` are the FREE
-    per-level logits before composition, kept for head-internal reuse.
+
+class SlotConditioning(nn.Module):
+    """Doubles: condition slot 2's rows on the cell slot 1 chose.
+
+    Zero-init output, so slot 2 starts as an exact copy of slot 1's readout
+    and the conditioning has to earn its way in. Re-based onto the sequence
+    rows on 2026-08-29 -- it used to add onto the 41-row action stream, which
+    no longer exists.
+
+    NOTE this keeps the MODEL side of doubles reachable and nothing more. The
+    plumbing outside it -- per-slot masks in requests, two stored action
+    indices, the (2, N*N) log_policy the learner would need, and the ~75%
+    slot-alignment defect in the service -- is the known-open doubles
+    workstream. `ALLY_i_SWITCH` slots have no sequence row of their own (the
+    switch logit is read off the sheet row instead), so choosing one gathers
+    zeros here; harmless while the path is untrained, and the thing to fix
+    first if doubles is ever picked up.
     """
-
-    logits: jax.Array
-    macro: jax.Array
-    micro: jax.Array
-    flat_valid: jax.Array
-
-
-class ActionScoreHead(nn.Module):
-    """THE action-axis readout: adapter -> macro/micro -> grid composition.
-
-    One module for both families, differing only in `reduce` — the policy and
-    the advantage score the same grid and disagree only about how macro and
-    micro combine:
-
-      reduce="logsumexp"  the hierarchical log-policy. micro becomes a
-                          within-modality log-softmax (per-modality
-                          shift-invariant) and macro, passed as a legal
-                          log-softmax over modalities, owns the modality
-                          contest — so micro confidence can never move the
-                          modality decision through logit magnitude.
-      reduce="mean"       the modality-centred advantage. micro is centred
-                          over each modality's LEGAL cells, so it carries
-                          only within-modality shape and each modality's
-                          LEVEL must flow through the low-dimensional macro
-                          route ("is switching better here").
-
-    Before 2026-08-25 this sequence was open-coded three times — the singles
-    policy, the doubles per-stage scorer and the Q head each rebuilt
-    adapter -> src_valid -> macro/micro -> compose by hand, and drifted.
-
-    `cond` is an optional per-state conditioning vector (the critic's value
-    embedding): projected and normed here, then threaded BOTH into the
-    adapter and into the macro MLP, so the information set reaches every
-    CELL rather than only the modality level.
-    """
-
-    cfg: ConfigDict
-    reduce: str
 
     @nn.compact
     def __call__(
         self,
-        action_embeddings: jax.Array,
-        valid_mask: jax.Array,
-        cond: jax.Array | None = None,
+        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
+        src_index: jax.Array,
+        tgt_index: jax.Array,
+    ):
+        private_rows, move_rows, target_rows = sequence_rows
+        width = private_rows.shape[-1]
+        slots = jnp.zeros((NUM_ACTION_FEATURES, width), dtype=private_rows.dtype)
+        slots = slots.at[jnp.asarray(MOVE_INDICES)].set(move_rows)
+        slots = slots.at[jnp.asarray(RESERVE_ENTITY_INDICES)].set(private_rows)
+        slots = slots.at[jnp.asarray(TARGET_SLOT_INDICES)].set(target_rows)
+
+        chosen = jnp.concatenate(
+            (jnp.take(slots, src_index, axis=0), jnp.take(slots, tgt_index, axis=0)),
+            axis=-1,
+        )
+        delta = nn.Dense(
+            width,
+            kernel_init=nn.initializers.zeros_init(),
+            use_bias=False,
+            dtype=private_rows.dtype,
+            name="condition",
+        )(chosen)
+        return (
+            private_rows + delta,
+            move_rows + delta,
+            target_rows + delta,
+        )
+
+
+class FlatActionReadout(nn.Module):
+    """The whole action readout: three small heads over named trunk rows.
+
+    Replaces the hierarchical stack -- `MacroMicroHead` = per-modality
+    queries, five MLPs and five zero-init output layers, over a per-slot-group
+    `PointerLogits` grid with a stop-grad RMS gauge and three zero-init local
+    routes -- which was instantiated twice, once for the policy and once for
+    an advantage head the policy did not read. 2.65M parameters became 0.13M.
+
+    The three heads are the three shapes of question the action space asks:
+
+      switch   one logit per SHEET ROW, "may this mon come in and should it".
+               Written into every cell naming that reserve, so it serves the
+               battle switch (the mon is the tgt) and team preview (the mon is
+               the src) alike; the mask decides which of those is live.
+      move     THE ONLY BILINEAR: 16 candidate move rows against the 17 target
+               rows, four of which carry the actual mon they would hit.
+      other    one logit per target row for the standalone actions -- pass,
+               default -- which sit on the grid diagonal.
+
+    INIT CONTRACT. Every logit is exactly 0 at init, so the policy starts
+    UNIFORM over legal cells and `compute_policy_metrics(prior=None)` -- which
+    already defaults to uniform-over-legal -- is the consistent anchor for the
+    magnet and for the zero-avoiding KL. `calculate_hierarchical_prior` was
+    that anchor while the head was hierarchical and retires with it.
+
+    Getting to exact zero WITHOUT re-creating the two-factor stall (CLAUDE.md
+    13: a learned grid behind a zero-init scale sat at lecun init for 60k
+    steps) is the whole subtlety here:
+
+      * `query` is zero-init and `key` is not. The bilinear is exactly 0 at
+        init, and d/d query is a rank-1 outer product of LIVE inputs, so query
+        moves at step 1 and key -- whose gradient is proportional to query --
+        unfreezes at step 2. That is one zero factor over a live input, not a
+        scalar multiplying a random grid.
+      * NO layer-norm on the query heads. Its input is identically zero at
+        init and its Jacobian goes as 1/sqrt(eps), i.e. ~1e3, straight into
+        the zero-init kernel. The trunk's final pre-norm conditions these rows
+        already.
+      * `local_src` / `local_tgt` and the two scalar heads are zero-init
+        single-factor routes over live rows, which have no stall mode.
+        `local_src` is also where a per-MODALITY force can live: modality is a
+        function of the src half alone, so it is the flat design's answer to
+        the macro head's dedicated per-modality parameter, and it is the
+        pre-decided place to add depth if the macro entropy floor cannot hold.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self,
+        private_rows: jax.Array,
+        move_rows: jax.Array,
+        target_rows: jax.Array,
+        action_mask: jax.Array,
         temp: float = 1.0,
-    ) -> ActionScores:
-        flat_valid = valid_mask.reshape(*valid_mask.shape[:-2], -1)
-        # A src slot is actionable iff its row has any valid tgt cell.
-        src_valid = valid_mask.any(axis=-1)
-
-        c = None
-        if cond is not None:
-            dtype = action_embeddings.dtype
-            c = nn.LayerNorm(name="cond_norm", dtype=dtype)(
-                nn.Dense(action_embeddings.shape[-1], name="cond_proj", dtype=dtype)(
-                    cond
-                )
-            )
-
-        adapted = ActionAdapter(self.cfg.adapter, name="adapter")(
-            action_embeddings, cond=c
-        )
-        macro, micro = MacroMicroHead(self.cfg.macro_micro, name="macro_micro")(
-            adapted, src_valid, cond=c
-        )
-        # num_logits 1: MacroHead already squeezes its single output; the
-        # pointer grid keeps its head axis — drop it so both micro kinds
-        # ride the one scalar composition path.
-        if micro.ndim == flat_valid.ndim + 1:
-            micro = micro.squeeze(-1)
-        if macro.ndim == flat_valid.ndim + 1:
-            macro = macro.squeeze(-1)
-
-        macro = macro.astype(jnp.float32) / temp
-        micro = micro.astype(jnp.float32) / temp
-
-        composed_macro = macro
-        if self.reduce == "logsumexp":
-            modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(
-                NUM_MODALITY_FEATURES
-            )
-            counts = (flat_valid[..., None] & modality_oh).sum(axis=-2)
-            composed_macro = legal_log_policy(macro, counts > 0)
-
-        logits = compose_action_grid(
-            composed_macro, micro, flat_valid, reduce=self.reduce
-        )
-        return ActionScores(
-            logits=logits, macro=macro, micro=micro, flat_valid=flat_valid
+    ) -> jax.Array:
+        dtype = private_rows.dtype
+        zeros = nn.initializers.zeros_init()
+        scalar_head = functools.partial(
+            nn.Dense, features=1, kernel_init=zeros, use_bias=False, dtype=dtype
         )
 
+        switch_logit = scalar_head(name="switch")(private_rows)[..., 0]
+        other_logit = scalar_head(name="other")(target_rows)[..., 0]
 
-def compose_q(
-    value: jax.Array,
-    advantage_raw: jax.Array,
-    log_policy: jax.Array,
-    legal_mask: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """The Q = V + A identity, written once.
-
-        A(s, a) = A_raw(s, a) - E_sg(pi)[A_raw(s, .)]
-        Q(s, a) = sg(V(s)) + A(s, a)
-
-    Returns (advantage, q) over legal cells, zero elsewhere, all f32.
-
-    Two stop-gradients, both load-bearing:
-
-    sg(V) closes the STATE route. Taken-cell supervision is satisfiable by a
-    state-only function (the Step-6 verdict in docs/critic-weakness-analysis.md
-    — the head fit the label to the label-entropy floor in <800 steps while
-    within-state action variance FELL 5x), so every state-level degree of
-    freedom must sit in V where this loss cannot reach it. What is left for
-    the advantage head to explain is the action axis alone.
-
-    sg(pi) stops the Q loss steering the POLICY through the centring term.
-
-    The pi-weighting here is required, and is deliberately NOT the uniform
-    centring compose_action_grid applies within each modality: pi-weighting is
-    what makes E_pi[Q] = V exactly, which is what makes V the correct
-    counterfactual baseline. Doing it at the micro tier instead would put a mass prefactor
-    back on starved cells, which docs/entropy-gradient-pressure.md shows can
-    never restore a dead modality.
-
-    Note what the centring can and cannot do: it conditions the head and pins
-    the level, but it cannot remove a MODALITY offset (a -0.1 on switches at
-    pi(switch) = 0.01 sums to ~0). Unclipped — the Huber loss sees the raw sum;
-    the policy clips the ADVANTAGE to +-2 (train_step's adv_for_policy), a
-    symmetric saturation guard, not the reward support.
-    """
-    adv = advantage_raw.astype(jnp.float32)
-    pi = jax.lax.stop_gradient(jnp.exp(log_policy.astype(jnp.float32))) * legal_mask
-    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
-    baseline = (pi * jnp.where(legal_mask, adv, 0.0)).sum(axis=-1, keepdims=True)
-    advantage = jnp.where(legal_mask, adv - baseline, 0.0)
-    v = jax.lax.stop_gradient(value.astype(jnp.float32))
-    q = jnp.where(legal_mask, v[..., None] + advantage, 0.0)
-    return advantage, q
-
-
-def compose_action_grid(
-    macro: jax.Array, micro: jax.Array, flat_valid_mask: jax.Array, reduce: str
-) -> jax.Array:
-    """The one macro/micro grid composition both head families share:
-
-      out(cell) = macro[modality(cell)]
-                  + micro(cell) − reduce_modality(micro over LEGAL cells)
-
-    reduce="logsumexp" is the policy's hierarchical log-policy: the
-    per-modality logsumexp turns micro into a within-modality log-softmax
-    (shift-invariant per modality), and macro — passed as the legal
-    log-softmax over modalities, micro pre-divided by temp — owns the
-    modality contest. Callers mask invalid cells afterwards.
-
-    reduce="mean" is the advantage composition: centring
-    micro over each modality's LEGAL cells makes the decomposition
-    identifiable (dueling-style) — micro carries only within-modality
-    shape, so the modality's level must flow through the macro readout, a
-    low-dimensional path that generalises across states, i.e. an explicit
-    parameter route for "is switching better here" (the flat-grid
-    predecessor made the head express the switch/move contest cell-by-cell
-    through one shared bilinear). Legal cells only, because invalid cells
-    never receive loss gradient and their drift must not leak into live
-    values.
-
-    micro is (..., N*N) scalar (policy) or (..., N*N, K) per-bin (Q), with
-    macro (..., M) / (..., M, K) to match; handles arbitrary leading batch
-    dims.
-    """
-    scalar = micro.ndim == flat_valid_mask.ndim
-    if scalar:
-        micro = micro[..., None]
-        macro = macro[..., None]
-    modality_oh = FLAT_MODALITY_MASK[:, None] == jnp.arange(NUM_MODALITY_FEATURES)
-    valid_per_modality = flat_valid_mask[..., None] & modality_oh
-    if reduce == "logsumexp":
-        stat = nn.logsumexp(
-            jnp.where(valid_per_modality[..., None], micro[..., :, None, :], -1e9),
-            axis=-3,
+        qk_size = self.cfg.qk_size
+        query = nn.Dense(
+            qk_size, kernel_init=zeros, use_bias=False, dtype=dtype, name="query"
+        )(move_rows)
+        key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name="key")(target_rows)
+        move_target = jnp.einsum("...mq,...tq->...mt", query, key) / math.sqrt(qk_size)
+        move_target = (
+            move_target
+            + scalar_head(name="local_src")(move_rows)
+            + scalar_head(name="local_tgt")(target_rows)[..., 0][..., None, :]
         )
-        # An empty modality's stat is -1e9; subtracting it would leave
-        # +1e9 in cells the caller masks anyway -- keep the intermediate
-        # finite-small instead of one mask-drop from poisoning a softmax.
-        stat = jnp.where(valid_per_modality.any(axis=-2)[..., None], stat, 0.0)
-    elif reduce == "mean":
-        weights = valid_per_modality.astype(micro.dtype)
-        counts = jnp.maximum(weights.sum(axis=-2), 1.0)
-        stat = jnp.einsum("...cm,...ck->...mk", weights, micro) / counts[..., None]
-    else:
-        raise ValueError(f"unknown reduce: {reduce}")
-    out = micro - stat[..., FLAT_MODALITY_MASK, :] + macro[..., FLAT_MODALITY_MASK, :]
-    if scalar:
-        return out.squeeze(-1)
-    return out
 
+        # Which active the switch replaces. In singles only ALLY_1_SWITCH is
+        # ever legal so this costs nothing there; the mask, which the service
+        # builds from the ally half it is actually asking about, clears the
+        # other row.
+        ally_switch_bias = self.param(
+            "ally_switch_bias", zeros, (len(ALLY_SWITCH_INDICES), 1)
+        ).astype(dtype)
 
-# Alive-mon differential support: margins -6..+6, matching the offline
-# critic's 13-bin distributional target.
-NUM_MARGIN_BINS = 13
+        grid = jnp.zeros(action_mask.shape, dtype=move_target.dtype)
+        # Team preview names the mon in the SRC half, a battle switch in the
+        # TGT half. Both are written; the mask keeps whichever the request
+        # actually asked, so the readout needs no request-type branch.
+        grid = grid.at[..., jnp.asarray(RESERVE_ENTITY_INDICES), :].add(
+            switch_logit[..., None]
+        )
+        grid = grid.at[
+            ...,
+            jnp.asarray(ALLY_SWITCH_INDICES)[:, None],
+            jnp.asarray(RESERVE_ENTITY_INDICES)[None, :],
+        ].add(switch_logit[..., None, :] + ally_switch_bias)
+        grid = grid.at[
+            ...,
+            jnp.asarray(MOVE_INDICES)[:, None],
+            jnp.asarray(TARGET_SLOT_INDICES)[None, :],
+        ].add(move_target)
+        standalone = jnp.asarray(TARGET_SLOT_INDICES)
+        grid = grid.at[..., standalone, standalone].add(other_logit)
+
+        # f32 once, before the masked log-softmax: bf16 normalisation holds
+        # only to ~3e-3 and every policy-loss term reads this.
+        # A PLAIN ARRAY, not a NamedTuple: flax's capture_intermediates skips
+        # non-array returns, which would silently exempt this module from
+        # tests/test_dtype_policy.py -- and this cast is the one place in the
+        # forward that is deliberately f32.
+        return grid.astype(jnp.float32).reshape(*action_mask.shape[:-2], -1) / temp
 
 
 class CategoricalValueLogitHead(nn.Module):

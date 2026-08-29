@@ -1,6 +1,19 @@
 import { createBattle, TrainablePlayerAI } from "../server/runner";
 import { InfoFeature } from "../../protos/features_pb";
-import { EnvironmentState, StepRequest } from "../../protos/service_pb";
+import {
+    ActionMask,
+    ActionRequestKind,
+    EnvironmentState,
+    StepRequest,
+} from "../../protos/service_pb";
+import {
+    ALLY_SWITCH_SRC_INDICES,
+    MOVE_SLOT_INDICES,
+    numActionFeatures,
+    RESERVE_SLOT_INDICES,
+    TARGET_SLOT_INDICES,
+    TEAM_PREVIEW_TGT,
+} from "../server/data";
 import {
     EdgeBuffer,
     generateTeamFromArray,
@@ -123,6 +136,100 @@ function assertPrivateSideShape(
     }
 }
 
+/**
+ * The wire mask must name exactly the cells the decoder can answer.
+ *
+ * This mirrors `_grid_from_structured_mask` in `rl/environment/utils.py` --
+ * deliberately a SECOND implementation, because the thing under test is that
+ * the two languages agree, and a shared helper could only prove itself
+ * self-consistent. If this drifts from the python one the assertion below
+ * fires, which is the point.
+ */
+function cellsFromStructuredMask(mask: ActionMask): Set<number> {
+    const cells = new Set<number>();
+    const kind = mask.getKind();
+    if (
+        kind === ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED ||
+        kind === ActionRequestKind.ACTION_REQUEST_KIND__WAIT
+    ) {
+        return cells;
+    }
+    const cell = (src: number, tgt: number) => src * numActionFeatures + tgt;
+
+    const switchSlots = mask.getSwitchSlots();
+    for (const [j, reserve] of RESERVE_SLOT_INDICES.entries()) {
+        if (!((switchSlots >> j) & 1)) {
+            continue;
+        }
+        if (kind === ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW) {
+            cells.add(cell(reserve, TEAM_PREVIEW_TGT));
+        } else {
+            cells.add(
+                cell(ALLY_SWITCH_SRC_INDICES[mask.getActiveSlot()], reserve),
+            );
+        }
+    }
+    for (const [moveBit, moveSlot] of MOVE_SLOT_INDICES.entries()) {
+        const targets = mask.getMoveTargetsList()[moveBit];
+        for (const [targetBit, target] of TARGET_SLOT_INDICES.entries()) {
+            if ((targets >> targetBit) & 1) {
+                cells.add(cell(moveSlot, target));
+            }
+        }
+    }
+    const otherSrcs = mask.getOtherSrcs();
+    for (const [slotBit, slot] of TARGET_SLOT_INDICES.entries()) {
+        if ((otherSrcs >> slotBit) & 1) {
+            cells.add(cell(slot, slot));
+        }
+    }
+    return cells;
+}
+
+/**
+ * The mask <-> decoder agreement invariant (2026-08-29).
+ *
+ * Every cell the wire says is legal must have a Showdown choice string, and
+ * every cell that has one must be on the wire. Before the cell -> choice map
+ * these were two independently written code paths and they had drifted three
+ * ways -- a hardcoded " terastallize" suffix, a move-target lookup through a
+ * different move list under Dynamax, and up to 7 duplicate team-preview cells
+ * for one choice. None of it was caught, because nothing asserted the two
+ * halves agreed and the sim's rejections were logged rather than counted.
+ */
+function assertMaskMatchesDecoder(
+    mask: ActionMask,
+    choiceByCell: Map<number, string>,
+) {
+    const kind = mask.getKind();
+    const carriesChoice =
+        kind !== ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED &&
+        kind !== ActionRequestKind.ACTION_REQUEST_KIND__WAIT;
+    if (carriesChoice && choiceByCell.size === 0) {
+        throw new Error(
+            `action mask kind ${kind} legalised nothing; an empty mask makes ` +
+                `the random baseline pick a uniformly ILLEGAL cell`,
+        );
+    }
+    const onWire = cellsFromStructuredMask(mask);
+    for (const cell of onWire) {
+        if (!choiceByCell.has(cell)) {
+            throw new Error(
+                `cell ${cell} is legal on the wire but the decoder has no ` +
+                    `choice string for it`,
+            );
+        }
+    }
+    for (const cell of choiceByCell.keys()) {
+        if (!onWire.has(cell)) {
+            throw new Error(
+                `cell ${cell} decodes to "${choiceByCell.get(cell)}" but is ` +
+                    `not legal on the wire`,
+            );
+        }
+    }
+}
+
 export async function playerController(player: TrainablePlayerAI) {
     let historyLength = 0,
         packedHistoryLength = 0,
@@ -188,6 +295,11 @@ export async function playerController(player: TrainablePlayerAI) {
             );
             assertPrivateSideShape(readablePrivateTeam, readableMoveset);
 
+            assertMaskMatchesDecoder(
+                state.getStructuredActionMask()!,
+                player.legalChoiceByCell,
+            );
+
             const request = player.getRequest();
             if (!request) {
                 throw new Error("No request available");
@@ -202,6 +314,12 @@ export async function playerController(player: TrainablePlayerAI) {
             stepRequest.setRqid(state.getRqid());
             player.submitStepRequest(stepRequest);
         }
+    }
+    if (player.invalidChoiceCount > 0) {
+        throw new Error(
+            `${player.invalidChoiceCount} choice(s) were rejected by the sim; ` +
+                `a legal mask cell decoded to something Showdown would not take`,
+        );
     }
     return {
         historyLength,

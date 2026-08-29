@@ -80,15 +80,11 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
-    # Learner-only (cfg.train; the advantage head is structural): the
-    # Q = V + A decomposition over the flat src x tgt action grid, both
-    # (T, A) f32 and both composed in the MODEL (heads.compose_q).
-    #   advantage  A(s, a), pi-centred so E_pi[A] = 0 exactly
-    #   q          sg(V(s)) + A(s, a), hence E_pi[q] = V exactly
-    # Illegal cells are zero in both. Actors leave them empty so replay
-    # transitions stay small.
-    advantage: ArrayLike = ()
-    q: ArrayLike = ()
+    # `advantage` and `q` lived here until 2026-08-29: the learner-only
+    # Q = V + A decomposition over the flat src x tgt grid, composed in the
+    # model by heads.compose_q. The policy stopped reading it at the NashPG
+    # switch, which left it a matched-control observer for an architecture
+    # that no longer exists; its last readings are banked in the ledger.
 
 
 @dataclass

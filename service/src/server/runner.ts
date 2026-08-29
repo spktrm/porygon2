@@ -13,13 +13,9 @@ import { Dex } from "@pkmn/dex";
 import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, RewardTracker, StateHandler } from "./state";
+import { numActionFeatures } from "./data";
 import { Protocol } from "@pkmn/protocol";
-import {
-    Action,
-    EnvironmentState,
-    StepRequest,
-    ActionEnum,
-} from "../../protos/service_pb";
+import { Action, EnvironmentState, StepRequest } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
 
@@ -141,14 +137,6 @@ export class AsyncQueue<T> implements Queue<T> {
     }
 }
 
-const CHOOSABLE_TARGETS = new Set([
-    "normal",
-    "any",
-    "adjacentAlly",
-    "adjacentAllyOrSelf",
-    "adjacentFoe",
-]);
-
 const globalGens = new Generations(Dex);
 
 export class TrainablePlayerAI extends RandomPlayerAI {
@@ -172,6 +160,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     rqid: number;
     choices: string[];
     actions: Action[];
+    // (src * numActionFeatures + tgt) -> the Showdown choice string that cell
+    // means, rebuilt by StateHandler.getActionMask on every request (and, in
+    // doubles, every sub-decision). choiceFromAction is a lookup in it, so the
+    // mask and the decoder cannot disagree about what a cell means. Empty
+    // until the first state is built, and on requests that carry no choice.
+    legalChoiceByCell: Map<number, string> = new Map();
+    // How many choices this battle's sim rejected outright. Should be 0.
+    invalidChoiceCount: number = 0;
 
     isBaseline: boolean;
     baselineIndex: number;
@@ -294,161 +290,33 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return true;
     }
 
-    getShowdownTargetFormat(
-        allyIndex: number,
-        moveIndex: number,
-        tgtIndex: number,
-    ): string {
-        const targetLookup = {
-            [ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "-1",
-            [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
-            [ActionEnum.ACTION_ENUM__ENEMY_1_TARGET]: "+1",
-            [ActionEnum.ACTION_ENUM__ENEMY_2_TARGET]: "+2",
-            [ActionEnum.ACTION_ENUM__TARGET_AUTO]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALL]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALLIES]: "",
-        };
-
-        const request = this.getRequest()! as AnyObject;
-        const allyMoves = request?.active?.[allyIndex]?.moves;
-        const chosenMove = allyMoves?.[moveIndex];
-        const moveTarget = chosenMove?.target;
-
-        if (!CHOOSABLE_TARGETS.has(moveTarget)) {
-            return "";
-        }
-
-        const showdownFormat =
-            targetLookup[tgtIndex as keyof typeof targetLookup];
-
-        if (showdownFormat === undefined) {
-            throw new Error(`Invalid target index: ${tgtIndex}`);
-        }
-
-        return showdownFormat;
-    }
-
+    /**
+     * The chosen cell -> the Showdown choice string, by lookup in the map
+     * StateHandler.getActionMask built when it legalised that cell.
+     *
+     * This used to be a hand-written decoder that re-derived the string from
+     * (src, tgt) independently of the mask, and the two drifted: it appended
+     * " terastallize" to every wildcard, it re-resolved move targets through a
+     * different move list than the mask indexed under Dynamax, and it ignored
+     * the target on team preview entirely. One table, built where the facts
+     * are, makes all three unrepresentable.
+     */
     choiceFromAction(action: Action): string {
-        const srcIndex = action.getSrc();
-        const tgtIndex = action.getTgt();
-
-        // Safe mapping for switch-ins since they are interleaved with RESERVE_MOVEs in V2
-        const reserveSwitchIndices: number[] = [
-            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-        ];
-
-        if (
-            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4
-        ) {
-            const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1;
-            const showdownFormat = this.getShowdownTargetFormat(
-                0,
-                moveIndex,
-                tgtIndex,
-            );
-
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return `move ${moveIndex + 1} ${showdownFormat}`.trim();
-        } else if (
-            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD
-        ) {
-            const moveIndex =
-                srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD;
-            const showdownFormat = this.getShowdownTargetFormat(
-                0,
-                moveIndex,
-                tgtIndex,
-            );
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return (
-                `move ${moveIndex + 1} ${showdownFormat}`.trim() +
-                " terastallize"
-            );
-        } else if (
-            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1 <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4
-        ) {
-            const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1;
-            const showdownFormat = this.getShowdownTargetFormat(
-                1,
-                moveIndex,
-                tgtIndex,
-            );
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return `move ${moveIndex + 1} ${showdownFormat}`.trim();
-        } else if (
-            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
-        ) {
-            const moveIndex =
-                srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD;
-            const showdownFormat = this.getShowdownTargetFormat(
-                1,
-                moveIndex,
-                tgtIndex,
-            );
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return (
-                `move ${moveIndex + 1} ${showdownFormat}`.trim() +
-                " terastallize"
-            );
-        } else if (
-            srcIndex === ActionEnum.ACTION_ENUM__ALLY_1_SWITCH ||
-            srcIndex === ActionEnum.ACTION_ENUM__ALLY_2_SWITCH
-        ) {
-            // Battle switch: the reserve mon switching in is encoded as the target.
-            const switchIndex = reserveSwitchIndices.indexOf(tgtIndex);
-            if (switchIndex === -1) {
-                throw new Error(
-                    `Invalid switch target index: ${tgtIndex} for src: ${srcIndex}`,
-                );
-            }
-
-            return `switch ${switchIndex + 1}`;
-        } else if (reserveSwitchIndices.includes(srcIndex)) {
-            // Team preview: the chosen mon is still encoded as the source.
-            const switchIndex = reserveSwitchIndices.indexOf(srcIndex);
-
-            return `switch ${switchIndex + 1}`;
-        } else if (srcIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
-            return "default";
-        } else if (
-            (srcIndex === ActionEnum.ACTION_ENUM__ALLY_1_PASS &&
-                srcIndex === tgtIndex) ||
-            (srcIndex === ActionEnum.ACTION_ENUM__ALLY_2_PASS &&
-                srcIndex === tgtIndex)
-        ) {
-            return "pass";
-        } else {
-            throw new Error(
-                `Invalid src index: ${srcIndex} and tgt index: ${tgtIndex}`,
-            );
+        const cell = action.getSrc() * numActionFeatures + action.getTgt();
+        const choice = this.legalChoiceByCell.get(cell);
+        if (choice !== undefined) {
+            return choice;
         }
+        // An empty map means the current request carries no choice (a wait, or
+        // no request at all). getActionMask lights every cell in that case so
+        // masked averages downstream never see an empty row, and "default" is
+        // the only thing any of those cells can mean.
+        if (this.legalChoiceByCell.size === 0) {
+            return "default";
+        }
+        throw new Error(
+            `Action (src ${action.getSrc()}, tgt ${action.getTgt()}) is not a legal cell`,
+        );
     }
 
     addLine(cmd: string, line: string) {
@@ -589,6 +457,12 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         for await (const chunk of this.stream) {
             if (chunk.startsWith("|error|")) {
                 if (chunk.includes("Invalid choice")) {
+                    // Counted, not merely logged: a mask cell whose choice
+                    // string the sim rejects is exactly the drift the
+                    // cell -> choice map exists to prevent, and a console line
+                    // is invisible to the test suite. The harness asserts this
+                    // stays at zero.
+                    this.invalidChoiceCount += 1;
                     console.error(`Invalid choice error in stream: ${chunk}`);
                 } else if (chunk.includes("Unavailable choice")) {
                     console.log(`Unavailable move error in stream: ${chunk}`);

@@ -20,14 +20,18 @@ from rl.environment.interfaces import (
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
+from rl.model.constants import (
+    CLS_ROW,
+    MOVE_ROWS,
+    PRIVATE_ROWS,
+    TARGET_ROWS,
+)
 from rl.model.encoder import Encoder
 from rl.model.heads import (
-    ActionScoreHead,
     CategoricalValueLogitHead,
+    FlatActionReadout,
     HeadParams,
     SlotConditioning,
-    calculate_hierarchical_prior,
-    compose_q,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -43,27 +47,20 @@ class Porygon2PlayerModel(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        """Four modules, and two of them are the same class.
+        """Three modules: the trunk, the action readout, the critic.
 
-        The action axis is read exactly twice — once as a policy, once as an
-        advantage — and both readouts are ActionScoreHead over the SAME
-        src x tgt grid, differing only in how macro and micro compose
-        (`reduce`). The state axis is read once, by v_head. That is the whole
-        model surface; everything else is composition.
+        Was four, two of them the same class -- a policy ActionScoreHead and
+        an advantage one over the same grid. The advantage head, `compose_q`
+        and the Retrace baseline it fed retired on 2026-08-29: the policy had
+        not read it since the NashPG switch, so it was a matched-control
+        observer for an architecture that no longer exists, and its last
+        readings are banked in the ledger.
 
-        The two ActionScoreHeads do NOT share parameters. The advantage
-        head's loss would otherwise reshape the live policy geometry
-        directly — each family reads the trunk through its own adapter, so
-        the trunk still receives both gradients while the head-specific
-        geometry stays decoupled.
+        The action readout scores the grid from the rows it owns; `v_head`
+        reads the CLS row and nothing else.
         """
         self.encoder = Encoder(self.cfg.encoder)
-        self.policy_head = ActionScoreHead(
-            self.cfg.policy_head, reduce="logsumexp", name="policy_head"
-        )
-        self.advantage_head = ActionScoreHead(
-            self.cfg.advantage_head, reduce="mean", name="advantage_head"
-        )
+        self.action_head = FlatActionReadout(self.cfg.action_head, name="action_head")
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
@@ -119,7 +116,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_action_head(
         self,
-        action_embeddings: jax.Array,
+        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -130,16 +127,12 @@ class Porygon2PlayerModel(nn.Module):
         stages over per-slot masks with slot 2 conditioned on slot 1's
         choice — the trunk is forwarded once either way."""
         if self.cfg.num_decision_slots == 2:
-            return self._forward_two_slots(
-                action_embeddings, valid_mask, head, train, temp
-            )
-        return self._forward_single_slot(
-            action_embeddings, valid_mask, head, train, temp
-        )
+            return self._forward_two_slots(sequence_rows, valid_mask, head, train, temp)
+        return self._forward_single_slot(sequence_rows, valid_mask, head, train, temp)
 
     def _score_and_sample(
         self,
-        action_embeddings: jax.Array,
+        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
         valid_mask: jax.Array,
         given_index: jax.Array | None,
         temp: float,
@@ -154,32 +147,35 @@ class Porygon2PlayerModel(nn.Module):
         Behaviour policy mu == pi, with illegal cells at the dtype's min so
         the sampler can never draw one.
         """
-        scores = self.policy_head(action_embeddings, valid_mask, temp=temp)
-        pi_logits = jnp.where(scores.flat_valid, scores.logits, -1e9)
-        metrics = compute_policy_metrics(
-            logits=pi_logits,
-            valid_mask=scores.flat_valid,
-            prior=calculate_hierarchical_prior(scores.flat_valid),
+        private_rows, move_rows, target_rows = sequence_rows
+        logits = self.action_head(
+            private_rows, move_rows, target_rows, valid_mask, temp=temp
         )
-        log_mu = _sampling_log_policy(metrics.log_policy, scores.flat_valid)
+        flat_valid = valid_mask.reshape(*valid_mask.shape[:-2], -1)
+        pi_logits = jnp.where(flat_valid, logits, -1e9)
+        # prior=None is uniform over legal cells -- which is exactly what the
+        # flat readout's all-zero init produces, so the init policy and the
+        # metric anchor are the same distribution.
+        metrics = compute_policy_metrics(logits=pi_logits, valid_mask=flat_valid)
+        log_mu = _sampling_log_policy(metrics.log_policy, flat_valid)
         action_index = (
             given_index
             if given_index is not None
             else sample_categorical(log_mu, self.make_rng("sampling"))
         )
         log_prob = jnp.take(log_mu, action_index, axis=-1)
-        return scores, metrics, action_index, log_prob
+        return flat_valid, metrics, action_index, log_prob
 
     def _forward_single_slot(
         self,
-        action_embeddings: jax.Array,
+        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
     ):
-        scores, metrics, action_index, log_prob = self._score_and_sample(
-            action_embeddings, valid_mask, head.action_index if train else None, temp
+        flat_valid, metrics, action_index, log_prob = self._score_and_sample(
+            sequence_rows, valid_mask, head.action_index if train else None, temp
         )
         mask_width = valid_mask.shape[-1]
         learner_only = {}
@@ -188,7 +184,7 @@ class Porygon2PlayerModel(nn.Module):
                 "log_policy": metrics.log_policy,
             }
         modality_log_probs, valid_per_modality = self._modality_log_marginal(
-            metrics.log_policy, scores.flat_valid
+            metrics.log_policy, flat_valid
         )
         return PlayerPolicyHeadOutput(
             action_index=action_index,
@@ -225,7 +221,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_two_slots(
         self,
-        action_embeddings: jax.Array,
+        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -248,21 +244,19 @@ class Porygon2PlayerModel(nn.Module):
         is the remaining doubles workstream; the model side is complete.
         """
         stage1_given = head.action_index[0] if train else None
-        scores_1, metrics_1, index_1, log_prob_1 = self._score_and_sample(
-            action_embeddings, valid_mask[0], stage1_given, temp
+        flat_valid_1, metrics_1, index_1, log_prob_1 = self._score_and_sample(
+            sequence_rows, valid_mask[0], stage1_given, temp
         )
-        flat_valid_1 = scores_1.flat_valid
 
         mask_width = valid_mask.shape[-1]
-        cond_embeddings = self.slot_conditioning(
-            action_embeddings, index_1 // mask_width, index_1 % mask_width
+        cond_rows = self.slot_conditioning(
+            sequence_rows, index_1 // mask_width, index_1 % mask_width
         )
         mask_2 = self._apply_choice_collision(valid_mask[1], index_1)
         stage2_given = head.action_index[1] if train else None
-        scores_2, metrics_2, index_2, log_prob_2 = self._score_and_sample(
-            cond_embeddings, mask_2, stage2_given, temp
+        flat_valid_2, metrics_2, index_2, log_prob_2 = self._score_and_sample(
+            cond_rows, mask_2, stage2_given, temp
         )
-        flat_valid_2 = scores_2.flat_valid
 
         action_index = jnp.stack([index_1, index_2])
         # Diagnostic average of the per-stage values (a true joint version
@@ -309,30 +303,26 @@ class Porygon2PlayerModel(nn.Module):
             normalized_modality_entropy=normalized_modality_entropy,
         )
 
-    def _forward_value_head(self, value_embeddings: jax.Array):
-        """value_embeddings: (4 * entity_size,)."""
-        return self.v_head(value_embeddings)
-
     def get_head_outputs(
         self,
-        action_embeddings: jax.Array,
-        value_embeddings: jax.Array,
+        sequence: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-
+        """Each head slices the rows it owns, by name. No head ever carries a
+        row offset -- rl/model/constants.py derives them once."""
         action_head = self._forward_action_head(
-            action_embeddings,
+            (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
         )
-
         return PlayerActorOutput(
             action_head=action_head,
-            value_head=self._forward_value_head(value_embeddings),
+            # The CLS row, and only the CLS row.
+            value_head=self.v_head(sequence[CLS_ROW]),
         )
 
     def __call__(
@@ -344,35 +334,13 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        action_embeddings, value_embeddings = self.encoder(
+        sequence = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
-        outputs = jax.vmap(
+        return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(action_embeddings, value_embeddings, actor_input.env, actor_output)
-
-        if self.cfg.train:
-            # Q = V + A, composed HERE — one place, next to the heads that
-            # produce the two terms, rather than reassembled at four call
-            # sites in the learner. Learner-only: actors never read Q, so
-            # replay transitions stay small.
-            #
-            # The advantage head runs with T leading (no vmap) — every
-            # module on this path takes arbitrary leading batch dims.
-            raw = self.advantage_head(
-                action_embeddings,
-                actor_input.env.action_mask,
-                cond=value_embeddings,
-            )
-            advantage, q = compose_q(
-                outputs.value_head.expectation,
-                raw.logits,
-                outputs.action_head.log_policy,
-                raw.flat_valid,
-            )
-            outputs = outputs.replace(advantage=advantage, q=q)
-        return outputs
+        )(sequence, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

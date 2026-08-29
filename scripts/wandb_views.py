@@ -156,73 +156,59 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # Observer stack (2026-08-26): the policy no longer reads the
-            # Q critic, but it remains the matched control and the
-            # starvation discriminators' evidence base.
-            name="1.5 · Q critic",
+            # What is left of the critic section after the advantage head
+            # retired (2026-08-29). Every panel that read a Q readout went
+            # with it; these read the one-step V LABEL and the taken-action
+            # coverage, which are properties of the data, not of any head --
+            # which is exactly why they outlived three critic designs.
+            name="1.5 · Switch evidence",
             is_open=True,
             panels=[
                 lp(
-                    # Acceptance: q_r2 climbing into the V head's band.
-                    # Lagging early is expected (one action's target per
-                    # state vs every state for V); plateauing far below
-                    # means per-action values aren't extractable from the
-                    # action embeddings.
-                    "Q calibration vs V head (R2)",
-                    ["player_q_r2", "player_value_head_r2"],
-                    range_y=(-1, 1),
-                ),
-                lp(
-                    # THE switching readout: best legal switch E[Q] minus
-                    # best legal move E[Q], joint-read with switch_ratio.
-                    # Gap positive while switch_ratio collapses = the
-                    # self-reinforcing ratchet; gap negative = the critic
-                    # agrees with not switching on the visited data (fix
-                    # is opponents/data, not the policy update).
-                    "Switch-vs-move value gap & switch rate",
-                    ["player_q_switch_move_gap", "switch_ratio"],
-                ),
-                lp(
-                    # |sum(pi*E[Q]) - V|: both critics learn the PLAIN
-                    # game (the reference is a policy-objective term
-                    # only since 2026-08-25), so this is calibration
-                    # debt and nothing else.
-                    "Q-V state-value agreement",
-                    ["player_q_ev_gap"],
-                ),
-                lp(
-                    # Gap discriminator 1/3 — calibration by context.
-                    # Forced switches (post-faint) stay data-rich through
-                    # a switch collapse; voluntary ones starve. Forced
-                    # calibrated + voluntary degraded = starvation
-                    # artefact (don't trust the gap); all three tracking
-                    # together = the critic means it.
-                    "Q calibration by context (R2)",
-                    [
-                        "player_q_r2_move",
-                        "player_q_r2_switch_forced",
-                        "player_q_r2_switch_voluntary",
-                    ],
-                    range_y=(-1, 1),
-                ),
-                lp(
-                    # Gap discriminator 2/3 — how much CE gradient switch
-                    # cells actually receive (the CE trains only the
-                    # taken action's cell). Voluntary frac -> 0 is the
-                    # starvation mechanism in the flesh.
-                    "Q training coverage by modality",
+                    # How much gradient switch cells actually receive. The
+                    # policy loss trains only the taken action, so
+                    # voluntary frac -> 0 IS the starvation mechanism in the
+                    # flesh, whatever the head looks like.
+                    "Training coverage by modality",
                     [
                         "player_q_switch_target_frac",
                         "player_q_voluntary_switch_target_frac",
                     ],
                 ),
                 lp(
-                    # Gap discriminator 3/3 — head-independent: mean
-                    # Retrace return after a voluntary switch vs after a
-                    # move, both over states offering both modalities. If
-                    # the data itself says switches lose, the negative
-                    # gap is honest and the fix is opponent pressure /
-                    # exploration coverage, not the improvement term.
+                    # The flat readout's own way to fail, and it is the same
+                    # SHAPE as the dx65cpwp runaway these panels were built
+                    # for: the bilinear is a two-factor product with ONE
+                    # zero-init factor. query must leave 0 within ~200 steps
+                    # (its gradient is a rank-1 outer product of live rows);
+                    # key must leave lecun 0.0625 shortly after (its gradient
+                    # is proportional to query, so it is frozen for exactly
+                    # one step). Either still flat at 2k IS the stall.
+                    "Action readout: drift from init",
+                    [
+                        "player_pointer_query_rms",
+                        "player_pointer_key_rms",
+                        "player_pointer_local_src_rms",
+                        "player_pointer_local_tgt_rms",
+                        "player_switch_head_rms",
+                        "player_other_head_rms",
+                    ],
+                ),
+                lp(
+                    "Trunk & head gradient norms",
+                    [
+                        "player_trunk_attn_out_rms",
+                        "player_trunk_mlp_out_rms",
+                        "player_action_head_grad_norm",
+                        "player_trunk_grad_norm",
+                    ],
+                ),
+                lp(
+                    # Head-independent: mean one-step return after a
+                    # voluntary switch vs after a move, over states offering
+                    # both. If the DATA says switches lose, a collapsing
+                    # switch rate is honest and the fix is opponent pressure
+                    # and coverage, not the update rule.
                     "Empirical returns: voluntary switch vs move",
                     [
                         "player_q_target_voluntary_switch",
@@ -230,8 +216,11 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    "Q loss & head gradient",
-                    ["player_loss_q", "player_advantage_head_gradient_norm"],
+                    "Voluntary-switch rows per batch",
+                    [
+                        "player_q_support_vol_switch_rows",
+                        "player_q_support_forced_switch_rows",
+                    ],
                 ),
             ],
         ),
@@ -307,6 +296,15 @@ def rl_sections():
                     log_y=True,
                 ),
                 lp(
+                    # The zero-avoiding term: forward KL from UNIFORM, the
+                    # one force in the bracket that is not pi-prefactored and
+                    # so the only one still acting on an abandoned cell.
+                    # Read against prob_switch -- rising mass with this
+                    # falling is the term doing its job and then relaxing.
+                    "Zero-avoiding KL & switch mass",
+                    ["player_loss_uniform_kl", "player_policy_prob_switch"],
+                ),
+                lp(
                     # Modality decomposition of the two throttles on any
                     # taken-action update: per-cell pi mass and the
                     # observer critic's |A|, as switch/move ratios.
@@ -314,7 +312,7 @@ def rl_sections():
                     # the starvation signature — the critic still
                     # believes, the policy has stopped sampling.
                     "Starvation watch (ratios, switch/move)",
-                    ["player_policy_prob_ratio", "player_policy_absadv_ratio"],
+                    ["player_policy_prob_ratio"],
                     log_y=True,
                 ),
                 lp(
@@ -322,8 +320,6 @@ def rl_sections():
                     [
                         "player_policy_prob_switch",
                         "player_policy_prob_move",
-                        "player_policy_absadv_switch",
-                        "player_policy_absadv_move",
                     ],
                     log_y=True,
                 ),
@@ -338,115 +334,12 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    # Action-value spread. Near-zero means the critic
-                    # cannot tell actions apart, so there is nothing to
-                    # push toward. p90 alongside the mean: spread
-                    # concentrates in few high-leverage states, so the
-                    # mean undersells by construction.
-                    # The uniform (π-free) pair is the flat-vs-anti-switch
-                    # discriminator: uniform ≫ π-weighted = spread lives on
-                    # abandoned actions (critic discriminates, policy
-                    # collapsed); both ≈ 0 = critic genuinely action-flat.
-                    "Action-value spread: Var_a~pi[Q] + uniform",
-                    [
-                        "player_q_action_var",
-                        "player_q_action_var_p90",
-                        "player_q_action_var_uniform",
-                        "player_q_action_var_uniform_p90",
-                    ],
-                ),
-                lp(
-                    # Uniform spread split by modality (2026-08-24): the
-                    # head is macro[modality] + gated micro, so between =
-                    # the switch-vs-move bit the macro carries and within
-                    # = which move / which reserve, which ONLY the pointer
-                    # micro grid can carry. within ≈ 0 with between ≈
-                    # uniform = the critic resolves one bit (70mhptdc
-                    # read: uniform ≈ p(1-p)·gap² all run).
-                    "Action-value spread: within vs between modality",
-                    [
-                        "player_q_action_var_within_modality",
-                        "player_q_action_var_within_modality_p90",
-                        "player_q_action_var_between_modality",
-                    ],
-                ),
-                lp(
-                    # Advantage scale per SLOT GROUP (2026-08-25). Each
-                    # group now owns its micro parameters, so one group
-                    # pinned near zero while the others move = that group's
-                    # readout is not training. The target group's scalar was
-                    # bitwise zero for the whole of the previous lineage.
-                    "Advantage rms by slot group",
-                    [
-                        "player_adv_rms",
-                        "player_adv_rms_move",
-                        "player_adv_rms_switch",
-                        "player_adv_rms_target",
-                    ],
-                ),
-                lp(
-                    # Is the within-modality route learning at all? The
-                    # zero-init micro gate (move/switch groups; target is
-                    # never legal in singles) and drift-from-init of the
-                    # out layers: pointer kernels at 0.0625 (lecun) with a
-                    # flat gate = the micro path is a random walk.
-                    "Q head: micro gate & drift from init",
-                    [
-                        "player_adv_type_scale_move",
-                        "player_adv_type_scale_switch",
-                        "player_q_micro_kernel_rms",
-                        "player_q_micro_local_rms",
-                        "player_q_macro_out_rms",
-                        "player_q_adapter_out_rms",
-                    ],
-                ),
-                lp(
-                    # Policy micro type_scale (2026-08-25): the gram is
-                    # rms-normalised per slot group, so this IS the micro
-                    # logit scale. Watch it regrow from ~0 smoothly;
-                    # collapse toward 0 with grads climbing was the
-                    # two-factor runaway the normalisation removes.
-                    "Policy micro type_scale (normalised gram)",
-                    [
-                        "player_policy_type_scale_move",
-                        "player_policy_type_scale_switch",
-                        "player_policy_type_scale_target",
-                    ],
-                ),
-                lp(
-                    # Policy-head param drift (2026-08-26): the dx65cpwp
-                    # micro runaway lived here — local_tgt 0.0028 -> 0.070,
-                    # adapter 0.006 -> 0.105 — with no panel watching.
-                    # Healthy O(0.005); a march toward 0.07 is the runaway
-                    # re-forming. tgt/src split: coherent tgt-column
-                    # accumulation was the 7.5x diagnostic asymmetry.
-                    "Policy head: param drift from init",
-                    [
-                        "player_policy_micro_local_tgt_rms",
-                        "player_policy_micro_local_src_rms",
-                        "player_policy_adapter_rms",
-                    ],
-                ),
-                lp(
                     # Pre-clip grad norm per policy-head subtree, the
                     # policy pathway's own gradient scale (the Q-head pair
                     # below stayed calm through both dx65cpwp failures).
                     "Policy head: grad norm by subtree",
                     [
-                        "player_policy_grad_norm_micro",
-                        "player_policy_grad_norm_macro",
                         "player_policy_head_gradient_norm",
-                    ],
-                ),
-                lp(
-                    # Pre-clip grad norm per Q-head subtree. micro ≪
-                    # macro = the loss is finding the modality offset
-                    # but not the cells.
-                    "Q head: grad norm by subtree",
-                    [
-                        "player_q_grad_norm_micro",
-                        "player_q_grad_norm_macro",
-                        "player_advantage_head_gradient_norm",
                     ],
                 ),
                 lp(
@@ -456,8 +349,6 @@ def rl_sections():
                     # critic.
                     "Calibration r2: Q fresh/replay vs V fresh",
                     [
-                        "player_q_calibration_r2_fresh",
-                        "player_q_calibration_r2_replay",
                         "player_value_r2_fresh",
                     ],
                 ),
@@ -482,20 +373,6 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    # Offline reference 18.7x (34x on voluntary switches):
-                    # the variance a one-step label would remove.
-                    "Label variance around Q: outcome vs one-step, by modality",
-                    [
-                        "player_q_label_var_outcome_move",
-                        "player_q_label_var_onestep_move",
-                        "player_q_label_var_outcome_forced",
-                        "player_q_label_var_onestep_forced",
-                        "player_q_label_var_outcome_voluntary",
-                        "player_q_label_var_onestep_voluntary",
-                    ],
-                    log_y=True,
-                ),
-                lp(
                     # Realised outcome of voluntary switches minus moves at
                     # matched V(s). Offline: pooled -0.147 -> matched
                     # -0.048±0.054. Per-batch n is tiny; read smoothed and
@@ -508,21 +385,6 @@ def rl_sections():
                         "player_mv_bin3_gap_realised",
                         "player_mv_bin4_gap_realised",
                         "player_mv_pooled_gap_realised",
-                    ],
-                    smooth=0.99,
-                ),
-                lp(
-                    # The critic's mean-over-legal-cells gap in the SAME
-                    # bins. Flat across bins = a modality offset (the
-                    # collapse signature); state-dependent = resolution.
-                    "Matched-V critic gap (Q_sw − Q_mv) per V bin",
-                    [
-                        "player_mv_bin0_gap_critic",
-                        "player_mv_bin1_gap_critic",
-                        "player_mv_bin2_gap_critic",
-                        "player_mv_bin3_gap_critic",
-                        "player_mv_bin4_gap_critic",
-                        "player_mv_pooled_gap_critic",
                     ],
                     smooth=0.99,
                 ),
@@ -579,20 +441,9 @@ def rl_sections():
                     # weighting.
                     "Q support: loss share by modality, chunk frac, edge frac",
                     [
-                        "player_q_loss_share_move",
-                        "player_q_loss_share_forced",
-                        "player_q_loss_share_voluntary",
                         "player_q_support_chunk_vol_switch_frac",
                         "player_q_target_edge_frac",
                     ],
-                ),
-                lp(
-                    # Step 3 residual critic (2026-08-23): Huber on the
-                    # taken cell vs the one-step label; MSE alongside, and
-                    # the fraction of legal cells whose unclipped V + A
-                    # leaves the reward support (expect ~0).
-                    "Q Huber + MSE (residual critic) and saturation",
-                    ["player_loss_q", "player_q_mse", "player_q_saturation_frac"],
                 ),
                 lp(
                     # THE DEADLINE PANEL. Voluntary-switch rows per batch is
@@ -632,36 +483,7 @@ def rl_sections():
             # chosen-switch selection bias of the Aug-15 crossover read.
             name="1.8 · Pivotal-state switch decisions",
             is_open=True,
-            panels=[
-                lp(
-                    # Collapse signature #1: the critic stops flagging ANY
-                    # state as switch-worthy. Healthy is a modest nonzero
-                    # fraction (~0.2 early on the q-boost lineage).
-                    "Pivotal fraction (critic prefers switch | both legal)",
-                    ["player_q_pivotal_frac"],
-                ),
-                lp(
-                    # Collapse signature #2: policy ignores the flags —
-                    # switch mass / taken-switch rate cratering on pivotal
-                    # states while pivotal_frac holds.
-                    "Compliance on pivotal states",
-                    [
-                        "player_q_pivotal_pi_switch_mass",
-                        "player_q_pivotal_taken_switch_frac",
-                    ],
-                ),
-                lp(
-                    # Same state class, different action — the closest
-                    # available reading of "are switches better where they
-                    # matter". Empty slices log 0; read alongside the
-                    # compliance panel.
-                    "Pivotal return split: switched vs stayed",
-                    [
-                        "player_q_pivotal_ret_switch",
-                        "player_q_pivotal_ret_stay",
-                    ],
-                ),
-            ],
+            panels=[],
         ),
         ws.Section(
             # Does the switch modality's signal actually reach the
@@ -713,19 +535,6 @@ def rl_sections():
                     range_y=(0, 1),
                 ),
                 lp(
-                    # What the Retrace baseline is worth: the value target
-                    # now subtracts Q = V + A, so the attenuation above
-                    # bites only on the residual A cannot explain. Flat at
-                    # ~0 means the advantage head is supplying nothing and
-                    # the mechanism is inert.
-                    "Retrace baseline |A(s, a_taken)|",
-                    [
-                        "player_retrace_baseline_abs",
-                        "player_retrace_baseline_switch",
-                        "player_retrace_baseline_move",
-                    ],
-                ),
-                lp(
                     # Context: the reuse cap the controller is holding,
                     # and the global upside-clip fraction.
                     "Replay reuse cap & rho clip fraction",
@@ -771,11 +580,6 @@ def rl_sections():
             name="3 · League",
             is_open=True,
             panels=[
-                lp(
-                    "Main vs league winrates",
-                    [],
-                    regex="^league_main_v_.*_winrate$",
-                ),
                 # The learner logs the payoff matrix through a custom
                 # Vega-Lite preset registered once via
                 # scripts/register_wandb_charts.py (learner._get_league_
@@ -820,7 +624,6 @@ def rl_sections():
                         "player_loss_entropy",
                         "player_loss_kl",
                         "player_loss_v_win",
-                        "player_loss_q",
                     ],
                 ),
                 lp("NLL sum", ["player_nll_sum"]),
@@ -929,7 +732,6 @@ def rl_sections():
                         "player_history_encoder_gradient_norm",
                         "player_policy_head_gradient_norm",
                         "player_v_head_gradient_norm",
-                        "player_advantage_head_gradient_norm",
                     ],
                     log_y=True,
                 ),
@@ -978,18 +780,6 @@ def rl_sections():
                 lp(
                     "Thread counts",
                     ["diag_os_threads", "diag_py_threads", "diag_node_num_workers"],
-                    smooth=0,
-                ),
-                lp(
-                    "Python thread buckets",
-                    [],
-                    regex="^diag_py_threads_",
-                    smooth=0,
-                ),
-                lp(
-                    "Replay buffer bytes (MB)",
-                    [],
-                    regex="^diag_(player|builder)_replay_mb_",
                     smooth=0,
                 ),
                 lp(

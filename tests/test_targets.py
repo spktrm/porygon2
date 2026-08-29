@@ -5,7 +5,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from rl.model.heads import compose_q
 from rl.online.training.targets import (
     compute_player_targets,
     compute_q_onestep_targets,
@@ -153,17 +152,16 @@ def ex_target_inputs():
     T, B = env.done.shape
     value_log_probs = jnp.full((T, B, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)
     isr = jnp.ones((T, B), dtype=jnp.float32)
-    adv_taken = jnp.zeros((T, B), dtype=jnp.float32)
-    return batch, value_log_probs, isr, adv_taken, Porygon2LearnerConfig()
+    return batch, value_log_probs, isr, Porygon2LearnerConfig()
 
 
 class TestQOnestepOnExTrajectory:
     def test_shapes_and_ranges(self, ex_target_inputs):
-        batch, _, isr, _, config = ex_target_inputs
+        batch, _, isr, config = ex_target_inputs
         env = batch.player_transitions.env_output
         T, B = env.done.shape
         flat_mask = np.asarray(env.action_mask).reshape(T, B, -1)
-        A = flat_mask.shape[-1]
+        flat_mask.shape[-1]
         full = _q_batch(
             env.done,
             env.win_reward,
@@ -175,23 +173,13 @@ class TestQOnestepOnExTrajectory:
         assert y.shape == (T, B)
         assert np.isfinite(np.asarray(y)).all()
         assert (np.abs(np.asarray(y)) <= 1.0 + 1e-6).all()
-        _, q_all = compose_q(
-            v,
-            jnp.zeros((T, B, A)),
-            jnp.full((T, B, A), -np.log(A)),
-            jnp.asarray(flat_mask),
-        )
-        assert q_all.shape == (T, B, A)
-        assert np.isfinite(np.asarray(q_all)).all()
 
 
 class TestPlayerTargetsOnExTrajectory:
     def test_shapes_and_finiteness(self, ex_target_inputs):
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        batch, value_log_probs, isr, config = ex_target_inputs
         T, B = batch.player_transitions.env_output.done.shape
-        targets, _ = compute_player_targets(
-            batch, value_log_probs, isr, adv_taken, config
-        )
+        targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
 
         assert targets.win_returns.shape == (T, B, 3)
         assert targets.policy_mask.shape == (T, B)
@@ -199,11 +187,9 @@ class TestPlayerTargetsOnExTrajectory:
         assert np.isfinite(np.asarray(targets.win_returns)).all()
 
     def test_masks_follow_episode_structure(self, ex_target_inputs):
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
+        batch, value_log_probs, isr, config = ex_target_inputs
         done = np.asarray(batch.player_transitions.env_output.done)
-        targets, _ = compute_player_targets(
-            batch, value_log_probs, isr, adv_taken, config
-        )
+        targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
 
         # value_mask covers everything up to and including the first done.
         expected = 1 - (np.cumsum(done, axis=0) - done)
@@ -222,10 +208,8 @@ class TestPlayerTargetsOnExTrajectory:
         # because the recursion runs in scalar space and projects once at
         # the end. The old distribution-space form accumulated signed
         # measures and could leave the simplex.
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
-        targets, _ = compute_player_targets(
-            batch, value_log_probs, isr, adv_taken, config
-        )
+        batch, value_log_probs, isr, config = ex_target_inputs
+        targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
         returns = np.asarray(targets.win_returns)
         mask = np.asarray(targets.value_mask)
         np.testing.assert_allclose(returns.sum(-1)[mask], 1.0, atol=1e-4)
@@ -233,97 +217,11 @@ class TestPlayerTargetsOnExTrajectory:
         np.testing.assert_allclose(returns.sum(-1)[~mask], 0.0, atol=1e-6)
 
     def test_on_policy_diagnostics(self, ex_target_inputs):
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
-        _, logs = compute_player_targets(batch, value_log_probs, isr, adv_taken, config)
+        batch, value_log_probs, isr, config = ex_target_inputs
+        _, logs = compute_player_targets(batch, value_log_probs, isr, config)
         # isr == 1 everywhere: full effective sample size, nothing clipped.
         np.testing.assert_allclose(float(logs["player_isr_ess"]), 1.0, atol=1e-3)
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
-
-
-class TestRetraceBaseline:
-    """Retrace over the composed Q: the value target's baseline is
-    Q(s, a) = V(s) + A(s, a), not V(s)."""
-
-    def _expectation(self, targets, support):
-        return np.asarray(targets.win_returns @ support)
-
-    def test_zero_baseline_reproduces_the_vtrace_targets(self, ex_target_inputs):
-        """The flat-at-init advantage head must leave the estimator exactly
-        where it was — checked against a reference implementation of the
-        plain scalar v-trace form, not against another call of the same
-        function."""
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
-        support = jnp.array([-1.0, 0.0, 1.0], dtype=jnp.float32)
-        done = batch.player_transitions.env_output.done
-        mask = (1 - (jnp.cumsum(done, axis=0) - done)).astype(jnp.float32)
-        discount_t = (1 - done).astype(jnp.float32) * config.player_gamma * mask
-        rho = jnp.minimum(1.0, isr).astype(jnp.float32)
-        v_tm1 = jnp.exp(value_log_probs.astype(jnp.float32)) @ support
-        v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
-        r_t = (
-            batch.player_transitions.env_output.win_reward.astype(jnp.float32) @ support
-        )
-        td = rho * mask * (r_t + discount_t * v_t - v_tm1)
-        scalar = (vtrace(td, discount_t, rho * config.player_lambda) + v_tm1) * mask
-        want = two_hot(scalar, support) * mask[..., None]
-
-        got, _ = compute_player_targets(
-            batch, value_log_probs, isr, jnp.zeros_like(adv_taken), config
-        )
-        np.testing.assert_allclose(
-            np.asarray(got.win_returns), np.asarray(want), atol=1e-6
-        )
-
-    def test_positive_advantage_lowers_the_state_target(self, ex_target_inputs):
-        """Positive control — without it the test above passes vacuously.
-        Q(s, a) = V + A, so subtracting a larger baseline must lower the
-        state's return, and a negative advantage must raise it."""
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
-        support = np.array([-1.0, 0.0, 1.0], dtype=np.float32)
-        mask = np.asarray(
-            compute_player_targets(batch, value_log_probs, isr, adv_taken, config)[
-                0
-            ].value_mask
-        )
-
-        def mean_target(scalar):
-            targets, _ = compute_player_targets(
-                batch,
-                value_log_probs,
-                isr,
-                jnp.full_like(adv_taken, scalar),
-                config,
-            )
-            return self._expectation(targets, support)[mask].mean()
-
-        assert mean_target(0.2) < mean_target(0.0) < mean_target(-0.2)
-
-    def test_baseline_does_not_leak_into_the_policy_advantage(self, ex_target_inputs):
-        """pg_advantages is the PLAIN v-trace pass: the Retrace baseline
-        (adv_taken) moves the VALUE targets only. Positive control below —
-        the value targets must move for the same perturbation."""
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
-        base, _ = compute_player_targets(
-            batch, value_log_probs, isr, jnp.zeros_like(adv_taken), config
-        )
-        shifted, _ = compute_player_targets(
-            batch, value_log_probs, isr, jnp.full_like(adv_taken, 0.3), config
-        )
-        np.testing.assert_array_equal(
-            np.asarray(base.pg_advantages), np.asarray(shifted.pg_advantages)
-        )
-        assert not np.array_equal(
-            np.asarray(base.win_returns), np.asarray(shifted.win_returns)
-        )
-
-    def test_targets_stay_normalised_under_a_nonzero_baseline(self, ex_target_inputs):
-        batch, value_log_probs, isr, adv_taken, config = ex_target_inputs
-        targets, _ = compute_player_targets(
-            batch, value_log_probs, isr, jnp.full_like(adv_taken, 0.4), config
-        )
-        sums = np.asarray(targets.win_returns).sum(-1)
-        mask = np.asarray(targets.value_mask)
-        np.testing.assert_allclose(sums[mask], 1.0, atol=1e-4)
 
 
 class TestPolicyAdvantage:
@@ -344,7 +242,6 @@ class TestPolicyAdvantage:
             batch,
             value_log_probs,
             isr,
-            jnp.zeros((T, B), jnp.float32),
             Porygon2LearnerConfig(player_gamma=1.0, player_lambda=player_lambda),
         )
         return targets
