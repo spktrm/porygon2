@@ -10,30 +10,16 @@ def factorised_entropies(
     taken_modality: jax.Array,
     legal_mask: jax.Array,
 ):
-    """(H_macro, H_micro_taken) per row, f32 — the Oct–Nov 2025 per-level
-    entropy form rebuilt on the composed head.
+    """(H_macro, H_micro_taken) per row, f32 — OBSERVERS since 2026-08-30
+    (the per-axis entropy loss terms and their dual temperatures are gone;
+    the regulariser is the plain joint entropy bonus). These stay as the
+    collapse instruments the acceptance gates read.
 
     H_macro is the entropy of the modality marginal over live modalities;
     H_micro_taken the entropy of the conditional within the TAKEN
-    modality's legal cells. Consumed as unit-weight masked AVERAGES over
-    their own row sets (train_step), which is the whole reason the form
-    exists: the joint entropy decomposes as H(macro) + sum_m pi_macro(m) *
-    H(micro|m), so its within-switch pressure dies in proportion to switch
-    mass — the regulariser defunds the which-axis exactly as the modality
-    shrinks — while the per-level form keeps unit weight on WHICH and the
-    masked average makes a rare taken-switch row's term inverse-frequency
-    amplified. A temperature opposed by live evidence, never a target: per
-    axis the equilibrium is pi ∝ exp(A/coef), so real advantages beat it
-    wherever they exist.
-
-    Both terms are NORMALISED by their own log(k) (user catch 2026-08-27:
-    raw conditional entropy caps at log k, so a move-taken row with 8
-    legal cells outweighs a 2-switch row ~3x and the 'unit budget' is
-    silently k-weighted). Normalised, each row contributes fraction-of-max
-    in [0, 1], the panels are comparable across modalities, and the
-    effective per-modality temperature is coef/log k — relatively stronger
-    regularisation for SMALL modalities, which is the direction the
-    which-axis needs. Rows with k < 2 are excluded by the caller's masks;
+    modality's legal cells. Both are NORMALISED by their own log(k), so
+    each row reads fraction-of-max in [0, 1] and the panels are comparable
+    across modalities. Rows with k < 2 are excluded by the caller's masks;
     the guards here only keep the arithmetic finite on excluded rows."""
     modality_oh = jax.nn.one_hot(
         jnp.asarray(FLAT_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
@@ -61,63 +47,6 @@ def factorised_entropies(
     taken_count = taken_cells.sum(axis=-1)
     h_micro_taken = h_micro_taken / jnp.log(jnp.maximum(taken_count, 2))
     return h_macro, h_micro_taken
-
-
-def uniform_kl_rows(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
-    """Per-row KL(u || pi) over legal cells -- the ZERO-AVOIDING term.
-
-    Note the DIRECTION. Reverse KL(pi || u) is, up to a constant, just
-    negative entropy, i.e. the entropy bonus already in the objective; it
-    carries the pi prefactor that CLAUDE.md 4 records as structurally unable
-    to hold a floor once a modality starves. This is the other direction:
-
-        KL(u || pi) = -(1/k) * sum_a log pi_a   (+ a constant)
-        d/d y_b     = pi_b - 1/k
-
-    Bounded by 1 for ANY pi, zero-sum over legal cells, and with NO pi
-    prefactor -- so it still pulls at pi = 1e-6, where both the entropy bonus
-    (d/dy_b = -pi_b (log pi_b + H)) and the reverse-KL magnet are numerically
-    dead. Those three properties are exactly what every mass-restoring
-    mechanism this project has tried lacked, and unlike the four support-anchor
-    phases the reference here is the CONSTANT uniform distribution: it cannot
-    collapse, cannot be ratcheted by a re-snapping reference, and cannot invert
-    on the modality-level sign of Q^pi.
-
-    Returned per row and unmasked in the batch sense; the caller applies the
-    row mask.
-    """
-    legal = legal_mask.astype(jnp.float32)
-    weights = legal / jnp.maximum(legal.sum(axis=-1, keepdims=True), 1.0)
-    return -(weights * log_policy.astype(jnp.float32)).sum(axis=-1)
-
-
-def entropy_floor_step(
-    log_alpha: jax.Array,
-    *,
-    target: float,
-    entropy_value: jax.Array,
-    rows: jax.Array,
-    alpha_lr: float,
-    alpha_min: float,
-    alpha_max: float,
-):
-    """One dual-ascent step on a per-axis entropy temperature (2026-08-28).
-
-    log alpha moves by alpha_lr * (target - H_norm): below target the
-    temperature rises, above it it relaxes — SAC's constraint form
-    max E[A] s.t. H >= target, whose equilibrium is still pi ∝ exp(A/alpha)
-    per axis, so the controller picks only the temperature and evidence
-    keeps deciding WHICH cells hold the mass. Clipped to [alpha_min,
-    alpha_max] in log space; FROZEN when the axis had no rows this batch
-    (average() reads 0.0 on an empty mask, which would otherwise register
-    as maximal entropy deficit — the NaN-EMA lesson's shape, LESSONS 2)."""
-    err = target - entropy_value.astype(jnp.float32)
-    stepped = jnp.clip(
-        log_alpha + alpha_lr * err,
-        jnp.log(alpha_min),
-        jnp.log(alpha_max),
-    )
-    return jnp.where(rows > 0, stepped, log_alpha)
 
 
 def spo_objective(
@@ -156,9 +85,9 @@ def policy_gradient_loss(
     threshold: float,
     objective: str = "spo",
 ):
-    """Ratio-surrogate PG loss, one selector over the two objectives: the
-    builder keeps SPO's smooth quadratic penalty; the player runs NashPG's
-    PPO clip (config.player_pg_objective — "spo" is the A/B alternative)."""
+    """Ratio-surrogate PG loss, one selector over the two objectives:
+    both the player and the builder run SPO's smooth quadratic penalty
+    (config.player_pg_objective — "ppo" is the A/B alternative)."""
     objective_fn = {"spo": spo_objective, "ppo": ppo_objective}[objective]
     pg_loss = objective_fn(
         policy_ratios=policy_ratios,

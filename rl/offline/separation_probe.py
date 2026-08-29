@@ -87,7 +87,7 @@ _MOVE_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__MOVE
 
 
 def trainable_rows(done: np.ndarray) -> np.ndarray:
-    """The learner's q_mask along the time axis: rows up to and including
+    """The learner's acted_mask along the time axis: rows up to and including
     the first done row (the terminal-copy padding after it repeats the
     terminal row with done=0), minus the bootstrap-only final row unless
     it is the game's own terminal, minus done rows themselves."""

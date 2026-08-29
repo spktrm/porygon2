@@ -7,7 +7,6 @@ import pytest
 
 from rl.online.training.targets import (
     compute_player_targets,
-    compute_q_onestep_targets,
     two_hot,
     vtrace,
 )
@@ -75,67 +74,6 @@ class TestTwoHot:
         np.testing.assert_allclose(got.sum(-1), 1.0, atol=1e-6)
 
 
-def _q_batch(done, win_reward, action_mask, action_index):
-    """Minimal Batch for compute_q_targets: env rows plus the taken-action
-    index (the only agent_output field the Retrace path reads)."""
-    from rl.environment.interfaces import (
-        Batch,
-        PlayerActorOutput,
-        PlayerAgentOutput,
-        PlayerEnvOutput,
-        PlayerPolicyHeadOutput,
-        PlayerTransition,
-    )
-
-    return Batch(
-        player_transitions=PlayerTransition(
-            env_output=PlayerEnvOutput(
-                done=done, win_reward=win_reward, action_mask=action_mask
-            ),
-            agent_output=PlayerAgentOutput(
-                actor_output=PlayerActorOutput(
-                    action_head=PlayerPolicyHeadOutput(action_index=action_index)
-                )
-            ),
-        )
-    )
-
-
-class TestQOnestepHandExample:
-    """T=3, B=1, terminal win on the last (done) row, V_target = 0.2 on
-    every row: y = [0 + V(s1), 0 + r, 0 (done row)] = [0.2, 1, 0]."""
-
-    def test_label_matches_hand_computation(self):
-        from rl.online.config import Porygon2LearnerConfig
-
-        T, B, N = 3, 1, 2
-        done = jnp.array([[False], [False], [True]])
-        win_reward = jnp.zeros((T, B, 3), dtype=jnp.float32)
-        win_reward = win_reward.at[:, :, 1].set(1.0)  # scalar 0 rows
-        win_reward = win_reward.at[2, :, :].set(jnp.array([0.0, 0.0, 1.0]))  # win
-        action_mask = jnp.ones((T, B, N, N), dtype=bool)
-        action_index = jnp.zeros((T, B), dtype=jnp.int32)
-        batch = _q_batch(done, win_reward, action_mask, action_index)
-        y = compute_q_onestep_targets(
-            batch, jnp.full((T, B), 0.2), Porygon2LearnerConfig(player_gamma=1.0)
-        )
-        np.testing.assert_allclose(np.asarray(y[:, 0]), [0.2, 1.0, 0.0], atol=1e-6)
-
-    def test_rows_past_the_first_done_read_zero(self):
-        from rl.online.config import Porygon2LearnerConfig
-
-        T, B, N = 4, 1, 2
-        done = jnp.array([[False], [True], [False], [False]])
-        win_reward = jnp.zeros((T, B, 3), dtype=jnp.float32).at[:, :, 1].set(1.0)
-        batch = _q_batch(
-            done, win_reward, jnp.ones((T, B, N, N), bool), jnp.zeros((T, B), jnp.int32)
-        )
-        y = compute_q_onestep_targets(
-            batch, jnp.full((T, B), 0.5), Porygon2LearnerConfig(player_gamma=1.0)
-        )
-        np.testing.assert_allclose(np.asarray(y[:, 0]), [0.0, 0.0, 0.0, 0.0], atol=1e-6)
-
-
 @pytest.fixture(scope="module")
 def ex_target_inputs():
     """Real env outputs from ex.bin (T, B=1), an on-policy isr, a zero
@@ -153,26 +91,6 @@ def ex_target_inputs():
     value_log_probs = jnp.full((T, B, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)
     isr = jnp.ones((T, B), dtype=jnp.float32)
     return batch, value_log_probs, isr, Porygon2LearnerConfig()
-
-
-class TestQOnestepOnExTrajectory:
-    def test_shapes_and_ranges(self, ex_target_inputs):
-        batch, _, isr, config = ex_target_inputs
-        env = batch.player_transitions.env_output
-        T, B = env.done.shape
-        flat_mask = np.asarray(env.action_mask).reshape(T, B, -1)
-        flat_mask.shape[-1]
-        full = _q_batch(
-            env.done,
-            env.win_reward,
-            env.action_mask,
-            jnp.argmax(jnp.asarray(flat_mask), axis=-1),
-        )
-        v = jnp.zeros((T, B), dtype=jnp.float32)
-        y = compute_q_onestep_targets(full, v, config)
-        assert y.shape == (T, B)
-        assert np.isfinite(np.asarray(y)).all()
-        assert (np.abs(np.asarray(y)) <= 1.0 + 1e-6).all()
 
 
 class TestPlayerTargetsOnExTrajectory:
@@ -224,6 +142,32 @@ class TestPlayerTargetsOnExTrajectory:
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
 
 
+def _min_batch(done, win_reward, action_mask, action_index):
+    """Minimal Batch for compute_player_targets: env rows plus the
+    taken-action index."""
+    from rl.environment.interfaces import (
+        Batch,
+        PlayerActorOutput,
+        PlayerAgentOutput,
+        PlayerEnvOutput,
+        PlayerPolicyHeadOutput,
+        PlayerTransition,
+    )
+
+    return Batch(
+        player_transitions=PlayerTransition(
+            env_output=PlayerEnvOutput(
+                done=done, win_reward=win_reward, action_mask=action_mask
+            ),
+            agent_output=PlayerAgentOutput(
+                actor_output=PlayerActorOutput(
+                    action_head=PlayerPolicyHeadOutput(action_index=action_index)
+                )
+            ),
+        )
+    )
+
+
 class TestPolicyAdvantage:
     """The v-trace policy advantage the PPO surrogate reads: hand-checked
     recursion, f32 contract, bootstrap-on-r at the terminal row."""
@@ -232,7 +176,7 @@ class TestPolicyAdvantage:
         from rl.online.config import Porygon2LearnerConfig
 
         T, B = done.shape
-        batch = _q_batch(
+        batch = _min_batch(
             done, win_reward, jnp.ones((T, B, 2, 2), bool), jnp.zeros((T, B), jnp.int32)
         )
         value_log_probs = jnp.full((T, B, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)

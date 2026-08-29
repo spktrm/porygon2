@@ -204,34 +204,6 @@ def reference_kl(
     return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
 
 
-def compute_q_onestep_targets(
-    batch: Batch, v_target: jax.Array, config: Porygon2LearnerConfig
-) -> jax.Array:
-    """TD(0) labels for the residual Q critic: y_t = r_t + gamma * V(s_{t+1})
-    from the TARGET net's win-value head (plain Q^pi — no Retrace trace,
-    no reference-policy transform; the reference enters the POLICY
-    objective only, as the differentiated magnet). Replaced the Retrace
-    recursion 2026-08-23: the one-step label has ~33x less variance than
-    the outcome chain for the action axis to be learnt against, and its
-    state component is exactly what V already carries, so the residual
-    A has only the action part left to fit.
-
-    Terminal anchor as before: rewards land on the terminal OBSERVATION
-    row, so that row's bootstrap is exactly its stored reward and its own
-    label is 0 (never trained — q_mask excludes done rows). Rows past a
-    chunk's first done (terminal-copy padding) read 0. f32 throughout.
-    """
-    support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
-    dones = batch.player_transitions.env_output.done
-    mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
-    done_b = dones.astype(bool)
-    discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
-    r_t = (batch.player_transitions.env_output.win_reward @ support).astype(jnp.float32)
-    v_boot = jnp.where(done_b, r_t, v_target.astype(jnp.float32))
-    v_next = jnp.concatenate([v_boot[1:], v_boot[-1:]], axis=0)
-    return jnp.where(done_b, 0.0, r_t + discount_t * v_next) * mask
-
-
 def compute_builder_targets(
     traj: Trajectory,
     target_pred: BuilderActorOutput,

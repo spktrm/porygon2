@@ -142,21 +142,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
 
-    # Entropy-floor dual variables (2026-08-28): log-space per-axis entropy
-    # temperatures, updated by loss.entropy_floor_step inside train_step.
-    # Traced leaves, NOT config — a coefficient that varies during a run in
-    # static config is the run-1326 recompile bug. Init from
-    # config.player_ent_coef in create_train_state; the defaults here are
-    # log(0.05) so a state built without the config path matches it.
-    log_ent_alpha_macro: jax.Array = struct.field(
-        default_factory=lambda: jnp.log(jnp.array(0.05, dtype=jnp.float32)),
-        pytree_node=True,
-    )
-    log_ent_alpha_micro: jax.Array = struct.field(
-        default_factory=lambda: jnp.log(jnp.array(0.05, dtype=jnp.float32)),
-        pytree_node=True,
-    )
-
 
 class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
@@ -215,12 +200,6 @@ def create_train_state(
         target_params=jax.tree.map(jnp.copy, initial_player_params),
         reg_params=jax.tree.map(jnp.copy, initial_player_params),
         tx=player_optimizer,
-        log_ent_alpha_macro=jnp.log(
-            jnp.array(config.player_ent_coef, dtype=jnp.float32)
-        ),
-        log_ent_alpha_micro=jnp.log(
-            jnp.array(config.player_ent_coef, dtype=jnp.float32)
-        ),
     )
 
     builder_params_init_fn = functools.partial(
@@ -299,20 +278,12 @@ def player_scalar_components(
     Both save paths (save_state here, and the learner's background
     checkpoint writer) go through this, so a leaf added to the TrainState
     cannot be persisted by one path and silently dropped by the other —
-    which is exactly how the entropy-floor dual temperatures went unsaved
-    from the day they landed.
-
-    The temperatures belong here rather than in `params`: they are
-    controller state, not parameters. Resuming without them resets the
-    dual ascent to config init — measured on ckpt_00067000, that is
-    alpha_macro 0.075 → 0.05 and alpha_micro 0.005 → 0.05, a 10x jump on
-    the axis the controller had deliberately driven to its floor.
+    which is exactly how the (since-removed) entropy-floor dual
+    temperatures went unsaved from the day they landed.
     """
     return dict(
         step_count=player_state.step_count,
         frame_count=player_state.frame_count,
-        log_ent_alpha_macro=player_state.log_ent_alpha_macro,
-        log_ent_alpha_micro=player_state.log_ent_alpha_micro,
     )
 
 
@@ -332,21 +303,13 @@ def apply_player_scalars(
     scalars: dict[str, Any],
 ) -> Porygon2PlayerTrainState:
     """Inverse of `player_scalar_components`: put a checkpoint's scalar
-    block back onto a live TrainState.
-
-    A key the checkpoint does not carry keeps the LIVE state's value, so a
-    checkpoint written before the dual temperatures were persisted resumes
-    at config init — the old behaviour — instead of raising.
+    block back onto a live TrainState. Keys this state does not carry —
+    e.g. the removed entropy-floor temperatures in a pre-2026-08-30
+    checkpoint — are simply ignored.
     """
     return player_state.replace(
         step_count=scalars["step_count"],
         frame_count=scalars["frame_count"],
-        log_ent_alpha_macro=scalars.get(
-            "log_ent_alpha_macro", player_state.log_ent_alpha_macro
-        ),
-        log_ent_alpha_micro=scalars.get(
-            "log_ent_alpha_micro", player_state.log_ent_alpha_micro
-        ),
     )
 
 

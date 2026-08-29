@@ -366,9 +366,9 @@ class ActionAxisMasks(NamedTuple):
     policy slice; the Q slice is unchanged.
 
     Row predicates are returned bare — each consumer combines them with its
-    own row mask (`q_mask` for the critic panels, `policy_mask` for the
-    policy loss), because those differ deliberately: policy_mask drops
-    forced single-option rows, q_mask keeps them.
+    own row mask (`acted_mask` for the outcome panels, `policy_mask` for
+    the policy loss), because those differ deliberately: policy_mask drops
+    forced single-option rows, acted_mask keeps them.
     """
 
     switch_cells: jax.Array
@@ -429,41 +429,34 @@ def critic_outcome_telemetry(
     game_length: jax.Array,
     game_step_offset: jax.Array,
     v_target: jax.Array,
-    onestep_label: jax.Array,
     flat_action_mask: jax.Array,
     masks: ActionAxisMasks,
-    q_mask: jax.Array,
+    acted_mask: jax.Array,
     value_mask: jax.Array,
 ) -> dict[str, jax.Array]:
     """Step-1 panels of docs/critic-weakness-analysis.md — the per-row
     JOINT statistics wandb's pooled means could not give, computed from
     the completed-game outcome carried on every chunk (Trajectory.
-    game_outcome). Shapes: game_* (1, B); v_target / onestep_label /
-    onestep_label / q_mask / value_mask (T, B); flat_action_mask
-    (T, B, A). Every panel is NaN, not 0, when its slice is empty in this
-    batch.
+    game_outcome). Shapes: game_* (1, B); v_target / acted_mask /
+    value_mask (T, B); flat_action_mask (T, B, A). Every panel is NaN,
+    not 0, when its slice is empty in this batch.
 
     The label-variance panels and the CRITIC half of the matched-V table
-    retired with the advantage head on 2026-08-29 -- both read the Q
-    readout. What is left is the half that never needed it: the REALISED
-    outcome gap, which is a property of the games, not of any critic.
+    retired with the advantage head on 2026-08-29, and the one-step-label
+    panels (v_onestep_r2, q_target_edge_frac) with the last of the Q
+    machinery on 2026-08-30. What is left never needed either: the
+    REALISED outcome gap, a property of the games, not of any critic.
     - mv_bin{i}_*: matched-V table on real-choice rows (a move and a
       switch both legal), binned by the target V head's own V(s):
-      realised outcome of voluntary switches vs moves, the critic's
-      mean-over-legal-cells gap in the same bin, and counts (per-batch
-      n is small; SE comes from n summed over a window, not per step).
+      realised outcome of voluntary switches vs moves, and counts
+      (per-batch n is small; SE comes from n summed over a window).
     - v_outcome_r2_{all,early,mid,late,prev_switch,prev_move}: the V
       head against the realised outcome (offline reference 0.265),
       split by game phase and by whether the PREVIOUS row's action was
       a switch (row 0 of a chunk has no local predecessor: excluded).
-    - v_onestep_r2: V(s) against r + V(s') — how much of the one-step
-      label V already knows (offline corr 0.95).
-    - q_target_edge_frac: one-step TD labels at the support edge, i.e.
-      |r + gamma*V(s')| ~ 1 — the fraction of rows whose label sits at a
-      decided outcome. A decidedness readout, not a clipping proxy:
-      nothing clips this label (gamma = 1 with terminal-only reward
-      bounds it by construction).
-    - q_support_*: storage- and row-level voluntary-switch support.
+    - {vol,forced}_switch_rows / chunk_vol_switch_frac: row- and
+      storage-level voluntary-switch supply (renamed off the
+      player_q_support_* prefix 2026-08-30).
     """
     f32 = jnp.float32
     T = v_target.shape[0]
@@ -471,14 +464,12 @@ def critic_outcome_telemetry(
     valid_g = jnp.isfinite(G)
     G = jnp.where(valid_g, G, 0.0)
     v_target = v_target.astype(f32)
-    onestep_label = onestep_label.astype(f32)
 
-    vol_mask = q_mask & masks.taken_switch & masks.has_move
-    forced_mask = q_mask & masks.taken_switch & jnp.logical_not(masks.has_move)
-    q_mask & jnp.logical_not(masks.taken_switch)
+    vol_mask = acted_mask & masks.taken_switch & masks.has_move
+    forced_mask = acted_mask & masks.taken_switch & jnp.logical_not(masks.has_move)
 
     logs: dict[str, jax.Array] = {}
-    rows = q_mask & valid_g & masks.has_both
+    rows = acted_mask & valid_g & masks.has_both
     for i, (lo, hi) in enumerate(zip(MATCHED_V_EDGES[:-1], MATCHED_V_EDGES[1:])):
         b = rows & (v_target >= lo) & (v_target < hi)
         bv = b & masks.taken_switch
@@ -534,17 +525,8 @@ def critic_outcome_telemetry(
         logs[f"player_v_outcome_bias_{name}"] = masked_mean(
             v_target - G, vm & known_prev & m
         )
-    logs["player_v_onestep_r2"] = masked_r2(v_target, onestep_label, q_mask)
 
-    # How often the one-step V label is pinned at the reward support's edge.
-    # `onestep_label` IS what q_label was -- the same array was passed under
-    # both names -- so the panel is unchanged and stays comparable.
-    logs["player_q_target_edge_frac"] = masked_mean(
-        (jnp.abs(onestep_label) >= 0.999).astype(f32), q_mask
-    )
-    logs["player_q_support_chunk_vol_switch_frac"] = (
-        vol_mask.any(axis=0).astype(f32).mean()
-    )
-    logs["player_q_support_vol_switch_rows"] = vol_mask.sum().astype(f32)
-    logs["player_q_support_forced_switch_rows"] = forced_mask.sum().astype(f32)
+    logs["player_chunk_vol_switch_frac"] = vol_mask.any(axis=0).astype(f32).mean()
+    logs["player_vol_switch_rows"] = vol_mask.sum().astype(f32)
+    logs["player_forced_switch_rows"] = forced_mask.sum().astype(f32)
     return logs

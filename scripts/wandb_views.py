@@ -157,10 +157,10 @@ def rl_sections():
         ),
         ws.Section(
             # What is left of the critic section after the advantage head
-            # retired (2026-08-29). Every panel that read a Q readout went
-            # with it; these read the one-step V LABEL and the taken-action
-            # coverage, which are properties of the data, not of any head --
-            # which is exactly why they outlived three critic designs.
+            # retired (2026-08-29) and the one-step-label panels went with
+            # the last of the Q machinery (2026-08-30). These read
+            # taken-action coverage — a property of the data, not of any
+            # head, which is exactly why it outlived three critic designs.
             name="1.5 · Switch evidence",
             is_open=True,
             panels=[
@@ -171,8 +171,8 @@ def rl_sections():
                     # flesh, whatever the head looks like.
                     "Training coverage by modality",
                     [
-                        "player_q_switch_target_frac",
-                        "player_q_voluntary_switch_target_frac",
+                        "player_taken_switch_frac",
+                        "player_taken_voluntary_switch_frac",
                     ],
                 ),
                 lp(
@@ -204,22 +204,10 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Head-independent: mean one-step return after a
-                    # voluntary switch vs after a move, over states offering
-                    # both. If the DATA says switches lose, a collapsing
-                    # switch rate is honest and the fix is opponent pressure
-                    # and coverage, not the update rule.
-                    "Empirical returns: voluntary switch vs move",
-                    [
-                        "player_q_target_voluntary_switch",
-                        "player_q_target_move",
-                    ],
-                ),
-                lp(
                     "Voluntary-switch rows per batch",
                     [
-                        "player_q_support_vol_switch_rows",
-                        "player_q_support_forced_switch_rows",
+                        "player_vol_switch_rows",
+                        "player_forced_switch_rows",
                     ],
                 ),
             ],
@@ -260,10 +248,10 @@ def rl_sections():
                     ["player_ref_kl", "player_reg_snapped"],
                 ),
                 lp(
-                    # Entropy bonus value (alpha-weighted since 2026-08-28)
-                    # and the two normalised entropies. A cliff here now
-                    # means the CONTROLLER is losing at its alpha ceiling,
-                    # not that a static coef needs a bump.
+                    # Plain joint entropy bonus (static player_ent_coef,
+                    # 2026-08-30 — the dual controllers are gone, so a
+                    # cliff here is the static coef losing, watched not
+                    # auto-corrected).
                     "Entropy bonus & abort watch",
                     [
                         "player_loss_entropy",
@@ -272,37 +260,15 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # The per-axis normalised entropies the floor holds
-                    # (targets player_ent_target_{macro,micro} = 0.5).
-                    # micro_taken staying off its floor on switch-heavy
-                    # batches is the which-axis plasticity signal.
-                    "Entropy floor: per-axis normalised entropies",
+                    # Per-axis normalised entropies, OBSERVERS since
+                    # 2026-08-30: macro dying while the joint H holds is
+                    # the modality-collapse shape the global panel above
+                    # cannot see.
+                    "Per-axis normalised entropies (observers)",
                     [
                         "player_entropy_macro",
                         "player_entropy_micro_taken",
                     ],
-                ),
-                lp(
-                    # The dual temperatures (2026-08-28). Equilibrium away
-                    # from both bounds = the floor holds at finite cost;
-                    # pinned at alpha_max (0.5) = the ask is infeasible
-                    # against the PG at this bound — the abort instrument;
-                    # at alpha_min = the axis holds itself for free.
-                    "Entropy floor: dual temperatures alpha",
-                    [
-                        "player_ent_alpha_macro",
-                        "player_ent_alpha_micro",
-                    ],
-                    log_y=True,
-                ),
-                lp(
-                    # The zero-avoiding term: forward KL from UNIFORM, the
-                    # one force in the bracket that is not pi-prefactored and
-                    # so the only one still acting on an abandoned cell.
-                    # Read against prob_switch -- rising mass with this
-                    # falling is the term doing its job and then relaxing.
-                    "Zero-avoiding KL & switch mass",
-                    ["player_loss_uniform_kl", "player_policy_prob_switch"],
                 ),
                 lp(
                     # Modality decomposition of the two throttles on any
@@ -410,7 +376,7 @@ def rl_sections():
                     # Outcome calibration of the V head (offline 0.265 on
                     # fresh on-policy games). prev_switch vs prev_move is
                     # the post-switch pessimism read.
-                    "V outcome R²: all / phase / after switch vs move; V vs one-step",
+                    "V outcome R²: all / phase / after switch vs move",
                     [
                         "player_v_outcome_r2_all",
                         "player_v_outcome_r2_early",
@@ -418,7 +384,6 @@ def rl_sections():
                         "player_v_outcome_r2_late",
                         "player_v_outcome_r2_prev_switch",
                         "player_v_outcome_r2_prev_move",
-                        "player_v_onestep_r2",
                     ],
                     smooth=0.99,
                 ),
@@ -435,14 +400,11 @@ def rl_sections():
                     smooth=0.99,
                 ),
                 lp(
-                    # Storage-level (chunks holding a voluntary switch) and
-                    # optimisation-level (loss share) support — the
-                    # acceptance measure for the Step-2 ramp and any row
-                    # weighting.
-                    "Q support: loss share by modality, chunk frac, edge frac",
+                    # Storage-level support: fraction of stored chunks
+                    # holding at least one voluntary switch.
+                    "Voluntary-switch chunk fraction",
                     [
-                        "player_q_support_chunk_vol_switch_frac",
-                        "player_q_target_edge_frac",
+                        "player_chunk_vol_switch_frac",
                     ],
                 ),
                 lp(
@@ -456,8 +418,8 @@ def rl_sections():
                     # 3.9 (33k), halving every ~8k.
                     "Voluntary-switch rows per batch (absorbing floor = 1.0)",
                     [
-                        "player_q_support_vol_switch_rows",
-                        "player_q_support_forced_switch_rows",
+                        "player_vol_switch_rows",
+                        "player_forced_switch_rows",
                     ],
                     log_y=True,
                 ),
@@ -468,7 +430,7 @@ def rl_sections():
                     "Reference cycle & switch support",
                     [
                         "player_ref_kl",
-                        "player_q_voluntary_switch_target_frac",
+                        "player_taken_voluntary_switch_frac",
                         "player_reg_snapped",
                     ],
                 ),

@@ -323,34 +323,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
 
-    # Zero-avoiding term: forward KL from UNIFORM to the policy, over legal
-    # cells, inside the pg bracket beside the entropy bonus and the magnet.
-    # Per-logit gradient is exactly pi_b - 1/k -- bounded by 1, zero-sum, and
-    # with NO pi prefactor, which is what makes it the only force here still
-    # acting on a cell at pi = 1e-6. Its reference is a CONSTANT, so unlike
-    # the four retired support-anchor phases it cannot collapse, cannot be
-    # ratcheted flat by re-snapping from an already-collapsing policy, and
-    # cannot invert on the modality-level sign of Q^pi.
-    #
-    # Sized against the entropy duals rather than against the surrogate: both
-    # act on every legal cell of every row, and alpha lives in
-    # [0.005, 0.5]. Set 0.0 for a control arm -- that is bit-identical to
-    # having no term at all.
-    #
-    # (player_q_coef, the all-action Q critic's Huber weight, sat here until
-    # 2026-08-29. It went with the advantage head: the policy stopped reading
-    # it at the NashPG switch, leaving it a matched control for an
-    # architecture that no longer exists.)
-    player_uniform_kl_coef: float = 0.05
-    # No trace parameter since 2026-08-23 (Step 3): the residual critic
-    # regresses on the TD(0) label r + gamma*V_win_target(s'). Retrace at
-    # q_lambda 1.0 / pi lambda 0.8 (the outcome chain within the chunk)
-    # is in git history; the Step-6 probe showed the categorical head
-    # fitting those labels through a state-only route, which the residual
-    # form closes. Since 2026-08-26 the policy no longer reads this stack
-    # — it is the matched-control observer (same modules as the policy
-    # head under a different loss) and the Retrace value baseline.
-    #
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
     # pi/mu with a batch-normalised v-trace advantage from V, plus a
@@ -371,10 +343,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # previous logit-force loss needed a force clip, centred logits and
     # b1=0 to contain.
     player_ppo_clip: float = 0.2
-    # Which surrogate policy_gradient_loss runs for the player: "ppo"
-    # (NashPG's own rule) or "spo" (the builder's smooth quadratic) for
-    # an A/B. Static config: switching costs one recompile at launch.
-    player_pg_objective: str = "ppo"
+    # Which surrogate policy_gradient_loss runs for the player: "spo"
+    # (the smooth quadratic the builder also runs, 2026-08-30) or "ppo"
+    # (NashPG's own rule) for an A/B. Static config: switching costs one
+    # recompile at launch.
+    player_pg_objective: str = "spo"
     # Differentiated REVERSE KL(pi || pi_reg) magnet, NashPG's mag_coef —
     # their Algorithm 4 line 8 / eq. 12 verbatim, D_KL(pi_theta(.|o) ||
     # rho(.|o)) under E_{o~pi}, i.e. the OPTIMISED policy is the first
@@ -393,56 +366,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # never starts. switch_ratio through the 13k wire is the acceptance
     # gate; the analytic-shift form is in git history if it fails.
     player_mag_coef: float = 0.2
-    # Entropy bonus, differentiated — FACTORISED 2026-08-27 (the Oct–Nov
-    # 2025 form rebuilt on the composed head): the coefficient now scales
-    # H(macro) + H(micro | taken modality), each masked-AVERAGED over its
-    # own row set (macro: >= 2 live modalities; micro: taken modality has
-    # >= 2 legal cells). The joint H it replaces decomposes as H(macro) +
-    # sum_m pi_m * H(micro|m) — its within-switch pressure died in
-    # proportion to switch mass, defunding the which-axis exactly as the
-    # modality shrank, and offered one budget payable wherever entropy was
-    # cheapest (the measured blindness: global 0.755 while modality 0.22).
-    # Unit weights are per-axis budgets; the masked average makes a rare
-    # taken-modality's term inverse-frequency amplified; and it is a
-    # temperature — per axis the equilibrium is pi ∝ exp(A/coef), so live
-    # evidence beats it wherever it exists (the injection post-mortem's
-    # temperature-vs-target law).
-    #
-    # ENTROPY FLOOR (2026-08-28): the two per-axis coefficients are now
-    # ADAPTIVE dual variables (SAC-style: alpha rises while its axis's
-    # normalised entropy sits below target, relaxes above it), stored as
-    # log-space leaves on the player TrainState — traced, so the
-    # controller varies them with NO recompile (the run-1326 rule) — and
-    # updated by loss.entropy_floor_step after each grad step, frozen on
-    # batches with no rows for an axis (average() reads 0.0 there, which
-    # would spuriously inflate alpha). player_ent_coef is the INIT of
-    # both alphas. This is the CLAUDE.md-4 prescription firing: four
-    # static-coef retunes each collapsed (0.01/0.05/0.1/0.2), so the coef
-    # gets a controller with a target-entropy set-point. The controller
-    # still only picks the TEMPERATURE — which cells hold the mass stays
-    # decided by evidence, so it cannot erase within-modality
-    # discrimination the way the mass-injection family did. Targets are
-    # NORMALISED (fraction of each level's own log k): the Nov-2025
-    # stable lineage's raw action entropy (0.5-1.4 nats lifetime,
-    # generous-sky-444) is the same band today's GLOBAL H occupies — what
-    # distinguished it is that entropy stayed distributed across BOTH
-    # axes (the modality axis never died), which only the per-axis
-    # normalised floors can see. 0.5 sits between healthy launch
-    # (normalised modality entropy 0.836) and collapse (0.23). Target
-    # 0.0 = that axis's controller OFF (alpha frozen at init — exactly
-    # the static-coef behaviour). Alpha pinned at max = the ask is
-    # infeasible against the PG at this bound — the abort instrument,
-    # never a reason to widen the bound silently.
-    player_ent_coef: float = 0.05
-    player_ent_target_macro: float = 0.5
-    player_ent_target_micro: float = 0.5
-    # Dual step size on log alpha per train step: at a persistent error
-    # of 0.5 an e-fold takes ~2k steps, so 0.05 -> 0.5 (ln 10 = 2.3
-    # e-folds) in ~4.6k steps — fast against the 13k collapse wire, slow
-    # against batch noise.
-    player_ent_alpha_lr: float = 1e-3
-    player_ent_alpha_min: float = 0.005
-    player_ent_alpha_max: float = 0.5
+    # Entropy bonus, differentiated — NashPG's ent_coef verbatim
+    # (2026-08-30): the plain JOINT entropy over legal cells, one static
+    # coefficient. Up to a constant this is the reverse KL to uniform.
+    # The per-axis split (H(macro) + H(micro|taken), 2026-08-27) and the
+    # SAC-style dual temperatures holding each at a normalised target
+    # (2026-08-28) are removed with the forward-KL-to-uniform term — the
+    # per-level entropies survive as OBSERVER panels only
+    # (loss.factorised_entropies). Revert handles in the CLAUDE.md
+    # ledgers.
+    player_ent_coef: float = 0.01
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,
     # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every

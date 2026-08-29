@@ -58,31 +58,30 @@ def _rows(T=4, B=2):
     action = np.full((T, B), MOVE, np.int32)
     action[1, 0] = SWITCH
     action[0, 1] = SWITCH
-    q_mask = np.ones((T, B), bool)
-    q_mask[-1] = False  # bootstrap-only final row
+    acted_mask = np.ones((T, B), bool)
+    acted_mask[-1] = False  # bootstrap-only final row
     v = np.array([[-0.9, 0.5], [-0.1, 0.5], [0.3, 0.7], [0.4, 0.9]], np.float32)
-    return flat, action, q_mask, v
+    return flat, action, acted_mask, v
 
 
 def test_critic_outcome_telemetry_counts_and_splits():
     T, B = 4, 2
-    flat, action, q_mask, v = _rows(T, B)
+    flat, action, acted_mask, v = _rows(T, B)
     logs = critic_outcome_telemetry(
         game_outcome=jnp.array([[1.0, -1.0]]),
         game_length=jnp.array([[9, 9]]),
         game_step_offset=jnp.array([[0, 6]]),
         v_target=jnp.asarray(v),
-        onestep_label=jnp.asarray(v) * 0.5,
         flat_action_mask=jnp.asarray(flat),
         masks=action_axis_masks(jnp.asarray(flat), jnp.asarray(action)),
-        q_mask=jnp.asarray(q_mask),
+        acted_mask=jnp.asarray(acted_mask),
         value_mask=jnp.ones((T, B), bool),
     )
     logs = {k: float(v) for k, v in logs.items()}
     # support: one voluntary switch row (chunk 0), one forced (chunk 1)
-    assert logs["player_q_support_vol_switch_rows"] == 1.0
-    assert logs["player_q_support_forced_switch_rows"] == 1.0
-    assert logs["player_q_support_chunk_vol_switch_frac"] == 0.5
+    assert logs["player_vol_switch_rows"] == 1.0
+    assert logs["player_forced_switch_rows"] == 1.0
+    assert logs["player_chunk_vol_switch_frac"] == 0.5
     # matched-V: every real-choice masked row lands in exactly one bin
     n_vol = sum(
         logs[f"player_mv_bin{i}_n_vol"] for i in range(len(MATCHED_V_EDGES) - 1)
@@ -121,20 +120,18 @@ def test_critic_outcome_telemetry_counts_and_splits():
 
 def test_truncated_game_outcome_nan_drops_outcome_panels_only():
     T, B = 4, 2
-    flat, action, q_mask, v = _rows(T, B)
+    flat, action, acted_mask, v = _rows(T, B)
     logs = critic_outcome_telemetry(
         game_outcome=jnp.array([[jnp.nan, jnp.nan]]),
         game_length=jnp.array([[9, 9]]),
         game_step_offset=jnp.array([[0, 6]]),
         v_target=jnp.asarray(v),
-        onestep_label=jnp.asarray(v),
         flat_action_mask=jnp.asarray(flat),
         masks=action_axis_masks(jnp.asarray(flat), jnp.asarray(action)),
-        q_mask=jnp.asarray(q_mask),
+        acted_mask=jnp.asarray(acted_mask),
         value_mask=jnp.ones((T, B), bool),
     )
     assert np.isnan(float(logs["player_v_outcome_r2_all"]))
     assert np.isnan(float(logs["player_mv_pooled_gap_realised"]))
-    # one-step panels need no outcome
-    assert not np.isnan(float(logs["player_v_onestep_r2"]))
-    assert float(logs["player_q_support_vol_switch_rows"]) == 1.0
+    # the supply counters need no outcome
+    assert float(logs["player_vol_switch_rows"]) == 1.0

@@ -752,6 +752,27 @@ PUBLIC row — a two-hop path over 61 rows now rather than a maze, which is the
 reason to EXPECT probe C to move, but it is an expectation and probe C is the
 instrument either way.
 
+## Removal ledger — 2026-08-30 NashPG-verbatim bracket
+
+One commit (the revert handle). The player policy bracket is the reference
+actor loss verbatim (ntu-agents/nashpg `update_agent.py`, mag_divergence
+"kl"): `surrogate + ent_coef*(-H_joint) + mag_coef*KL(pi || pi_reg)`, with
+`player_pg_objective` defaulting to "spo" (the smooth quadratic; "ppo" stays
+the A/B) and `player_ent_coef` 0.01 STATIC on the plain JOINT entropy — which
+is, up to a constant, the reverse KL to uniform, i.e. NashPG's own form.
+
+| mechanism | symbols | why |
+|---|---|---|
+| Entropy-floor dual controllers + per-level entropy loss | `log_ent_alpha_{macro,micro}` TrainState leaves + their ckpt scalar plumbing (old ckpts still load; `apply_player_scalars` ignores their alpha keys), `loss.entropy_floor_step`, the per-axis loss terms, `player_ent_target_{macro,micro}` / `player_ent_alpha_{lr,min,max}`, `tests/test_entropy_floor.py` | on wy8m50ic BOTH alphas sat at the 0.005 MINIMUM for the whole 185k-step run while H_macro held 0.45–0.70 — the flat trunk holds its entropy for free, so the controller was pure machinery (the §10 rule firing again). `factorised_entropies` and the `player_entropy_{macro,micro_taken}` panels survive as OBSERVERS — macro dying while joint H holds is the collapse shape the global panel cannot see, and nothing defends the floor any more |
+| Uniform-KL zero-avoider | `loss.uniform_kl_rows`, `player_uniform_kl_coef`, its gradient test | reference alignment (NashPG carries no mass-independent restorer). Given up KNOWINGLY — this was the only pi-prefactor-free force in the bracket; `prob_switch` / `player_vol_switch_rows` are the watch, and the term is one commit away if the collapse returns |
+| Last Q machinery | `targets.compute_q_onestep_targets`, `q_mask` (→ `acted_mask`), the one-step-label panels (`player_q_target_*`, `player_v_onestep_r2`, `player_q_target_edge_frac`), dead `pi_target` compute and two bare no-op statements | the labels had no consumer since the Q head retired 2026-08-29. Supply counters KEPT, renamed off the q prefix: `player_{vol,forced}_switch_rows`, `player_chunk_vol_switch_frac`, `player_taken_{,voluntary_}switch_frac` — fresh wandb continuity by design (the coma→neurd precedent) |
+
+Also in: `masked_policy` (exp→mask→renormalise written once in train_step),
+wandb views tidied and re-saved. Fresh lineage from step 0 (the loss moved);
+wy8m50ic archived at ~185k. Same acceptance table as the flat-trunk gate,
+plus the entropy observers now watched UNDEFENDED — a macro-entropy cliff
+under the static 0.01 is the abort, answered by re-instating the floor or
+the uniform-KL as their own commits, never by a silent coef bump.
 
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 

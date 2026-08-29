@@ -92,25 +92,19 @@ def test_train_step_smoke():
 
     assert int(new_player_state.step_count) == 1
     for key in (
-        # NashPG policy update: the PPO surrogate, its clip occupancy, the
-        # differentiated entropy/magnet terms, the zero-avoiding KL and the
-        # batch-advantage statistics.
+        # NashPG policy update: the surrogate, its clip occupancy, the
+        # differentiated entropy/magnet terms and the batch-advantage
+        # statistics.
         "player_loss_pg",
         "player_ppo_clip_frac",
         "player_loss_entropy",
         "player_ref_kl",
-        "player_loss_uniform_kl",
         "player_pg_adv_mean",
         "player_pg_adv_std",
         "player_reg_snapped",
         "player_loss_v_win",
         "player_loss_kl",
-        # Entropy-floor controller: per-axis dual temperatures and the row
-        # occupancy that gates their update.
-        "player_ent_alpha_macro",
-        "player_ent_alpha_micro",
-        "player_ent_rows_macro",
-        "player_ent_rows_micro",
+        # Per-level entropy observers.
         "player_entropy_macro",
         "player_entropy_micro_taken",
         # Modality-resolved staleness: de-averaged actor KL and the
@@ -122,12 +116,9 @@ def test_train_step_smoke():
         "player_isr_move",
         "player_isr_below1_switch_voluntary",
         "player_isr_below1_move",
-        # Switch evidence, head-independent: coverage and the one-step
-        # label's conditional means.
-        "player_q_switch_target_frac",
-        "player_q_voluntary_switch_target_frac",
-        "player_q_target_voluntary_switch",
-        "player_q_target_move",
+        # Realised behaviour frequency on the stay/switch axis.
+        "player_taken_switch_frac",
+        "player_taken_voluntary_switch_frac",
         # Policy mass by modality.
         "player_policy_prob_switch",
         "player_policy_prob_move",
@@ -154,13 +145,11 @@ def test_train_step_smoke():
     for key in (
         "player_mv_bin0_gap_realised",
         "player_v_outcome_r2_all",
-        "player_v_onestep_r2",
     ):
         assert key in logs, key
     for key in (
-        "player_q_support_vol_switch_rows",
-        "player_q_support_chunk_vol_switch_frac",
-        "player_q_target_edge_frac",
+        "player_vol_switch_rows",
+        "player_chunk_vol_switch_frac",
     ):
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
 

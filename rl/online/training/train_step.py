@@ -23,17 +23,14 @@ from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
-    entropy_floor_step,
     factorised_entropies,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
-    uniform_kl_rows,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
-    compute_q_onestep_targets,
     reference_kl,
 )
 from rl.online.training.telemetry import (
@@ -47,6 +44,13 @@ from rl.online.training.telemetry import (
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
+
+
+def masked_policy(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
+    """f32 probabilities over legal cells: exp(log_policy), illegal cells
+    zeroed, renormalised so the legal mass sums to 1."""
+    policy = jnp.exp(log_policy.astype(jnp.float32)) * legal_mask
+    return policy / jnp.maximum(policy.sum(axis=-1, keepdims=True), 1e-8)
 
 
 def train_step(
@@ -199,43 +203,27 @@ def train_step(
     # in the POLICY objective and uses no reward transform
     # (arXiv:2510.18183), so no penalty stream enters the labels or
     # bootstraps.
-    # The one-step V label, r + gamma * V_target(s'). It fed the Q critic's
-    # Huber regression until 2026-08-29; the `player_q_*` panels below still
-    # read it, and their names are kept because the QUANTITY is unchanged --
-    # they were never a Q readout, only labels the Q loss also consumed.
-    q_label = compute_q_onestep_targets(batch, v_target, config)
     # An action was actually taken here — including on forced single-option
     # steps, which policy_mask excludes — but not on terminal rows.
-    q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
+    acted_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
     # One derivation of the switch/move predicates for the whole step —
     # the panels below, critic_outcome_telemetry and the policy-loss
     # telemetry all read THESE, so they cannot drift apart again
     # (telemetry.ActionAxisMasks).
     axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
-    axis.valid_switch
-    axis.valid_move
-    has_both = axis.has_both
-    # Discriminators for a negative gap: starved switch cells vs a
-    # genuine judgement. The Huber loss only trains the taken action's cell,
-    # so a collapsing switch_ratio starves voluntary-switch cells of
-    # gradient while forced replacements (post-faint, no legal move)
-    # keep flowing regardless of policy. Coverage says how bad the
-    # starvation is; the conditional one-step-label means are the
-    # head-independent answer to "do voluntary switches actually lead
-    # to worse outcomes than moves from the same kind of state?".
     taken_switch = axis.taken_switch
     has_move = axis.has_move
-    q_voluntary_switch_mask = q_mask & taken_switch & has_move
-    q_forced_switch_mask = q_mask & taken_switch & jnp.logical_not(has_move)
-    q_move_mask = q_mask & jnp.logical_not(taken_switch)
-    training_logs["player_q_switch_target_frac"] = average(
-        taken_switch.astype(jnp.float32), q_mask
+    voluntary_switch_mask = acted_mask & taken_switch & has_move
+    forced_switch_mask = acted_mask & taken_switch & jnp.logical_not(has_move)
+    move_mask = acted_mask & jnp.logical_not(taken_switch)
+    # Realised behaviour frequency on the axis every collapse formed in
+    # (RENAMED off the player_q_* prefix 2026-08-30 with the last of the Q
+    # machinery — same quantities, fresh wandb continuity by design).
+    training_logs["player_taken_switch_frac"] = average(
+        taken_switch.astype(jnp.float32), acted_mask
     )
-    training_logs["player_q_voluntary_switch_target_frac"] = average(
-        (taken_switch & has_move).astype(jnp.float32), q_mask
-    )
-    training_logs["player_q_target_voluntary_switch"] = average(
-        q_label, q_voluntary_switch_mask
+    training_logs["player_taken_voluntary_switch_frac"] = average(
+        (taken_switch & has_move).astype(jnp.float32), acted_mask
     )
 
     # Off-policy attenuation audit, split by the TAKEN modality. isr =
@@ -254,40 +242,32 @@ def train_step(
     # mean (isr is heavy-tailed on the upside).
     isr_f32 = target_actor_ratio.astype(jnp.float32)
     training_logs["player_isr_switch_voluntary"] = average(
-        isr_f32, q_voluntary_switch_mask
+        isr_f32, voluntary_switch_mask
     )
-    training_logs["player_isr_switch_forced"] = average(isr_f32, q_forced_switch_mask)
-    training_logs["player_isr_move"] = average(isr_f32, q_move_mask)
+    training_logs["player_isr_switch_forced"] = average(isr_f32, forced_switch_mask)
+    training_logs["player_isr_move"] = average(isr_f32, move_mask)
     training_logs["player_isr_below1_switch_voluntary"] = average(
-        (isr_f32 < 1.0).astype(jnp.float32), q_voluntary_switch_mask
+        (isr_f32 < 1.0).astype(jnp.float32), voluntary_switch_mask
     )
     training_logs["player_isr_below1_move"] = average(
-        (isr_f32 < 1.0).astype(jnp.float32), q_move_mask
+        (isr_f32 < 1.0).astype(jnp.float32), move_mask
     )
-    training_logs["player_q_target_move"] = average(q_label, q_move_mask & has_both)
 
     if not isinstance(batch.game_outcome, tuple):
-        # Step-1 panels (docs/critic-weakness-analysis.md). Since Step 3
-        # the one-step label IS the Q label; the outcome/onestep split
-        # of the label-variance panels is kept as the record of why.
+        # Step-1 panels (docs/critic-weakness-analysis.md): the realised-
+        # outcome instruments, a property of the games, not of any critic.
         training_logs.update(
             critic_outcome_telemetry(
                 game_outcome=batch.game_outcome,
                 game_length=batch.game_length,
                 game_step_offset=batch.game_step_offset,
                 v_target=v_target,
-                onestep_label=q_label,
                 flat_action_mask=flat_action_mask,
                 masks=axis,
-                q_mask=q_mask,
+                acted_mask=acted_mask,
                 value_mask=value_mask,
             )
         )
-    pi_target = (
-        jnp.exp(player_target_pred.action_head.log_policy.astype(jnp.float32))
-        * flat_action_mask
-    )
-    pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
     if not isinstance(batch.reuse_count, tuple):
         fresh_cols = batch.reuse_count[0] == 0
         ~fresh_cols
@@ -376,21 +356,10 @@ def train_step(
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # JOINT PPO surrogate (2026-08-28, reverting the 2026-08-27
-        # per-level split): one pi/mu ratio on the taken action, one clip.
-        # The factorised-PPO lineage answered its own gate — two trust
-        # regions did not slow the collapse (type_scale_switch trained
-        # NEGATIVE, prob_switch 0.131 -> 0.02 by 77k) — and the 77638 BR
-        # probe located the deficit in evidence supply, not trust-region
-        # geometry. The per-level ENTROPY terms below STAY: they are the
-        # axis handles the entropy-floor controllers act on, and their row
-        # masks (macro >= 2 live modalities, micro >= 2 legal cells in the
-        # taken modality) are theirs now.
+        # JOINT surrogate: one pi/mu ratio on the taken action (the
+        # 2026-08-27 per-level split is reverted — 2026-08-28 ledger).
         learner_log_policy = learner_action_head.log_policy
-        pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
-        pi_learner = pi_learner / jnp.maximum(
-            pi_learner.sum(axis=-1, keepdims=True), 1e-8
-        )
+        pi_learner = masked_policy(learner_log_policy, flat_action_mask)
 
         macro_valid = policy_mask & (axis.num_legal_modalities >= 2)
         micro_valid = policy_mask & (axis.taken_modality_count >= 2)
@@ -402,29 +371,18 @@ def train_step(
             threshold=config.player_ppo_clip,
             objective=config.player_pg_objective,
         )
-        # Per-level entropy (2026-08-27, the Oct–Nov 2025 form): unit-weight
-        # H(macro) + H(micro | taken modality), each masked-averaged over
-        # its OWN row set. The joint entropy this replaces weighted the
-        # within-switch term by pi_macro(switch) — defunding the which-axis
-        # exactly as the modality shrank — and offered one budget the
-        # policy could pay wherever entropy was cheapest. Unit weights are
-        # per-axis budgets; the masked average is inverse-frequency
-        # amplification for rare taken modalities; and as a bonus (not a
-        # target) it is a temperature real advantages beat.
+        # Per-level entropies (macro = modality marginal, micro = within
+        # the taken modality) are OBSERVERS only — the collapse instruments
+        # the acceptance gates read. The regulariser itself is NashPG's:
+        # the plain joint entropy bonus at the static player_ent_coef
+        # (2026-08-30; the per-axis dual temperatures are removed).
         h_macro_rows, h_micro_rows = factorised_entropies(
             learner_log_policy, axis.taken_modality, flat_action_mask
         )
         entropy_macro = average(h_macro_rows, macro_valid)
         entropy_micro_taken = average(h_micro_rows, micro_valid)
-        # Entropy floor (2026-08-28): each axis's temperature is a dual
-        # variable off the train state (log-space; dual-ascent update after
-        # the grad step, loss.entropy_floor_step), holding its NORMALISED
-        # entropy at config.player_ent_target_{macro,micro}. Read here, not
-        # differentiated — the alphas are state leaves, not params.
-        alpha_macro = jnp.exp(player_state.log_ent_alpha_macro)
-        alpha_micro = jnp.exp(player_state.log_ent_alpha_micro)
-        loss_entropy = -(
-            alpha_macro * entropy_macro + alpha_micro * entropy_micro_taken
+        loss_entropy = -average(
+            learner_action_head.entropy.astype(jnp.float32), policy_mask
         )
         # Magnet: full-distribution KL(pi || pi_reg) per row —
         # differentiated through the learner side (reg_log_policy comes
@@ -433,23 +391,6 @@ def train_step(
             learner_log_policy, reg_log_policy, flat_action_mask
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
-
-        # The zero-avoiding term (2026-08-29): forward KL from UNIFORM to the
-        # policy, per-logit gradient exactly pi_b - 1/k. It is the only force
-        # in this bracket that is not pi-prefactored, so it is the only one
-        # still acting on a cell the policy has abandoned -- and its reference
-        # is a constant, so unlike the retired support anchor it cannot be
-        # ratcheted flat by re-snapping from a collapsing policy.
-        loss_uniform_kl = average(
-            uniform_kl_rows(learner_log_policy, flat_action_mask), policy_mask
-        )
-        # The support anchor family (forward KL toward a temperature-raised
-        # / advantage-tilted reference, phases 1-4) was REMOVED 2026-08-27:
-        # every mass-restoring force either erased within-modality
-        # discrimination or taught the mean switch's (losing) value — see
-        # the CLAUDE.md removal ledger. The factorised objective below is
-        # the replacement: the axes get their own trust regions and their
-        # own entropy budgets, and mass is left to follow value.
 
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
@@ -473,11 +414,6 @@ def train_step(
             player_loss_entropy=loss_entropy,
             player_entropy_macro=entropy_macro,
             player_entropy_micro_taken=entropy_micro_taken,
-            # Row occupancy per axis: consumed by the dual update outside
-            # the closure (an axis with no rows this batch freezes its
-            # alpha — average() reads 0.0 there, a spurious full deficit).
-            player_ent_rows_macro=macro_valid.sum().astype(jnp.float32),
-            player_ent_rows_micro=micro_valid.sum().astype(jnp.float32),
             player_ppo_clip_frac=clip_fraction(
                 policy_ratios=learner_actor_ratio,
                 valid=policy_mask,
@@ -494,23 +430,17 @@ def train_step(
             # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
             player_ref_kl=loss_mag,
-            player_loss_uniform_kl=loss_uniform_kl,
         )
         # pg bracket + v + kl.
         loss = (
-            # pg: the NashPG bracket — the PPO surrogate is the only term
-            # that moves the action logits toward return; the entropy
-            # bonus, the magnet and the zero-avoiding KL sit inside the
-            # bracket so one coefficient scales improvement and
-            # regularisation together.
+            # pg: the NashPG bracket verbatim — surrogate + ent_coef *
+            # (-H) + mag_coef * KL(pi || pi_reg), one coefficient scaling
+            # improvement and regularisation together.
             config.player_pg_coef
             * (
-                # loss_entropy carries the per-axis dual temperatures
-                # (player_ent_coef is their INIT, not a live multiplier).
                 loss_pg
-                + loss_entropy
+                + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
-                + config.player_uniform_kl_coef * loss_uniform_kl
             )
             # v: one critic, on the deploy-time information set. The
             # all-action advantage that sat beside it retired 2026-08-29 --
@@ -593,35 +523,6 @@ def train_step(
             config.player_ema_update_rate,
         ),
     )
-    # Entropy-floor dual update (2026-08-28): BEFORE the finite gate below,
-    # so a poisoned batch reverts the alphas along with everything else.
-    # Target 0.0 is that axis's controller OFF — the alpha stays at its
-    # player_ent_coef init, which is exactly the static-coefficient
-    # behaviour (a static python branch: config is a jit-static arg).
-    if config.player_ent_target_macro > 0.0:
-        player_state = player_state.replace(
-            log_ent_alpha_macro=entropy_floor_step(
-                player_state.log_ent_alpha_macro,
-                target=config.player_ent_target_macro,
-                entropy_value=player_logs["player_entropy_macro"],
-                rows=player_logs["player_ent_rows_macro"],
-                alpha_lr=config.player_ent_alpha_lr,
-                alpha_min=config.player_ent_alpha_min,
-                alpha_max=config.player_ent_alpha_max,
-            )
-        )
-    if config.player_ent_target_micro > 0.0:
-        player_state = player_state.replace(
-            log_ent_alpha_micro=entropy_floor_step(
-                player_state.log_ent_alpha_micro,
-                target=config.player_ent_target_micro,
-                entropy_value=player_logs["player_entropy_micro_taken"],
-                rows=player_logs["player_ent_rows_micro"],
-                alpha_lr=config.player_ent_alpha_lr,
-                alpha_min=config.player_ent_alpha_min,
-                alpha_max=config.player_ent_alpha_max,
-            )
-        )
     # A non-finite loss or gradient must never reach the params or the EMA
     # scalars: one poisoned update is permanent, and the next periodic save
     # then overwrites the last good checkpoint with it. Keep the previous
@@ -641,11 +542,6 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            # Post-gate dual temperatures: pinned at player_ent_alpha_max =
-            # the floor is infeasible against the PG at this bound (abort
-            # instrument); back at min = the axis holds itself for free.
-            player_ent_alpha_macro=jnp.exp(player_state.log_ent_alpha_macro),
-            player_ent_alpha_micro=jnp.exp(player_state.log_ent_alpha_micro),
             # Q-head learning readouts: the three-scalar micro gate, the
             # drift-from-init of the zero-init out layers and the pointer
             # kernels, and per-subtree grad norms (pre-clip). A micro
