@@ -415,11 +415,25 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # cancels on one side only: equilibrium mass ~ coef/(k*|A|), so the ask
     # DIVERGES as a cell starves and RELAXES as evidence arrives.
     #
-    # Sized on that equilibrium, not on loss balance: at k ~ 10 and a 0.2
-    # sigma headwind (pg_advantages are unit-std) 0.05 holds ~0.02 mass,
-    # falling to ~0.009 at 0.5 sigma. Set 0.0 for a control arm -- that is
-    # bit-identical to having no term at all.
-    player_uniform_kl_coef: float = 0.05
+    # Sized on that equilibrium, not on loss balance. 0.05 was the first
+    # shipped value and is MEASURED TOO LARGE (2026-08-31, the sp75b/sp75c
+    # matched BR pair): it bought everything it promised on its own axis --
+    # entropy_macro 2.8x the control, prob_switch 4.3x, vol_switch_rows
+    # 7.7x, all held flat where the control collapsed -- and HALVED the
+    # exploit (league_main_v_254992_winrate 0.186 vs 0.343 at 69k, still
+    # below the control's 50k value at 82k). Read the equilibrium as the
+    # binding constraint it became: sp75c's switch mass sat 0.05-0.065 flat
+    # across 35k-82k while the control's tracked value down to 0.015, i.e.
+    # the coefficient was setting the mass, not flooring it.
+    #
+    # 0.025 is the halving arm: mass is linear in coef at fixed |A|, so
+    # ~0.015 (what evidence alone gives) + ~0.02 = ~0.035, separated from
+    # both existing arms. If exploit recovers to near-control at ~2x the
+    # control's mass the trade-off curve has a usable middle; if it stays
+    # depressed the FORM is wrong, not the scale, and the fix is to move
+    # the uniform reference to the MODALITY MARGINAL -- see the ledger.
+    # Set 0.0 for a control arm -- that is bit-identical to no term at all.
+    player_uniform_kl_coef: float = 0.025
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,
     # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every

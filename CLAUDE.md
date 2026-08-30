@@ -838,11 +838,57 @@ identical in init, target and budget and differs by this one term. Read
 `prob_switch` / `entropy_macro` against vm9b7p07 at matched steps;
 `player_loss_uniform_kl` should FALL as mass returns (the term relaxing, not a
 standing tax); the exploitability read is
-`league_main_v_ckpt_00254992_winrate` against the 0.57-0.58 the 77638 probe
-set. **Abort:** the phase-1 shape again — mass rising while the readout stops
+`league_main_v_254992_winrate` against the 0.57-0.58 the 77638 probe set.
+**Abort:** the phase-1 shape again — mass rising while the readout stops
 discriminating (`player_pointer_*` drift flat, entropy at ceiling), or
 `loss_uniform_kl` pinned with switch mass unmoved, which would say the term is
 paying and buying nothing.
+
+**PHASE 1 RESULT (coef 0.05, read at 69k on the matched pair). The abort
+fired on its first clause, and the mechanism is not the scale.** Everything
+the term promised on its own axis arrived, and the BR was half as strong for
+it:
+
+| @ lifetime_step 69k | sp75b control | sp75c uniKL 0.05 |
+|---|---|---|
+| `entropy_macro` | 0.264 | **0.727** |
+| `player_policy_prob_switch` | 0.0151 | **0.0650** |
+| `player_policy_prob_ratio` | 0.060 | **0.330** |
+| `player_vol_switch_rows` | 3 | **23** |
+| `league_main_v_254992_winrate` | **0.343** | 0.186 |
+
+The control collapsed exactly on the recorded schedule (macro 0.94 -> 0.26,
+switch 0.115 -> 0.015, supply 35 -> 3) and sp75c held all of it — so this is
+not "the term failed to fire", it is the term firing hard and costing
+strength. No slower-but-higher story either: control slope 50k->69k
+~0.005/1k, sp75c 50k->82k ~0.0022/1k, and sp75c @82k (0.215) is still under
+the control @50k (0.248). `mag_coef` 0.2 was nowhere near binding in either
+arm (`ref_kl` 0.01-0.03 both), and `ent_coef` 0.01 was identical in both, so
+neither is implicated. One seed, one control — the 2x gap sustained over 50k
+steps is well outside seed noise at this magnitude, but it is a single pair.
+
+**The design error, stated plainly: the term is a ROW flattener, not a
+MODALITY one, and the ledger row above claimed otherwise.** `KL(u || pi)` runs
+over every legal cell of the row, so its `pi_b - 1/k` pull separates moves
+from each other with exactly the force it uses to restore switch mass — it
+buys WHETHER-to-switch and pays in WHICH-move-to-pick. `entropy_micro_taken`
+sat at 0.93 normalised (near-uniform over the taken modality's cells) and was
+NOT trending down, against the control's 0.84 and falling. That is the phase-1
+support-anchor shape, mass without discrimination, which this form was
+asserted to avoid: the constant reference does fix the RATCHET (it cannot be
+walked flat by a re-snapping reference) but says nothing about the
+FLATTENING, and those were conflated when the term was written.
+
+**Next reads, in order.** (1) Cheap: coef 0.025, same form, `sp75d` — mass is
+linear in coef at fixed |A|, so equilibrium ~0.035 against control 0.015 and
+sp75c 0.055. Exploit recovering to near-control at ~2x the control's mass
+means the trade-off curve has a usable middle; exploit still depressed
+falsifies the FORM and not the scale. (2) The structural fix if (1) fails:
+move the uniform reference to the MODALITY MARGINAL — forward KL from uniform
+over modalities, gradient `pi_m - 1/M` with M = 2-3, silent within a modality
+— restoring mass on the axis that dies and leaving every within-modality
+choice to the critic. That is the phase-4 law reached from the other
+direction: the regulariser says WHETHER, never WHICH.
 
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 
