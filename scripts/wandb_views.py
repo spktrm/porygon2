@@ -99,7 +99,15 @@ SH = "EvalActor-simpleheuristic"
 def rl_sections():
     return [
         ws.Section(
-            name="0 · Beats the heuristic?",
+            # NEED-TO-KNOW ONLY: is this run winning, is it healthy, is it
+            # collapsing, is the critic calibrated, is it about to OOM.
+            # Everything else is drill-down detail in the sections below.
+            # 2026-08-30 redesign collapsed 16 sections -> 10 and pulled the
+            # canonical copy of every metric that used to be duplicated
+            # across 3+ sections up here (scripts/wandb_views.py history —
+            # see the old panel list in git log if you need the pre-redesign
+            # layout back).
+            name="0 · At a glance",
             is_open=True,
             panels=[
                 lp(
@@ -136,32 +144,132 @@ def rl_sections():
                     x="lifetime_step",
                     smooth=0,
                 ),
-            ],
-        ),
-        ws.Section(
-            name="1 · Value heads",
-            is_open=True,
-            panels=[
                 lp(
-                    # The one critic's CE against the v-trace win targets.
-                    "Value loss",
-                    ["player_loss_v_win"],
+                    # player_update_skipped is the non-finite gate — a
+                    # poisoned update is permanent and the next periodic
+                    # save overwrites the last good checkpoint with it
+                    # (CLAUDE.md §8), so this is checkpoint protection, not
+                    # just a numerics footnote. Never surfaced before this
+                    # redesign.
+                    "Loss & non-finite gate",
+                    ["player_loss", "player_update_skipped"],
                 ),
                 lp(
-                    # R2 of expectations vs v-trace targets.
+                    # THE collapse watch panel — with the adaptivity
+                    # controller removed (2026-08-13) and the entropy-floor
+                    # dual controllers removed (2026-08-30), modality
+                    # collapse has no automated backstop, only these
+                    # eyes-on axes (1330 died at modality entropy 0.08;
+                    # 1328 gained strength at 0.18-0.26).
+                    "Collapse watch: entropy axes & switch rate",
+                    [
+                        "switch_ratio",
+                        "player_action_normalized_entropy",
+                        "player_normalized_modality_entropy",
+                    ],
+                ),
+                lp(
+                    # R2 of expectations vs v-trace targets — repeated in
+                    # detail in "3 · Critic quality & value" alongside value
+                    # loss and calibration.
                     "Value R2 (main head)",
                     ["player_value_head_r2"],
                     range_y=(-1, 1),
                 ),
+                lp(
+                    "Process RSS (MB)",
+                    ["diag_rss_mb", "diag_node_rss_mb"],
+                    smooth=0,
+                ),
+            ],
+        ),
+        ws.Section(
+            # THE policy gradient since 2026-08-26: NashPG
+            # (arXiv:2510.18183) — a PPO-clipped surrogate on the taken
+            # action's pi/mu ratio over the batch-normalised v-trace
+            # advantage, plus a differentiated forward KL magnet to the
+            # periodically snapped reference and an entropy bonus inside
+            # the same bracket. The entropy/switch-rate abort watch lives
+            # in "0 · At a glance" now — not repeated here.
+            name="1 · Policy loss (NashPG)",
+            is_open=True,
+            panels=[
+                lp(
+                    # The surrogate's value and how often the trust region
+                    # is active. clip_frac pinned near 0 = the policy
+                    # barely moves (look at lr/coef before blaming the
+                    # critic); climbing toward 1 = replayed data has
+                    # outrun the band (staleness / replay controller).
+                    "PPO surrogate & clip occupancy",
+                    ["player_loss_pg", "player_ppo_clip_frac"],
+                ),
+                lp(
+                    # Batch advantage statistics BEFORE normalisation —
+                    # the scale the unit-std surrogate advantage divides
+                    # out. std collapsing toward 0 = the value function
+                    # sees no return differences to steer by.
+                    "v-trace advantage scale (pre-normalisation)",
+                    ["player_pg_adv_mean", "player_pg_adv_std"],
+                ),
+                lp(
+                    # Per-axis normalised entropies, OBSERVERS since
+                    # 2026-08-30: macro dying while the joint H holds is
+                    # the modality-collapse shape the global panel in
+                    # "0 · At a glance" cannot see.
+                    "Per-axis normalised entropies (observers)",
+                    [
+                        "player_entropy_macro",
+                        "player_entropy_micro_taken",
+                    ],
+                ),
+                lp(
+                    # Modality decomposition of the throttle on any
+                    # taken-action update: per-cell pi mass, as a
+                    # switch/move ratio. A falling ratio is the starvation
+                    # signature.
+                    "Starvation watch (ratio, switch/move)",
+                    ["player_policy_prob_ratio"],
+                    log_y=True,
+                ),
+                lp(
+                    "Starvation factors: per-cell pi",
+                    [
+                        "player_policy_prob_switch",
+                        "player_policy_prob_move",
+                    ],
+                    log_y=True,
+                ),
+                lp(
+                    # The zero-avoiding term: forward KL from UNIFORM, the
+                    # one force in the bracket that is not pi-prefactored
+                    # and so the only one still acting on an abandoned
+                    # cell. Read against prob_switch -- rising mass with
+                    # this falling is the term doing its job and relaxing.
+                    "Zero-avoiding KL & switch mass",
+                    ["player_loss_uniform_kl", "player_policy_prob_switch"],
+                ),
+                lp(
+                    "Loss components",
+                    [
+                        "player_loss_pg",
+                        "player_loss_entropy",
+                        "player_loss_uniform_kl",
+                        "player_loss_kl",
+                        "player_loss_v_win",
+                    ],
+                ),
+                lp("NLL sum", ["player_nll_sum"]),
             ],
         ),
         ws.Section(
             # What is left of the critic section after the advantage head
             # retired (2026-08-29) and the one-step-label panels went with
-            # the last of the Q machinery (2026-08-30). These read
-            # taken-action coverage — a property of the data, not of any
-            # head, which is exactly why it outlived three critic designs.
-            name="1.5 · Switch evidence",
+            # the last of the Q machinery (2026-08-30), merged with Step 1
+            # of docs/critic-weakness-analysis.md (2026-08-23): the per-row
+            # JOINT statistics that judge every later step, from the
+            # completed-game outcome carried on every chunk. NaN where a
+            # batch has no rows in the slice (wandb skips them).
+            name="2 · Switch & critic evidence",
             is_open=True,
             panels=[
                 lp(
@@ -203,141 +311,6 @@ def rl_sections():
                         "player_trunk_grad_norm",
                     ],
                 ),
-                lp(
-                    "Voluntary-switch rows per batch",
-                    [
-                        "player_vol_switch_rows",
-                        "player_forced_switch_rows",
-                    ],
-                ),
-            ],
-        ),
-        ws.Section(
-            # THE policy gradient since 2026-08-26: NashPG
-            # (arXiv:2510.18183) — a PPO-clipped surrogate on the taken
-            # action's pi/mu ratio over the batch-normalised v-trace
-            # advantage, plus a differentiated forward KL magnet to the
-            # periodically snapped reference and an entropy bonus inside
-            # the same bracket.
-            name="1.6 · NashPG policy loss",
-            is_open=True,
-            panels=[
-                lp(
-                    # The surrogate's value and how often the trust region
-                    # is active. clip_frac pinned near 0 = the policy
-                    # barely moves (look at lr/coef before blaming the
-                    # critic); climbing toward 1 = replayed data has
-                    # outrun the band (staleness / replay controller).
-                    "PPO surrogate & clip occupancy",
-                    ["player_loss_pg", "player_ppo_clip_frac"],
-                ),
-                lp(
-                    # Batch advantage statistics BEFORE normalisation —
-                    # the scale the unit-std surrogate advantage divides
-                    # out. std collapsing toward 0 = the value function
-                    # sees no return differences to steer by.
-                    "v-trace advantage scale (pre-normalisation)",
-                    ["player_pg_adv_mean", "player_pg_adv_std"],
-                ),
-                lp(
-                    # The magnet cycle: KL(pi || pi_reg) sawtooths — up
-                    # against the FROZEN reference, ~0 at each snap. A
-                    # level climbing ACROSS snaps is a policy outrunning
-                    # the snap period.
-                    "Magnet: reference KL sawtooth & snaps",
-                    ["player_ref_kl", "player_reg_snapped"],
-                ),
-                lp(
-                    # Plain joint entropy bonus (static player_ent_coef,
-                    # 2026-08-30 — the dual controllers are gone, so a
-                    # cliff here is the static coef losing, watched not
-                    # auto-corrected).
-                    "Entropy bonus & abort watch",
-                    [
-                        "player_loss_entropy",
-                        "player_action_normalized_entropy",
-                        "player_normalized_modality_entropy",
-                    ],
-                ),
-                lp(
-                    # Per-axis normalised entropies, OBSERVERS since
-                    # 2026-08-30: macro dying while the joint H holds is
-                    # the modality-collapse shape the global panel above
-                    # cannot see.
-                    "Per-axis normalised entropies (observers)",
-                    [
-                        "player_entropy_macro",
-                        "player_entropy_micro_taken",
-                    ],
-                ),
-                lp(
-                    # Modality decomposition of the two throttles on any
-                    # taken-action update: per-cell pi mass and the
-                    # observer critic's |A|, as switch/move ratios.
-                    # prob_ratio falling while absadv_ratio holds ~ 1 is
-                    # the starvation signature — the critic still
-                    # believes, the policy has stopped sampling.
-                    "Starvation watch (ratios, switch/move)",
-                    ["player_policy_prob_ratio"],
-                    log_y=True,
-                ),
-                lp(
-                    "Starvation factors: per-cell pi and |A|",
-                    [
-                        "player_policy_prob_switch",
-                        "player_policy_prob_move",
-                    ],
-                    log_y=True,
-                ),
-            ],
-        ),
-        ws.Section(
-            # Observer critic quality. The policy no longer reads the Q
-            # stack (2026-08-26; its link to return is the v-trace
-            # advantage), but an action-flat critic still voids the
-            # matched control and the starvation discriminators above.
-            name="1.7 · Critic quality (observer stack)",
-            is_open=True,
-            panels=[
-                lp(
-                    # Pre-clip grad norm per policy-head subtree, the
-                    # policy pathway's own gradient scale (the Q-head pair
-                    # below stayed calm through both dx65cpwp failures).
-                    "Policy head: grad norm by subtree",
-                    [
-                        "player_policy_head_gradient_norm",
-                    ],
-                ),
-                lp(
-                    # The Q readout should calibrate at least as well as
-                    # the V head on fresh rows. q_fresh persistently below
-                    # value_fresh = the policy is steering off the worse
-                    # critic.
-                    "Calibration r2: Q fresh/replay vs V fresh",
-                    [
-                        "player_value_r2_fresh",
-                    ],
-                ),
-                lp(
-                    # switch_ratio is the number this whole saga is about;
-                    # an entropy cliff is the abort signal (raise
-                    # player_ent_coef first; back player_pg_coef off).
-                    "Outcome watch: switch ratio & modality entropy",
-                    [
-                        "switch_ratio",
-                        "player_normalized_modality_entropy",
-                    ],
-                ),
-            ],
-        ),
-        ws.Section(
-            # Step 1 of docs/critic-weakness-analysis.md (2026-08-23): the
-            # per-row JOINT statistics that judge every later step, from
-            # the completed-game outcome now carried on every chunk. NaN
-            # where a batch has no rows in the slice (wandb skips them).
-            name="1.75 · Critic telemetry (Step 1: labels, matched-V, support)",
-            is_open=True,
-            panels=[
                 lp(
                     # Realised outcome of voluntary switches minus moves at
                     # matched V(s). Offline: pooled -0.147 -> matched
@@ -403,9 +376,7 @@ def rl_sections():
                     # Storage-level support: fraction of stored chunks
                     # holding at least one voluntary switch.
                     "Voluntary-switch chunk fraction",
-                    [
-                        "player_chunk_vol_switch_frac",
-                    ],
+                    ["player_chunk_vol_switch_frac"],
                 ),
                 lp(
                     # THE DEADLINE PANEL. Voluntary-switch rows per batch is
@@ -424,9 +395,12 @@ def rl_sections():
                     log_y=True,
                 ),
                 lp(
-                    # The reference cycle against the switch support it
-                    # must hold: voluntary-switch target fraction >= 0.2
-                    # is the wire every collapsed lineage tripped.
+                    # The magnet/reference cycle against the switch support
+                    # it must hold: KL(pi || pi_reg) sawtooths up against
+                    # the FROZEN reference, ~0 at each snap (a level
+                    # climbing ACROSS snaps is a policy outrunning the snap
+                    # period); voluntary-switch target fraction >= 0.2 is
+                    # the wire every collapsed lineage tripped.
                     "Reference cycle & switch support",
                     [
                         "player_ref_kl",
@@ -437,24 +411,60 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # 2026-08-19 reframing: a negative MEAN switch/move gap is the
-            # expected sign under correct play (switching spends a turn),
-            # so collapse detection lives in the tail — states where the
-            # critic actually prefers the switch. Conditioned on the STATE
-            # (critic flag), not the taken action, dodging the
-            # chosen-switch selection bias of the Aug-15 crossover read.
-            name="1.8 · Pivotal-state switch decisions",
+            # Observer critic quality. The policy no longer reads a Q stack
+            # (retired 2026-08-26/30; its link to return is the v-trace
+            # advantage), but an action-flat critic still voids the matched
+            # control and the starvation discriminators above.
+            name="3 · Critic quality & value",
             is_open=True,
-            panels=[],
+            panels=[
+                lp(
+                    # The one critic's CE against the v-trace win targets.
+                    "Value loss",
+                    ["player_loss_v_win"],
+                ),
+                lp(
+                    # Fresh-row calibration. Was framed as "Q fresh/replay
+                    # vs V fresh" pre-2026-08-30 — the Q side retired with
+                    # the Q head; only the V-fresh reading remains.
+                    "Value R2 calibration (fresh rows)",
+                    ["player_value_r2_fresh"],
+                ),
+                lp(
+                    # R2 of expectations vs v-trace targets. Also shown
+                    # summarised in "0 · At a glance"; this is the detail
+                    # copy beside the rest of the critic reading.
+                    "Value R2 (main head)",
+                    ["player_value_head_r2"],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    # Pre-clip grad norm per policy-head subtree, the
+                    # policy pathway's own gradient scale (the retired
+                    # Q-head pair stayed calm through both dx65cpwp
+                    # failures).
+                    "Policy head: grad norm by subtree",
+                    ["player_policy_head_gradient_norm"],
+                ),
+                lp(
+                    "Value expectation",
+                    ["value_expectation_mean", "value_expectation_early_mean"],
+                ),
+                lp(
+                    "Win returns",
+                    ["player_win_returns_sum", "player_win_returns_min"],
+                ),
+            ],
         ),
         ws.Section(
             # Does the switch modality's signal actually reach the
-            # learner? Both readouts exist because the global staleness
-            # instruments are structurally blind to a rare modality:
-            # the actor-KL feeding the replay reuse controller is an
-            # expectation over the policy, and the capacity probe grades
-            # VALUE error, not action-distribution fidelity.
-            name="1.9 · Modality-resolved staleness & attenuation",
+            # learner, and is the trust region behaving. Both readouts
+            # exist because the global staleness instruments are
+            # structurally blind to a rare modality: the actor-KL feeding
+            # the replay reuse controller is an expectation over the
+            # policy, and the capacity probe grades VALUE error, not
+            # action-distribution fidelity.
+            name="4 · Staleness, ISR & trust region",
             is_open=True,
             panels=[
                 lp(
@@ -497,18 +507,6 @@ def rl_sections():
                     range_y=(0, 1),
                 ),
                 lp(
-                    # Context: the reuse cap the controller is holding,
-                    # and the global upside-clip fraction.
-                    "Replay reuse cap & rho clip fraction",
-                    ["player_replay_max_reuses", "player_rho_clip_frac"],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="2 · Optimiser guardrails",
-            is_open=True,
-            panels=[
-                lp(
                     "Actor KL (ceiling 0.045)",
                     [
                         "player_learner_actor_backward_kl",
@@ -516,30 +514,29 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    "Replay reuse (controller)",
+                    "Replay reuse (controller & cap)",
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
                 ),
                 lp(
-                    # THE collapse watch panel — with the adaptivity
-                    # controller removed (2026-08-13) modality collapse
-                    # has no automated backstop, only these eyes-on axes
-                    # (1330 died at modality entropy 0.08; 1328 gained
-                    # strength at 0.18-0.26).
-                    "Entropy axes & switch rate",
-                    [
-                        "player_action_normalized_entropy",
-                        "player_normalized_modality_entropy",
-                        "switch_ratio",
-                    ],
+                    "Clip fractions",
+                    ["player_impact_clip_frac", "player_rho_clip_frac"],
+                ),
+                lp("ISR ESS", ["player_isr_ess"]),
+                lp(
+                    "Ratios",
+                    ["player_learner_actor_ratio", "player_learner_target_ratio"],
                 ),
                 lp(
-                    "Gradient / param norm",
-                    ["player_gradient_norm", "player_param_norm"],
+                    "Target KLs",
+                    [
+                        "player_learner_target_backward_kl",
+                        "player_learner_target_forward_kl",
+                    ],
                 ),
             ],
         ),
         ws.Section(
-            name="3 · League",
+            name="5 · League",
             is_open=True,
             panels=[
                 # The learner logs the payoff matrix through a custom
@@ -566,76 +563,21 @@ def rl_sections():
                     chart_strings={"title": "league payoff table (row beats column)"},
                 ),
                 lp(
-                    "Fresh vs replayed value error",
-                    [
-                        "plasticity_fresh_value_err",
-                        "plasticity_replay_value_err",
-                        "plasticity_value_err_reuse_gap",
-                    ],
+                    # The heatmap above is a snapshot; this is the trend.
+                    # league_main_v_{label}_winrate is dynamically keyed per
+                    # opponent (step-numbered snapshots AND br-{step} BR
+                    # probes both land here), so a regex panel is the only
+                    # way to see it over time — this is also where the
+                    # project's only ground-truth exploitability read (the
+                    # BR probe curve) becomes visible on the dashboard.
+                    "League winrate trend (snapshots & BR probes)",
+                    None,
+                    regex=r"league_main_v_.*_winrate",
                 ),
             ],
         ),
         ws.Section(
-            name="Losses",
-            panels=[
-                lp("Total player loss", ["player_loss"]),
-                lp(
-                    "Loss components",
-                    [
-                        "player_loss_pg",
-                        "player_loss_entropy",
-                        "player_loss_kl",
-                        "player_loss_v_win",
-                    ],
-                ),
-                lp("NLL sum", ["player_nll_sum"]),
-            ],
-        ),
-        ws.Section(
-            name="Ratios & trust region",
-            panels=[
-                lp(
-                    "Clip fractions",
-                    ["player_impact_clip_frac", "player_rho_clip_frac"],
-                ),
-                lp("ISR ESS", ["player_isr_ess"]),
-                lp(
-                    "Ratios",
-                    ["player_learner_actor_ratio", "player_learner_target_ratio"],
-                ),
-                lp(
-                    "Target KLs",
-                    [
-                        "player_learner_target_backward_kl",
-                        "player_learner_target_forward_kl",
-                    ],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="Value & advantages",
-            panels=[
-                lp(
-                    "Value expectation",
-                    ["value_expectation_mean", "value_expectation_early_mean"],
-                ),
-                lp(
-                    "Win returns",
-                    ["player_win_returns_sum", "player_win_returns_min"],
-                ),
-                lp(
-                    # The one critic's R2 against the v-trace win targets.
-                    # The all/private/public ladder went with the
-                    # privileged rung (2026-08-25) — its final readings are
-                    # in docs/qva-redesign-step0-reference.md.
-                    "Value R2",
-                    ["player_value_head_r2"],
-                    range_y=(-1, 1),
-                ),
-            ],
-        ),
-        ws.Section(
-            name="Behaviour & environment",
+            name="6 · Behaviour & environment",
             panels=[
                 lp("Move / switch ratio", ["move_ratio", "switch_ratio"]),
                 lp("Early finish rate", ["early_finish_rate"]),
@@ -682,7 +624,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="Gradient norms by module",
+            name="7 · Gradient norms by module",
             panels=[
                 lp(
                     # Keys are f"player_{module}_gradient_norm" over the
@@ -697,10 +639,14 @@ def rl_sections():
                     ],
                     log_y=True,
                 ),
+                lp(
+                    "Gradient / param norm (aggregate)",
+                    ["player_gradient_norm", "player_param_norm"],
+                ),
             ],
         ),
         ws.Section(
-            name="Throughput",
+            name="8 · Throughput & compile",
             panels=[
                 lp(
                     "Frame counts",
@@ -717,19 +663,26 @@ def rl_sections():
                     ["training_step", "lifetime_step"],
                     smooth=0,
                 ),
+                lp(
+                    # Which (chunk_rows, history_rows) combo of
+                    # player_shape_lattice a batch hit — relevant given the
+                    # shape-lattice OOM-guard history (CLAUDE.md §1): a
+                    # surprise top-bucket compile is what killed three runs
+                    # before the lattice was enumerated up front.
+                    "Shape lattice combo (T, H)",
+                    ["player_shape_T", "player_shape_H"],
+                    smooth=0,
+                ),
             ],
         ),
         ws.Section(
             # Fed by learner.py's _log_memory_diagnostics (main-only, every
             # memory_diag_interval steps) plus the service's own 10s
             # process.memoryUsage() write — see index.ts:writeMemoryStats.
-            name="Memory",
+            # Process RSS is summarised in "0 · At a glance"; not repeated
+            # here.
+            name="9 · Memory",
             panels=[
-                lp(
-                    "Process RSS (MB)",
-                    ["diag_rss_mb", "diag_node_rss_mb"],
-                    smooth=0,
-                ),
                 lp(
                     # node's own heap is the tiny GameServer coordinator
                     # thread only (Node quirk — memoryUsage() can't see
