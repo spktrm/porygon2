@@ -587,6 +587,46 @@ def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
     return _merge(fresh, loaded, ""), kept_fresh
 
 
+def apply_br_init(
+    merged: Params, fresh: Params, learner_config: Porygon2LearnerConfig
+) -> Params:
+    """BR-init transform on the merged PLAYER params (config.br_init).
+
+    `fresh` is the freshly initialised tree the checkpoint was merged
+    into — the same tree, so no shape juggling. "target" (and every
+    non-BR params-mode load, where br_init sits at its default) is the
+    identity. "scratch" never reaches here: it takes the scratch load
+    path. The returned tree is what params/target_params/reg_params are
+    all set to, so the magnet anchors to the TRANSFORMED policy —
+    post-reset the anchor is near-uniform, not the inherited collapse.
+    """
+    if learner_config.br_init == "target":
+        return merged
+    if learner_config.br_init == "head-reset":
+        inner = dict(merged["params"])
+        if "action_head" not in inner:
+            raise KeyError(
+                "br_init='head-reset': no 'action_head' subtree in the "
+                "player params — the readout was renamed out from under "
+                "this transform"
+            )
+        inner["action_head"] = fresh["params"]["action_head"]
+        grafted = dict(merged)
+        grafted["params"] = inner
+        return grafted
+    if learner_config.br_init == "shrink-perturb":
+        frac = learner_config.br_perturb_frac
+        if not 0.0 <= frac <= 1.0:
+            raise ValueError(f"br_perturb_frac={frac} outside [0, 1]")
+
+        def interpolate(trained, init):
+            mixed = (1.0 - frac) * trained + frac * init
+            return jnp.asarray(mixed, dtype=jnp.asarray(trained).dtype)
+
+        return jax.tree.map(interpolate, merged, fresh)
+    raise ValueError(f"unknown br_init {learner_config.br_init!r}")
+
+
 def load_from_params(
     ckpt_path: str,
     learner_config: Porygon2LearnerConfig,
@@ -621,6 +661,8 @@ def load_from_params(
             tqdm.write(f"{name}: {len(kept)} param subtrees kept fresh init:")
             for path in kept:
                 tqdm.write(f"  {path}")
+
+    player_params = apply_br_init(player_params, player_state.params, learner_config)
 
     # target_params gets the same merged tree: leaving it at fresh init
     # would hand v-trace a garbage reference policy for ~1/ema_rate steps.

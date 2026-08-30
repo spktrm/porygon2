@@ -375,11 +375,16 @@ def resolve_run_setup(
     A --br-target run derives everything itself: its own checkpoint
     subtree under br/<tag>, checkpoint-mode resume when that subtree
     already holds a checkpoint, otherwise params-mode init from the
-    target (fresh optimiser, zeroed counters, fresh league)."""
+    target (fresh optimiser, zeroed counters, fresh league) shaped by
+    --br-init (scratch-mode when that says so)."""
     if args.num_steps is not None:
         learner_config = learner_config.replace(num_steps=args.num_steps)
 
     if args.br_target is None:
+        if args.br_init != "target" or args.br_perturb_frac is not None:
+            raise SystemExit(
+                "--br-init/--br-perturb-frac only apply to a --br-target run"
+            )
         mode = args.load_mode or os.environ.get("LOAD_STATE_MODE", "checkpoint")
         return learner_config, mode, args.init_ckpt, "main"
 
@@ -406,15 +411,36 @@ def resolve_run_setup(
         stop_winrate = 0.7
     else:
         stop_winrate = 0.0
+    if args.br_perturb_frac is not None and args.br_init != "shrink-perturb":
+        raise SystemExit("--br-perturb-frac only applies to --br-init shrink-perturb")
+    if args.br_perturb_frac is not None:
+        perturb_frac = args.br_perturb_frac
+    else:
+        perturb_frac = 0.5
     learner_config = learner_config.replace(
         br_target_ckpt=target,
         ckpt_subdir=os.path.join("br", run_tag),
         br_stop_winrate=stop_winrate,
+        br_init=args.br_init,
+        br_perturb_frac=perturb_frac,
     )
     root = ckpt_root(learner_config)
     os.makedirs(root, exist_ok=True)
     if checkpoint.most_recent_ckpt_dir(root) is not None:
+        if args.br_init != "target":
+            # Resuming re-runs the SAME command (start_br.sh's contract),
+            # so the init flag rides along on resumes — it applied at
+            # first launch and does nothing now. Say so rather than let a
+            # DIFFERENT intended init silently resume the old lineage.
+            logger.warning(
+                "BR subtree %s already holds a checkpoint — resuming it; "
+                "--br-init only shapes a FIRST launch (use a fresh "
+                "--run-tag for a new init)",
+                root,
+            )
         return learner_config, "checkpoint", None, f"br-{run_tag}"
+    if args.br_init == "scratch":
+        return learner_config, "scratch", None, f"br-{run_tag}"
     return learner_config, "params", target, f"br-{run_tag}"
 
 
@@ -892,6 +918,24 @@ if __name__ == "__main__":
         default=None,
         help="Name for the BR child dir and wandb run "
         "(default: the target checkpoint's basename).",
+    )
+    parser.add_argument(
+        "--br-init",
+        choices=["target", "head-reset", "shrink-perturb", "scratch"],
+        default="target",
+        help="BR param init on FIRST launch (a resume keeps its subtree): "
+        "'target' inherits the frozen target verbatim; 'head-reset' "
+        "grafts a fresh action readout onto the inherited trunk (uniform "
+        "policy over legal cells at step 0); 'shrink-perturb' "
+        "interpolates every player param toward fresh init by "
+        "--br-perturb-frac; 'scratch' ignores the target's params.",
+    )
+    parser.add_argument(
+        "--br-perturb-frac",
+        type=float,
+        default=None,
+        help="shrink-perturb interpolation toward fresh init: 0.0 = pure "
+        "inherit, 1.0 = pure fresh init (default 0.5).",
     )
     parser.add_argument(
         "--br-winrate",

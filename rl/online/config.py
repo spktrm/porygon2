@@ -202,6 +202,24 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # a BR launched WITHOUT --num-steps to 0.7 so "train until the target
     # is beaten" is the no-flags behaviour.
     br_stop_winrate: float = 0.0
+    # BR init policy — first launch of a BR child only; a resume keeps
+    # whatever the subtree holds. "target" inherits the frozen target's
+    # params verbatim (the pre-2026-08-30 behaviour — the probe searches
+    # only the target's own basin, and its blind spot is the collapsed
+    # switch axis it inits from). "head-reset" grafts a fresh-init
+    # action_head onto the inherited trunk: uniform over legal cells at
+    # step 0 (the flat readout's init contract), so the exploit axis has
+    # full supply while the world model carries. "shrink-perturb"
+    # interpolates every PLAYER param toward fresh init by
+    # br_perturb_frac (Ash & Adams, arXiv:1910.08475 — the ~179k
+    # perturbation is the one event observed to revive collapsed switch
+    # mass). "scratch" ignores the target's params entirely — recorded
+    # as expected-nonviable (no curriculum against the strongest frozen
+    # policy), kept as the control arm. The builder inherits under every
+    # mode except "scratch".
+    br_init: str = "target"
+    # shrink-perturb only: 0.0 = pure inherit, 1.0 = pure fresh init.
+    br_perturb_frac: float = 0.5
 
     # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
     # through main's periodic wandb logs: process RSS + OS-vs-python thread
