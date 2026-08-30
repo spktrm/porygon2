@@ -11,6 +11,7 @@ low-level serialisation beneath both.
 """
 
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -588,20 +589,43 @@ def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
 
 
 def apply_br_init(
-    merged: Params, fresh: Params, learner_config: Porygon2LearnerConfig
+    merged: Params,
+    init_fn: Callable[[jax.Array], Params],
+    learner_config: Porygon2LearnerConfig,
 ) -> Params:
     """BR-init transform on the merged PLAYER params (config.br_init).
 
-    `fresh` is the freshly initialised tree the checkpoint was merged
-    into — the same tree, so no shape juggling. "target" (and every
-    non-BR params-mode load, where br_init sits at its default) is the
-    identity. "scratch" never reaches here: it takes the scratch load
-    path. The returned tree is what params/target_params/reg_params are
-    all set to, so the magnet anchors to the TRANSFORMED policy —
+    The fresh component is drawn from init_fn under a key folded OFF
+    the lineage seed. Every lineage inits from jax.random.key(42)
+    (rl/online/main.py) — the TARGET included — so a same-seed fresh
+    tree is the target's own ancestor: with t = f + delta the
+    interpolation collapses to f + (1-frac)*delta, a rewind along the
+    target's own training path with no new direction in it. The first
+    sp75 probe shipped exactly that and measured cos 0.95 to the target
+    at its first checkpoint (2026-08-30). And a CONSTANT fold is the
+    same defect one level down: every launch would share one draw, so a
+    BR against a checkpoint descended from a shrink-perturb BR would
+    interpolate toward that target's own ancestor again. The fold is
+    therefore derived from the run's identity (target ckpt + BR
+    subtree) — unique per new run, since a reused tag resumes instead
+    of re-initialising, and reproducible from the config alone.
+
+    "target" (and every non-BR params-mode load, where br_init sits at
+    its default) is the identity and never pays the init call.
+    "scratch" never reaches here: it takes the scratch load path — and
+    note scratch itself inits from the lineage seed, i.e. the target's
+    ancestor. The returned tree is what params/target_params/reg_params
+    are all set to, so the magnet anchors to the TRANSFORMED policy —
     post-reset the anchor is near-uniform, not the inherited collapse.
     """
     if learner_config.br_init == "target":
         return merged
+    if learner_config.br_init not in ("head-reset", "shrink-perturb"):
+        raise ValueError(f"unknown br_init {learner_config.br_init!r}")
+    run_identity = f"{learner_config.br_target_ckpt}:{learner_config.ckpt_subdir}"
+    fold = int.from_bytes(hashlib.blake2s(run_identity.encode()).digest()[:4], "little")
+    tqdm.write(f"br_init={learner_config.br_init}: fresh draw folds {fold} off key(42)")
+    fresh = init_fn(jax.random.fold_in(jax.random.key(42), fold))
     if learner_config.br_init == "head-reset":
         inner = dict(merged["params"])
         if "action_head" not in inner:
@@ -614,17 +638,15 @@ def apply_br_init(
         grafted = dict(merged)
         grafted["params"] = inner
         return grafted
-    if learner_config.br_init == "shrink-perturb":
-        frac = learner_config.br_perturb_frac
-        if not 0.0 <= frac <= 1.0:
-            raise ValueError(f"br_perturb_frac={frac} outside [0, 1]")
+    frac = learner_config.br_perturb_frac
+    if not 0.0 <= frac <= 1.0:
+        raise ValueError(f"br_perturb_frac={frac} outside [0, 1]")
 
-        def interpolate(trained, init):
-            mixed = (1.0 - frac) * trained + frac * init
-            return jnp.asarray(mixed, dtype=jnp.asarray(trained).dtype)
+    def interpolate(trained, init):
+        mixed = (1.0 - frac) * trained + frac * init
+        return jnp.asarray(mixed, dtype=jnp.asarray(trained).dtype)
 
-        return jax.tree.map(interpolate, merged, fresh)
-    raise ValueError(f"unknown br_init {learner_config.br_init!r}")
+    return jax.tree.map(interpolate, merged, fresh)
 
 
 def load_from_params(
@@ -662,7 +684,7 @@ def load_from_params(
             for path in kept:
                 tqdm.write(f"  {path}")
 
-    player_params = apply_br_init(player_params, player_state.params, learner_config)
+    player_params = apply_br_init(player_params, player_state.init_fn, learner_config)
 
     # target_params gets the same merged tree: leaving it at fresh init
     # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
