@@ -99,6 +99,7 @@ def test_train_step_smoke():
         "player_ppo_clip_frac",
         "player_loss_entropy",
         "player_ref_kl",
+        "player_loss_uniform_kl",
         "player_pg_adv_mean",
         "player_pg_adv_std",
         "player_reg_snapped",

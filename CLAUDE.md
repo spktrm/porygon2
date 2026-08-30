@@ -764,7 +764,7 @@ is, up to a constant, the reverse KL to uniform, i.e. NashPG's own form.
 | mechanism | symbols | why |
 |---|---|---|
 | Entropy-floor dual controllers + per-level entropy loss | `log_ent_alpha_{macro,micro}` TrainState leaves + their ckpt scalar plumbing (old ckpts still load; `apply_player_scalars` ignores their alpha keys), `loss.entropy_floor_step`, the per-axis loss terms, `player_ent_target_{macro,micro}` / `player_ent_alpha_{lr,min,max}`, `tests/test_entropy_floor.py` | on wy8m50ic BOTH alphas sat at the 0.005 MINIMUM for the whole 185k-step run while H_macro held 0.45–0.70 — the flat trunk holds its entropy for free, so the controller was pure machinery (the §10 rule firing again). `factorised_entropies` and the `player_entropy_{macro,micro_taken}` panels survive as OBSERVERS — macro dying while joint H holds is the collapse shape the global panel cannot see, and nothing defends the floor any more |
-| Uniform-KL zero-avoider | `loss.uniform_kl_rows`, `player_uniform_kl_coef`, its gradient test | reference alignment (NashPG carries no mass-independent restorer). Given up KNOWINGLY — this was the only pi-prefactor-free force in the bracket; `prob_switch` / `player_vol_switch_rows` are the watch, and the term is one commit away if the collapse returns |
+| Uniform-KL zero-avoider | `loss.uniform_kl_rows`, `player_uniform_kl_coef`, its gradient test | reference alignment (NashPG carries no mass-independent restorer). Given up KNOWINGLY — this was the only pi-prefactor-free force in the bracket; `prob_switch` / `player_vol_switch_rows` are the watch, and the term is one commit away if the collapse returns. **RESTORED 2026-08-31 — the watch fired, one day later** (see the addition ledger below) |
 | Last Q machinery | `targets.compute_q_onestep_targets`, `q_mask` (→ `acted_mask`), the one-step-label panels (`player_q_target_*`, `player_v_onestep_r2`, `player_q_target_edge_frac`), dead `pi_target` compute and two bare no-op statements | the labels had no consumer since the Q head retired 2026-08-29. Supply counters KEPT, renamed off the q prefix: `player_{vol,forced}_switch_rows`, `player_chunk_vol_switch_frac`, `player_taken_{,voluntary_}switch_frac` — fresh wandb continuity by design (the coma→neurd precedent) |
 
 Also in: `masked_policy` (exp→mask→renormalise written once in train_step),
@@ -773,6 +773,76 @@ wy8m50ic archived at ~185k. Same acceptance table as the flat-trunk gate,
 plus the entropy observers now watched UNDEFENDED — a macro-entropy cliff
 under the static 0.01 is the abort, answered by re-instating the floor or
 the uniform-KL as their own commits, never by a silent coef bump.
+
+## Addition ledger — 2026-08-31 zero-avoider restored, and WHY no coefficient works
+
+**The abort fired within a day and the watch was the right one.** wy8m50ic's
+alpha panels stop at ~187k (the dual controllers' removal); everything after
+that is the undefended static-0.01 era, and it is the only era in the run's
+history below 0.35 macro entropy:
+
+| lifetime_step | 114k | 180k | 217k | 230k | 246k | 266k |
+|---|---|---|---|---|---|---|
+| `player_entropy_macro` | 0.41 | 0.46 | 0.43 | 0.36 | 0.31 | **0.19** |
+
+with `player_policy_prob_switch` 0.026 -> 0.012 and `player_vol_switch_rows`
+15 -> 2 across the same window. Confounded with depth (114k also dipped to
+0.41 with the floor live), so the reading is directional, not causal.
+
+**The argument that retires "just raise `player_ent_coef`" permanently.** The
+two terms have the SAME minimiser — entropy IS reverse KL to uniform, up to a
+constant — so as objectives they are the same thing pointed opposite ways.
+What differs is what happens against an opposing force, and the decisive fact
+is that the surrogate's expected force on a cell is ALSO pi-prefactored (the
+cell is taken on ~pi_b of rows, so ~pi_b * A_b). Against the entropy bonus the
+pi_b cancels on BOTH sides, leaving a pure temperature; against forward KL it
+cancels on one:
+
+```
+entropy   d/dy_b = -pi_b (log pi_b + H)   equilibrium  pi_b ~ exp(-|A|/alpha)   EXPONENTIAL decay
+unif-KL   d/dy_b =  pi_b - 1/k            equilibrium  pi_b ~ coef/(k |A|)      LINEAR decay
+```
+
+Measured at k=10 (pg_advantages are unit-std, so |A| is in sigma):
+
+| headwind | ent 0.01 | ent 0.05 | ent 0.2 | unif-KL 0.05 |
+|---|---|---|---|---|
+| 0.1 sigma | 4.5e-05 | 1.4e-01 | 6.1e-01 | 3.3e-02 |
+| 0.2 sigma | 2.1e-09 | 1.8e-02 | 3.7e-01 | 2.0e-02 |
+| 0.5 sigma | 1.9e-22 | 4.5e-05 | 8.2e-02 | 9.1e-03 |
+| 1.0 sigma | 3.7e-44 | 2.1e-09 | 6.7e-03 | 4.8e-03 |
+
+Read across the entropy columns: there is no alpha that holds a floor without
+setting the temperature of every OTHER cell to the same value — mass without
+discrimination, the phase-1 support-anchor shape. That is what the four
+retunes (0.01/0.05/0.1/0.2) each measured one at a time. Two further
+properties fall out of the same algebra and are worth stating once: forward
+KL contains `-(1/k) log pi_b`, a log BARRIER that diverges as the cell dies,
+where reverse KL contains `-pi_b log pi_b`, which vanishes there — entropy
+scores a dead cell as costing nothing; and `H` appears inside entropy's own
+per-cell force, so entropy earned on a wide move row is directly SUBTRACTED
+from the pressure on a starved switch row. That is "one fungible budget,
+payable wherever it is cheapest" written in the gradient, and it is why the
+live split (`entropy_micro_taken` 0.61 against `entropy_macro` 0.25) is a
+stable state rather than a transient.
+
+| mechanism | what | why |
+|---|---|---|
+| `loss.uniform_kl_rows` + `player_uniform_kl_coef` 0.05 | forward KL from the CONSTANT uniform over each row's legal cells, inside the pg bracket | restored verbatim from `daa4228^`. Sized on the equilibrium above, never on loss balance: 0.05 holds ~0.02 mass against a 0.2 sigma headwind and ~0.009 against 0.5 sigma, and the ask RELAXES as evidence arrives. The one deliberate divergence from the reference actor loss, which carries no mass-independent restorer in either `mag_divergence` mode |
+
+**Judged on a matched BR pair, not on the main lineage.** `sp75c-ckpt_00254992`
+launched 2026-08-31 against target `ckpt_00254992` with the same
+`--br-init shrink-perturb --br-perturb-frac 0.75` as `sp75b` (vm9b7p07,
+stopped at 65k and published into the parent's `players/`), so the control is
+identical in init, target and budget and differs by this one term. Read
+`prob_switch` / `entropy_macro` against vm9b7p07 at matched steps;
+`player_loss_uniform_kl` should FALL as mass returns (the term relaxing, not a
+standing tax); the exploitability read is
+`league_main_v_ckpt_00254992_winrate` against the 0.57-0.58 the 77638 probe
+set. **Abort:** the phase-1 shape again — mass rising while the readout stops
+discriminating (`player_pointer_*` drift flat, entropy at ceiling), or
+`loss_uniform_kl` pinned with switch mass unmoved, which would say the term is
+paying and buying nothing.
 
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 

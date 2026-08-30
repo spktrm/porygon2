@@ -49,6 +49,43 @@ def factorised_entropies(
     return h_macro, h_micro_taken
 
 
+def uniform_kl_rows(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
+    """Per-row KL(u || pi) over legal cells -- the ZERO-AVOIDING term.
+
+    Note the DIRECTION. Reverse KL(pi || u) is, up to a constant, just
+    negative entropy, i.e. the entropy bonus already in the objective; it
+    carries the pi prefactor that CLAUDE.md 4 records as structurally unable
+    to hold a floor once a modality starves. This is the other direction:
+
+        KL(u || pi) = -(1/k) * sum_a log pi_a   (+ a constant)
+        d/d y_b     = pi_b - 1/k
+
+    Bounded by 1 for ANY pi, zero-sum over legal cells, and with NO pi
+    prefactor -- so it still pulls at pi = 1e-6, where both the entropy bonus
+    (d/dy_b = -pi_b (log pi_b + H)) and the reverse-KL magnet are numerically
+    dead. Those three properties are exactly what every mass-restoring
+    mechanism this project has tried lacked, and unlike the four support-anchor
+    phases the reference here is the CONSTANT uniform distribution: it cannot
+    collapse, cannot be ratcheted by a re-snapping reference, and cannot invert
+    on the modality-level sign of Q^pi.
+
+    Why it is back (2026-08-31), having been dropped one commit ago for
+    reference alignment: the surrogate's expected force on a cell is also
+    pi-prefactored (~pi_b * A_b, the cell is taken on ~pi_b of rows), so
+    against the entropy bonus the prefactor CANCELS and the equilibrium is a
+    pure temperature, pi ∝ exp(A/alpha) -- mass decaying EXPONENTIALLY in the
+    headwind. Here it cancels on one side only, so equilibrium mass is
+    ~coef/(k*|A|), decaying merely linearly. That is the difference between a
+    floor and a coefficient that has been retuned four times.
+
+    Returned per row and unmasked in the batch sense; the caller applies the
+    row mask.
+    """
+    legal = legal_mask.astype(jnp.float32)
+    weights = legal / jnp.maximum(legal.sum(axis=-1, keepdims=True), 1.0)
+    return -(weights * log_policy.astype(jnp.float32)).sum(axis=-1)
+
+
 def spo_objective(
     *,
     policy_ratios: jax.Array,

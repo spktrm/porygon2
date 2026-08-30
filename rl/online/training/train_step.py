@@ -27,6 +27,7 @@ from rl.online.training.loss import (
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
+    uniform_kl_rows,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
@@ -392,6 +393,19 @@ def train_step(
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
 
+        # The zero-avoiding term (restored 2026-08-31): forward KL from
+        # UNIFORM to the policy, per-logit gradient exactly pi_b - 1/k. It
+        # is the only force in this bracket that is not pi-prefactored, so
+        # it is the only one still acting on a cell the policy has
+        # abandoned -- the entropy bonus above shares the surrogate's own
+        # pi_b, which makes its equilibrium a temperature and not a floor.
+        # Its reference is a constant, so unlike the retired support anchor
+        # it cannot be ratcheted flat by re-snapping from a collapsing
+        # policy, nor invert on the modality-level sign of Q^pi.
+        loss_uniform_kl = average(
+            uniform_kl_rows(learner_log_policy, flat_action_mask), policy_mask
+        )
+
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
         # over legal switch vs non-switch cells of real-choice rows.
@@ -430,17 +444,22 @@ def train_step(
             # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
             player_ref_kl=loss_mag,
+            player_loss_uniform_kl=loss_uniform_kl,
         )
         # pg bracket + v + kl.
         loss = (
-            # pg: the NashPG bracket verbatim — surrogate + ent_coef *
-            # (-H) + mag_coef * KL(pi || pi_reg), one coefficient scaling
-            # improvement and regularisation together.
+            # pg: the NashPG bracket — surrogate + ent_coef * (-H) +
+            # mag_coef * KL(pi || pi_reg), one coefficient scaling
+            # improvement and regularisation together — plus the
+            # zero-avoiding KL, which is the one deliberate divergence from
+            # the reference actor loss (the reference carries no
+            # mass-independent restorer in either mag_divergence mode).
             config.player_pg_coef
             * (
                 loss_pg
                 + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
+                + config.player_uniform_kl_coef * loss_uniform_kl
             )
             # v: one critic, on the deploy-time information set. The
             # all-action advantage that sat beside it retired 2026-08-29 --

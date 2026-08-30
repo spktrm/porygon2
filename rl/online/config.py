@@ -401,6 +401,25 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (loss.factorised_entropies). Revert handles in the CLAUDE.md
     # ledgers.
     player_ent_coef: float = 0.01
+    # The ZERO-AVOIDING term (loss.uniform_kl_rows): forward KL from the
+    # CONSTANT uniform over each row's legal cells, per-logit gradient
+    # exactly pi_b - 1/k. Removed 2026-08-30 for reference alignment and
+    # restored 2026-08-31 on the watch it was removed against -- wy8m50ic's
+    # undefended era ran entropy_macro 0.43 -> 0.19 and prob_switch 0.026 ->
+    # 0.012, the pre-registered abort. It is the only force in the bracket
+    # that is not pi-prefactored, and that is not a matter of degree: the
+    # surrogate's expected force on a cell carries the same pi_b the entropy
+    # bonus does, so their ratio is mass-independent and the entropy
+    # equilibrium is exp(-|A|/alpha) -- no coefficient holds a floor, which
+    # is what four retunes (0.01/0.05/0.1/0.2) measured. Here the prefactor
+    # cancels on one side only: equilibrium mass ~ coef/(k*|A|), so the ask
+    # DIVERGES as a cell starves and RELAXES as evidence arrives.
+    #
+    # Sized on that equilibrium, not on loss balance: at k ~ 10 and a 0.2
+    # sigma headwind (pg_advantages are unit-std) 0.05 holds ~0.02 mass,
+    # falling to ~0.009 at 0.5 sigma. Set 0.0 for a control arm -- that is
+    # bit-identical to having no term at all.
+    player_uniform_kl_coef: float = 0.05
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,
     # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every
