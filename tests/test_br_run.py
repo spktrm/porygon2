@@ -396,6 +396,8 @@ class TestResolveRunSetup:
             br_target=None,
             run_tag=None,
             br_winrate=None,
+            br_init="target",
+            br_perturb_frac=None,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
