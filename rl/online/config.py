@@ -221,10 +221,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # shrink-perturb only: 0.0 = pure inherit, 1.0 = pure fresh init.
     # The fresh component is drawn under a key folded off the lineage
     # seed (apply_br_init) — a same-seed draw is the target's own
-    # ancestor and rotates nothing. Size frac against the norm ratio:
-    # fresh is init-scale while the target's kernels measured ~1.9x
-    # init scale (2026-08-30), so mid-range fracs shrink magnitudes
-    # more than they move direction.
+    # ancestor and rotates nothing. Measured calibration (2026-08-30,
+    # vs ckpt_00254992): full-tree fresh/trained norm ratio 0.925, so
+    # frac maps near-linearly onto direction — 0.75 lands at cos 0.40
+    # to the target (0.34 predicted orthogonal; the excess is
+    # structural, e.g. LayerNorm scales ~1.0 in both nets).
     br_perturb_frac: float = 0.5
 
     # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
