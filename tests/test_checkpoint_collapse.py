@@ -175,6 +175,12 @@ def test_checkpoint_embedding_tables_not_collapsed(ckpt_target_params):
         table = _find_leaf(ckpt_target_params, name)
         assert np.isfinite(table).all(), f"{name}: contains non-finite values"
 
+        if table.shape[0] < 2:
+            # A single-row table (the flat trunk's cls_embedding) has no
+            # pairs to compare -- degenerate for this probe, not collapsed.
+            # Same rule as the arch sentinel above: skip what cannot be
+            # judged, never report it as the pathology being probed for.
+            continue
         sims = _pairwise_cosine_similarities(table)
         assert sims.max() < 0.999, (
             f"{name}: two rows are near-duplicate (max cosine {sims.max():.4f}) "

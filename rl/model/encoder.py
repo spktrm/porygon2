@@ -239,6 +239,17 @@ class Encoder(nn.Module):
         self.private_side_bias = self.param(
             "private_side_bias", embedding_init, (1, entity_size)
         )
+        # Shared identity tag over the STABLE entity index (identToIndex,
+        # revelation order across both sides): row 0 = never fielded /
+        # unrevealed filler, rows 1..12 = index + 1. Applied to public rows
+        # via PUBLIC_ORDER and to private rows via the wire's ENTITY_IDX, so
+        # a sheet row and the public row describing the same mon carry the
+        # SAME additive tag -- an exact correspondence the trunk can read,
+        # where the species match is forme-fragile and, under a my-side
+        # Illusion, actively wrong.
+        self.entity_index_tag = self.param(
+            "entity_index_tag", embedding_init, (NUM_PUBLIC_SLOTS + 1, entity_size)
+        )
         # Whose side a field token describes. Row 1 = mine, row 0 = theirs —
         # the SIDE convention, written once. Until 2026-08-28 these two
         # tokens borrowed pos_bias rows 1/0, but pos_bias is indexed by
@@ -726,6 +737,51 @@ class Encoder(nn.Module):
             .astype(self.cfg.dtype)
         )
 
+        # The truth channel (2026-08-31): current condition, written from
+        # the request side, so a switch candidate's own row finally says
+        # whether it is hurt, statused or fainted -- probe C measured the
+        # trunk's public-row workaround at the floor. Same encodings as the
+        # public path: hp scalar + 32-bin one-hot, StatusEnum one-hot,
+        # toxic/sleep counters, fainted.
+        private_hp_ratio = (
+            private[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO]
+            / MAX_RATIO_TOKEN
+        ).astype(self.cfg.dtype)
+        private_hp_features = jnp.concatenate(
+            [
+                private_hp_ratio[..., None],
+                jax.nn.one_hot(
+                    jnp.floor(32 * private_hp_ratio), 32, dtype=self.cfg.dtype
+                ),
+            ],
+            axis=-1,
+        ).reshape(-1)
+        condition_code = one_hot_concat_jax(
+            [
+                encode_one_hot_private_entity(
+                    private,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__STATUS,
+                ),
+                encode_one_hot_private_entity(
+                    private,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS,
+                ),
+                encode_one_hot_private_entity(
+                    private,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS,
+                ),
+                encode_one_hot_private_entity(
+                    private,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS,
+                ),
+                encode_one_hot_private_entity(
+                    private,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED,
+                ),
+            ],
+            dtype=self.cfg.dtype,
+        )
+
         tokens = jnp.concatenate(
             (
                 jnp.stack(
@@ -737,7 +793,15 @@ class Encoder(nn.Module):
                 ),
                 move_embeddings,
                 self.private_state_linear(
-                    jnp.concatenate((boolean_code, stat_encoding), axis=-1)
+                    jnp.concatenate(
+                        (
+                            boolean_code,
+                            condition_code,
+                            private_hp_features,
+                            stat_encoding,
+                        ),
+                        axis=-1,
+                    )
                 )[None],
             ),
             axis=0,
@@ -1098,6 +1162,29 @@ class Encoder(nn.Module):
             env_step.private_team
         )
         private_rows = private_rows + self.private_side_bias.astype(private_rows.dtype)
+
+        # The shared identity tag (see setup): public rows keyed by
+        # PUBLIC_ORDER, private rows by the wire's ENTITY_IDX (already the
+        # +1 form, 0 = never fielded). A -1 (filler) public row keys row 0,
+        # same as a never-fielded reserve -- both mean "no public identity".
+        public_order = env_step.info[
+            InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
+            + 1
+        ]
+        public_tag_index = jnp.clip(public_order + 1, 0, NUM_PUBLIC_SLOTS)
+        public_rows = public_rows + jnp.take(
+            self.entity_index_tag, public_tag_index, axis=0
+        ).astype(public_rows.dtype)
+        private_tag_index = jnp.clip(
+            env_step.private_team[
+                :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+            ],
+            0,
+            NUM_PUBLIC_SLOTS,
+        )
+        private_rows = private_rows + jnp.take(
+            self.entity_index_tag, private_tag_index, axis=0
+        ).astype(private_rows.dtype)
 
         # ---- my candidate moves, one row per action slot ------------------
         # Row k IS action slot MOVE_INDICES[k], carrying that slot's pp,

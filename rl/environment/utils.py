@@ -413,11 +413,17 @@ def process_state(
         .reshape(16, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
-    private_team = (
-        np.frombuffer(state.private_team, dtype=np.int16)
-        .reshape(6, NUM_ENTITY_PRIVATE_FEATURES)
-        .astype(np.int32)
-    )
+    # Right-pad a short private buffer with zero COLUMNS to the current
+    # width: the replay shards (spectator logs, no |request|) store private
+    # blocks frozen at an older feature count, and 0 is UNSPECIFIED for
+    # every appended field -- padding is semantically exact where a reshape
+    # would raise. Appending private features is therefore safe; renumbering
+    # never is.
+    private_flat = np.frombuffer(state.private_team, dtype=np.int16)
+    private_team = private_flat.reshape(6, private_flat.shape[0] // 6).astype(np.int32)
+    missing_columns = NUM_ENTITY_PRIVATE_FEATURES - private_team.shape[1]
+    if missing_columns > 0:
+        private_team = np.pad(private_team, ((0, 0), (0, missing_columns)))
     revealed_team = (
         np.frombuffer(state.revealed_team, dtype=np.int16)
         .reshape(6 * 2, NUM_ENTITY_REVEALED_FEATURES)

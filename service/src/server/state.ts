@@ -289,6 +289,35 @@ const entityPrivateArrayToObject = (array: Int16Array) => {
                         .ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE
                 ]
             ],
+        hpRatio:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO
+            ],
+        status: array[
+            EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__STATUS
+        ],
+        hasStatus:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS
+            ] === 1,
+        toxicTurns:
+            array[
+                EntityPrivateNodeFeature
+                    .ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS
+            ],
+        sleepTurns:
+            array[
+                EntityPrivateNodeFeature
+                    .ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS
+            ],
+        fainted:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED
+            ] === 1,
+        entityIdxPlusOne:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+            ],
     };
 };
 
@@ -769,6 +798,7 @@ function getArrayFromPrivatePokemon(
     // pokemonSet: PokemonSet,
     pokemonSet: Protocol.Request.Pokemon,
     firstPokemonSet: Protocol.Request.Pokemon,
+    entityIdxPlusOne: number,
 ) {
     const dataArr = getBlankPrivatePokemonArr();
 
@@ -843,6 +873,46 @@ function getArrayFromPrivatePokemon(
         : TypechartEnum.TYPECHART_ENUM___NULL;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE] =
         teraType;
+
+    // The truth channel: hp/status/fainted parsed from the REQUEST's own
+    // condition string ("245/272 tox", "0 fnt") -- the one source that is
+    // authoritative by construction. NOT the privateBattle `candidate`: its
+    // hp is log-event-driven and reads 0/0 for a mon the log has not yet
+    // given a reading (measured: request "252/342" against candidate 0/0,
+    // caught by the harness truth invariant on its first run), and NOT the
+    // transform-unwrapped `pokemon`: transform copies appearance, never
+    // condition. Turn counters live only on `candidate.statusState` (the
+    // string has no counters), event-driven and 0 when uninitialised --
+    // exactly the no-status default.
+    const conditionParts = pokemonSet.condition.split(" ");
+    const conditionFainted = conditionParts[1] === "fnt";
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED] =
+        conditionFainted ? 1 : 0;
+    let conditionRatio = 0;
+    if (!conditionFainted) {
+        const [hpPart, maxHpPart] = conditionParts[0].split("/");
+        const conditionHp = parseInt(hpPart);
+        const conditionMaxHp = parseInt(maxHpPart ?? hpPart);
+        conditionRatio = Math.floor(
+            (MAX_RATIO_TOKEN * conditionHp) / Math.max(conditionMaxHp, 1),
+        );
+    }
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO] =
+        conditionRatio;
+    const conditionStatus = conditionFainted ? undefined : conditionParts[1];
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__STATUS] =
+        conditionStatus
+            ? IndexValueFromEnum(StatusEnum, conditionStatus)
+            : StatusEnum.STATUS_ENUM___NULL;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS] =
+        conditionStatus ? 1 : 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS] =
+        candidate.statusState.toxicTurns;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS] =
+        candidate.statusState.sleepTurns;
+
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX] =
+        entityIdxPlusOne;
 
     return dataArr;
 }
@@ -4451,11 +4521,19 @@ export class StateHandler {
                     throw new Error("cannot find first instance of pokemon");
                 }
 
+                const stableIdx = this.player.eventHandler.identToIndex.get(
+                    member.ident,
+                );
+                let entityIdxPlusOne = 0;
+                if (stableIdx !== undefined) {
+                    entityIdxPlusOne = stableIdx + 1;
+                }
                 buffer.set(
                     getArrayFromPrivatePokemon(
                         matchedTeamMate,
                         member,
                         firstRequestValue,
+                        entityIdxPlusOne,
                     ),
                     offset,
                 );

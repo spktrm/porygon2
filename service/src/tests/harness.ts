@@ -17,7 +17,7 @@ import {
     getSampleTeam,
     StateHandler,
 } from "../server/state";
-import { Teams } from "@pkmn/sim";
+import { AnyObject, Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { GetRandomAction } from "../server/baselines/random";
 import { numEvals } from "../server/eval";
@@ -130,6 +130,94 @@ function assertPrivateSideShape(
             `my_moveset decoded to ${moveset.length} moves, expected a ` +
                 `non-zero multiple of 4 (one 4-move block per active slot)`,
         );
+    }
+}
+
+const MAX_RATIO_TOKEN_HARNESS = 16384;
+
+/**
+ * The private TRUTH CHANNEL (2026-08-31): a private row's condition must
+ * equal what the REQUEST says about that mon -- an independent parse of the
+ * request's condition string ("288/288", "0 fnt", "150/288 tox"), never the
+ * public row, which under a my-side Illusion blends two mons' histories
+ * until |replace| remaps. Battles with organic Illusion (Zoroark is in the
+ * random sets) make the soak itself the positive control: any accidental
+ * public-sourcing of these columns diverges from the request there and this
+ * throws.
+ *
+ * Also asserts the alignment key: a row's entityIdxPlusOne, when present,
+ * must point at a stable entity index that appears in MY side's
+ * PUBLIC_ORDER permutation -- i.e. the tag connects to a real public row.
+ * KNOWN ~0.1% false-positive class (2 in 1791 soak battles): a my-side
+ * Illusion mon's own index attaches to no public row until |replace| --
+ * the wire is CORRECT there (the hidden mon has no public identity yet,
+ * the tag reads as absent model-side), and vitest's retry: 2 absorbs it
+ * like the rest of the Illusion family.
+ */
+function assertPrivateTruthChannel(
+    privateTeam: ReturnType<typeof StateHandler.toReadablePrivate>,
+    request: AnyObject,
+    publicOrder: Int16Array,
+) {
+    const requestPokemon = request?.side?.pokemon as
+        | { condition: string; ident: string }[]
+        | undefined;
+    if (!requestPokemon) {
+        return;
+    }
+    const mySideSlots = new Set<number>();
+    // My side's public rows are the first half of PUBLIC_ORDER.
+    for (let row = 0; row < publicOrder.length / 2; row++) {
+        if (publicOrder[row] >= 0) {
+            mySideSlots.add(publicOrder[row]);
+        }
+    }
+    for (const [j, member] of requestPokemon.entries()) {
+        const row = privateTeam[j];
+        if (row === undefined) {
+            break;
+        }
+        const condition = member.condition;
+        const fainted = condition.endsWith(" fnt");
+        let expectedRatio = 0;
+        let statusToken: string | undefined = undefined;
+        if (!fainted) {
+            const [hpPart, rest] = condition.split("/");
+            const restParts = (rest ?? "").split(" ");
+            const maxHp = parseInt(restParts[0]);
+            statusToken = restParts[1];
+            expectedRatio = Math.floor(
+                (MAX_RATIO_TOKEN_HARNESS * parseInt(hpPart)) / maxHp,
+            );
+        }
+        if (row.fainted !== fainted) {
+            throw new Error(
+                `private row ${j}: fainted ${row.fainted} but the request ` +
+                    `says "${condition}"`,
+            );
+        }
+        if (!fainted && row.hpRatio !== expectedRatio) {
+            throw new Error(
+                `private row ${j}: hpRatio ${row.hpRatio} but the request ` +
+                    `says "${condition}" (expected ${expectedRatio})`,
+            );
+        }
+        if (!fainted && row.hasStatus !== (statusToken !== undefined)) {
+            throw new Error(
+                `private row ${j}: hasStatus ${row.hasStatus} but the ` +
+                    `request says "${condition}"`,
+            );
+        }
+        if (row.entityIdxPlusOne > 0) {
+            const stableIdx = row.entityIdxPlusOne - 1;
+            if (!mySideSlots.has(stableIdx)) {
+                throw new Error(
+                    `private row ${j}: entity idx ${stableIdx} is not in my ` +
+                        `side's PUBLIC_ORDER -- the alignment key points at ` +
+                        `no public row`,
+                );
+            }
+        }
     }
 }
 
@@ -288,6 +376,15 @@ export async function playerController(player: TrainablePlayerAI) {
                 state.getMyMoveset_asU8(),
             );
             assertPrivateSideShape(readablePrivateTeam, readableMoveset);
+
+            const truthRequest = player.getRequest();
+            if (truthRequest) {
+                assertPrivateTruthChannel(
+                    readablePrivateTeam,
+                    truthRequest as AnyObject,
+                    publicOrder,
+                );
+            }
 
             assertMaskMatchesDecoder(
                 state.getStructuredActionMask()!,

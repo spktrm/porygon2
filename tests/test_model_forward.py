@@ -159,3 +159,70 @@ def test_field_side_tokens_do_not_read_the_active_status_table(
     assert not np.allclose(np.asarray(base[2]), np.asarray(moved_side[2]))
     # The global field token carries no side, so it must be untouched.
     np.testing.assert_allclose(np.asarray(base[0]), np.asarray(moved_side[0]), atol=0)
+
+
+def _with_private_column(actor_input, row, column, value):
+    """actor_input with private_team[:, row, column] set to `value`."""
+    import dataclasses
+
+    env = actor_input.env
+    team = jnp.asarray(env.private_team).at[:, row, column].set(value)
+    return dataclasses.replace(
+        actor_input, env=dataclasses.replace(env, private_team=team)
+    )
+
+
+def test_private_condition_reaches_only_its_own_sheet_row(
+    real_model_and_trajectory,
+):
+    """The truth channel is wired: a candidate's CURRENT hp on the wire moves
+    its own assembled sheet row and no other -- the input-level half of what
+    probe C measures behaviourally after training. Probe C's baseline read
+    was r ~ 0.00 precisely because this input did not exist."""
+    from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
+
+    network, params, actor_input, _ = real_model_and_trajectory
+    base = _assembled_rows(network, params, actor_input)[PRIVATE_ROWS]
+
+    halved = _with_private_column(
+        actor_input,
+        2,
+        EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO,
+        4096,
+    )
+    moved = _assembled_rows(network, params, halved)[PRIVATE_ROWS]
+
+    changed_rows = ~np.all(np.isclose(base, moved, atol=1e-6), axis=-1)
+    assert changed_rows[2], "the perturbed candidate's own row must move"
+    assert not changed_rows[
+        [0, 1, 3, 4, 5]
+    ].any(), "condition must be entity-local at assembly time"
+
+
+def test_entity_index_tag_links_private_to_public(real_model_and_trajectory):
+    """The alignment key: perturbing the shared entity_index_tag table moves
+    BOTH public and private rows (one table, applied twice), and changing a
+    private row's ENTITY_IDX on the wire moves only that row. idx 0 (never
+    fielded) keys the absent row, same as a filler public row."""
+    from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
+    from rl.model.constants import PUBLIC_ROWS
+
+    network, params, actor_input, _ = real_model_and_trajectory
+    base = _assembled_rows(network, params, actor_input)
+
+    moved = _assembled_rows(
+        network, _perturbed(params, ("entity_index_tag",)), actor_input
+    )
+    assert not np.allclose(base[PRIVATE_ROWS], moved[PRIVATE_ROWS], atol=1e-6)
+    assert not np.allclose(base[PUBLIC_ROWS], moved[PUBLIC_ROWS], atol=1e-6)
+
+    rekeyed_input = _with_private_column(
+        actor_input,
+        1,
+        EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX,
+        12,
+    )
+    rekeyed = _assembled_rows(network, params, rekeyed_input)[PRIVATE_ROWS]
+    changed_rows = ~np.all(np.isclose(base[PRIVATE_ROWS], rekeyed, atol=1e-6), axis=-1)
+    assert changed_rows[1]
+    assert not changed_rows[[0, 2, 3, 4, 5]].any()
