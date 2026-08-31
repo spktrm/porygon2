@@ -908,6 +908,32 @@ Also in this pass: player Adam eps 1e-8 -> 1e-5 (the reference diff's flagged
 proof that mass + strength coexist under a zero-avoider, and the measurement
 that priced the row form's WHICH-tax.
 
+## Investigation ledger — 2026-09-01 flash attention: measured, declined
+
+The old objection ("APIs too immature") is RETIRED — jax 0.10.2's
+`jax.nn.dot_product_attention(implementation="cudnn")` is first-class (bool
+masks, GQA, per-batch seq lengths, logsumexp residual; bf16 and head-dim 64
+both fine on the 3080 Ti). What replaces it is a measured no-win at this
+model's shapes. Full table in the comment beside the einsum in
+`rl/model/modules.py`; the bench scripts were scratchpad-only.
+
+| finding | number |
+|---|---|
+| trunk shape (61-64 rows): einsum vs best flash | einsum 2-4x FASTER (0.12ms vs 0.32-0.54ms at seq 64) — kernel overhead dominates tiny attentions |
+| crossover where cudnn wins | ~256 rows with `seq_lengths`; decisive only at 2048 (3.09 vs 4.11ms, and plain xla OOMs there — the memory win is real at long seqs) |
+| the mask tax | a DENSE bool mask is folded into an additive bias whose materialisation eats the flash win at every length (cudnn+mask never beats einsum past noise); `seq_lengths` avoids it but is PREFIX-only, and the trunk's validity mask is scattered — structurally inexpressible |
+| the odd-length blocker | cuDNN training backward raises verbatim "Unsupported sequence length Q 61, KV 61" whenever a mask/bias is present — the trunk would need 64-padding |
+| masked-query rows | dpa returns garbage (~0.4) where the einsum's double-mask returns exact 0; the trunk's block-end hard-zero would absorb it, but it is a semantic difference to re-check on any future swap |
+| softcap | max pre-cap logit 7.6 on the trained ckpt_00140000 against the 50 cap — qk layer norm bounds it; INERT INSURANCE, deletable if a future swap needs it gone |
+
+Verdict against the pre-registered bar (adopt at >=5% win at the live shape):
+declined at -2x to -4x. Revisit only when a design grows the sequence past
+~512 with prefix-shaped masking (matchup rows, token-level history, the
+parked world model) — the crossover number above is the deliverable. Also:
+even a winning kernel moves nothing end-to-end today; the 4.2 steps/sec
+system rate is actor-bound (the learner alone does 12.3). The dead
+commented-out dpa call from the original attempt is deleted.
+
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 
 A full read of `rl/model/` against `service/src/server/state.ts`, treating

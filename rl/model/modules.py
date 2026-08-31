@@ -109,7 +109,6 @@ class MultiHeadAttention(nn.Module):
     need_pos: bool = False
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
-    implementation: str | None = None  # "cudnn"
     collect_intermediates: bool = False
 
     @nn.compact
@@ -178,18 +177,24 @@ class MultiHeadAttention(nn.Module):
                 *key_heads.shape
             )
 
-        # target_shape = list(mask.shape)
-        # target_shape[-3] = self.num_heads
-        # mask = jnp.broadcast_to(mask, target_shape)
-
-        # attn = jax.nn.dot_product_attention(
-        #     query_heads,
-        #     key_heads,
-        #     value_heads,
-        #     mask=mask,
-        #     implementation=self.implementation,
-        # )
-
+        # DELIBERATELY the plain einsum, not jax.nn.dot_product_attention /
+        # cuDNN flash. Measured 2026-09-01 (fwd+bwd ms, bf16, 4 heads x 64,
+        # B*T = 8192 tokens; einsum / dpa-xla / cudnn+dense-mask /
+        # cudnn+seq_lengths): seq 64: 0.12/0.27/0.54/0.32; 128:
+        # 0.16/0.42/0.46/0.53; 256: 0.68/0.70/0.73/0.58; 512:
+        # 1.02/0.72/1.30/0.75; 1024: 1.42/1.53/2.33/1.71; 2048:
+        # 4.11/OOM/4.23/3.09. At the trunk's 61-64 rows the einsum is 2-4x
+        # FASTER than every flash variant (kernel overhead dominates), and
+        # the only variant that ever clearly wins (cudnn+seq_lengths, from
+        # ~256 and decisively at 2048 where plain xla OOMs) cannot express
+        # this module's SCATTERED validity mask -- seq_lengths is
+        # prefix-only, and a dense mask is folded into an additive bias
+        # whose materialisation eats the flash win (and trips cuDNN's
+        # odd-length training limitation at 61). Revisit only when a design
+        # grows the sequence past ~512 WITH prefix-shaped masking; the
+        # softcap below is not a blocker then -- max |pre-cap logit| on the
+        # trained model measured 7.6 against the 50 cap (qk layer norm
+        # bounds it), so it is deletable insurance.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = softcap(attn_logits / np.sqrt(qk_size).astype(q.dtype))
 
