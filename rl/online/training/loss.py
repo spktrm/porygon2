@@ -49,41 +49,46 @@ def factorised_entropies(
     return h_macro, h_micro_taken
 
 
-def uniform_kl_rows(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
-    """Per-row KL(u || pi) over legal cells -- the ZERO-AVOIDING term.
+def uniform_kl_modalities(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
+    """Per-row KL(u || pi_m) over LIVE modalities -- the ZERO-AVOIDING term,
+    moved to the MODALITY MARGINAL (2026-08-31).
 
-    Note the DIRECTION. Reverse KL(pi || u) is, up to a constant, just
-    negative entropy, i.e. the entropy bonus already in the objective; it
-    carries the pi prefactor that CLAUDE.md 4 records as structurally unable
-    to hold a floor once a modality starves. This is the other direction:
+    The row form (`uniform_kl_rows`, gradient pi_b - 1/k over every legal
+    cell) was measured on the sp75b/sp75c matched BR pair to be a ROW
+    flattener: its pull separates moves from each other with the same force
+    it restores switch mass with, buying WHETHER-to-switch and paying in
+    WHICH-move-to-pick (entropy_micro_taken pinned 0.93 against the
+    control's 0.84, exploit halved). This form keeps everything the constant
+    reference bought and drops the tax:
 
-        KL(u || pi) = -(1/k) * sum_a log pi_a   (+ a constant)
-        d/d y_b     = pi_b - 1/k
+        KL(u || pi_m) = -(1/M) * sum_m log pi_m   (+ a constant), M = live
+        d/d y_b       = pi_b - (1/M) * pi_b / pi_m(b)
 
-    Bounded by 1 for ANY pi, zero-sum over legal cells, and with NO pi
-    prefactor -- so it still pulls at pi = 1e-6, where both the entropy bonus
-    (d/dy_b = -pi_b (log pi_b + H)) and the reverse-KL magnet are numerically
-    dead. Those three properties are exactly what every mass-restoring
-    mechanism this project has tried lacked, and unlike the four support-anchor
-    phases the reference here is the CONSTANT uniform distribution: it cannot
-    collapse, cannot be ratcheted by a re-snapping reference, and cannot invert
-    on the modality-level sign of Q^pi.
+    summed over a modality's cells that is exactly **pi_m - 1/M**: bounded,
+    zero-sum over modalities, NO pi_m prefactor -- and the per-cell force is
+    proportional to the CONDITIONAL pi_b/pi_m, so the term moves mass into a
+    modality along the policy's own within-modality ranking and never
+    reranks it. The loss depends on the marginals alone: any redistribution
+    within a modality is invariant, which is the phase-4 law -- the
+    regulariser says WHETHER, never WHICH -- written as an identity rather
+    than an aspiration.
 
-    Why it is back (2026-08-31), having been dropped one commit ago for
-    reference alignment: the surrogate's expected force on a cell is also
-    pi-prefactored (~pi_b * A_b, the cell is taken on ~pi_b of rows), so
-    against the entropy bonus the prefactor CANCELS and the equilibrium is a
-    pure temperature, pi ∝ exp(A/alpha) -- mass decaying EXPONENTIALLY in the
-    headwind. Here it cancels on one side only, so equilibrium mass is
-    ~coef/(k*|A|), decaying merely linearly. That is the difference between a
-    floor and a coefficient that has been retuned four times.
-
-    Returned per row and unmasked in the batch sense; the caller applies the
-    row mask.
+    A row with one live modality contributes -log 1 = 0, so forced rows are
+    silent without a mask (the caller's row mask still applies). Returned
+    per row, f32.
     """
-    legal = legal_mask.astype(jnp.float32)
-    weights = legal / jnp.maximum(legal.sum(axis=-1, keepdims=True), 1.0)
-    return -(weights * log_policy.astype(jnp.float32)).sum(axis=-1)
+    modality_oh = jax.nn.one_hot(
+        jnp.asarray(CELL_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
+    )
+    log_policy32 = log_policy.astype(jnp.float32)
+    marginal = jax.nn.logsumexp(
+        jnp.where(legal_mask[..., None] & modality_oh, log_policy32[..., None], -1e9),
+        axis=-2,
+    )
+    live = marginal > -1e8
+    num_live = live.sum(axis=-1)
+    weights = live / jnp.maximum(num_live, 1)[..., None]
+    return -(weights * jnp.where(live, marginal, 0.0)).sum(axis=-1)
 
 
 def spo_objective(

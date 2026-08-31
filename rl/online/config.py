@@ -408,38 +408,38 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (loss.factorised_entropies). Revert handles in the CLAUDE.md
     # ledgers.
     player_ent_coef: float = 0.01
-    # The ZERO-AVOIDING term (loss.uniform_kl_rows): forward KL from the
-    # CONSTANT uniform over each row's legal cells, per-logit gradient
-    # exactly pi_b - 1/k. Removed 2026-08-30 for reference alignment and
-    # restored 2026-08-31 on the watch it was removed against -- wy8m50ic's
-    # undefended era ran entropy_macro 0.43 -> 0.19 and prob_switch 0.026 ->
-    # 0.012, the pre-registered abort. It is the only force in the bracket
-    # that is not pi-prefactored, and that is not a matter of degree: the
+    # The ZERO-AVOIDING term (loss.uniform_kl_modalities): forward KL from
+    # the CONSTANT uniform over each row's LIVE MODALITIES, modality-level
+    # gradient exactly pi_m - 1/M. It is the only force in the bracket that
+    # is not pi-prefactored, and that is not a matter of degree: the
     # surrogate's expected force on a cell carries the same pi_b the entropy
     # bonus does, so their ratio is mass-independent and the entropy
     # equilibrium is exp(-|A|/alpha) -- no coefficient holds a floor, which
     # is what four retunes (0.01/0.05/0.1/0.2) measured. Here the prefactor
-    # cancels on one side only: equilibrium mass ~ coef/(k*|A|), so the ask
-    # DIVERGES as a cell starves and RELAXES as evidence arrives.
+    # cancels on one side only: equilibrium modality mass ~ coef/(M*|A|), so
+    # the ask DIVERGES as the modality starves and RELAXES as evidence
+    # arrives.
     #
-    # Sized on that equilibrium, not on loss balance. 0.05 was the first
-    # shipped value and is MEASURED TOO LARGE (2026-08-31, the sp75b/sp75c
-    # matched BR pair): it bought everything it promised on its own axis --
-    # entropy_macro 2.8x the control, prob_switch 4.3x, vol_switch_rows
-    # 7.7x, all held flat where the control collapsed -- and HALVED the
-    # exploit (league_main_v_254992_winrate 0.186 vs 0.343 at 69k, still
-    # below the control's 50k value at 82k). Read the equilibrium as the
-    # binding constraint it became: sp75c's switch mass sat 0.05-0.065 flat
-    # across 35k-82k while the control's tracked value down to 0.015, i.e.
-    # the coefficient was setting the mass, not flooring it.
+    # WHY THE MARGINAL (2026-08-31, the sp75b/sp75c matched BR pair): the
+    # row form (pi_b - 1/k over every legal cell) bought every mass metric
+    # (entropy_macro 2.8x the control, prob_switch 4.3x, vol_switch_rows
+    # 7.7x) and HALVED the exploit (0.186 vs 0.343 @69k) -- it separated
+    # moves from each other with the same force it restored switch mass
+    # with, entropy_micro_taken pinned at 0.93. The marginal form's loss
+    # depends on the modality masses alone: within-modality redistribution
+    # is IDENTICALLY invariant, and the per-cell force is proportional to
+    # the policy's own conditional -- the regulariser says WHETHER, never
+    # WHICH, as an algebraic identity rather than a hope.
     #
-    # 0.025 is the halving arm: mass is linear in coef at fixed |A|, so
-    # ~0.015 (what evidence alone gives) + ~0.02 = ~0.035, separated from
-    # both existing arms. If exploit recovers to near-control at ~2x the
-    # control's mass the trade-off curve has a usable middle; if it stays
-    # depressed the FORM is wrong, not the scale, and the fix is to move
-    # the uniform reference to the MODALITY MARGINAL -- see the ledger.
-    # Set 0.0 for a control arm -- that is bit-identical to no term at all.
+    # Sized on the equilibrium, never on loss balance, with M = 2-3 against
+    # the row form's k ~ 10 -- the SAME coefficient buys ~5x the modality
+    # mass, so 0.025 here is not the sp75d halving arm resized: it holds
+    # switch mass ~0.06 against a 0.2 sigma headwind and ~0.025 against
+    # 0.5 sigma, floors comfortably above the 0.015 collapse level that
+    # still yield to real evidence. Set 0.0 for a control arm -- that is
+    # bit-identical to no term at all. Watch: player_loss_modality_kl
+    # falling as switch mass returns is the term relaxing (healthy); pinned
+    # with mass unmoved is paying-and-buying-nothing (the abort).
     player_uniform_kl_coef: float = 0.025
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,

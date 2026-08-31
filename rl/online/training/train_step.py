@@ -27,7 +27,7 @@ from rl.online.training.loss import (
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
-    uniform_kl_rows,
+    uniform_kl_modalities,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
@@ -393,17 +393,18 @@ def train_step(
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
 
-        # The zero-avoiding term (restored 2026-08-31): forward KL from
-        # UNIFORM to the policy, per-logit gradient exactly pi_b - 1/k. It
-        # is the only force in this bracket that is not pi-prefactored, so
-        # it is the only one still acting on a cell the policy has
-        # abandoned -- the entropy bonus above shares the surrogate's own
-        # pi_b, which makes its equilibrium a temperature and not a floor.
-        # Its reference is a constant, so unlike the retired support anchor
-        # it cannot be ratcheted flat by re-snapping from a collapsing
-        # policy, nor invert on the modality-level sign of Q^pi.
-        loss_uniform_kl = average(
-            uniform_kl_rows(learner_log_policy, flat_action_mask), policy_mask
+        # The zero-avoiding term, on the MODALITY MARGINAL (2026-08-31):
+        # forward KL from uniform over live modalities, modality-level
+        # gradient exactly pi_m - 1/M. It is the only force in this bracket
+        # that is not pi-prefactored, so it is the only one still acting on
+        # a modality the policy has abandoned -- and unlike the row form it
+        # replaced (the sp75c lesson) the loss is IDENTICALLY invariant to
+        # within-modality redistribution, so it restores WHETHER-to-switch
+        # mass without flattening WHICH-move-to-pick. The constant reference
+        # still cannot be ratcheted flat or invert on the Q^pi sign.
+        loss_modality_kl = average(
+            uniform_kl_modalities(learner_log_policy, flat_action_mask),
+            policy_mask,
         )
 
         # Modality decomposition of the two factors any taken-action
@@ -444,7 +445,7 @@ def train_step(
             # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
             player_ref_kl=loss_mag,
-            player_loss_uniform_kl=loss_uniform_kl,
+            player_loss_modality_kl=loss_modality_kl,
         )
         # pg bracket + v + kl.
         loss = (
@@ -459,7 +460,7 @@ def train_step(
                 loss_pg
                 + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
-                + config.player_uniform_kl_coef * loss_uniform_kl
+                + config.player_uniform_kl_coef * loss_modality_kl
             )
             # v: one critic, on the deploy-time information set. The
             # all-action advantage that sat beside it retired 2026-08-29 --

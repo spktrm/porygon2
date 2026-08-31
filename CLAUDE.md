@@ -890,6 +890,22 @@ over modalities, gradient `pi_m - 1/M` with M = 2-3, silent within a modality
 choice to the critic. That is the phase-4 law reached from the other
 direction: the regulariser says WHETHER, never WHICH.
 
+## Removal + addition ledger — 2026-08-31 grid retired, modality-marginal KL
+
+One fresh lineage (new param tree accepted). Revert handle: the two commits on
+`flat-trunk` following `4c3948d`.
+
+| mechanism | what | why |
+|---|---|---|
+| 41x41 action grid, everywhere | `Action{src,tgt}` -> `Action{cell}` (an index into the 295-cell BLOCK SPACE: ActionMask's own fields flattened — 6 switch, 16x17 move x target, 17 standalone; layout documented beside the proto message, offsets derived from the slot-list lengths on BOTH sides); `FlatActionReadout` emits the three blocks it always computed and the scatter dies; the service builds `structuredMask` + `legalChoiceByCell` directly from block cells and its internal `OneDBoolean` grid dies; `FLAT_MODALITY_MASK` -> `CELL_MODALITY_MASK` (length 295, IDENTICAL per-cell values, so `entropy_macro` and every modality consumer keeps its meaning); `ally_switch_bias` (2,1) folds to one `switch_bias` scalar (row 1 never trained in singles; at preview a uniform shift over an all-switch set is softmax-invariant); `src_index`/`tgt_index` leave the stored pytrees; `kind`/`active_slot` become purely decoder-side (test-pinned: the mask cells are kind-invariant, harness.ts asserts the decode half) | ~82% of the grid was unreachable in any format; the readout, the wire mask and the service's choice map were all already block-shaped, and every grid artefact was adapter code between them. Stored mask leaf shrinks 5.7x. Shards survive via the packed-grid fold shim (`_cells_from_packed_grid`); prev-action info features keep their ActionEnum vocabulary via decode-time conversion (`cellToEnumPair`). 2049-battle soak, zero mask/decoder violations; probe C's row addressing ported off the dead 41-slot action stream onto named sequence rows in the same pass (it silently indexed sequence rows by ActionEnum VALUE — reads were garbage on the flat trunk) |
+| `loss.uniform_kl_rows` -> `loss.uniform_kl_modalities` | forward KL from uniform over LIVE MODALITIES; modality-level gradient exactly pi_m − 1/M; the loss reads the marginals ALONE, so within-modality redistribution is identically invariant and the per-cell force follows the policy's own conditional. Metric renamed `player_loss_modality_kl` (the loss changed meaning — the coma->neurd precedent). Coef stays `player_uniform_kl_coef` = 0.025: with M = 2–3 against the row form's k ~ 10 the same coef buys ~5x the modality mass — equilibrium switch mass ~0.06 at 0.2 sigma headwind, ~0.025 at 0.5 sigma | the pre-registered structural fix from the sp75c falsification: the row form's pi_b − 1/k separated moves from each other with the same force it restored switch mass with — every mass metric bought (macro-H 2.8x, prob_switch 4.3x) and the exploit HALVED (0.186 vs 0.343 @69k), `entropy_micro_taken` pinned 0.93. The phase-4 law — the regulariser says WHETHER, never WHICH — is now an algebraic identity of the term rather than an aspiration. Tests: pi_m − 1/M gradient, full pull at a starved marginal, within-modality swap invariance WITH the cross-modality positive control, forced rows silent by construction |
+
+Also in this pass: player Adam eps 1e-8 -> 1e-5 (the reference diff's flagged
+"one to test"; builder unchanged). sp75c stopped at ~283k (winrate vs target
+0.48 and climbing, prob_switch ~0.026 held; published `p_100254992`) — the
+proof that mass + strength coexist under a zero-avoider, and the measurement
+that priced the row form's WHICH-tax.
+
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 
 A full read of `rl/model/` against `service/src/server/state.ts`, treating

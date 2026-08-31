@@ -240,20 +240,24 @@ def rl_sections():
                     log_y=True,
                 ),
                 lp(
-                    # The zero-avoiding term: forward KL from UNIFORM, the
-                    # one force in the bracket that is not pi-prefactored
-                    # and so the only one still acting on an abandoned
-                    # cell. Read against prob_switch -- rising mass with
-                    # this falling is the term doing its job and relaxing.
+                    # The zero-avoiding term on the MODALITY MARGINAL:
+                    # forward KL from uniform over live modalities, the one
+                    # force in the bracket that is not pi-prefactored and so
+                    # the only one still acting on an abandoned modality --
+                    # identically silent within a modality since 2026-08-31
+                    # (the sp75c row form flattened WHICH-move). Read
+                    # against prob_switch -- rising mass with this falling
+                    # is the term doing its job and relaxing; pinned with
+                    # mass unmoved is paying and buying nothing.
                     "Zero-avoiding KL & switch mass",
-                    ["player_loss_uniform_kl", "player_policy_prob_switch"],
+                    ["player_loss_modality_kl", "player_policy_prob_switch"],
                 ),
                 lp(
                     "Loss components",
                     [
                         "player_loss_pg",
                         "player_loss_entropy",
-                        "player_loss_uniform_kl",
+                        "player_loss_modality_kl",
                         "player_loss_kl",
                         "player_loss_v_win",
                     ],
