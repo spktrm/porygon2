@@ -72,6 +72,17 @@ class Trunk(nn.Module):
     `nothing_saveable`, not the house `checkpoint_dots`: the latter saves
     exactly the wide SwiGLU hidden activations that dominate the backward
     pass's memory, which is what OOM'd the train step when it was tried.
+
+    MEASURED, not assumed (2026-09-01 sweep, full train_step compiled at the
+    largest lattice entry (64, 256) x batch 4; XLA memory_analysis temp +
+    15-step timing): the step is memory-bandwidth-bound, so recomputing is
+    genuinely cheaper than storing -- NO remat is both 3.8x the memory AND
+    ~10% SLOWER. Full table (trunk x entity pool, temp MiB / steps per sec):
+    nothing+nothing 796/12.26 (this), nothing+dots 1071/12.65, dots+nothing
+    1244/12.32, dots+dots 1508/12.60, none+nothing 3019/11.03, none+dots
+    3402/11.29. The fastest fitting variant buys +3.2% for +275MiB, landing
+    on the >=1.5GB headroom boundary (the 12GB box peaked ~10.5GB all-in),
+    so the cheapest policy stays.
     """
 
     cfg: ConfigDict
