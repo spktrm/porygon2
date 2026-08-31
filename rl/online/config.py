@@ -268,7 +268,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # The player now runs the same trust-regioned PPO surrogate as the
     # builder, the exact case the pro-momentum argument was always
     # about; NashPG's own optimiser is AdamW with default moments.
-    player_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
+    # Player eps 1e-5 (2026-08-31): the NashPG reference explicitly
+    # overrides optax's 1e-8 (`optax.adamw(lr, eps=1e-5)`) and the
+    # reference-diff ledger flagged it as "the one to test" — Adam is
+    # scale-invariant, so a param whose gradient has gone tiny (a starved
+    # switch cell's) still steps at ~full lr along a noise-dominated
+    # direction, and eps is the ONLY damper; 1e-5 engages 1000x sooner.
+    # Builder keeps 1e-8: the divergence concerned the player bracket.
+    player_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-05, weight_decay=0)
     builder_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     # 3e-5. A 1e-4 trial (Aug 2026, zany-leaf-1305) collapsed: pre-clip grad
     # norms 10-100x the clip, action-emb srank at 0.27 by 13k steps (vs
