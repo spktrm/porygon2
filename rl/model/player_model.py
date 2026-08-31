@@ -9,7 +9,11 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
+from rl.environment.data import (
+    CELL_MODALITY_MASK,
+    NUM_MODALITY_FEATURES,
+    NUM_SWITCH_CELLS,
+)
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
@@ -17,7 +21,6 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
-from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
@@ -56,8 +59,8 @@ class Porygon2PlayerModel(nn.Module):
         observer for an architecture that no longer exists, and its last
         readings are banked in the ledger.
 
-        The action readout scores the grid from the rows it owns; `v_head`
-        reads the CLS row and nothing else.
+        The action readout scores the block cells from the rows it owns;
+        `v_head` reads the CLS row and nothing else.
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = FlatActionReadout(self.cfg.action_head, name="action_head")
@@ -69,13 +72,11 @@ class Porygon2PlayerModel(nn.Module):
 
     def _modality_log_marginal(self, log_policy: jax.Array, flat_valid_mask: jax.Array):
         """log of the policy's modality marginal over legal cells, plus each
-        modality's legal-cell count. By the composition identity
-        (heads.compose_action_grid: log_policy(a) = composed_macro[m(a)] +
-        centred micro) this marginal IS the composed macro log-softmax —
-        recovered here by marginalisation so neither the head signature nor
-        the actor payload has to carry the full distribution."""
+        modality's legal-cell count — recovered by marginalisation over the
+        per-cell modality constant so neither the head signature nor the
+        actor payload has to carry the full distribution."""
         modality_oh = jax.nn.one_hot(
-            FLAT_MODALITY_MASK,
+            jnp.asarray(CELL_MODALITY_MASK),
             NUM_MODALITY_FEATURES,
             dtype=log_policy.dtype,
         )
@@ -123,7 +124,7 @@ class Porygon2PlayerModel(nn.Module):
         temp: float,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
-        the grid (the historical path, unchanged); doubles = two head-level
+        the block cells (the historical path, unchanged); doubles = two head-level
         stages over per-slot masks with slot 2 conditioned on slot 1's
         choice — the trunk is forwarded once either way."""
         if self.cfg.num_decision_slots == 2:
@@ -137,7 +138,7 @@ class Porygon2PlayerModel(nn.Module):
         given_index: jax.Array | None,
         temp: float,
     ):
-        """Score one decision grid and pick an action.
+        """Score one decision's cells and pick an action.
 
         THE policy scoring path — singles calls it once, doubles calls it
         once per stage with shared params. `given_index` teacher-forces the
@@ -148,10 +149,8 @@ class Porygon2PlayerModel(nn.Module):
         the sampler can never draw one.
         """
         private_rows, move_rows, target_rows = sequence_rows
-        logits = self.action_head(
-            private_rows, move_rows, target_rows, valid_mask, temp=temp
-        )
-        flat_valid = valid_mask.reshape(*valid_mask.shape[:-2], -1)
+        logits = self.action_head(private_rows, move_rows, target_rows, temp=temp)
+        flat_valid = valid_mask
         pi_logits = jnp.where(flat_valid, logits, -1e9)
         # prior=None is uniform over legal cells -- which is exactly what the
         # flat readout's all-zero init produces, so the init policy and the
@@ -177,7 +176,6 @@ class Porygon2PlayerModel(nn.Module):
         flat_valid, metrics, action_index, log_prob = self._score_and_sample(
             sequence_rows, valid_mask, head.action_index if train else None, temp
         )
-        mask_width = valid_mask.shape[-1]
         learner_only = {}
         if self.cfg.train:
             learner_only = {
@@ -190,8 +188,6 @@ class Porygon2PlayerModel(nn.Module):
             action_index=action_index,
             log_prob=log_prob,
             **learner_only,
-            src_index=action_index // mask_width,
-            tgt_index=action_index % mask_width,
             entropy=metrics.entropy,
             normalized_entropy=metrics.normalized_entropy,
             magnet_kl=metrics.magnet_kl,
@@ -202,22 +198,13 @@ class Porygon2PlayerModel(nn.Module):
 
     def _apply_choice_collision(self, valid_mask: jax.Array, action_index: jax.Array):
         """Slot-2 legality given slot 1's choice: both mons cannot switch
-        to the same reserve, so if slot 1 chose a switch, knock out slot
-        2's switch cells sharing its target column. Must be applied
+        to the same reserve. A switch cell IS its reserve index in the block
+        space, so the collision is exactly slot 1's own cell. Must be applied
         identically at act and learn time or the stored behaviour log-prob
         and the learner's recompute diverge."""
-        mask_width = valid_mask.shape[-1]
-        flat = valid_mask.reshape(-1)
-        cell_modality = jnp.asarray(FLAT_MODALITY_MASK)
-        a1_is_switch = (
-            jnp.take(cell_modality, action_index) == ModalityEnum.MODALITY_ENUM__SWITCH
-        )
-        same_tgt = (jnp.arange(flat.shape[0]) % mask_width) == (
-            action_index % mask_width
-        )
-        is_switch_cell = cell_modality == ModalityEnum.MODALITY_ENUM__SWITCH
-        collide = a1_is_switch & same_tgt & is_switch_cell
-        return jnp.where(collide, False, flat).reshape(valid_mask.shape)
+        a1_is_switch = action_index < NUM_SWITCH_CELLS
+        collide = a1_is_switch & (jnp.arange(valid_mask.shape[-1]) == action_index)
+        return jnp.where(collide, False, valid_mask)
 
     def _forward_two_slots(
         self,
@@ -227,7 +214,7 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
     ):
-        """Doubles: valid_mask is (2, N, N) per-slot masks and, in train,
+        """Doubles: valid_mask is (2, NUM_ACTION_CELLS) per-slot masks and, in train,
         head.action_index is (2,). One trunk pass serves both decisions —
         only the heads run twice, with slot 2's embeddings conditioned on
         slot 1's chosen action and its mask adjusted for choice collisions.
@@ -240,7 +227,7 @@ class Porygon2PlayerModel(nn.Module):
         magnet gradient also drops the REINFORCE pathway through pi_1
         reweighting the conditional KLs. NOTE: the service/actor/replay
         plumbing for this path (per-slot masks in requests, two stored
-        action indices, (2, N*N) full-support log_policy in the learner)
+        action indices, (2, NUM_ACTION_CELLS) full-support log_policy in the learner)
         is the remaining doubles workstream; the model side is complete.
         """
         stage1_given = head.action_index[0] if train else None
@@ -248,10 +235,7 @@ class Porygon2PlayerModel(nn.Module):
             sequence_rows, valid_mask[0], stage1_given, temp
         )
 
-        mask_width = valid_mask.shape[-1]
-        cond_rows = self.slot_conditioning(
-            sequence_rows, index_1 // mask_width, index_1 % mask_width
-        )
+        cond_rows = self.slot_conditioning(sequence_rows, index_1)
         mask_2 = self._apply_choice_collision(valid_mask[1], index_1)
         stage2_given = head.action_index[1] if train else None
         flat_valid_2, metrics_2, index_2, log_prob_2 = self._score_and_sample(
@@ -295,8 +279,6 @@ class Porygon2PlayerModel(nn.Module):
                 if self.cfg.train
                 else ()
             ),
-            src_index=action_index // mask_width,
-            tgt_index=action_index % mask_width,
             entropy=entropy,
             normalized_entropy=normalized_entropy,
             magnet_kl=metrics_1.magnet_kl + metrics_2.magnet_kl,

@@ -10,5 +10,4 @@ class StepResponse(BaseModel):
     v_win: float
     log_prob: float
     entropy: float
-    src: int
-    tgt: int
+    cell: int

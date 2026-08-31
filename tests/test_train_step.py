@@ -55,7 +55,6 @@ def test_train_step_smoke():
     actor_input, actor_output = get_ex_player_step()
     env = actor_input.env  # (T, B=1, ...)
     T, B = env.done.shape
-    mask_width = env.action_mask.shape[-1]
     action_index = jnp.asarray(actor_output.action_head.action_index)
 
     batch = Batch(
@@ -66,8 +65,6 @@ def test_train_step_smoke():
                     action_head=PlayerPolicyHeadOutput(
                         action_index=action_index,
                         log_prob=jnp.full((T, B), -1.0, dtype=jnp.float32),
-                        src_index=action_index // mask_width,
-                        tgt_index=action_index % mask_width,
                     ),
                     value_head=CategoricalValueHeadOutput(
                         expectation=jnp.zeros((T, B), dtype=jnp.float32)

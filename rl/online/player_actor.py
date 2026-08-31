@@ -102,10 +102,7 @@ class PlayerActor:
 
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
-        return Action(
-            src=agent_output.actor_output.action_head.src_index.item(),
-            tgt=agent_output.actor_output.action_head.tgt_index.item(),
-        )
+        return Action(cell=agent_output.actor_output.action_head.action_index.item())
 
     def _snapshot_window(self, actor_input: PlayerActorInput):
         """Fixed-length trailing history window as of ``actor_input``'s

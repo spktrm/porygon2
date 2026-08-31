@@ -28,6 +28,7 @@ from rl.environment.data import (
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
     MOVE_INDICES,
+    NUM_ACTION_CELLS,
     NUM_ACTION_FEATURES,
     RESERVE_ENTITY_INDICES,
     TARGET_SLOT_INDICES,
@@ -195,3 +196,34 @@ ENEMY_TARGET_ROWS = np.array(
     [_target_row_of[int(slot)] for slot in ENEMY_TARGET_INDICES], dtype=np.int32
 )
 assert len(ALLY_TARGET_ROWS) == len(ENEMY_TARGET_ROWS) == NUM_ACTIVES_PER_SIDE
+
+# Block cell -> row-bank index, for the doubles SlotConditioning gather. The
+# bank is the readout's own input rows stacked in order --
+# private(6) | move(16) | target(17) -- and each cell names the row(s) that
+# produced its logit: a switch cell its private row (both halves -- the
+# ALLY_i_SWITCH pseudo-slots of the grid era had no row and gathered zeros),
+# a move cell its move row and its target row, a standalone cell its target
+# row twice.
+_BANK_MOVE_OFFSET = NUM_PRIVATE_SLOTS
+_BANK_TARGET_OFFSET = NUM_PRIVATE_SLOTS + len(MOVE_INDICES)
+CELL_BANK_SRC = np.concatenate(
+    [
+        np.arange(NUM_PRIVATE_SLOTS),
+        np.repeat(
+            _BANK_MOVE_OFFSET + np.arange(len(MOVE_INDICES)),
+            len(TARGET_SLOT_INDICES),
+        ),
+        _BANK_TARGET_OFFSET + np.arange(len(TARGET_SLOT_INDICES)),
+    ]
+).astype(np.int32)
+CELL_BANK_TGT = np.concatenate(
+    [
+        np.arange(NUM_PRIVATE_SLOTS),
+        np.tile(
+            _BANK_TARGET_OFFSET + np.arange(len(TARGET_SLOT_INDICES)),
+            len(MOVE_INDICES),
+        ),
+        _BANK_TARGET_OFFSET + np.arange(len(TARGET_SLOT_INDICES)),
+    ]
+).astype(np.int32)
+assert len(CELL_BANK_SRC) == len(CELL_BANK_TGT) == NUM_ACTION_CELLS

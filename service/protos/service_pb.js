@@ -828,8 +828,7 @@ proto.servicev2.Action.prototype.toObject = function(opt_includeInstance) {
  */
 proto.servicev2.Action.toObject = function(includeInstance, msg) {
   var f, obj = {
-src: jspb.Message.getFieldWithDefault(msg, 1, 0),
-tgt: jspb.Message.getFieldWithDefault(msg, 2, 0)
+cell: jspb.Message.getFieldWithDefault(msg, 1, 0)
   };
 
   if (includeInstance) {
@@ -867,12 +866,8 @@ proto.servicev2.Action.deserializeBinaryFromReader = function(msg, reader) {
     var field = reader.getFieldNumber();
     switch (field) {
     case 1:
-      var value = /** @type {!proto.servicev2.ActionEnum} */ (reader.readEnum());
-      msg.setSrc(value);
-      break;
-    case 2:
-      var value = /** @type {!proto.servicev2.ActionEnum} */ (reader.readEnum());
-      msg.setTgt(value);
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setCell(value);
       break;
     default:
       reader.skipField();
@@ -903,56 +898,31 @@ proto.servicev2.Action.prototype.serializeBinary = function() {
  */
 proto.servicev2.Action.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
-  f = message.getSrc();
-  if (f !== 0.0) {
-    writer.writeEnum(
+  f = message.getCell();
+  if (f !== 0) {
+    writer.writeInt32(
       1,
       f
     );
   }
-  f = message.getTgt();
-  if (f !== 0.0) {
-    writer.writeEnum(
-      2,
-      f
-    );
-  }
 };
 
 
 /**
- * optional ActionEnum src = 1;
- * @return {!proto.servicev2.ActionEnum}
+ * optional int32 cell = 1;
+ * @return {number}
  */
-proto.servicev2.Action.prototype.getSrc = function() {
-  return /** @type {!proto.servicev2.ActionEnum} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
+proto.servicev2.Action.prototype.getCell = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
 };
 
 
 /**
- * @param {!proto.servicev2.ActionEnum} value
+ * @param {number} value
  * @return {!proto.servicev2.Action} returns this
  */
-proto.servicev2.Action.prototype.setSrc = function(value) {
-  return jspb.Message.setProto3EnumField(this, 1, value);
-};
-
-
-/**
- * optional ActionEnum tgt = 2;
- * @return {!proto.servicev2.ActionEnum}
- */
-proto.servicev2.Action.prototype.getTgt = function() {
-  return /** @type {!proto.servicev2.ActionEnum} */ (jspb.Message.getFieldWithDefault(this, 2, 0));
-};
-
-
-/**
- * @param {!proto.servicev2.ActionEnum} value
- * @return {!proto.servicev2.Action} returns this
- */
-proto.servicev2.Action.prototype.setTgt = function(value) {
-  return jspb.Message.setProto3EnumField(this, 2, value);
+proto.servicev2.Action.prototype.setCell = function(value) {
+  return jspb.Message.setProto3IntField(this, 1, value);
 };
 
 

@@ -8,12 +8,14 @@ from ml_collections import ConfigDict
 
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
+    MOVE_CELL_OFFSET,
     MOVE_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_MOVES,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
+    OTHER_CELL_OFFSET,
     TARGET_SLOT_INDICES,
 )
 from rl.environment.interfaces import (
@@ -1174,10 +1176,16 @@ class Encoder(nn.Module):
         )[None]
 
         # ---- the sequence --------------------------------------------------
-        # A slot is live if the mask can reach it either way round, exactly as
-        # the action stream's validity was computed before the rewrite.
-        slot_valid = env_step.action_mask.any(axis=0) | env_step.action_mask.any(axis=1)
-        slot_valid = slot_valid & jnp.logical_not(env_step.done)
+        # Row validity from the block mask: a move row is live if any of its
+        # target cells is, a target row if any move can reach it or it stands
+        # alone -- the same content the old grid's any-over-both-axes gave.
+        not_done = jnp.logical_not(env_step.done)
+        move_cells = env_step.action_mask[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET].reshape(
+            len(MOVE_INDICES), len(TARGET_SLOT_INDICES)
+        )
+        other_cells = env_step.action_mask[OTHER_CELL_OFFSET:]
+        move_slot_valid = move_cells.any(axis=-1) & not_done
+        target_slot_valid = (move_cells.any(axis=0) | other_cells) & not_done
 
         sequence = jnp.concatenate(
             (
@@ -1202,8 +1210,8 @@ class Encoder(nn.Module):
                 jnp.ones(1, dtype=jnp.bool_),
                 public_valid,
                 private_valid,
-                move_revealed & slot_valid[jnp.asarray(MOVE_INDICES)],
-                slot_valid[jnp.asarray(TARGET_SLOT_INDICES)],
+                move_revealed & move_slot_valid,
+                target_slot_valid,
                 jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
                 jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
                 jnp.full(2, has_prev_action),

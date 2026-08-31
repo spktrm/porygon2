@@ -7,12 +7,9 @@ import {
     StepRequest,
 } from "../../protos/service_pb";
 import {
-    ALLY_SWITCH_SRC_INDICES,
     MOVE_SLOT_INDICES,
-    numActionFeatures,
     RESERVE_SLOT_INDICES,
     TARGET_SLOT_INDICES,
-    TEAM_PREVIEW_TGT,
 } from "../server/data";
 import {
     EdgeBuffer,
@@ -139,11 +136,13 @@ function assertPrivateSideShape(
 /**
  * The wire mask must name exactly the cells the decoder can answer.
  *
- * This mirrors `_grid_from_structured_mask` in `rl/environment/utils.py` --
+ * This mirrors `_cells_from_structured_mask` in `rl/environment/utils.py` --
  * deliberately a SECOND implementation, because the thing under test is that
  * the two languages agree, and a shared helper could only prove itself
  * self-consistent. If this drifts from the python one the assertion below
- * fires, which is the point.
+ * fires, which is the point. The offsets are derived HERE from the slot-list
+ * lengths, independently of data.ts's exported block constants, for the same
+ * reason.
  */
 function cellsFromStructuredMask(mask: ActionMask): Set<number> {
     const cells = new Set<number>();
@@ -154,33 +153,28 @@ function cellsFromStructuredMask(mask: ActionMask): Set<number> {
     ) {
         return cells;
     }
-    const cell = (src: number, tgt: number) => src * numActionFeatures + tgt;
+    const numTargets = TARGET_SLOT_INDICES.length;
+    const moveOffset = RESERVE_SLOT_INDICES.length;
+    const otherOffset = moveOffset + MOVE_SLOT_INDICES.length * numTargets;
 
     const switchSlots = mask.getSwitchSlots();
-    for (const [j, reserve] of RESERVE_SLOT_INDICES.entries()) {
-        if (!((switchSlots >> j) & 1)) {
-            continue;
-        }
-        if (kind === ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW) {
-            cells.add(cell(reserve, TEAM_PREVIEW_TGT));
-        } else {
-            cells.add(
-                cell(ALLY_SWITCH_SRC_INDICES[mask.getActiveSlot()], reserve),
-            );
+    for (let j = 0; j < RESERVE_SLOT_INDICES.length; j++) {
+        if ((switchSlots >> j) & 1) {
+            cells.add(j);
         }
     }
-    for (const [moveBit, moveSlot] of MOVE_SLOT_INDICES.entries()) {
+    for (let moveBit = 0; moveBit < MOVE_SLOT_INDICES.length; moveBit++) {
         const targets = mask.getMoveTargetsList()[moveBit];
-        for (const [targetBit, target] of TARGET_SLOT_INDICES.entries()) {
+        for (let targetBit = 0; targetBit < numTargets; targetBit++) {
             if ((targets >> targetBit) & 1) {
-                cells.add(cell(moveSlot, target));
+                cells.add(moveOffset + moveBit * numTargets + targetBit);
             }
         }
     }
     const otherSrcs = mask.getOtherSrcs();
-    for (const [slotBit, slot] of TARGET_SLOT_INDICES.entries()) {
+    for (let slotBit = 0; slotBit < numTargets; slotBit++) {
         if ((otherSrcs >> slotBit) & 1) {
-            cells.add(cell(slot, slot));
+            cells.add(otherOffset + slotBit);
         }
     }
     return cells;

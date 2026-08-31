@@ -188,12 +188,11 @@ class Battle {
                 });
                 // await new Promise((resolve) => setTimeout(resolve, rateLimit));
 
-                const { src, tgt } = await response.json();
+                const { cell } = await response.json();
                 const stepRequest = new StepRequest();
 
                 const protoAction = new ProtoAction();
-                protoAction.setSrc(src);
-                protoAction.setTgt(tgt);
+                protoAction.setCell(cell);
 
                 stepRequest.setAction(protoAction);
                 stepRequest.setRqid(state.getRqid());

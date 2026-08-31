@@ -40,7 +40,11 @@ import {
     EntityRevealedNodeFeature,
     PackedSetFeature,
 } from "../../protos/features_pb";
-import { ActionEnum } from "../../protos/service_pb";
+import {
+    ActionEnum,
+    ActionRequestKind,
+    ActionRequestKindMap,
+} from "../../protos/service_pb";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -194,6 +198,52 @@ export const TARGET_SLOT_INDICES: number[] = Array.from(
     { length: numActionFeatures },
     (_, index) => index,
 ).filter((index) => !NON_TARGET_SLOTS.has(index));
+
+// The block action space (2026-08-31): ActionMask's fields flattened in
+// field order -- see proto/service.proto `Action`. These derive from the
+// three slot-list lengths above; rl/environment/data.py derives the same
+// numbers and both suites assert the 295 total.
+export const NUM_SWITCH_CELLS = RESERVE_SLOT_INDICES.length;
+export const NUM_MOVE_SLOTS = MOVE_SLOT_INDICES.length;
+export const NUM_TARGET_SLOTS = TARGET_SLOT_INDICES.length;
+export const MOVE_CELL_OFFSET = NUM_SWITCH_CELLS;
+export const OTHER_CELL_OFFSET =
+    MOVE_CELL_OFFSET + NUM_MOVE_SLOTS * NUM_TARGET_SLOTS;
+export const NUM_ACTION_CELLS = OTHER_CELL_OFFSET + NUM_TARGET_SLOTS;
+if (NUM_ACTION_CELLS !== 295) {
+    throw new Error(
+        `Block layout drifted from the proto contract: ${NUM_ACTION_CELLS}`,
+    );
+}
+
+// A block cell named in ActionEnum terms, for the PREV_ACTION_SRC/TGT info
+// features (whose vocabulary predates the block space and is shared with the
+// replay shards). A switch cell needs the request kind and ally half to name
+// itself -- a lead names the mon as the src, a battle switch as the tgt.
+export function cellToEnumPair(
+    cell: number,
+    kind: ActionRequestKindMap[keyof ActionRequestKindMap],
+    activeSlot: number,
+): [number, number] {
+    if (cell < MOVE_CELL_OFFSET) {
+        if (kind === ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW) {
+            return [RESERVE_SLOT_INDICES[cell], TEAM_PREVIEW_TGT];
+        }
+        return [
+            ALLY_SWITCH_SRC_INDICES[activeSlot],
+            RESERVE_SLOT_INDICES[cell],
+        ];
+    }
+    if (cell < OTHER_CELL_OFFSET) {
+        const rel = cell - MOVE_CELL_OFFSET;
+        return [
+            MOVE_SLOT_INDICES[Math.floor(rel / NUM_TARGET_SLOTS)],
+            TARGET_SLOT_INDICES[rel % NUM_TARGET_SLOTS],
+        ];
+    }
+    const targetSlot = TARGET_SLOT_INDICES[cell - OTHER_CELL_OFFSET];
+    return [targetSlot, targetSlot];
+}
 
 // Team preview asks "which mon", full stop -- the position being filled is
 // always the next one, so it carries no choice. It is written at this single

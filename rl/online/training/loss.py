@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import FLAT_MODALITY_MASK, NUM_MODALITY_FEATURES
+from rl.environment.data import CELL_MODALITY_MASK, NUM_MODALITY_FEATURES
 from rl.utils import average
 
 
@@ -22,7 +22,7 @@ def factorised_entropies(
     across modalities. Rows with k < 2 are excluded by the caller's masks;
     the guards here only keep the arithmetic finite on excluded rows."""
     modality_oh = jax.nn.one_hot(
-        jnp.asarray(FLAT_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
+        jnp.asarray(CELL_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
     )
     log_policy32 = log_policy.astype(jnp.float32)
     marginal = jax.nn.logsumexp(
@@ -37,7 +37,7 @@ def factorised_entropies(
 
     macro_taken = jnp.take_along_axis(marginal, taken_modality[..., None], axis=-1)
     taken_cells = legal_mask & (
-        jnp.asarray(FLAT_MODALITY_MASK) == taken_modality[..., None]
+        jnp.asarray(CELL_MODALITY_MASK) == taken_modality[..., None]
     )
     log_conditional = log_policy32 - macro_taken
     conditional_probs = jnp.where(taken_cells, jnp.exp(log_conditional), 0.0)

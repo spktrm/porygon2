@@ -96,10 +96,10 @@ class TestFactorisedEntropies:
     two mask-semantics edges."""
 
     def _setup(self):
-        from rl.environment.data import FLAT_MODALITY_MASK
+        from rl.environment.data import CELL_MODALITY_MASK
         from rl.environment.protos.service_pb2 import ModalityEnum
 
-        flat = np.asarray(FLAT_MODALITY_MASK)
+        flat = np.asarray(CELL_MODALITY_MASK)
         legal = np.zeros(flat.shape[0], dtype=bool)
         move_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__MOVE)[:4]
         switch_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__SWITCH)[:3]

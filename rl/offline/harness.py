@@ -191,7 +191,7 @@ def forward(
     """Yields (prediction, stacked batch) over `chunks` in batches, using
     the learner-side model (train=True, so the full-support log_policy is
     populated). Batch axis is 1, matching the learner's apply_fn. Leaves are
-    host numpy-able jax arrays; read the action grid with
+    host numpy-able jax arrays; read the action cells with
     decode_log_policy(pred, flat_action_mask) and V as
     pred.value_head.expectation.""" ""
     net = get_player_model(get_player_model_config(generation, train=True))
@@ -211,8 +211,8 @@ def forward(
 
 
 def decode_log_policy(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
-    """The full-support log-policy over the flat src x tgt grid, (T, B, A),
-    masked to legal cells.
+    """The full-support log-policy over the block cells, (T, B, A), masked
+    to legal cells.
 
     Replaces decode_q on 2026-08-29. The Q readout it decoded went with the
     advantage head; the action grid the policy itself scores is what is left,

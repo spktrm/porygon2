@@ -7,18 +7,13 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import (
-    ALLY_SWITCH_INDICES,
-    MOVE_INDICES,
-    NUM_ACTION_FEATURES,
-    RESERVE_ENTITY_INDICES,
-    TARGET_SLOT_INDICES,
-)
+from rl.environment.data import NUM_ACTION_CELLS
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
+from rl.model.constants import CELL_BANK_SRC, CELL_BANK_TGT
 from rl.model.modules import MLP, PointerLogits
 from rl.model.utils import legal_log_policy, legal_policy
 
@@ -137,36 +132,33 @@ class SlotConditioning(nn.Module):
     """Doubles: condition slot 2's rows on the cell slot 1 chose.
 
     Zero-init output, so slot 2 starts as an exact copy of slot 1's readout
-    and the conditioning has to earn its way in. Re-based onto the sequence
-    rows on 2026-08-29 -- it used to add onto the 41-row action stream, which
-    no longer exists.
+    and the conditioning has to earn its way in. Keyed by the chosen BLOCK
+    CELL since 2026-08-31: `CELL_BANK_SRC`/`CELL_BANK_TGT` name the readout
+    input rows that produced the cell's logit, so a switch cell now gathers
+    its private row where the grid era's ALLY_i_SWITCH pseudo-slot gathered
+    zeros.
 
     NOTE this keeps the MODEL side of doubles reachable and nothing more. The
     plumbing outside it -- per-slot masks in requests, two stored action
-    indices, the (2, N*N) log_policy the learner would need, and the ~75%
-    slot-alignment defect in the service -- is the known-open doubles
-    workstream. `ALLY_i_SWITCH` slots have no sequence row of their own (the
-    switch logit is read off the sheet row instead), so choosing one gathers
-    zeros here; harmless while the path is untrained, and the thing to fix
-    first if doubles is ever picked up.
+    indices, the (2, NUM_ACTION_CELLS) log_policy the learner would need, and
+    the ~75% slot-alignment defect in the service -- is the known-open
+    doubles workstream.
     """
 
     @nn.compact
     def __call__(
         self,
         sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
-        src_index: jax.Array,
-        tgt_index: jax.Array,
+        action_cell: jax.Array,
     ):
         private_rows, move_rows, target_rows = sequence_rows
         width = private_rows.shape[-1]
-        slots = jnp.zeros((NUM_ACTION_FEATURES, width), dtype=private_rows.dtype)
-        slots = slots.at[jnp.asarray(MOVE_INDICES)].set(move_rows)
-        slots = slots.at[jnp.asarray(RESERVE_ENTITY_INDICES)].set(private_rows)
-        slots = slots.at[jnp.asarray(TARGET_SLOT_INDICES)].set(target_rows)
+        bank = jnp.concatenate((private_rows, move_rows, target_rows), axis=0)
+        src_row = jnp.take(jnp.asarray(CELL_BANK_SRC), action_cell)
+        tgt_row = jnp.take(jnp.asarray(CELL_BANK_TGT), action_cell)
 
         chosen = jnp.concatenate(
-            (jnp.take(slots, src_index, axis=0), jnp.take(slots, tgt_index, axis=0)),
+            (jnp.take(bank, src_row, axis=0), jnp.take(bank, tgt_row, axis=0)),
             axis=-1,
         )
         delta = nn.Dense(
@@ -192,16 +184,17 @@ class FlatActionReadout(nn.Module):
     routes -- which was instantiated twice, once for the policy and once for
     an advantage head the policy did not read. 2.65M parameters became 0.13M.
 
-    The three heads are the three shapes of question the action space asks:
+    The three heads are the three blocks of the action space (the flattening
+    of ActionMask's fields -- proto/service.proto `Action`), emitted directly
+    since 2026-08-31; the 41x41 scatter they used to land in is gone:
 
       switch   one logit per SHEET ROW, "may this mon come in and should it".
-               Written into every cell naming that reserve, so it serves the
-               battle switch (the mon is the tgt) and team preview (the mon is
-               the src) alike; the mask decides which of those is live.
+               One block serves the battle switch and the team-preview lead
+               alike; `kind` only matters to the service's decoder.
       move     THE ONLY BILINEAR: 16 candidate move rows against the 17 target
                rows, four of which carry the actual mon they would hit.
       other    one logit per target row for the standalone actions -- pass,
-               default -- which sit on the grid diagonal.
+               default.
 
     INIT CONTRACT. Every logit is exactly 0 at init, so the policy starts
     UNIFORM over legal cells and `compute_policy_metrics(prior=None)` -- which
@@ -238,7 +231,6 @@ class FlatActionReadout(nn.Module):
         private_rows: jax.Array,
         move_rows: jax.Array,
         target_rows: jax.Array,
-        action_mask: jax.Array,
         temp: float = 1.0,
     ) -> jax.Array:
         dtype = private_rows.dtype
@@ -262,33 +254,24 @@ class FlatActionReadout(nn.Module):
             + scalar_head(name="local_tgt")(target_rows)[..., 0][..., None, :]
         )
 
-        # Which active the switch replaces. In singles only ALLY_1_SWITCH is
-        # ever legal so this costs nothing there; the mask, which the service
-        # builds from the ally half it is actually asking about, clears the
-        # other row.
-        ally_switch_bias = self.param(
-            "ally_switch_bias", zeros, (len(ALLY_SWITCH_INDICES), 1)
-        ).astype(dtype)
+        # The whether-to-switch baseline: one scalar over the whole switch
+        # block. The grid era's `ally_switch_bias` (2, 1) is folded to one
+        # value -- in singles only row 0 ever trained (the mask cleared the
+        # other ally half), and at team preview a uniform shift over an
+        # all-switch legal set is softmax-invariant, so behaviour is
+        # unchanged. A per-active-slot bias rejoins with the doubles
+        # workstream, which needs per-slot masks anyway.
+        switch_bias = self.param("switch_bias", zeros, (1,)).astype(dtype)
 
-        grid = jnp.zeros(action_mask.shape, dtype=move_target.dtype)
-        # Team preview names the mon in the SRC half, a battle switch in the
-        # TGT half. Both are written; the mask keeps whichever the request
-        # actually asked, so the readout needs no request-type branch.
-        grid = grid.at[..., jnp.asarray(RESERVE_ENTITY_INDICES), :].add(
-            switch_logit[..., None]
+        cells = jnp.concatenate(
+            (
+                switch_logit + switch_bias,
+                move_target.reshape(*move_target.shape[:-2], -1),
+                other_logit,
+            ),
+            axis=-1,
         )
-        grid = grid.at[
-            ...,
-            jnp.asarray(ALLY_SWITCH_INDICES)[:, None],
-            jnp.asarray(RESERVE_ENTITY_INDICES)[None, :],
-        ].add(switch_logit[..., None, :] + ally_switch_bias)
-        grid = grid.at[
-            ...,
-            jnp.asarray(MOVE_INDICES)[:, None],
-            jnp.asarray(TARGET_SLOT_INDICES)[None, :],
-        ].add(move_target)
-        standalone = jnp.asarray(TARGET_SLOT_INDICES)
-        grid = grid.at[..., standalone, standalone].add(other_logit)
+        assert cells.shape[-1] == NUM_ACTION_CELLS
 
         # f32 once, before the masked log-softmax: bf16 normalisation holds
         # only to ~3e-3 and every policy-loss term reads this.
@@ -296,7 +279,7 @@ class FlatActionReadout(nn.Module):
         # non-array returns, which would silently exempt this module from
         # tests/test_dtype_policy.py -- and this cast is the one place in the
         # forward that is deliberately f32.
-        return grid.astype(jnp.float32).reshape(*action_mask.shape[:-2], -1) / temp
+        return cells.astype(jnp.float32) / temp
 
 
 class CategoricalValueLogitHead(nn.Module):

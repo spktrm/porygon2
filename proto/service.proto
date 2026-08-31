@@ -62,10 +62,10 @@ enum ActionEnum {
     ACTION_ENUM__ALLY_2_SWITCH = 40;
 }
 
-// How the environment is asking us to choose. READ, not decorative: the same
-// ActionMask fields name different cells of the (src, tgt) grid depending on
-// it, because TEAM_PREVIEW puts the chosen mon in the SRC half while a battle
-// switch puts it in the TGT half.
+// How the environment is asking us to choose. READ, not decorative: the
+// switch block means a different Showdown choice depending on it -- a lead at
+// TEAM_PREVIEW, a `switch` otherwise -- and WAIT/UNSPECIFIED light every cell
+// so masked averages never meet an empty row.
 enum ActionRequestKind {
     ACTION_REQUEST_KIND___UNSPECIFIED = 0;
     ACTION_REQUEST_KIND__MOVE = 1;
@@ -74,11 +74,11 @@ enum ActionRequestKind {
     ACTION_REQUEST_KIND__WAIT = 4;
 }
 
-// The legal-action set, shaped like the DECISION rather than like the model's
-// scoring grid. The 41x41 (src, tgt) grid it replaces was a model-side artefact
-// that leaked onto the wire: only ~264 of its 1681 cells are reachable in any
-// format and ~9 are legal at a given step, so 211 bytes carried a ~10-element
-// choice set with no field naming what could even in principle be set.
+// The legal-action set, shaped like the DECISION. The 41x41 (src, tgt) grid
+// it replaced (2026-08-29) was a model-side artefact that leaked onto the
+// wire: only ~264 of its 1681 cells were reachable in any format and ~9 legal
+// at a given step. Since 2026-08-31 this message's fields, flattened in field
+// order, ARE the model's action space -- see `Action` below.
 //
 // Bit indices are positions in the ActionEnum-derived slot lists both sides
 // build (rl/environment/data.py MOVE_INDICES / TARGET_SLOT_INDICES /
@@ -90,8 +90,8 @@ message ActionMask {
 
     // Bit j: RESERVE_j_SWITCH_IN is a legal switch-in (MOVE / FORCE_SWITCH) or
     // a legal lead (TEAM_PREVIEW). One field for all three because it is one
-    // question -- "may this mon come in" -- and `kind` says where the grid
-    // puts it.
+    // question -- "may this mon come in" -- and `kind` says which choice
+    // string it decodes to.
     uint32 switch_slots = 2;
 
     // One entry per MOVE_INDICES slot, in that order (16 = 2 allies x 4 moves
@@ -99,23 +99,34 @@ message ActionMask {
     // legal for that move slot.
     repeated uint32 move_targets = 3 [packed = true];
 
-    // Bit s over TARGET_SLOT_INDICES: slot s is legal as a standalone action,
-    // written on the grid diagonal (s, s). Today that is ALLY_i_PASS only.
+    // Bit s over TARGET_SLOT_INDICES: slot s is legal as a standalone action.
+    // Today that is ALLY_i_PASS only.
     uint32 other_srcs = 4;
 
     // Which ally half this sub-decision is for -- 0 in singles, 0 or 1 in
     // doubles, where the service asks one slot at a time. READ: `switch_slots`
-    // says WHICH mon may come in but not which active it replaces, so without
-    // this the grid would legalise ALLY_2_SWITCH in a singles battle and the
-    // model could pick a cell the decoder has no choice string for. Before
-    // 2026-08-29 the packed grid carried it implicitly, in which ally half
-    // happened to be lit.
+    // says WHICH mon may come in but not which active it replaces; the decoder
+    // needs this to build the choice string. Before 2026-08-29 the packed grid
+    // carried it implicitly, in which ally half happened to be lit.
     int32 active_slot = 5;
 }
 
+// The chosen action, as an index into the BLOCK SPACE -- the flattening of
+// ActionMask's own fields, in field order:
+//
+//   [0, 6)     switch     bit j of `switch_slots` (RESERVE_j comes in / leads)
+//   [6, 278)   move       move_targets, row-major: slot m of MOVE_INDICES x
+//                         bit t of TARGET_SLOT_INDICES, cell 6 + 17*m + t
+//   [278, 295) standalone bit s of `other_srcs`
+//
+// This layout is the shared contract between the service's cell->choice map
+// and the model's readout; both sides derive the offsets from the same three
+// slot-list lengths (rl/environment/data.py and service/src/server/data.ts)
+// and assert the 295 total. It replaced Action{src, tgt} -- an index pair
+// into the 41x41 scoring grid -- when the grid was retired (2026-08-31):
+// `kind` + `active_slot` on the mask carry what the two halves used to.
 message Action {
-    ActionEnum src = 1;
-    ActionEnum tgt = 2;
+    int32 cell = 1;
 }
 
 message StepRequest {

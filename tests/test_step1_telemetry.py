@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from rl.environment.data import FLAT_MODALITY_MASK
+from rl.environment.data import CELL_MODALITY_MASK
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.online.training.batching import _or_empty
@@ -20,12 +20,12 @@ from rl.online.training.telemetry import (
     masked_var,
 )
 
-A = int(np.asarray(FLAT_MODALITY_MASK).shape[0])
+A = int(np.asarray(CELL_MODALITY_MASK).shape[0])
 SWITCH = int(
-    np.argmax(np.asarray(FLAT_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__SWITCH)
+    np.argmax(np.asarray(CELL_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__SWITCH)
 )
 MOVE = int(
-    np.argmax(np.asarray(FLAT_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__MOVE)
+    np.argmax(np.asarray(CELL_MODALITY_MASK) == ModalityEnum.MODALITY_ENUM__MOVE)
 )
 
 

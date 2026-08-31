@@ -139,10 +139,7 @@ def compute_player_targets(
         ~is_final_row | batch.player_transitions.env_output.done.astype(jnp.bool_)
     )
 
-    t_length, batch_size, *_ = batch.player_transitions.env_output.action_mask.shape
-    num_actions = batch.player_transitions.env_output.action_mask.reshape(
-        t_length, batch_size, -1
-    ).sum(axis=-1)
+    num_actions = batch.player_transitions.env_output.action_mask.sum(axis=-1)
     policy_mask = (
         value_mask
         & jnp.logical_not(batch.player_transitions.env_output.done)

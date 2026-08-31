@@ -141,12 +141,10 @@ class ActionMask(_message.Message):
     def __init__(self, kind: _Optional[_Union[ActionRequestKind, str]] = ..., switch_slots: _Optional[int] = ..., move_targets: _Optional[_Iterable[int]] = ..., other_srcs: _Optional[int] = ..., active_slot: _Optional[int] = ...) -> None: ...
 
 class Action(_message.Message):
-    __slots__ = ("src", "tgt")
-    SRC_FIELD_NUMBER: _ClassVar[int]
-    TGT_FIELD_NUMBER: _ClassVar[int]
-    src: ActionEnum
-    tgt: ActionEnum
-    def __init__(self, src: _Optional[_Union[ActionEnum, str]] = ..., tgt: _Optional[_Union[ActionEnum, str]] = ...) -> None: ...
+    __slots__ = ("cell",)
+    CELL_FIELD_NUMBER: _ClassVar[int]
+    cell: int
+    def __init__(self, cell: _Optional[int] = ...) -> None: ...
 
 class StepRequest(_message.Message):
     __slots__ = ("username", "action", "rqid", "teampreview")

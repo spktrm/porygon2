@@ -316,11 +316,11 @@ def test_truncated_tail_window_forward_is_finite(real_model_and_trajectory):
 
 def _targets_batch(dones: np.ndarray):
     """Minimal batch for compute_player_targets: T x B dones, everything
-    else neutral (uniform two-action masks, zero reward off-terminal)."""
+    else neutral (uniform four-cell masks, zero reward off-terminal)."""
     t_len, batch_size = dones.shape
     win_reward = np.zeros((t_len, batch_size, 3), dtype=np.float32)
     win_reward[..., 2] = dones.astype(np.float32)  # win lands on the done row
-    action_mask = np.ones((t_len, batch_size, 2, 2), dtype=bool)
+    action_mask = np.ones((t_len, batch_size, 4), dtype=bool)
     env = PlayerEnvOutput(
         done=jnp.asarray(dones),
         win_reward=jnp.asarray(win_reward),

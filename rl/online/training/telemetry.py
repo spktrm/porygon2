@@ -10,12 +10,13 @@ import jax.numpy as jnp
 import optax
 
 from rl.environment.data import (
-    ALLY_SWITCH_INDICES,
     CAT_VF_SUPPORT,
-    FLAT_MODALITY_MASK,
+    CELL_MODALITY_MASK,
+    MOVE_CELL_OFFSET,
     NUM_MODALITY_FEATURES,
     NUM_PACKED_SET_FEATURES,
-    RESERVE_ENTITY_INDICES,
+    NUM_SWITCH_CELLS,
+    OTHER_CELL_OFFSET,
 )
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import (
@@ -23,7 +24,7 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
     PackedSetFeature,
 )
-from rl.environment.protos.service_pb2 import ActionEnum, ModalityEnum
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.online.config import Porygon2LearnerConfig
 
 T = TypeVar("T")
@@ -58,46 +59,25 @@ def collect_batch_telemetry_data(
     ].sum(0)
 
     can_move = batch.player_transitions.env_output.action_mask[
-        ...,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 : ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
-        + 1,
-        :,
-    ].any((-2, -1))
+        ..., MOVE_CELL_OFFSET:OTHER_CELL_OFFSET
+    ].any(-1)
     can_switch = batch.player_transitions.env_output.action_mask[
-        ...,
-        ALLY_SWITCH_INDICES,
-        :,
-    ].any((-2, -1))
+        ..., :NUM_SWITCH_CELLS
+    ].any(-1)
     can_act = can_move & can_switch & player_valid
 
-    src_action_index = (
-        batch.player_transitions.agent_output.actor_output.action_head.src_index
+    action_index = (
+        batch.player_transitions.agent_output.actor_output.action_head.action_index
     )
-    tgt_action_index = (
-        batch.player_transitions.agent_output.actor_output.action_head.tgt_index
-    )
+    taken_cell_modality = jnp.take(jnp.asarray(CELL_MODALITY_MASK), action_index)
     did_move = (
-        (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1)
-        & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
-        & can_move
-    )
-    did_wildcard = (
-        (
-            (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
-            & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
-        )
-        | (
-            (src_action_index >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
-            & (src_action_index <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
-        )
+        (taken_cell_modality == ModalityEnum.MODALITY_ENUM__MOVE)
+        | (taken_cell_modality == ModalityEnum.MODALITY_ENUM__WILDCARD)
     ) & can_move
-    did_switch = (
-        (src_action_index[..., None] == ALLY_SWITCH_INDICES[None, None]).any(axis=-1)
-        & (tgt_action_index[..., None] == RESERVE_ENTITY_INDICES[None, None]).any(
-            axis=-1
-        )
-        & can_switch
-    )
+    did_wildcard = (
+        taken_cell_modality == ModalityEnum.MODALITY_ENUM__WILDCARD
+    ) & can_move
+    did_switch = (action_index < NUM_SWITCH_CELLS) & can_switch
     move_ratio = renormalize(did_move, can_act)
     switch_ratio = renormalize(did_switch, can_act)
 
@@ -396,7 +376,7 @@ def action_axis_masks(
     flat_action_mask: jax.Array, action_index: jax.Array
 ) -> ActionAxisMasks:
     """See ActionAxisMasks. `has_both` is THE real-choice predicate."""
-    flat_modality = jnp.asarray(FLAT_MODALITY_MASK)
+    flat_modality = jnp.asarray(CELL_MODALITY_MASK)
     switch_cells = flat_modality == ModalityEnum.MODALITY_ENUM__SWITCH
     move_cells = flat_modality == ModalityEnum.MODALITY_ENUM__MOVE
     valid_switch = flat_action_mask & switch_cells

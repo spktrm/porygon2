@@ -34,7 +34,6 @@ import {
     NUM_HISTORY,
     WILDCARDS,
     jsonDatum,
-    numActionFeatures,
     numEntityEdgeFeatures,
     numFieldFeatures,
     numInfoFeatures,
@@ -46,9 +45,11 @@ import {
     sampleTeams,
     MOVE_SLOT_INDICES,
     RESERVE_SLOT_INDICES,
-    ALLY_SWITCH_SRC_INDICES,
     TARGET_SLOT_INDICES,
-    TEAM_PREVIEW_TGT,
+    MOVE_CELL_OFFSET,
+    OTHER_CELL_OFFSET,
+    NUM_TARGET_SLOTS,
+    NUM_ACTION_CELLS,
     showdownTargetSuffix,
     chooseWildcardKeyword,
 } from "./data";
@@ -56,7 +57,7 @@ import { Battle, NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, BoostID } from "@pkmn/dex-types";
 import { ID, MoveTarget, SideID } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
-import { OneDBoolean, TypedArray } from "./utils";
+import { TypedArray } from "./utils";
 import {
     ActionType,
     EntityEdgeFeature,
@@ -3831,27 +3832,59 @@ export class StateHandler {
         allyActive: (Pokemon | null)[];
         enemyActive: (Pokemon | null)[];
     }): {
-        actionMask: OneDBoolean;
+        legalCells: boolean[];
         choiceByCell: Map<number, string>;
         structuredMask: ActionMask;
     } {
         const { request, allyActive, enemyActive } = args;
 
-        const arrWidth = numActionFeatures;
-        const arrLength = arrWidth ** 2;
-        const actionMask = new OneDBoolean(arrLength, Uint8Array, arrWidth);
         const choiceByCell = new Map<number, string>();
         let kind: ActionRequestKindMap[keyof ActionRequestKindMap] =
             ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED;
+        // A wait (or no request at all) carries no choice: every cell reads
+        // legal so masked averages downstream never see an empty row, and the
+        // decoder answers "default" for any of them.
+        let allLegal = false;
 
         // Which ally half this sub-decision is for. Both branches that ask
         // per-active gate on `i != this.player.choices.length`, so exactly one
         // half is ever populated and this is that half.
         let activeSlot = 0;
 
-        const legalise = (src: number, tgt: number, choice: string) => {
-            actionMask.setRowCol(src, tgt, true);
-            choiceByCell.set(src * arrWidth + tgt, choice);
+        // Cells are BLOCK-SPACE indices (proto/service.proto `Action`): the
+        // switch bit, the (move slot, target slot) pair, or the standalone
+        // target slot. One helper per block, and choiceByCell is the single
+        // place a cell becomes legal -- the wire mask is derived from its
+        // keys below, so the message cannot disagree with the map the
+        // decoder reads.
+        const legaliseSwitch = (reserveIndex: number, choice: string) => {
+            choiceByCell.set(reserveIndex, choice);
+        };
+        const legaliseMove = (
+            moveSlot: number,
+            targetSlot: number,
+            choice: string,
+        ) => {
+            const moveBit = MOVE_SLOT_INDICES.indexOf(moveSlot);
+            const targetBit = TARGET_SLOT_INDICES.indexOf(targetSlot);
+            if (moveBit < 0 || targetBit < 0) {
+                throw new Error(
+                    `Move src ${moveSlot} legalised against non-target ${targetSlot}`,
+                );
+            }
+            choiceByCell.set(
+                MOVE_CELL_OFFSET + moveBit * NUM_TARGET_SLOTS + targetBit,
+                choice,
+            );
+        };
+        const legaliseOther = (targetSlot: number, choice: string) => {
+            const targetBit = TARGET_SLOT_INDICES.indexOf(targetSlot);
+            if (targetBit < 0) {
+                throw new Error(
+                    `Standalone action ${targetSlot} is not a target slot`,
+                );
+            }
+            choiceByCell.set(OTHER_CELL_OFFSET + targetBit, choice);
         };
 
         const moveIndices = [
@@ -3896,22 +3929,12 @@ export class StateHandler {
                 : undefined,
         ];
 
-        const setAll = (val: boolean) => {
-            for (let i = 0; i < arrLength; i++) {
-                actionMask.set(i, val);
-            }
-        };
-        setAll(false);
-
         if (request === undefined || request === null) {
-            // Nothing is being asked. Keep every cell legal so downstream
-            // masked averages never see an empty row; the decoder answers
-            // "default" for any cell on a kind that carries no choice map.
-            setAll(true);
+            allLegal = true;
         } else {
             if (request.wait) {
                 kind = ActionRequestKind.ACTION_REQUEST_KIND__WAIT;
-                setAll(true);
+                allLegal = true;
             } else if (request.forceSwitch) {
                 kind = ActionRequestKind.ACTION_REQUEST_KIND__FORCE_SWITCH;
                 const pokemon = request.side
@@ -3929,11 +3952,7 @@ export class StateHandler {
                     ][i];
 
                     if (!mustSwitch) {
-                        legalise(
-                            rowColValPassValue,
-                            rowColValPassValue,
-                            "pass",
-                        );
+                        legaliseOther(rowColValPassValue, "pass");
                         continue;
                     }
 
@@ -3951,24 +3970,12 @@ export class StateHandler {
                         },
                     );
                     if (canSwitch.length === 0) {
-                        legalise(
-                            rowColValPassValue,
-                            rowColValPassValue,
-                            "pass",
-                        );
+                        legaliseOther(rowColValPassValue, "pass");
                         continue;
                     }
 
-                    const forcedSwitchSrc = [
-                        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
-                        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
-                    ][i];
                     for (const [j, _] of canSwitch) {
-                        legalise(
-                            forcedSwitchSrc,
-                            RESERVE_SLOT_INDICES[j],
-                            `switch ${j + 1}`,
-                        );
+                        legaliseSwitch(j, `switch ${j + 1}`);
                     }
                 }
             } else if (request.active) {
@@ -3998,11 +4005,7 @@ export class StateHandler {
                         pokemon[i].condition.endsWith(` fnt`) ||
                         pokemon[i].commanding
                     ) {
-                        legalise(
-                            rowColValPassValue,
-                            rowColValPassValue,
-                            "pass",
-                        );
+                        legaliseOther(rowColValPassValue, "pass");
                         continue;
                     }
 
@@ -4165,7 +4168,11 @@ export class StateHandler {
                             const moveChoice = `move ${
                                 j + 1
                             } ${showdownTargetSuffix(move, tgtIndex)}`.trim();
-                            legalise(moveIndices[i][j], tgtIndex, moveChoice);
+                            legaliseMove(
+                                moveIndices[i][j],
+                                tgtIndex,
+                                moveChoice,
+                            );
 
                             const wildCardChosenAlready = this.player.choices
                                 .map((x) =>
@@ -4187,7 +4194,7 @@ export class StateHandler {
                                   });
 
                             if (wildCardKeyword !== undefined) {
-                                legalise(
+                                legaliseMove(
                                     wildCardIndices[i][j],
                                     tgtIndex,
                                     `${moveChoice} ${wildCardKeyword}`,
@@ -4210,18 +4217,9 @@ export class StateHandler {
                     );
                     const switches = active.trapped ? [] : canSwitch;
 
-                    const switchSrcIndex = [
-                        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
-                        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
-                    ][i];
-
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            legalise(
-                                switchSrcIndex,
-                                RESERVE_SLOT_INDICES[j],
-                                `switch ${j + 1}`,
-                            );
+                            legaliseSwitch(j, `switch ${j + 1}`);
                         }
                     }
                 }
@@ -4240,18 +4238,19 @@ export class StateHandler {
                         .filter((choice) => choice.startsWith("switch "))
                         .map((choice) => parseInt(choice.split(" ")[1]) - 1),
                 );
-                for (const [j, src] of RESERVE_SLOT_INDICES.entries()) {
+                for (let j = 0; j < RESERVE_SLOT_INDICES.length; j++) {
                     if (alreadyChosen.has(j)) {
                         continue;
                     }
-                    legalise(src, TEAM_PREVIEW_TGT, `switch ${j + 1}`);
+                    legaliseSwitch(j, `switch ${j + 1}`);
                 }
             }
         }
 
         // The wire form. Derived from choiceByCell rather than set alongside
         // it, so there is exactly one place a cell becomes legal and the
-        // message cannot disagree with the map the decoder reads.
+        // message cannot disagree with the map the decoder reads. Cells are
+        // already block indices, so the derivation is pure arithmetic.
         const structuredMask = new ActionMask();
         structuredMask.setKind(kind);
 
@@ -4260,41 +4259,15 @@ export class StateHandler {
         const moveTargets = new Array<number>(MOVE_SLOT_INDICES.length).fill(0);
 
         for (const cell of choiceByCell.keys()) {
-            const src = Math.floor(cell / arrWidth);
-            const tgt = cell % arrWidth;
-
-            const moveBit = MOVE_SLOT_INDICES.indexOf(src);
-            if (moveBit >= 0) {
-                const targetBit = TARGET_SLOT_INDICES.indexOf(tgt);
-                if (targetBit < 0) {
-                    throw new Error(
-                        `Move src ${src} legalised against non-target ${tgt}`,
-                    );
-                }
-                moveTargets[moveBit] |= 1 << targetBit;
-                continue;
+            if (cell < MOVE_CELL_OFFSET) {
+                switchSlots |= 1 << cell;
+            } else if (cell < OTHER_CELL_OFFSET) {
+                const rel = cell - MOVE_CELL_OFFSET;
+                moveTargets[Math.floor(rel / NUM_TARGET_SLOTS)] |=
+                    1 << rel % NUM_TARGET_SLOTS;
+            } else {
+                otherSrcs |= 1 << (cell - OTHER_CELL_OFFSET);
             }
-
-            // A battle switch names the incoming mon in the TGT half; team
-            // preview names it in the SRC half. `kind` is what tells the model
-            // which, so both collapse to one bit per reserve here.
-            const allySwitchBit = ALLY_SWITCH_SRC_INDICES.indexOf(src);
-            if (allySwitchBit >= 0) {
-                switchSlots |= 1 << RESERVE_SLOT_INDICES.indexOf(tgt);
-                continue;
-            }
-            const previewBit = RESERVE_SLOT_INDICES.indexOf(src);
-            if (previewBit >= 0) {
-                switchSlots |= 1 << previewBit;
-                continue;
-            }
-
-            if (src !== tgt) {
-                throw new Error(
-                    `Standalone action ${src} must sit on the diagonal, got tgt ${tgt}`,
-                );
-            }
-            otherSrcs |= 1 << TARGET_SLOT_INDICES.indexOf(src);
         }
 
         structuredMask.setSwitchSlots(switchSlots);
@@ -4302,13 +4275,22 @@ export class StateHandler {
         structuredMask.setOtherSrcs(otherSrcs);
         structuredMask.setActiveSlot(activeSlot);
 
+        const legalCells = new Array<boolean>(NUM_ACTION_CELLS).fill(allLegal);
+        for (const cell of choiceByCell.keys()) {
+            legalCells[cell] = true;
+        }
+
         // Publish here, not at the call site: the baselines build a mask on
         // their own StateHandler and never reach StateHandler.build, so an
         // assignment there would leave them decoding against an empty map.
-        // One assignment, at the one place a cell becomes legal.
+        // One assignment, at the one place a cell becomes legal. The kind and
+        // ally half ride along so the prev-action features can name the
+        // choice in ActionEnum terms after the fact.
         this.player.legalChoiceByCell = choiceByCell;
+        this.player.lastMaskKind = kind;
+        this.player.lastMaskActiveSlot = activeSlot;
 
-        return { actionMask, choiceByCell, structuredMask };
+        return { legalCells, choiceByCell, structuredMask };
     }
 
     getMyMoveset(): Uint8Array {
@@ -4614,13 +4596,15 @@ export class StateHandler {
         }
 
         infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 0;
-        if (!request?.teamPreview && this.player.actions.length > 0) {
+        if (!request?.teamPreview && this.player.actionEnumPairs.length > 0) {
             infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 1;
-            const lastAction = this.player.actions.at(-1)!;
-            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC] =
-                lastAction.getSrc();
-            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT] =
-                lastAction.getTgt();
+            // Named in ActionEnum (src, tgt) terms -- the feature vocabulary
+            // predates the block space and the replay shards carry it, so the
+            // conversion happens at decode time (runner.ts) rather than
+            // changing the wire meaning here.
+            const [prevSrc, prevTgt] = this.player.actionEnumPairs.at(-1)!;
+            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC] = prevSrc;
+            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT] = prevTgt;
         }
 
         // INFO_FEATURE__STATE_POTENTIAL is left at 0: the hand-crafted

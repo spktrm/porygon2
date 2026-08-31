@@ -77,11 +77,8 @@ export namespace ActionMask {
 }
 
 export class Action extends jspb.Message {
-  getSrc(): ActionEnumMap[keyof ActionEnumMap];
-  setSrc(value: ActionEnumMap[keyof ActionEnumMap]): void;
-
-  getTgt(): ActionEnumMap[keyof ActionEnumMap];
-  setTgt(value: ActionEnumMap[keyof ActionEnumMap]): void;
+  getCell(): number;
+  setCell(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
@@ -95,8 +92,7 @@ export class Action extends jspb.Message {
 
 export namespace Action {
   export type AsObject = {
-    src: ActionEnumMap[keyof ActionEnumMap],
-    tgt: ActionEnumMap[keyof ActionEnumMap],
+    cell: number,
   }
 }
 

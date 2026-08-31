@@ -174,8 +174,8 @@ def train_step(
                 "plasticity_value_err_reuse_gap": fresh_err - replay_err,
             }
         )
-    action_mask = player_transitions.env_output.action_mask
-    flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
+    # Already flat: the env mask IS the block-cell vector since 2026-08-31.
+    flat_action_mask = player_transitions.env_output.action_mask
 
     # NashPG advantage: the plain v-trace pass from targets.py, batch-
     # normalised over the surrogate's own rows with masked mean/std (the

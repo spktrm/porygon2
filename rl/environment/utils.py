@@ -52,8 +52,10 @@ from constants import NUM_HISTORY
 from rl.environment.data import (
     ALLY_SWITCH_INDICES,
     EX_BATCH,
+    MOVE_CELL_OFFSET,
     MOVE_INDICES,
     NUM_ABILITIES,
+    NUM_ACTION_CELLS,
     NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_PRIVATE_FEATURES,
@@ -67,10 +69,12 @@ from rl.environment.data import (
     NUM_NATURES,
     NUM_PACKED_SET_FEATURES,
     NUM_SPECIES,
+    NUM_SWITCH_CELLS,
+    NUM_TARGET_SLOTS,
     NUM_TYPECHART,
+    OTHER_CELL_OFFSET,
     RESERVE_ENTITY_INDICES,
     TARGET_SLOT_INDICES,
-    TEAM_PREVIEW_TGT,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -281,17 +285,17 @@ def clip_history_windows_tail(
     )
 
 
-def _grid_from_structured_mask(mask: ActionMask) -> np.ndarray:
-    """The (src, tgt) grid the model scores, from the wire's structured mask.
+def _cells_from_structured_mask(mask: ActionMask) -> np.ndarray:
+    """The block-space legal mask (NUM_ACTION_CELLS,) from the wire's mask.
 
-    The mirror of `StateHandler.getActionMask`'s derivation in
-    `service/src/server/state.ts`: bit positions index the ActionEnum slot
-    lists both sides build (MOVE_INDICES / TARGET_SLOT_INDICES /
-    RESERVE_ENTITY_INDICES), never raw enum values, and `kind` says which half
-    of the grid names the incoming mon — team preview puts it in the SRC half,
-    a battle switch in the TGT half.
+    The block layout is the flattening of ActionMask's own fields in field
+    order (proto/service.proto `Action`): the 6 switch bits, then the 16x17
+    move_targets rows, then the standalone bits. Bit positions index the
+    ActionEnum slot lists both sides build, never raw enum values, and `kind`
+    only matters to the DECODER (lead vs switch choice string) -- the mask
+    cells are the same either way.
     """
-    grid = np.zeros((NUM_ACTION_FEATURES, NUM_ACTION_FEATURES), dtype=bool)
+    cells = np.zeros(NUM_ACTION_CELLS, dtype=bool)
 
     if mask.kind in (
         ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED,
@@ -300,51 +304,53 @@ def _grid_from_structured_mask(mask: ActionMask) -> np.ndarray:
         # Nothing is being asked. The service lights every cell so masked
         # averages downstream never meet an empty row, and the decoder answers
         # "default" whichever cell comes back.
-        grid[:] = True
-        return grid
+        cells[:] = True
+        return cells
 
-    switch_bits = np.array(
-        [(mask.switch_slots >> j) & 1 for j in range(len(RESERVE_ENTITY_INDICES))],
-        dtype=bool,
-    )
-    live_reserves = RESERVE_ENTITY_INDICES[switch_bits]
-    if mask.kind == ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW:
-        grid[live_reserves, TEAM_PREVIEW_TGT] = True
-    else:
-        # `switch_slots` says which mon may come in, `active_slot` which active
-        # it replaces. Without the second, a singles battle would legalise
-        # ALLY_2_SWITCH and the model could pick a cell the service's decoder
-        # has no choice string for.
-        switch_src = ALLY_SWITCH_INDICES[mask.active_slot]
-        grid[switch_src, live_reserves] = True
+    for switch_bit in range(NUM_SWITCH_CELLS):
+        cells[switch_bit] = (mask.switch_slots >> switch_bit) & 1
 
-    for move_bit, move_slot in enumerate(MOVE_INDICES):
-        targets = mask.move_targets[move_bit]
+    for move_slot, targets in enumerate(mask.move_targets):
         if targets == 0:
             continue
-        target_bits = np.array(
-            [(targets >> t) & 1 for t in range(len(TARGET_SLOT_INDICES))], dtype=bool
-        )
-        grid[move_slot, TARGET_SLOT_INDICES[target_bits]] = True
+        base = MOVE_CELL_OFFSET + move_slot * NUM_TARGET_SLOTS
+        for target_bit in range(NUM_TARGET_SLOTS):
+            cells[base + target_bit] = (targets >> target_bit) & 1
 
-    other_bits = np.array(
-        [(mask.other_srcs >> s) & 1 for s in range(len(TARGET_SLOT_INDICES))],
-        dtype=bool,
-    )
-    standalone = TARGET_SLOT_INDICES[other_bits]
-    grid[standalone, standalone] = True
-    return grid
+    for other_bit in range(NUM_TARGET_SLOTS):
+        cells[OTHER_CELL_OFFSET + other_bit] = (mask.other_srcs >> other_bit) & 1
+    return cells
+
+
+def _cells_from_packed_grid(grid: np.ndarray) -> np.ndarray:
+    """Block mask from a legacy 41x41 grid (replay shards only).
+
+    The inverse of the retired scatter over the ~18% reachable cells: battle
+    switches lived at (ALLY_i_SWITCH, RESERVE_j) and team-preview leads at
+    (RESERVE_j, tgt), both folding onto switch cell j; moves at
+    (MOVE_INDICES[m], TARGET_SLOT_INDICES[t]); standalone on the target-slot
+    diagonal. An all-lit grid (the WAIT sentinel) folds onto all-lit cells.
+    """
+    cells = np.zeros(NUM_ACTION_CELLS, dtype=bool)
+    switch_via_tgt = grid[ALLY_SWITCH_INDICES][:, RESERVE_ENTITY_INDICES].any(axis=0)
+    switch_via_src = grid[RESERVE_ENTITY_INDICES].any(axis=-1)
+    cells[:NUM_SWITCH_CELLS] = switch_via_tgt | switch_via_src
+    move_block = grid[MOVE_INDICES][:, TARGET_SLOT_INDICES]
+    cells[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET] = move_block.reshape(-1)
+    cells[OTHER_CELL_OFFSET:] = grid[TARGET_SLOT_INDICES, TARGET_SLOT_INDICES]
+    return cells
 
 
 def get_action_mask(state: EnvironmentState):
     if state.HasField("structured_action_mask"):
-        return _grid_from_structured_mask(state.structured_action_mask)
+        return _cells_from_structured_mask(state.structured_action_mask)
     # Replay shards predate the structured mask (2026-08-29) and carry the
     # 1681-bit packed grid instead. Delete this branch, and the proto field it
     # reads, when replays/shards is next rebuilt.
     buffer = np.frombuffer(state.packed_action_mask, dtype=np.uint8)
     mask = np.unpackbits(buffer, axis=-1)[: NUM_ACTION_FEATURES**2]
-    return mask.astype(bool).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    grid = mask.astype(bool).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    return _cells_from_packed_grid(grid)
 
 
 def process_state(
@@ -496,11 +502,7 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
                 log_probs=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
                 expectation=np.zeros((env.done.shape[0], 1), dtype=np.float32),
             ),
-            action_head=PolicyHeadOutput(
-                action_index=env.action_mask.reshape(
-                    env.action_mask.shape[:-2] + (-1,)
-                ).argmax(-1)
-            ),
+            action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),
         ),
     )
 

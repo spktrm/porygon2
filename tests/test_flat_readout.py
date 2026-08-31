@@ -12,9 +12,11 @@ import pytest
 from ml_collections import ConfigDict
 
 from rl.environment.data import (
-    ALLY_SWITCH_INDICES,
+    MOVE_CELL_OFFSET,
     MOVE_INDICES,
-    NUM_ACTION_FEATURES,
+    NUM_ACTION_CELLS,
+    NUM_TARGET_SLOTS,
+    OTHER_CELL_OFFSET,
     RESERVE_ENTITY_INDICES,
     TARGET_SLOT_INDICES,
 )
@@ -47,19 +49,11 @@ def _rows(key):
     )
 
 
-def _full_mask():
-    mask = np.zeros((NUM_ACTION_FEATURES, NUM_ACTION_FEATURES), bool)
-    mask[np.ix_(MOVE_INDICES, TARGET_SLOT_INDICES)] = True
-    mask[np.ix_(ALLY_SWITCH_INDICES, RESERVE_ENTITY_INDICES)] = True
-    return jnp.asarray(mask)
-
-
 def _init():
     head = _readout()
     rows = _rows(jax.random.key(0))
-    mask = _full_mask()
-    params = head.init(jax.random.key(1), *rows, mask)
-    return head, params, rows, mask
+    params = head.init(jax.random.key(1), *rows)
+    return head, params, rows
 
 
 # --- layout ---------------------------------------------------------------
@@ -87,8 +81,9 @@ def test_every_logit_is_exactly_zero_at_init():
     """The policy starts UNIFORM over legal cells, so
     compute_policy_metrics(prior=None) is the consistent anchor and the PG
     has no lecun noise posing as an action preference to unlearn."""
-    head, params, rows, mask = _init()
-    logits = head.apply(params, *rows, mask)
+    head, params, rows = _init()
+    logits = head.apply(params, *rows)
+    assert logits.shape[-1] == NUM_ACTION_CELLS
     np.testing.assert_array_equal(np.asarray(logits), 0.0)
 
 
@@ -102,10 +97,10 @@ def test_zero_init_query_gets_live_gradient_and_the_key_unfreezes():
     below is that nudging query off zero unfreezes it, i.e. this is a
     one-step unfreeze and not a stalled product.
     """
-    head, params, rows, mask = _init()
+    head, params, rows = _init()
 
     def total(p):
-        return jnp.sum(head.apply(p, *rows, mask))
+        return jnp.sum(head.apply(p, *rows))
 
     grads = jax.grad(total)(params)["params"]
     assert np.abs(np.asarray(grads["query"]["kernel"])).max() > 0
@@ -123,15 +118,16 @@ def test_zero_init_query_gets_live_gradient_and_the_key_unfreezes():
 def test_the_pointer_is_not_symmetric():
     """A move-src/target-tgt cell is not a target-src/move-tgt cell, so
     query and key must not share one projection."""
-    head, params, rows, mask = _init()
+    head, params, rows = _init()
     p = jax.tree.map(lambda x: x, params)
     p["params"]["query"]["kernel"] = jax.random.normal(
         jax.random.key(3), p["params"]["query"]["kernel"].shape
     )
     _, move_rows, target_rows = rows
-    logits = np.asarray(head.apply(p, rows[0], move_rows, target_rows, mask))
-    grid = logits.reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
-    block = grid[np.ix_(MOVE_INDICES, TARGET_SLOT_INDICES)]
+    logits = np.asarray(head.apply(p, rows[0], move_rows, target_rows))
+    block = logits[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET].reshape(
+        len(MOVE_INDICES), NUM_TARGET_SLOTS
+    )
     square = min(block.shape)
     assert not np.allclose(
         block[:square, :square], block[:square, :square].T, atol=1e-6
@@ -148,42 +144,34 @@ def _open(params, seed=5):
 
 
 @pytest.mark.parametrize("reserve", [0, 3])
-def test_a_sheet_row_moves_only_the_cells_naming_that_reserve(reserve):
-    head, params, rows, mask = _init()
+def test_a_sheet_row_moves_only_its_own_switch_cell(reserve):
+    head, params, rows = _init()
     params = _open(params)
     private_rows, move_rows, target_rows = rows
 
     bumped = private_rows.at[reserve].add(1.0)
-    base = np.asarray(head.apply(params, *rows, mask)).reshape(
-        NUM_ACTION_FEATURES, NUM_ACTION_FEATURES
-    )
-    moved = np.asarray(
-        head.apply(params, bumped, move_rows, target_rows, mask)
-    ).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    base = np.asarray(head.apply(params, *rows))
+    moved = np.asarray(head.apply(params, bumped, move_rows, target_rows))
 
     changed = ~np.isclose(base, moved, atol=1e-6)
     expected = np.zeros_like(changed)
-    expected[RESERVE_ENTITY_INDICES[reserve], :] = True
-    expected[ALLY_SWITCH_INDICES, RESERVE_ENTITY_INDICES[reserve]] = True
+    expected[reserve] = True
     np.testing.assert_array_equal(changed, expected)
 
 
-def test_a_move_row_moves_only_its_own_grid_row():
-    head, params, rows, mask = _init()
+def test_a_move_row_moves_only_its_own_move_cells():
+    head, params, rows = _init()
     params = _open(params)
     private_rows, move_rows, target_rows = rows
 
     bumped = move_rows.at[2].add(1.0)
-    base = np.asarray(head.apply(params, *rows, mask)).reshape(
-        NUM_ACTION_FEATURES, NUM_ACTION_FEATURES
-    )
-    moved = np.asarray(
-        head.apply(params, private_rows, bumped, target_rows, mask)
-    ).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    base = np.asarray(head.apply(params, *rows))
+    moved = np.asarray(head.apply(params, private_rows, bumped, target_rows))
 
     changed = ~np.isclose(base, moved, atol=1e-6)
     expected = np.zeros_like(changed)
-    expected[MOVE_INDICES[2], TARGET_SLOT_INDICES] = True
+    row_start = MOVE_CELL_OFFSET + 2 * NUM_TARGET_SLOTS
+    expected[row_start : row_start + NUM_TARGET_SLOTS] = True
     np.testing.assert_array_equal(changed, expected)
     # Control: it did change something, so the invariance above is not the
     # readout simply ignoring its move rows.

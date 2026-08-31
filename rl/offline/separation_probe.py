@@ -53,13 +53,17 @@ import optax
 
 from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
-    ALLY_SWITCH_INDICES,
     ALLY_TARGET_INDICES,
+    CELL_MODALITY_MASK,
     ENEMY_TARGET_INDICES,
-    FLAT_MODALITY_MASK,
-    MOVE_SLOT_INDICES,
-    NUM_ACTION_FEATURES,
-    RESERVE_ENTITY_INDICES,
+    MOVE_CELL_OFFSET,
+    MOVE_INDICES,
+    NUM_MOVE_SLOTS,
+    NUM_SWITCH_CELLS,
+    NUM_TARGET_SLOTS,
+    OTHER_CELL_OFFSET,
+    TARGET_SLOT_INDICES,
+    WILDCARD_MOVE_INDICES,
 )
 from rl.environment.interfaces import PlayerActorInput, Trajectory
 from rl.environment.protos.features_pb2 import (
@@ -70,6 +74,12 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.model.config import get_player_model_config
+from rl.model.constants import (
+    ALLY_TARGET_ROWS,
+    ENEMY_TARGET_ROWS,
+    PRIVATE_ROWS,
+    TARGET_ROWS,
+)
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.model.utils import open_zero_init_paths
@@ -81,7 +91,7 @@ logger = logging.getLogger(__name__)
 # Batch selection, moved here from rl/offline/overfit_probe.py when that
 # file retired with the Q head on 2026-08-29. This probe was its only
 # remaining consumer.
-_FLAT = np.asarray(FLAT_MODALITY_MASK)
+_FLAT = np.asarray(CELL_MODALITY_MASK)
 _SWITCH_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__SWITCH
 _MOVE_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__MOVE
 
@@ -102,8 +112,7 @@ def voluntary_switch_rows(chunk: Trajectory) -> int:
     """Rows where a switch was taken with a legal move available, over the
     chunk's trainable rows (not done, not the bootstrap-only final row)."""
     env = chunk.player_transitions.env_output
-    mask = np.asarray(env.action_mask)
-    flat = mask.reshape(mask.shape[0], -1)
+    flat = np.asarray(env.action_mask)
     idx = np.asarray(
         chunk.player_transitions.agent_output.actor_output.action_head.action_index
     )
@@ -134,12 +143,6 @@ def pick_batches(chunks: list[Trajectory], batch: int, pool: int = 1):
     return [stack_batch(b) for b in train], stack_batch(held)
 
 
-_A = NUM_ACTION_FEATURES
-_CELL_SRC = np.arange(_A * _A) // _A
-_CELL_TGT = np.arange(_A * _A) % _A
-_FLAT = np.asarray(FLAT_MODALITY_MASK)
-_SWITCH_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__SWITCH
-_MOVE_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__MOVE
 _SPECIES_PRIV = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
 _SPECIES_REV = EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
 _MOVE_ID = MovesetFeature.MOVESET_FEATURE__MOVE_ID
@@ -147,14 +150,16 @@ _HP_RATIO = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
 _FAINTED = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
 # Entity-backed target cells: ally targets key revealed rows 0/1, enemy
 # targets revealed rows 6/7; the learned TARGET_*/PASS slots carry no
-# entity and are excluded from identity labels.
-_TARGET_ENTITY_SLOTS = {
-    int(ALLY_TARGET_INDICES[0]): 0,
-    int(ALLY_TARGET_INDICES[1]): 1,
-    int(ENEMY_TARGET_INDICES[0]): 6,
-    int(ENEMY_TARGET_INDICES[1]): 7,
+# entity and are excluded from identity labels. Keys are BLOCK CELLS (the
+# standalone block entry of each target slot).
+_target_row_of = {int(slot): row for row, slot in enumerate(TARGET_SLOT_INDICES)}
+_TARGET_ENTITY_CELLS = {
+    OTHER_CELL_OFFSET + _target_row_of[int(ALLY_TARGET_INDICES[0])]: 0,
+    OTHER_CELL_OFFSET + _target_row_of[int(ALLY_TARGET_INDICES[1])]: 1,
+    OTHER_CELL_OFFSET + _target_row_of[int(ENEMY_TARGET_INDICES[0])]: 6,
+    OTHER_CELL_OFFSET + _target_row_of[int(ENEMY_TARGET_INDICES[1])]: 7,
 }
-_OTHER = ModalityEnum.MODALITY_ENUM__OTHER
+_IS_WILDCARD_SLOT = np.isin(MOVE_INDICES, WILDCARD_MOVE_INDICES)
 
 
 def cell_identities(env, mode: str = "identity") -> np.ndarray:
@@ -173,23 +178,20 @@ def cell_identities(env, mode: str = "identity") -> np.ndarray:
     priv_species = np.asarray(env.private_team)[..., _SPECIES_PRIV]
     rev_species = np.asarray(env.revealed_team)[..., _SPECIES_REV]
     move_ids = np.asarray(env.my_moveset)[..., _MOVE_ID]
-    shape = priv_species.shape[:-1] + (_A * _A,)
+    shape = priv_species.shape[:-1] + (len(_FLAT),)
     ids = np.full(shape, -1, dtype=np.int64)
-    # Preview switch cells key the reserve as SRC; battle switch cells key
-    # it as TGT and take precedence where both apply.
-    for reserve, slot in enumerate(RESERVE_ENTITY_INDICES):
-        cells = _SWITCH_CELLS & (_CELL_SRC == slot)
-        ids[..., cells] = priv_species[..., reserve : reserve + 1]
-    for reserve, slot in enumerate(RESERVE_ENTITY_INDICES):
-        cells = _SWITCH_CELLS & (_CELL_TGT == slot)
-        ids[..., cells] = priv_species[..., reserve : reserve + 1]
-    for row, slot in enumerate(MOVE_SLOT_INDICES):
-        cells = _MOVE_CELLS & (_CELL_SRC == slot)
-        if cells.any():
-            ids[..., cells] = move_ids[..., row : row + 1]
-    for slot, rev_row in _TARGET_ENTITY_SLOTS.items():
-        cells = (_FLAT == _OTHER) & (_CELL_TGT == slot)
-        ids[..., cells] = rev_species[..., rev_row : rev_row + 1]
+    # Switch cell j IS reserve j in the block space -- one write serves the
+    # battle switch and the team-preview lead alike.
+    ids[..., :NUM_SWITCH_CELLS] = priv_species
+    for move_row in range(NUM_MOVE_SLOTS):
+        if _IS_WILDCARD_SLOT[move_row]:
+            continue
+        base = MOVE_CELL_OFFSET + move_row * NUM_TARGET_SLOTS
+        ids[..., base : base + NUM_TARGET_SLOTS] = move_ids[
+            ..., move_row : move_row + 1
+        ]
+    for cell, rev_row in _TARGET_ENTITY_CELLS.items():
+        ids[..., cell] = rev_species[..., rev_row]
     if mode == "pair":
         # Opponent side is revealed rows 6-11, actives first — row 6 is
         # the opponent's active. 8192 clears every id enum's range.
@@ -214,7 +216,7 @@ def hash_normal(ids: np.ndarray, seed: int) -> np.ndarray:
 GROUPS = (
     ("switch", _SWITCH_CELLS),
     ("move", _MOVE_CELLS),
-    ("target", (_FLAT == _OTHER) & np.isin(_CELL_TGT, list(_TARGET_ENTITY_SLOTS))),
+    ("target", np.isin(np.arange(len(_FLAT)), list(_TARGET_ENTITY_CELLS))),
 )
 
 
@@ -222,7 +224,7 @@ def build_labels(env, seed: int, label_scale: float, mode: str = "identity"):
     """Per-cell labels y and the eval mask: identity-keyed z, centred
     WITHIN each group over the row's legal identity-carrying cells; rows
     contribute a group only when it has >= 2 such cells."""
-    flat_mask = np.asarray(env.action_mask).reshape(*env.done.shape, -1)
+    flat_mask = np.asarray(env.action_mask)
     ids = cell_identities(env, mode)
     z = hash_normal(ids, seed)
     y = np.zeros_like(z, dtype=np.float32)
@@ -447,12 +449,12 @@ def run_probe_a(net, variables, batch, seed):
     apply = make_apply(net)
     env = batch.player_transitions.env_output
     actor_output = batch.player_transitions.agent_output.actor_output
-    flat_mask = np.asarray(env.action_mask).reshape(*env.done.shape, -1)
+    flat_mask = np.asarray(env.action_mask)
     rows = trainable_rows(np.asarray(env.done))
     rng = np.random.default_rng(seed)
 
     reserve_cells = [
-        _SWITCH_CELLS & (_CELL_TGT == slot) for slot in RESERVE_ENTITY_INDICES
+        np.arange(len(_FLAT)) == reserve for reserve in range(NUM_SWITCH_CELLS)
     ]
     legal_per_reserve = np.stack(
         [(flat_mask & cells).any(-1) & rows for cells in reserve_cells], axis=-1
@@ -579,9 +581,7 @@ def _slot_condition_rows(env, batch_index: int):
                     j=j,
                     hp=float(row[_HP_RATIO]) / MAX_RATIO_TOKEN,
                     fainted=float(row[_FAINTED]),
-                    legal=bool(
-                        action_mask[t, batch_index, :, RESERVE_ENTITY_INDICES[j]].any()
-                    ),
+                    legal=bool(action_mask[t, batch_index, j]),
                 )
             )
     return rows
@@ -622,9 +622,20 @@ def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float
     dev_variables = jax.device_put(variables)
 
     reserve = {"features": [], "hp": [], "fainted": [], "legal": [], "chunk": []}
+    # Controls are SEQUENCE rows that carry the named entity: my active's
+    # ally-target row and the opponent active's enemy-target row (the
+    # entity-derived target rows). The grid era read the 41-slot action
+    # stream here; the flat trunk has no such stream, so the rows are named
+    # off rl/model/constants like every head does.
     controls = {
-        "ally_1_switch": (int(ALLY_SWITCH_INDICES[0]), 0),
-        "enemy_1_target": (int(ENEMY_TARGET_INDICES[0]), 6),
+        "ally_1_target": (
+            TARGET_ROWS.start + int(ALLY_TARGET_ROWS[0]),
+            0,
+        ),
+        "enemy_1_target": (
+            TARGET_ROWS.start + int(ENEMY_TARGET_ROWS[0]),
+            6,
+        ),
     }
     control_rows = {
         name: {"features": [], "hp": [], "fainted": [], "chunk": []}
@@ -635,23 +646,25 @@ def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float
         group = chunks[start : start + batch_size]
         stacked = stack_batch(group)
         actor_input = actor_input_of(stacked)
-        action_embeddings, _ = apply_encoder(dev_variables, actor_input)
-        action_embeddings = np.asarray(action_embeddings, dtype=np.float32)
+        sequence_rows_out = apply_encoder(dev_variables, actor_input)
+        sequence_rows_out = np.asarray(sequence_rows_out, dtype=np.float32)
         env = stacked.player_transitions.env_output
         public = np.asarray(env.public_team)
         for b in range(len(group)):
             chunk_id = start + b
             for entry in _slot_condition_rows(env, b):
-                slot = int(RESERVE_ENTITY_INDICES[entry["j"]])
-                reserve["features"].append(action_embeddings[entry["t"], b, slot])
+                row_index = PRIVATE_ROWS.start + entry["j"]
+                reserve["features"].append(sequence_rows_out[entry["t"], b, row_index])
                 reserve["hp"].append(entry["hp"])
                 reserve["fainted"].append(entry["fainted"])
                 reserve["legal"].append(entry["legal"])
                 reserve["chunk"].append(chunk_id)
-            for name, (slot, public_row) in controls.items():
-                for t in range(action_embeddings.shape[0]):
+            for name, (row_index, public_row) in controls.items():
+                for t in range(sequence_rows_out.shape[0]):
                     row = public[t, b, public_row]
-                    control_rows[name]["features"].append(action_embeddings[t, b, slot])
+                    control_rows[name]["features"].append(
+                        sequence_rows_out[t, b, row_index]
+                    )
                     control_rows[name]["hp"].append(
                         float(row[_HP_RATIO]) / MAX_RATIO_TOKEN
                     )
@@ -667,7 +680,7 @@ def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float
 
     readouts = {
         "RESERVE_j": reserve,
-        "ally_1_switch (ctl)": control_rows["ally_1_switch"],
+        "ally_1_target (ctl)": control_rows["ally_1_target"],
         "enemy_1_target (ctl)": control_rows["enemy_1_target"],
     }
     for entry in readouts.values():

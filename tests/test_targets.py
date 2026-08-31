@@ -177,7 +177,7 @@ class TestPolicyAdvantage:
 
         T, B = done.shape
         batch = _min_batch(
-            done, win_reward, jnp.ones((T, B, 2, 2), bool), jnp.zeros((T, B), jnp.int32)
+            done, win_reward, jnp.ones((T, B, 4), bool), jnp.zeros((T, B), jnp.int32)
         )
         value_log_probs = jnp.full((T, B, 3), jnp.log(1.0 / 3.0), dtype=jnp.float32)
         if isr is None:

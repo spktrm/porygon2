@@ -69,8 +69,9 @@ class PolicyHeadOutput:
 
 @dataclass
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
-    src_index: ArrayLike = ()
-    tgt_index: ArrayLike = ()
+    # `src_index`/`tgt_index` lived here until 2026-08-31: coordinates into
+    # the 41x41 scoring grid the wire Action used to carry. `action_index`
+    # IS the wire action now -- an index into the block space.
     normalized_modality_entropy: ArrayLike = ()
 
 
