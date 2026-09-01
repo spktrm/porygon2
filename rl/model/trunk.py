@@ -134,7 +134,8 @@ def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:
     of equal-variance directions that would give the same spectrum, no
     eigendecomposition -- so it reads the spread AROUND the shared direction
     and the two disagree precisely when a common offset carries a live
-    residual. NaN when there is no spread at all (an all-identical set).
+    residual. Participation is NaN when there is no spread at all (an
+    all-identical set); cosine is NaN with fewer than two valid rows.
     A valid row is one with nonzero norm: the trunk hard-zeroes invalid
     rows every block, so that is its own invariant.
     """
@@ -145,7 +146,12 @@ def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:
     unit = values / jnp.maximum(norms, 1e-12)[..., None]
     pair = valid[..., :, None] & valid[..., None, :] & ~jnp.eye(rows, dtype=bool)
     cosines = jnp.einsum("...id,...jd->...ij", unit, unit)
-    cosine = (cosines * pair).sum((-2, -1)) / jnp.maximum(pair.sum((-2, -1)), 1)
+    num_pairs = pair.sum((-2, -1))
+    cosine = jnp.where(
+        num_pairs > 0,
+        (cosines * pair).sum((-2, -1)) / jnp.maximum(num_pairs, 1),
+        jnp.nan,
+    )
 
     num_valid = jnp.maximum(valid.sum(-1), 1)
     mean_row = (values * valid[..., None]).sum(-2) / num_valid[..., None]
