@@ -190,7 +190,11 @@ assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 #   SECRET (OPP_PRIVATE_ROWS) -- the opponent's request truth: readable ONLY
 #     by VALUE_CLS; may itself read the policy-readable rows and its
 #     siblings, because a row's READS leak nothing.
-#   VALUE_CLS -- reads everything, read by NOTHING (out-degree 0).
+#   VALUE_CLS -- reads everything, read by NOTHING (out-degree 0). Reading
+#     the policy-readable rows (history included) AS WELL AS the secret
+#     partition is what makes the privileged V the (history, state)-
+#     conditioned asymmetric critic -- unbiased for the policy's returns
+#     (Baisero & Amato 2022); a state-only critic is the biased form.
 # Leak-freedom is transitive by induction over blocks: a row's content after
 # block b is a function of its in-edges' contents at block b-1 (plus its own
 # residual), and a policy-readable row's in-edges are policy-readable at
