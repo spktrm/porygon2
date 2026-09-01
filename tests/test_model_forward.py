@@ -70,6 +70,7 @@ def _assembled_rows(network, params, actor_input):
             zero_slots.astype(encoder.cfg.dtype),
             jnp.zeros(NUM_PUBLIC_SLOTS, jnp.bool_),
             jnp.zeros((NUM_FIELD_ROWS, width), encoder.cfg.dtype),
+            zero_slots.astype(encoder.cfg.dtype),
         )
         return sequence
 
