@@ -1653,12 +1653,17 @@ class Encoder(nn.Module):
         ]
         return jax.ops.segment_max(sides, slot_ids, num_segments=NUM_PUBLIC_SLOTS)
 
-    def __call__(
+    def _history_inputs(
         self,
         env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
+        """The history pathway's four inputs to the sequence, in PUBLIC-ROW
+        order: (row_states, order_valid, field_state, snapshot_rows). The
+        one place the slot-to-row alignment is written; the offline history
+        addend read (rl/offline/history_addends.py) calls it directly.
+        """
         slot_states, field_state, node_snapshots = self.encode_history(
             env_step, packed_history_step, history_step
         )
@@ -1681,12 +1686,21 @@ class Encoder(nn.Module):
         # TGN staleness fix the RL path used to discard (only the offline
         # critic read it; "the GRU-only readout loses the latest node").
         snapshot_rows = jnp.take_along_axis(node_snapshots, aligned_order, axis=1)
+        return row_states, order_valid, field_state, snapshot_rows
 
+    def __call__(
+        self,
+        env_step: PlayerEnvOutput,
+        packed_history_step: PlayerPackedHistoryOutput,
+        history_step: PlayerHistoryOutput,
+    ):
         # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K)). The heads
         # slice the rows they own by name (rl/model/constants.py), so no
         # offset is ever written twice; the second element is the opponent
         # code one-hot -- the belief head's label -- riding out beside the
         # sequence because it is computed where the secret rows are built.
         return _forward_vmap()(
-            self, env_step, row_states, order_valid, field_state, snapshot_rows
+            self,
+            env_step,
+            *self._history_inputs(env_step, packed_history_step, history_step),
         )
