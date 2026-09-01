@@ -70,6 +70,11 @@ class TrunkBlock(nn.Module):
 
         # Hard-zero invalid rows so a padded row never accumulates content.
         sequence = jnp.where(row_valid[..., None], sequence, 0)
+        # The block's output residual stream, for the offline row-homogeneity
+        # read (rl/offline/trunk_homogeneity.py). Same gate as the attention
+        # sow; training never allocates it.
+        if COLLECT_INTERMEDIATES:
+            self.sow("intermediates", "residual", sequence.astype(jnp.float32))
         return (sequence, row_valid), None
 
 
@@ -97,10 +102,58 @@ class Trunk(nn.Module):
     @nn.compact
     def __call__(self, sequence: jax.Array, row_valid: jax.Array) -> jax.Array:
         block = nn.remat(TrunkBlock, policy=jax.checkpoint_policies.nothing_saveable)
+        # A sow is a silent no-op unless its collection is lifted through
+        # every transform above it, and this scan lifted only params from
+        # a1c18ed to 2026-09-02 -- so the block's attention sow captured
+        # NOTHING and scripts/attn_probe.py never saw a trunk attention.
+        # Stacked along the block axis, as the old round trunk's scan did.
+        variable_axes = {"params": 0}
+        if COLLECT_INTERMEDIATES:
+            variable_axes["intermediates"] = 0
         (sequence, _), _ = nn.scan(
             block,
-            variable_axes={"params": 0},
+            variable_axes=variable_axes,
             split_rngs={"params": True},
             length=self.cfg.num_blocks,
         )(self.cfg, name="blocks")((sequence, row_valid), None)
         return sequence
+
+
+def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """How alike a sequence's rows are: (mean off-diagonal cosine,
+    participation ratio), each over the trailing (rows, dim) axes, batched
+    over any leading ones. The over-smoothing instrument for a stack of
+    ungated pre-norm blocks whose readouts are all PER ROW (Noci et al.
+    2022, rank collapse): rows converging to one direction reads on the
+    existing panels as "entropy at ceiling while the pointer params grow",
+    which is indistinguishable from the phase-1 support-anchor shape.
+
+    Cosine is UNCENTRED: q and k pass through RMSNorm, not LayerNorm, so a
+    shared direction is exactly what every attention in the trunk sees.
+    Participation is of the CENTRED Gram -- tr(G)^2 / ||G||_F^2, the number
+    of equal-variance directions that would give the same spectrum, no
+    eigendecomposition -- so it reads the spread AROUND the shared direction
+    and the two disagree precisely when a common offset carries a live
+    residual. NaN when there is no spread at all (an all-identical set).
+    A valid row is one with nonzero norm: the trunk hard-zeroes invalid
+    rows every block, so that is its own invariant.
+    """
+    rows = sequence.shape[-2]
+    values = sequence.astype(jnp.float32)
+    norms = jnp.linalg.norm(values, axis=-1)
+    valid = norms > 0
+    unit = values / jnp.maximum(norms, 1e-12)[..., None]
+    pair = valid[..., :, None] & valid[..., None, :] & ~jnp.eye(rows, dtype=bool)
+    cosines = jnp.einsum("...id,...jd->...ij", unit, unit)
+    cosine = (cosines * pair).sum((-2, -1)) / jnp.maximum(pair.sum((-2, -1)), 1)
+
+    num_valid = jnp.maximum(valid.sum(-1), 1)
+    mean_row = (values * valid[..., None]).sum(-2) / num_valid[..., None]
+    centred = (values - mean_row[..., None, :]) * valid[..., None]
+    gram = jnp.einsum("...id,...jd->...ij", centred, centred)
+    trace = jnp.trace(gram, axis1=-2, axis2=-1)
+    frobenius_sq = jnp.sum(jnp.square(gram), axis=(-2, -1))
+    participation = jnp.where(
+        trace > 0, jnp.square(trace) / jnp.maximum(frobenius_sq, 1e-30), jnp.nan
+    )
+    return cosine, participation

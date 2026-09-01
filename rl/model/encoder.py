@@ -129,6 +129,11 @@ def _lifted_entity_vmap(method):
     call sites agree on shapes. Composing lifted transforms (rather than
     plain jax ones) is what keeps this legal to nest under flax's other
     lifted transforms (nn.scan/nn.checkpoint) elsewhere in the model."""
+    # NOT lifting "intermediates" here is deliberate: one pool instance is
+    # applied at several sites with different entity counts, and mapping
+    # the collection would demand one batch size across them. The pools'
+    # attention sows are therefore dropped; scripts/attn_probe.py reads
+    # the trunk's (rl/model/trunk.py lifts them).
     return nn.jit(
         nn.vmap(
             method,
