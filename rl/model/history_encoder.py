@@ -43,12 +43,14 @@ FIELD_ROW_GLOBAL, FIELD_ROW_MINE, FIELD_ROW_THEIRS = 0, 1, 2
 # ENTITY_PUBLIC_NODE_FEATURE__SIDE == 1 is mine (service isMySide).
 SIDE_MINE = 1
 
+# All EIGHT columns the service writes (state.ts maxRelevant = 8). Until
+# 2026-09-01 this listed only IDX0..3, so any step touching more than four
+# entities -- spread moves, hazard cascades -- had rows 5-8 silently dropped
+# before the scatter ever saw them.
 _RELEVANT_ENTITY_FEATURES = np.array(
     [
-        FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0,
-        FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX1,
-        FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX2,
-        FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX3,
+        FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{index}")
+        for index in range(8)
     ]
 )
 
