@@ -323,6 +323,37 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # The 2026-09-01 opponent-code leaves and the shared
+                    # entity_index_tag join key against their known init
+                    # (all lecun 0.0625). Still there tens of thousands of
+                    # steps in = never trained: the code is a random hash
+                    # and the belief head is learning it. The tag was
+                    # measured at 0.028 of the history row's other addends
+                    # (alarm < 0.05) and near-illegible on the sheet rows
+                    # post-trunk (probe D) -- only its growth here can
+                    # rescue that join without an architectural fix.
+                    "Opp code & join key: drift from init",
+                    [
+                        "player_opp_code_logits_rms",
+                        "player_opp_code_embedding_rms",
+                        "player_entity_index_tag_rms",
+                        "player_belief_head_out_rms",
+                    ],
+                ),
+                lp(
+                    # Pre-clip grad norms on the same leaves. The embedding
+                    # gets gradient on ONE row per (mon, group) through the
+                    # straight-through argmax, so a dead group reads as one
+                    # row absorbing it -- read beside code_perplexity_min.
+                    "Opp code & join key: gradient norms",
+                    [
+                        "player_opp_code_logits_grad_norm",
+                        "player_opp_code_embedding_grad_norm",
+                        "player_entity_index_tag_grad_norm",
+                        "player_belief_head_gradient_norm",
+                    ],
+                ),
+                lp(
                     # Realised outcome of voluntary switches minus moves at
                     # matched V(s). Offline: pooled -0.147 -> matched
                     # -0.048±0.054. Per-batch n is tiny; read smoothed and
@@ -443,6 +474,18 @@ def rl_sections():
                     [
                         "player_belief_accuracy",
                         "player_belief_matched_frac",
+                    ],
+                ),
+                lp(
+                    # The accuracy made honest (2026-09-02): the majority
+                    # rate a constant predictor scores on the SAME rows,
+                    # and accuracy minus it. Above-marginal ~0 = the head
+                    # has learnt the batch marginal and nothing else
+                    # (a collapsed group is predicted at 100% for free).
+                    "Belief accuracy above marginal",
+                    [
+                        "player_belief_accuracy_above_marginal",
+                        "player_belief_majority_rate",
                     ],
                 ),
                 lp(

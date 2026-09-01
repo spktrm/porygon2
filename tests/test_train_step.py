@@ -134,6 +134,17 @@ def test_train_step_smoke():
         "player_trunk_mlp_out_rms",
         "player_action_head_grad_norm",
         "player_trunk_grad_norm",
+        # The 2026-09-01 opponent-code leaves and the join key (plan step
+        # b): the code trains only through the priv-value CE, and these
+        # are the only readings that separate a trained code from init
+        # noise with the same perplexity.
+        "player_opp_code_logits_rms",
+        "player_opp_code_embedding_rms",
+        "player_entity_index_tag_rms",
+        "player_belief_head_out_rms",
+        "player_opp_code_logits_grad_norm",
+        "player_opp_code_embedding_grad_norm",
+        "player_entity_index_tag_grad_norm",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
