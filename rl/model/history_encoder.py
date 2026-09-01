@@ -369,7 +369,9 @@ class PerSlotHistoryEncoder(nn.Module):
         self.initial_field_state = self.param(
             "initial_field_state", init, (NUM_FIELD_ROWS, entity_size)
         )
-        # Projects [node snapshot ; edge ; field] into a slot message.
+        # Projects [node ; edge ; field ; side ; src_node ; src_edge ;
+        # is_src] into a directed slot message (the last three blocks are
+        # the 2026-09-01 TGN source half).
         self.message_projection = nn.Dense(
             features=entity_size,
             use_bias=False,
@@ -506,6 +508,7 @@ class PerSlotHistoryEncoder(nn.Module):
         node_embedding_cache: jax.Array,
         edge_embedding_cache: jax.Array,
         edge_slot_ids: jax.Array,
+        edge_major_args: jax.Array,
         node_sides: jax.Array,
         field_step_embeddings: jax.Array,
         field_row_embeddings: jax.Array,
@@ -519,6 +522,8 @@ class PerSlotHistoryEncoder(nn.Module):
             node_embedding_cache: (P, D) embedded public-entity cache rows.
             edge_embedding_cache: (P, D) embedded edge cache rows.
             edge_slot_ids: (P,) ENTITY_EDGE_FEATURE__ENTITY_IDX per cache row.
+            edge_major_args: (P,) ENTITY_EDGE_FEATURE__MAJOR_ARG per cache
+                row -- what identifies a step's SOURCE rows (the mover).
             node_sides: (P,) relative side (1 = mine) per cache row.
             field_step_embeddings: (H, D) pooled field embedding per step —
                 the message/slot-input view.
@@ -549,6 +554,25 @@ class PerSlotHistoryEncoder(nn.Module):
         )  # (H, K, 2)
         edge_is_mine = edge_sides == SIDE_MINE
 
+        # ---- the directed edge (TGN message, 2026-09-01) ------------------
+        # A step's SOURCE rows are the ones carrying a real major arg (the
+        # mover of a move/switch/faint/cant); their masked-mean node+edge
+        # latents ride EVERY message of the step, so mover and target
+        # finally coexist in one vector -- the relation "move X did N to Y"
+        # the per-slot scatter used to destroy. TGN proper uses the source's
+        # MEMORY here; that is carry-dependent and hence serial, so against
+        # the ~26us/step dependency-latency bound the source's raw cache
+        # embedding (its revealed state at event time) stands in, keeping
+        # the whole message batch precomputable.
+        edge_majors = jnp.take(edge_major_args, relevant, axis=0)  # (H, K)
+        is_src = (
+            edge_majors > BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___PAD
+        ) & edge_mask
+        src_weights = is_src.astype(node_embeddings.dtype)[..., None]
+        src_denom = src_weights.sum(axis=-2).clip(min=1)
+        src_node = (node_embeddings * src_weights).sum(axis=-2) / src_denom
+        src_edge = (edge_embeddings * src_weights).sum(axis=-2) / src_denom
+
         messages = self.message_projection(
             jnp.concatenate(
                 (
@@ -558,6 +582,9 @@ class PerSlotHistoryEncoder(nn.Module):
                         field_step_embeddings[:, None], node_embeddings.shape
                     ),
                     side_onehot,
+                    jnp.broadcast_to(src_node[:, None], node_embeddings.shape),
+                    jnp.broadcast_to(src_edge[:, None], edge_embeddings.shape),
+                    src_weights,
                 ),
                 axis=-1,
             )
@@ -766,14 +793,25 @@ class PerSlotHistoryEncoder(nn.Module):
         # the edge — are projected once per request and added per
         # contributing edge (× count). This keeps the work at
         # O(H·K + T·12) projections instead of O(T·H·K).
-        def project(node, edge, field, side):
+        def project(node, edge, field, side, src_node, src_edge, is_src):
             return self.message_projection(
-                jnp.concatenate((node, edge, field, side), axis=-1)
+                jnp.concatenate(
+                    (node, edge, field, side, src_node, src_edge, is_src), axis=-1
+                )
             )
 
         zeros_hkd = jnp.zeros_like(edge_embeddings)
+        # Announced rows ARE the chosen actions, so is_src = 1; the source
+        # aggregate blocks stay zero -- an announcement carries no outcome,
+        # and the linear-decomposition trick needs the zero blocks anyway.
         edge_messages = project(
-            zeros_hkd, edge_embeddings, zeros_hkd, side_onehot
+            zeros_hkd,
+            edge_embeddings,
+            zeros_hkd,
+            side_onehot,
+            zeros_hkd,
+            zeros_hkd,
+            jnp.ones_like(side_onehot[..., :1]),
         )  # (H, K, D)
 
         seg = jnp.where(edge_ok, slot_ids, NUM_PUBLIC_SLOTS)

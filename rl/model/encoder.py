@@ -944,6 +944,27 @@ class Encoder(nn.Module):
             axis=0, where=effect_from_source_mask[..., None]
         )
 
+        # FROM_TYPE tokens (2026-09-01): on the wire since the beginning,
+        # never read. Summed masked one-hots over the typechart vocabulary
+        # -- the cause channel ("hit by a Fire move") the type-matchup
+        # reasoning needs.
+        from_type_indices = np.array(
+            [
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_TYPE_TOKEN0,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_TYPE_TOKEN1,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_TYPE_TOKEN2,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_TYPE_TOKEN3,
+                EntityEdgeFeature.ENTITY_EDGE_FEATURE__FROM_TYPE_TOKEN4,
+            ]
+        )
+        from_type_tokens = edge[from_type_indices]
+        num_from_types = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__NUM_FROM_TYPES]
+        from_type_mask = np.arange(len(from_type_indices)) < num_from_types
+        from_type_code = (
+            jax.nn.one_hot(from_type_tokens, NUM_TYPECHART, dtype=self.cfg.dtype)
+            * from_type_mask[..., None].astype(self.cfg.dtype)
+        ).sum(axis=0)
+
         ability_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ABILITY_TOKEN]
         item_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__ITEM_TOKEN]
         move_token = edge[EntityEdgeFeature.ENTITY_EDGE_FEATURE__MOVE_TOKEN]
@@ -987,6 +1008,7 @@ class Encoder(nn.Module):
             self._embed_item(item_token),
             self._embed_move(move_token),
             effect_from_source_embedding,
+            from_type_code,
         )
 
         mask = (
@@ -1200,6 +1222,7 @@ class Encoder(nn.Module):
         history_row_states: jax.Array,
         history_row_valid: jax.Array,
         history_field_state: jax.Array,
+        history_node_snapshots: jax.Array,
     ):
         """One row per thing -> (sequence, row_valid), BEFORE the trunk.
 
@@ -1219,12 +1242,11 @@ class Encoder(nn.Module):
         public_rows, public_valid = _lifted_entity_vmap(Encoder._embed_public_entity)(
             self, env_step.public_team, env_step.revealed_team
         )
-        # History row i IS public entity i's diary -- `Encoder.__call__` has
-        # already re-aligned the two through PUBLIC_ORDER -- so it is summed
-        # into that entity's row and inherits its pos/side identity for free.
-        public_rows = public_rows + jnp.where(
-            history_row_valid[:, None], history_row_states, 0
-        ).astype(public_rows.dtype)
+        # Until 2026-09-01 the history states were SUMMED into the public
+        # rows here ("entity i's 11th attribute token"). They are their own
+        # HISTORY_ENTITY rows now -- built below, once public_tag_index
+        # exists -- so attention routes board-now vs diary instead of one
+        # vector carrying their sum.
 
         private_rows, private_valid = self._embed_private_entities(
             env_step.private_team
@@ -1253,6 +1275,19 @@ class Encoder(nn.Module):
         private_rows = private_rows + jnp.take(
             self.entity_index_tag, private_tag_index, axis=0
         ).astype(private_rows.dtype)
+
+        # ---- history as its own rows (2026-09-01) --------------------------
+        # Entity i's diary: GRU slot state + the latest raw node snapshot
+        # (the TGN embedding module's memory + raw-features pair), aligned
+        # to public row i by Encoder.__call__'s PUBLIC_ORDER gather and
+        # tagged with the SAME entity_index_tag, so diary and board row
+        # share their join key. Group/row biases below give them their own
+        # identity.
+        history_entity_rows = (
+            history_row_states.astype(dtype)
+            + history_node_snapshots.astype(dtype)
+            + jnp.take(self.entity_index_tag, public_tag_index, axis=0).astype(dtype)
+        )
 
         # ---- the learner-only partition -----------------------------------
         # The opponent's request truth as discrete-code rows (see
@@ -1379,6 +1414,7 @@ class Encoder(nn.Module):
                 info_row.astype(dtype),
                 opp_private_rows.astype(dtype),
                 self.value_cls_embedding.astype(dtype),
+                history_entity_rows,
             ),
             axis=0,
         )
@@ -1403,6 +1439,7 @@ class Encoder(nn.Module):
                 # VALUE_CLS is always valid, like CLS: the privileged head
                 # reads it every step, terminal or not.
                 jnp.ones(1, dtype=jnp.bool_),
+                history_row_valid,
             )
         )
 
@@ -1420,6 +1457,7 @@ class Encoder(nn.Module):
         history_row_states: jax.Array,
         history_row_valid: jax.Array,
         history_field_state: jax.Array,
+        history_node_snapshots: jax.Array,
     ):
         """The whole per-timestep forward: assemble, then run the trunk.
 
@@ -1430,7 +1468,11 @@ class Encoder(nn.Module):
         structural.
         """
         sequence, row_valid, opp_code_one_hot = self._assemble_sequence(
-            env_step, history_row_states, history_row_valid, history_field_state
+            env_step,
+            history_row_states,
+            history_row_valid,
+            history_field_state,
+            history_node_snapshots,
         )
         return self.trunk(sequence, row_valid), opp_code_one_hot
 
@@ -1453,6 +1495,9 @@ class Encoder(nn.Module):
         edge_slot_ids = packed_history_step.edge_cache[
             :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
         ]
+        edge_major_args = packed_history_step.edge_cache[
+            :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG
+        ]
         node_sides = packed_history_step.public_cache[
             :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
         ]
@@ -1473,6 +1518,7 @@ class Encoder(nn.Module):
             node_embedding_cache=node_embedding_cache,
             edge_embedding_cache=edge_embedding_cache,
             edge_slot_ids=edge_slot_ids,
+            edge_major_args=edge_major_args,
             node_sides=node_sides,
             field_step_embeddings=step_field_vec,
             field_row_embeddings=step_field_embeddings,
@@ -1608,7 +1654,7 @@ class Encoder(nn.Module):
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
-        slot_states, field_state, _ = self.encode_history(
+        slot_states, field_state, node_snapshots = self.encode_history(
             env_step, packed_history_step, history_step
         )
 
@@ -1624,15 +1670,18 @@ class Encoder(nn.Module):
             + 1,
         ]
         order_valid = (public_order >= 0) & (public_order < NUM_PUBLIC_SLOTS)
-        row_states = jnp.take_along_axis(
-            slot_states,
-            public_order.clip(0, NUM_PUBLIC_SLOTS - 1)[..., None],
-            axis=1,
-        )
+        aligned_order = public_order.clip(0, NUM_PUBLIC_SLOTS - 1)[..., None]
+        row_states = jnp.take_along_axis(slot_states, aligned_order, axis=1)
+        # The latest raw node snapshot per entity, same alignment -- the
+        # TGN staleness fix the RL path used to discard (only the offline
+        # critic read it; "the GRU-only readout loses the latest node").
+        snapshot_rows = jnp.take_along_axis(node_snapshots, aligned_order, axis=1)
 
         # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K)). The heads
         # slice the rows they own by name (rl/model/constants.py), so no
         # offset is ever written twice; the second element is the opponent
         # code one-hot -- the belief head's label -- riding out beside the
         # sequence because it is computed where the secret rows are built.
-        return _forward_vmap()(self, env_step, row_states, order_valid, field_state)
+        return _forward_vmap()(
+            self, env_step, row_states, order_valid, field_state, snapshot_rows
+        )

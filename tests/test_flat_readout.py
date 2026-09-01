@@ -60,7 +60,7 @@ def _init():
 
 
 def test_sequence_layout_is_derived_and_contiguous():
-    assert NUM_SEQUENCE_ROWS == 68
+    assert NUM_SEQUENCE_ROWS == 80
     assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
     covered = []
     for group, sl in SEQUENCE_SLICES.items():

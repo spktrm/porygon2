@@ -128,6 +128,11 @@ class SequenceGroup(IntEnum):
     # readout pins -- survives unchanged.
     OPP_PRIVATE_ENTITY = 9
     VALUE_CLS = 10
+    # History as its own rows (2026-09-01): entity i's GRU diary + latest
+    # raw snapshot, freed from being an additive attribute on the public
+    # row so attention routes board-now vs memory instead of one vector
+    # carrying their sum. Policy-readable.
+    HISTORY_ENTITY = 11
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -148,6 +153,7 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.INFO, 1),
     (SequenceGroup.OPP_PRIVATE_ENTITY, NUM_PRIVATE_SLOTS),
     (SequenceGroup.VALUE_CLS, 1),
+    (SequenceGroup.HISTORY_ENTITY, NUM_PUBLIC_SLOTS),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -169,9 +175,10 @@ PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVATE_ENTITY]
 MOVE_ROWS = SEQUENCE_SLICES[SequenceGroup.MOVE_SLOT]
 TARGET_ROWS = SEQUENCE_SLICES[SequenceGroup.TARGET_SLOT]
 OPP_PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.OPP_PRIVATE_ENTITY]
+HISTORY_ENTITY_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ENTITY]
 VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
 
-assert NUM_SEQUENCE_ROWS == 68, NUM_SEQUENCE_ROWS
+assert NUM_SEQUENCE_ROWS == 80, NUM_SEQUENCE_ROWS
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
 assert MOVE_ROWS.stop - MOVE_ROWS.start == len(MOVE_INDICES)
 assert TARGET_ROWS.stop - TARGET_ROWS.start == len(TARGET_SLOT_INDICES)

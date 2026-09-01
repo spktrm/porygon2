@@ -16,8 +16,9 @@ from rl.environment.data import (
     PackedSetFeature,
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
-from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
+from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature, FieldFeature
 from rl.model.heads import HeadParams
+from rl.model.history_encoder import major_arg_step_mask
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
@@ -115,6 +116,20 @@ def train_step(
     player_valid = jnp.bitwise_not(player_transitions.env_output.done)
 
     training_logs = {}
+
+    # Directed-message sanity (2026-09-01): fraction of valid history steps
+    # carrying an identified SOURCE row (a real major arg). Expect >> 0.5;
+    # a collapse here says the src identification broke, not the game.
+    history_field = player_history.field
+    step_is_valid = history_field[..., FieldFeature.FIELD_FEATURE__VALID] > 0
+    step_has_src = jax.vmap(major_arg_step_mask, in_axes=(1, 1), out_axes=1)(
+        history_field, player_packed_history.edge_cache
+    )
+    training_logs["player_history_src_frac"] = jnp.where(
+        step_is_valid.sum() > 0,
+        (step_has_src & step_is_valid).sum() / step_is_valid.sum().clip(min=1),
+        0.0,
+    )
 
     target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
     target_actor_ratio = jnp.exp(target_actor_log_ratio)
