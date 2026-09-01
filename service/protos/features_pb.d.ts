@@ -88,6 +88,7 @@ export interface EntityPrivateNodeFeatureMap {
   ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS: 19;
   ENTITY_PRIVATE_NODE_FEATURE__FAINTED: 20;
   ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX: 21;
+  ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG: 22;
 }
 
 export const EntityPrivateNodeFeature: EntityPrivateNodeFeatureMap;

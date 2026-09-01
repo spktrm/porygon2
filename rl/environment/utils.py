@@ -341,6 +341,27 @@ def _cells_from_packed_grid(grid: np.ndarray) -> np.ndarray:
     return cells
 
 
+def _decode_private_rows(raw: bytes) -> np.ndarray:
+    """One private sheet -> (6, NUM_ENTITY_PRIVATE_FEATURES) int32.
+
+    Right-pads a short buffer with zero COLUMNS to the current width: the
+    replay shards (spectator logs, no |request|) store private blocks frozen
+    at an older feature count, and 0 is UNSPECIFIED for every appended field
+    -- padding is semantically exact where a reshape would raise. Appending
+    private features is therefore safe; renumbering never is. An EMPTY buffer
+    (opp_private_team on old shards and at deploy) decodes as all zeros --
+    the documented "does not exist" encoding.
+    """
+    flat = np.frombuffer(raw, dtype=np.int16)
+    if flat.shape[0] == 0:
+        return np.zeros((6, NUM_ENTITY_PRIVATE_FEATURES), dtype=np.int32)
+    rows = flat.reshape(6, flat.shape[0] // 6).astype(np.int32)
+    missing_columns = NUM_ENTITY_PRIVATE_FEATURES - rows.shape[1]
+    if missing_columns > 0:
+        rows = np.pad(rows, ((0, 0), (0, missing_columns)))
+    return rows
+
+
 def get_action_mask(state: EnvironmentState):
     if state.HasField("structured_action_mask"):
         return _cells_from_structured_mask(state.structured_action_mask)
@@ -419,11 +440,11 @@ def process_state(
     # every appended field -- padding is semantically exact where a reshape
     # would raise. Appending private features is therefore safe; renumbering
     # never is.
-    private_flat = np.frombuffer(state.private_team, dtype=np.int16)
-    private_team = private_flat.reshape(6, private_flat.shape[0] // 6).astype(np.int32)
-    missing_columns = NUM_ENTITY_PRIVATE_FEATURES - private_team.shape[1]
-    if missing_columns > 0:
-        private_team = np.pad(private_team, ((0, 0), (0, missing_columns)))
+    private_team = _decode_private_rows(state.private_team)
+    # The opponent truth channel (2026-09-01): absent entirely on old shards
+    # and at deploy -- all-zero rows are the documented "does not exist"
+    # encoding, matching the service's own zero-buffer branches.
+    opp_private_team = _decode_private_rows(state.opp_private_team)
     revealed_team = (
         np.frombuffer(state.revealed_team, dtype=np.int16)
         .reshape(6 * 2, NUM_ENTITY_REVEALED_FEATURES)
@@ -463,6 +484,7 @@ def process_state(
         field=field,
         my_moveset=my_moveset,
         opp_moveset=opp_moveset,
+        opp_private_team=opp_private_team,
         action_mask=get_action_mask(state),
     )
     if with_history:

@@ -239,6 +239,11 @@ export class EnvironmentState extends jspb.Message {
   getStructuredActionMask(): ActionMask | undefined;
   setStructuredActionMask(value?: ActionMask): void;
 
+  getOppPrivateTeam(): Uint8Array | string;
+  getOppPrivateTeam_asU8(): Uint8Array;
+  getOppPrivateTeam_asB64(): string;
+  setOppPrivateTeam(value: Uint8Array | string): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): EnvironmentState.AsObject;
   static toObject(includeInstance: boolean, msg: EnvironmentState): EnvironmentState.AsObject;
@@ -267,6 +272,7 @@ export namespace EnvironmentState {
     rqid: number,
     historyPackedLength: number,
     structuredActionMask?: ActionMask.AsObject,
+    oppPrivateTeam: Uint8Array | string,
   }
 }
 

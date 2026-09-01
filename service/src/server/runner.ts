@@ -194,6 +194,13 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // have no opponent object, so everything reading this must tolerate
     // undefined (the opponent's private info simply does not exist there).
     opponent: TrainablePlayerAI | undefined;
+    // The exact opponent request object the most recent build() serialised
+    // into opp_private_team (undefined when that build wrote the all-zero
+    // degrade). The opponent's live request is replaced wholesale per
+    // |request| line, so holding the reference IS a stable snapshot -- the
+    // harness truth invariant compares against this, never against the
+    // live request, which can move between build and check.
+    lastSerialisedOppRequest: AnyObject | undefined;
     constructor(
         userName: string,
         playerStream: ObjectReadWriteStream<string>,

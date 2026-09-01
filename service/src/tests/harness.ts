@@ -158,6 +158,7 @@ function assertPrivateTruthChannel(
     privateTeam: ReturnType<typeof StateHandler.toReadablePrivate>,
     request: AnyObject,
     publicOrder: Int16Array,
+    channel: "mine" | "opponent" = "mine",
 ) {
     const requestPokemon = request?.side?.pokemon as
         | { condition: string; ident: string }[]
@@ -165,11 +166,18 @@ function assertPrivateTruthChannel(
     if (!requestPokemon) {
         return;
     }
-    const mySideSlots = new Set<number>();
-    // My side's public rows are the first half of PUBLIC_ORDER.
-    for (let row = 0; row < publicOrder.length / 2; row++) {
+    const sideSlots = new Set<number>();
+    // My side's public rows are the first half of PUBLIC_ORDER, the
+    // opponent's the second half -- the channel picks which half the
+    // alignment keys must land in.
+    const halfLength = publicOrder.length / 2;
+    let rowStart = 0;
+    if (channel === "opponent") {
+        rowStart = halfLength;
+    }
+    for (let row = rowStart; row < rowStart + halfLength; row++) {
         if (publicOrder[row] >= 0) {
-            mySideSlots.add(publicOrder[row]);
+            sideSlots.add(publicOrder[row]);
         }
     }
     for (const [j, member] of requestPokemon.entries()) {
@@ -210,11 +218,11 @@ function assertPrivateTruthChannel(
         }
         if (row.entityIdxPlusOne > 0) {
             const stableIdx = row.entityIdxPlusOne - 1;
-            if (!mySideSlots.has(stableIdx)) {
+            if (!sideSlots.has(stableIdx)) {
                 throw new Error(
-                    `private row ${j}: entity idx ${stableIdx} is not in my ` +
-                        `side's PUBLIC_ORDER -- the alignment key points at ` +
-                        `no public row`,
+                    `${channel} private row ${j}: entity idx ${stableIdx} ` +
+                        `is not in the ${channel} half of PUBLIC_ORDER -- ` +
+                        `the alignment key points at no public row`,
                 );
             }
         }
@@ -383,6 +391,52 @@ export async function playerController(player: TrainablePlayerAI) {
                     readablePrivateTeam,
                     truthRequest as AnyObject,
                     publicOrder,
+                );
+            }
+
+            // The OPPONENT truth channel (2026-09-01). The opponent's live
+            // request can move between build and this check (their loop is
+            // an independent async consumer), so the compare runs against
+            // `lastSerialisedOppRequest` -- the EXACT object the build
+            // serialised, race-free by construction (the client replaces
+            // its request wholesale per |request| line, so the held
+            // reference is a stable snapshot). Undefined snapshot == the
+            // build wrote the all-zero degrade, which the shape of the
+            // buffer must then agree with.
+            const readableOppPrivateTeam = StateHandler.toReadablePrivate(
+                state.getOppPrivateTeam_asU8(),
+            );
+            if (readableOppPrivateTeam.length !== 6) {
+                throw new Error(
+                    `opp_private_team decoded to ` +
+                        `${readableOppPrivateTeam.length} rows, expected 6`,
+                );
+            }
+            // The all-zero degrade: every row reads hpRatio 0 AND fainted
+            // false, a combination no real request produces (a living mon
+            // has hp, a fainted one has the flag).
+            const oppRowsEmpty = readableOppPrivateTeam.every(
+                (row) => row.hpRatio === 0 && !row.fainted,
+            );
+            const oppSnapshot = player.lastSerialisedOppRequest;
+            if (oppSnapshot === undefined && !oppRowsEmpty) {
+                throw new Error(
+                    "opp_private_team is populated but the build recorded " +
+                        "no serialised opponent request",
+                );
+            }
+            if (oppSnapshot !== undefined) {
+                if (oppRowsEmpty) {
+                    throw new Error(
+                        "the build serialised an opponent request but " +
+                            "opp_private_team decoded as the all-zero degrade",
+                    );
+                }
+                assertPrivateTruthChannel(
+                    readableOppPrivateTeam,
+                    oppSnapshot,
+                    publicOrder,
+                    "opponent",
                 );
             }
 

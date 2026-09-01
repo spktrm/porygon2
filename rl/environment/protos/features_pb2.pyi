@@ -86,6 +86,7 @@ class EntityPrivateNodeFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper
     ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS: _ClassVar[EntityPrivateNodeFeature]
     ENTITY_PRIVATE_NODE_FEATURE__FAINTED: _ClassVar[EntityPrivateNodeFeature]
     ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX: _ClassVar[EntityPrivateNodeFeature]
+    ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG: _ClassVar[EntityPrivateNodeFeature]
 
 class MovesetHasPP(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -325,6 +326,7 @@ ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__FAINTED: EntityPrivateNodeFeature
 ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX: EntityPrivateNodeFeature
+ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG: EntityPrivateNodeFeature
 MOVESET_HAS_PP___UNSPECIFIED: MovesetHasPP
 MOVESET_HAS_PP__YES: MovesetHasPP
 MOVESET_HAS_PP__NO: MovesetHasPP

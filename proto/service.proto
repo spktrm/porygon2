@@ -168,6 +168,17 @@ message EnvironmentState {
     int32 rqid = 14;
     int32 history_packed_length = 15;
     ActionMask structured_action_mask = 16;
+    // The OPPONENT's last request, serialised through the same
+    // EntityPrivateNodeFeature rows as `private_team` -- the centralised-value
+    // truth channel (2026-09-01). Written only in training self-play (the
+    // builder reads `player.opponent`); empty at deploy, for baselines'
+    // observers and for spectator exports, and the decode zero-fills so old
+    // shards keep parsing. NEVER reachable by the policy: the model routes
+    // these rows into a leak-masked trunk partition read only by the
+    // privileged value head. Field 16 above RE-USED the deleted
+    // opp_private_team's number, so this channel takes 17 -- never reuse a
+    // freed number here.
+    bytes opp_private_team = 17;
 }
 
 message EnvironmentTrajectory {

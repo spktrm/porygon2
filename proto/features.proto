@@ -104,6 +104,15 @@ enum EntityPrivateNodeFeature {
     // has never been fielded. Lets the model line truth up against the
     // opponent's belief about it without the forme-fragile species match.
     ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX = 21;
+    // Staleness of the request this row was parsed from, in battle turns:
+    // clip(observer's privateBattle.turn - source's privateBattle.turn, 0, 8).
+    // Identically 0 on the player's own channel (observer == source); on
+    // `opp_private_team` it is >0 exactly when the opponent's client has not
+    // yet ingested the observer's current turn (the two player loops are
+    // independent async consumers), so the model can weigh how fresh the
+    // truth is. Turn delta, not rqid delta: rqid counters drift apart
+    // legitimately (force-switch turns give one side extra requests).
+    ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG = 22;
 }
 
 

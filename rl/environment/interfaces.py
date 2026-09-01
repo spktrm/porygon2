@@ -18,6 +18,10 @@ class PlayerEnvOutput:
     # Private Info
     my_moveset: ArrayLike = ()
     private_team: ArrayLike = ()
+    # The OPPONENT's request, same row schema as private_team (2026-09-01).
+    # Learner-only truth: the encoder routes it into the leak-masked trunk
+    # partition; empty on old shards and at deploy, decoded as zeros.
+    opp_private_team: ArrayLike = ()
 
     action_mask: ArrayLike = ()
 

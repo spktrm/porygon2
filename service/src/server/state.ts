@@ -318,6 +318,11 @@ const entityPrivateArrayToObject = (array: Int16Array) => {
             array[
                 EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
             ],
+        requestLag:
+            array[
+                EntityPrivateNodeFeature
+                    .ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG
+            ],
     };
 };
 
@@ -799,6 +804,7 @@ function getArrayFromPrivatePokemon(
     pokemonSet: Protocol.Request.Pokemon,
     firstPokemonSet: Protocol.Request.Pokemon,
     entityIdxPlusOne: number,
+    requestLagTurns: number,
 ) {
     const dataArr = getBlankPrivatePokemonArr();
 
@@ -913,6 +919,9 @@ function getArrayFromPrivatePokemon(
 
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX] =
         entityIdxPlusOne;
+
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG] =
+        Math.min(Math.max(requestLagTurns, 0), 8);
 
     return dataArr;
 }
@@ -4452,10 +4461,48 @@ export class StateHandler {
         return { publicBuffer, revealedBuffer };
     }
 
-    getPrivateTeam(playerIndex: number): Int16Array {
-        const request = this.player.getRequest();
+    /**
+     * The private sheet of `sourcePlayer`, serialised through
+     * EntityPrivateNodeFeature rows. ONE builder for both channels
+     * (2026-09-01): the observer's own sheet (sourcePlayer === this.player --
+     * a missing request is a bug and throws) and the opponent's sheet for the
+     * centralised-value truth channel (sourcePlayer === this.player.opponent
+     * -- absent at deploy, and its request may lag the observer's build, so
+     * both degrade to the all-zero buffer rather than throwing). The stable
+     * index is ALWAYS the observer's identToIndex: idents are side-qualified
+     * ("p2: Name"), so the opponent's request idents resolve in the
+     * observer's map for every mon the observer has seen fielded; a
+     * never-fielded (or still-disguised) mon reads 0.
+     */
+    getPrivateTeam(sourcePlayer: TrainablePlayerAI | undefined): Int16Array {
+        const isOpponentChannel =
+            sourcePlayer !== undefined && sourcePlayer !== this.player;
+        if (isOpponentChannel) {
+            // Every degrade path below leaves the snapshot cleared; the
+            // populated path re-points it at the request it serialised.
+            this.player.lastSerialisedOppRequest = undefined;
+        }
+        if (sourcePlayer === undefined) {
+            // Deploy/eval: there is no opponent object, so their private
+            // info does not exist and the channel stays all-unspecified.
+            return new Int16Array(6 * numPrivateEntityNodeFeatures);
+        }
+        const isOwnChannel = sourcePlayer === this.player;
+        const playerIndex = sourcePlayer.getPlayerIndex();
+        if (playerIndex === undefined) {
+            if (isOwnChannel) {
+                throw new Error("Player index is undefined");
+            }
+            return new Int16Array(6 * numPrivateEntityNodeFeatures);
+        }
+        const request = sourcePlayer.getRequest();
         if (request === undefined) {
-            throw new Error("Request is undefined");
+            if (isOwnChannel) {
+                throw new Error("Request is undefined");
+            }
+            // The opponent's loop is an independent async consumer and may
+            // not have ingested a |request| yet.
+            return new Int16Array(6 * numPrivateEntityNodeFeatures);
         }
         if (request === null) {
             // Spectator-log replay (offline exporter): private info does
@@ -4463,7 +4510,14 @@ export class StateHandler {
             // encoding is public-view only.
             return new Int16Array(6 * numPrivateEntityNodeFeatures);
         }
-        const firstRequest = this.player.firstRequest!;
+        if (isOpponentChannel) {
+            this.player.lastSerialisedOppRequest = request as AnyObject;
+        }
+        const firstRequest = sourcePlayer.firstRequest!;
+        // Staleness in battle turns (see REQUEST_LAG in features.proto):
+        // identically 0 on the own channel.
+        const requestLagTurns =
+            this.player.privateBattle.turn - sourcePlayer.privateBattle.turn;
         const requestPokemon = request.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
@@ -4499,7 +4553,7 @@ export class StateHandler {
             for (const member of privateOrder) {
                 const name = toID(member.speciesForme);
 
-                const matchedTeamMate = this.player.privateBattle.sides[
+                const matchedTeamMate = sourcePlayer.privateBattle.sides[
                     playerIndex
                 ].team.find((teamMate) => {
                     const setSpecies = toID(
@@ -4534,6 +4588,7 @@ export class StateHandler {
                         member,
                         firstRequestValue,
                         entityIdxPlusOne,
+                        requestLagTurns,
                     ),
                     offset,
                 );
@@ -4862,8 +4917,11 @@ export class StateHandler {
         state.setHistoryLength(historyLength);
         state.setHistoryPackedLength(historyPackedLength);
 
-        const privateTeam = this.getPrivateTeam(playerIndex);
+        const privateTeam = this.getPrivateTeam(this.player);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
+
+        const oppPrivateTeam = this.getPrivateTeam(this.player.opponent);
+        state.setOppPrivateTeam(new Uint8Array(oppPrivateTeam.buffer));
 
         const { publicData, revealedData } = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicData.buffer));
