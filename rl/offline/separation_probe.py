@@ -152,6 +152,15 @@ _ENTITY_IDX = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
 _SPECIES_REV = EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
 _MOVE_ID = MovesetFeature.MOVESET_FEATURE__MOVE_ID
 _HP_RATIO = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
+# Public-row features with NO private-row counterpart (the sheet row cannot
+# carry them except through the trunk). ACTIVE is partly derivable from the
+# move slots; the boosts and the revealed-move count are not.
+_JOINED_PUBLIC_ONLY = {
+    "num_moves": EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NUM_MOVES,
+    "boost_atk": EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE,
+    "boost_spe": EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE,
+    "active": EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE,
+}
 _FAINTED = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
 # Entity-backed target cells: ally targets key revealed rows 0/1, enemy
 # targets revealed rows 6/7; the learned TARGET_*/PASS slots carry no
@@ -843,9 +852,19 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
         "public (post, ctl)": [],
         "history (pre, ctl)": [],
     }
-    sheet_readouts = {"sheet (post-trunk)": [], "sheet (pre, ctl)": []}
+    sheet_readouts = {
+        "sheet (post-trunk)": [],
+        "sheet (pre, ctl)": [],
+        "joined public (post)": [],
+    }
     identity, hp, chunk_of = [], [], []
     sheet_identity, sheet_chunk_of = [], []
+    # The JOIN read (2026-09-02): features that exist ONLY on the public
+    # row, read from the sheet row of the same entity. Probe D's identity
+    # read measures whether the tag is legible; this measures whether the
+    # trunk moved the joined row's content across, which attention can do
+    # by species content with no tag at all.
+    joined_labels = {key: [] for key in _JOINED_PUBLIC_ONLY}
     for start in range(0, len(chunks), batch_size):
         group = chunks[start : start + batch_size]
         stacked = stack_batch(group)
@@ -885,6 +904,25 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
         )
         sheet_identity.append(entity_index[sheet_rows])
         sheet_chunk_of.append(start + batch_index)
+        # Public row i is the one whose public_order + 1 equals the sheet
+        # row's ENTITY_IDX; a sheet row with no such public row (the
+        # ~0.1% disguised-until-reveal class) matches nothing and is
+        # dropped through joined_valid.
+        tag_of_public = public_order + 1
+        match = (
+            tag_of_public[time_index, batch_index] == entity_index[sheet_rows][:, None]
+        )
+        joined_valid = match.any(-1)
+        joined_row = match.argmax(-1)
+        public_team = np.asarray(env.public_team)
+        for key, feature in _JOINED_PUBLIC_ONLY.items():
+            values = public_team[time_index, batch_index, joined_row, feature]
+            joined_labels[key].append(
+                np.where(joined_valid, values, np.nan).astype(np.float64)
+            )
+        sheet_readouts["joined public (post)"].append(
+            encoded[time_index, batch_index, PUBLIC_ROWS.start + joined_row]
+        )
 
     identity = np.concatenate(identity)
     hp = np.concatenate(hp).astype(np.float64)
@@ -956,6 +994,48 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
     )
     print(f"{'  shuffled (floor)':<22} {accuracy:>12.3f} {'':>7} {'':>9} {n_held:>7}")
     results["sheet shuffled/identity"] = accuracy
+
+    print(
+        "\n--- the join: public-ONLY features of the same entity, read from the "
+        "sheet row (held r; read y-std first) ---"
+    )
+    labels = {key: np.concatenate(values) for key, values in joined_labels.items()}
+    joined_ok = np.isfinite(np.stack(list(labels.values()), -1)).all(-1)
+    header = f"{'readout':<22}" + "".join(f"{key:>12}" for key in labels)
+    print(header)
+    print(
+        f"{'  y-std (held)':<22}"
+        + "".join(
+            f"{labels[key][joined_ok & ~sheet_train].std():>12.3f}" for key in labels
+        )
+    )
+    print("-" * len(header))
+    features_by_name = {
+        name: np.concatenate(values).astype(np.float64)[joined_ok]
+        for name, values in sheet_readouts.items()
+    }
+    train_ok = sheet_train[joined_ok]
+    for name in ("sheet (post-trunk)", "sheet (pre, ctl)", "joined public (post)"):
+        line = f"{name:<22}"
+        for key in labels:
+            r, _ = _ridge_r(
+                features_by_name[name], labels[key][joined_ok], train_ok, alpha
+            )
+            line += f"{r:>12.3f}"
+            results[f"join {name}/{key}"] = r
+        print(line)
+    permutation = rng.permutation(int(joined_ok.sum()))
+    line = f"{'  shuffled (floor)':<22}"
+    for key in labels:
+        r, _ = _ridge_r(
+            features_by_name["sheet (post-trunk)"],
+            labels[key][joined_ok][permutation],
+            train_ok,
+            alpha,
+        )
+        line += f"{r:>12.3f}"
+        results[f"join shuffled/{key}"] = r
+    print(line)
     return results
 
 
