@@ -65,7 +65,7 @@ def _assembled_rows(network, params, actor_input):
         encoder = module.encoder
         width = encoder.cfg.entity_size
         zero_slots = jnp.zeros((NUM_PUBLIC_SLOTS, width), env_step.field.dtype)
-        sequence, _ = encoder._assemble_sequence(
+        sequence, _, _ = encoder._assemble_sequence(
             env_step,
             zero_slots.astype(encoder.cfg.dtype),
             jnp.zeros(NUM_PUBLIC_SLOTS, jnp.bool_),

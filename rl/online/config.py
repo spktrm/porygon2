@@ -354,6 +354,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     ## Player
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
+    # The privileged critic (2026-09-01): trained beside the deployable head
+    # on the SAME win_returns; its CE carries this coefficient.
+    player_priv_value_head_loss_coef: float = 1.0
+    # True routes the v-trace value bootstraps -- and therefore
+    # pg_advantages -- through the privileged head. False is the exact
+    # pre-2026-09-01 estimator (deployable head), the live fallback: the
+    # run continues on the deployable estimator without a lineage break and
+    # the privileged head stays an observer.
+    player_privileged_targets: bool = True
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio

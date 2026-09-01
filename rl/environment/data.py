@@ -102,6 +102,9 @@ ENTITY_PRIVATE_MAX_VALUES = {
     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS: 8,
     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS: 4,
     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED: 2,
+    # Turn-delta staleness of the source request, clipped 0..8 by the
+    # service; identically 0 on the own channel.
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG: 9,
 }
 
 

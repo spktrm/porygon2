@@ -187,6 +187,24 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The privileged critic (2026-09-01): same shape as v_head, reading the
+    # VALUE_CLS row of the leak-masked partition. Only instantiated under
+    # cfg.train (see Porygon2PlayerModel.setup).
+    cfg.priv_v_head = ConfigDict()
+    cfg.priv_v_head.mlp = ConfigDict()
+    cfg.priv_v_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        len(CAT_VF_SUPPORT),
+    )
+    cfg.priv_v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The opponent discrete code: per mon, num_groups categoricals of
+    # num_classes -- 16x16 = a 64-bit-ish joint space over a randbats build
+    # pool, with entity_size divisible by num_groups so the code embedding
+    # concatenates to one row.
+    cfg.encoder.opp_code = ConfigDict()
+    cfg.encoder.opp_code.num_groups = 16
+    cfg.encoder.opp_code.num_classes = 16
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step

@@ -28,6 +28,7 @@ from rl.model.constants import (
     MOVE_ROWS,
     PRIVATE_ROWS,
     TARGET_ROWS,
+    VALUE_CLS_ROW,
 )
 from rl.model.encoder import Encoder
 from rl.model.heads import (
@@ -65,6 +66,12 @@ class Porygon2PlayerModel(nn.Module):
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = FlatActionReadout(self.cfg.action_head, name="action_head")
         self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        # The privileged critic (2026-09-01): architecturally identical to
+        # v_head, reading VALUE_CLS -- the one row that attends over the
+        # opponent-truth partition. Called only under cfg.train, so its
+        # params exist in the learner-initialised tree and an actor apply
+        # never visits them; nothing at deploy consumes its output.
+        self.priv_v_head = CategoricalValueLogitHead(self.cfg.priv_v_head)
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -288,6 +295,7 @@ class Porygon2PlayerModel(nn.Module):
     def get_head_outputs(
         self,
         sequence: jax.Array,
+        opp_code_one_hot: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -301,10 +309,20 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
             temp=head_params.temp,
         )
+        learner_only = {}
+        if self.cfg.train:
+            learner_only = {
+                # The privileged critic: VALUE_CLS, and only VALUE_CLS.
+                "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
+                # The belief label, straight from where the secret rows
+                # were coded.
+                "opp_code": opp_code_one_hot,
+            }
         return PlayerActorOutput(
             action_head=action_head,
             # The CLS row, and only the CLS row.
             value_head=self.v_head(sequence[CLS_ROW]),
+            **learner_only,
         )
 
     def __call__(
@@ -316,13 +334,13 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        sequence = self.encoder(
+        sequence, opp_code_one_hot = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
             functools.partial(self.get_head_outputs, head_params=head_params)
-        )(sequence, actor_input.env, actor_output)
+        )(sequence, opp_code_one_hot, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

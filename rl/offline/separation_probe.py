@@ -545,9 +545,10 @@ def _ridge_r(features: np.ndarray, labels: np.ndarray, train: np.ndarray, alpha=
 
 
 def _encode_fn(module, actor_input):
-    return module.encoder(
+    sequence, _ = module.encoder(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
+    return sequence
 
 
 def _slot_condition_rows(env, batch_index: int):

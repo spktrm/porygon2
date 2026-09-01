@@ -51,9 +51,10 @@ def make_capacity_probe(network):
     both trunk embedding streams, keyed capacity_{action,value}_emb_*."""
 
     def encoder_only(module, actor_input: PlayerActorInput):
-        return module.encoder(
+        sequence, _ = module.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
+        return sequence
 
     encode = jax.vmap(
         lambda params, actor_input: network.apply(

@@ -85,6 +85,13 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
+    # Learner-only (cfg.train), like log_policy: the privileged critic over
+    # the VALUE_CLS row, and the opponent discrete-code one-hot (T, 6, G, K)
+    # that is the belief head's label. Actors ship the () defaults.
+    priv_value_head: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
+    )
+    opp_code: ArrayLike = ()
     # `advantage` and `q` lived here until 2026-08-29: the learner-only
     # Q = V + A decomposition over the flat src x tgt grid, composed in the
     # model by heads.compose_q. The policy stopped reading it at the NashPG

@@ -16,6 +16,7 @@ from rl.environment.data import (
     PackedSetFeature,
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
+from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
 from rl.model.heads import HeadParams
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
@@ -123,10 +124,17 @@ def train_step(
     actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
 
     # IMPACT-style targets: the fast target network supplies the Retrace
-    # reference policy and value/kl bootstraps.
+    # reference policy and value/kl bootstraps. Under
+    # player_privileged_targets the bootstraps -- and therefore
+    # pg_advantages -- come from the PRIVILEGED head (asymmetric
+    # actor-critic, 2026-09-01); False is bit-for-bit the old estimator.
+    if config.player_privileged_targets:
+        target_value_log_probs = player_target_pred.priv_value_head.log_probs
+    else:
+        target_value_log_probs = player_target_pred.value_head.log_probs
     player_targets, channel_logs = compute_player_targets(
         batch,
-        value_log_probs=player_target_pred.value_head.log_probs,
+        value_log_probs=target_value_log_probs,
         isr=target_actor_ratio,
         config=config,
     )
@@ -287,6 +295,31 @@ def train_step(
             0.0,
         )
 
+    def code_usage_logs(
+        opp_code: jax.Array, opp_private_team: jax.Array, value_mask: jax.Array
+    ):
+        """Per-group usage perplexity of the opponent code -- the collapse
+        instrument: a group whose batch-marginal perplexity pins at 1 has
+        stopped using its classes, i.e. the code is ungrounded there."""
+        species = opp_private_team[
+            ..., EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
+        ]
+        row_live = (species != 0) & value_mask[..., None]
+        weights = row_live[..., None, None].astype(jnp.float32)
+        usage = (opp_code.astype(jnp.float32) * weights).sum(axis=(0, 1, 2))
+        total = jnp.maximum(weights.sum(axis=(0, 1, 2)), 1e-6)
+        usage_probs = usage / total
+        safe_probs = jnp.maximum(usage_probs, 1e-9)
+        group_entropy = -(usage_probs * jnp.log(safe_probs)).sum(axis=-1)
+        group_perplexity = jnp.exp(group_entropy)
+        return {
+            "player_code_perplexity_mean": group_perplexity.mean(),
+            "player_code_perplexity_min": group_perplexity.min(),
+            "player_code_row_frac": average(
+                row_live.any(axis=-1).astype(jnp.float32), value_mask
+            ),
+        }
+
     def player_loss_fn(params: Params):
 
         learner_player_pred = player_state.apply_fn(
@@ -309,6 +342,18 @@ def train_step(
         loss_v_win = average(
             optax.softmax_cross_entropy(
                 logits=learner_value_head.logits.astype(jnp.float32),
+                labels=player_targets.win_returns.astype(jnp.float32),
+            ),
+            value_mask,
+        )
+        # The privileged critic: SAME labels, SAME mask -- the deployable
+        # head above stays trained unchanged as the matched control, and
+        # the priv-vs-deploy R2 pair is the discriminator the 2026-08-25
+        # falsification never had.
+        learner_priv_value_head = learner_player_pred.priv_value_head
+        loss_v_win_priv = average(
+            optax.softmax_cross_entropy(
+                logits=learner_priv_value_head.logits.astype(jnp.float32),
                 labels=player_targets.win_returns.astype(jnp.float32),
             ),
             value_mask,
@@ -467,6 +512,7 @@ def train_step(
             # the policy stopped reading it at the NashPG switch, which left
             # it a matched control for an architecture that is now gone.
             + config.player_value_head_loss_coef * loss_v_win
+            + config.player_priv_value_head_loss_coef * loss_v_win_priv
             # kl: trust region against the behaviour policy — the
             # replay-staleness guard alongside the PPO clip.
             + config.player_kl_loss_coef * loss_actor_backward_kl
@@ -475,6 +521,7 @@ def train_step(
         return loss, dict(
             **pg_logs,
             player_loss_v_win=loss_v_win,
+            player_loss_v_win_priv=loss_v_win_priv,
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
@@ -514,12 +561,34 @@ def train_step(
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=value_mask,
             ),
+            # THE discriminator for the privileged premise: this pair on one
+            # panel. The 2026-08-25 rung read WORSE than the deployable head
+            # and was deleted for it; priv < deploy sustained past 30k is
+            # this pass's pre-registered abort.
+            player_priv_value_head_r2=calculate_r2(
+                value_prediction=learner_priv_value_head.expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            # Mean absolute priv-minus-deploy expectation gap: the "worth
+            # 0.005 value units" number, re-measured live.
+            player_priv_value_gap=average(
+                jnp.abs(
+                    learner_priv_value_head.expectation - learner_value_head.expectation
+                ),
+                value_mask,
+            ),
             player_nll_sum=(
                 batch.player_transitions.agent_output.actor_output.action_head.log_prob
                 * policy_mask
             )
             .sum(axis=0)
             .mean(),
+            **code_usage_logs(
+                learner_player_pred.opp_code,
+                batch.player_transitions.env_output.opp_private_team,
+                value_mask,
+            ),
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)

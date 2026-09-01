@@ -103,13 +103,22 @@ TypeScript game service speaking protobuf over websockets.
 - Chunk contract: chunks overlap by one row; a chunk's final row is
   bootstrap-only unless it is the game's done row; outcome-derived stats and
   builder losses gate on terminal chunks (`win_reward[-1]` is only real there).
-- NO privileged info (2026-08-25, inverting the old value-ladder rule):
-  every stream sees exactly what the agent sees at deploy time. There is one
-  V and one advantage head, both on that set. Do not reintroduce an
-  opponent-sheet input or a privileged critic rung — measured worth on the
-  85k-step run was 0.005 value units with the privileged rung scoring
-  *worse* in R² than the deployable one (`docs/qva-redesign-step0-reference.md`),
-  and its advantage conditions on information the policy cannot act on.
+- NO privileged info FOR THE POLICY (2026-08-25, AMENDED 2026-09-01): the
+  policy's information set is exactly deploy time's, and that is enforced
+  by MASK, not convention — `SEQUENCE_READ_MASK` gives every policy-readable
+  row zero in-edges from the learner-only partition (the opponent-truth
+  rows + VALUE_CLS) at every trunk block, transitively leak-free by
+  induction and pinned by `tests/test_privileged_partition.py`. Privileged
+  opponent state MAY enter that partition, feeding a privileged critic
+  nothing at deploy consumes; v-trace targets and pg_advantages read it
+  under `player_privileged_targets` (False = the exact deployable-head
+  estimator). The 2026-08-25 falsification (team sheet worth 0.005 value
+  units, privileged rung scoring *worse* in R² than the deployable one,
+  `docs/qva-redesign-step0-reference.md`) is superseded ONLY under its
+  pre-registered gate: `player_priv_value_head_r2 >=
+  player_value_head_r2` from 20k on, else the premise fails on its own
+  instrument and the flag flips back. The deployable V stays trained on
+  the same labels as the matched control.
 - History windows: field steps name packed-cache rows by ABSOLUTE index —
   never slice the field and packed axes independently; use
   `clip_history_windows_tail` (mirrors the service's `getHistory`).
@@ -889,6 +898,26 @@ over modalities, gradient `pi_m - 1/M` with M = 2-3, silent within a modality
 — restoring mass on the axis that dies and leaving every within-modality
 choice to the critic. That is the phase-4 law reached from the other
 direction: the regulariser says WHETHER, never WHICH.
+
+## Addition ledger — 2026-09-01 centralised value, discrete belief code
+
+The user-decided amendment of the no-privileged-info invariant (see the
+Invariants section for the amended rule and its gate). One fresh lineage
+carries this pass plus the TGN history restructure; plan and baselines in
+`docs/central-value-baselines.md` (d7zdz8hw @33k/50k banked there).
+
+| mechanism | what | why |
+|---|---|---|
+| `opp_private_team = 17` + `REQUEST_LAG = 22` | the opponent's live request serialised through the SAME EntityPrivateNodeFeature rows by ONE parameterised `getPrivateTeam(sourcePlayer)`; staleness = clip(observer turn − source turn, 0, 8), identically 0 on the own channel (rqid deltas drift on force-switch turns — not comparable across players); every degrade (deploy, un-ingested request, spectator) is the all-zero buffer. Field 16 was RE-USED by the action mask after the old deletion — 17, never reuse | the deleted 2026-08-25 sheet was STATIC team truth; the request is live HP/status/PP — the state a decision actually turns on. Harness truth invariant extended to the channel, race-free via `lastSerialisedOppRequest` (the exact object build() serialised; the live request moves between build and check). 5014-battle soak, zero violations |
+| leak partition: `OPP_PRIVATE_ENTITY` (6) + `VALUE_CLS` (1), 61 → 68 rows, `SEQUENCE_READ_MASK` | policy-readable rows keep the complete 61×61 attention among themselves and gain ZERO in-edges from the partition; secret rows may read anything but VALUE_CLS; VALUE_CLS reads all, read by nothing (out-degree 0) — leak-freedom transitive across the 6 blocks by induction, ANDed into the trunk mask every block | asymmetric actor-critic (Lambrechts et al. 2025: removes the value-aliasing penalty) with the leak objection answered structurally rather than by convention; V is learner-only so deployment is untouched. `tests/test_privileged_partition.py` pins bit-identity of every policy output under opp-team perturbation WITH both positive controls |
+| privileged V + `player_privileged_targets` | second `CategoricalValueLogitHead` on VALUE_CLS, train-gated; CE on the SAME win_returns; True routes v-trace bootstraps → pg_advantages through it, False is bit-for-bit the old estimator (the live fallback) | the deployable head stays trained unchanged — the matched control the 2026-08-25 diagnosis never had. Panels: `player_loss_v_win_priv`, `player_priv_value_head_r2` (THE discriminator, beside the deployable R²), `player_priv_value_gap` (the 0.005 number re-measured) |
+| opponent discrete code (`_opp_code_rows`) | per mon: same private embedder → (16 groups × 16 classes) multi-softmax, 1% unimix floor, straight-through argmax → concat of code-table vectors IS the secret-row content; `entity_index_tag` + `opp_private_side_bias` give it the shared additive identity | Dreamer's discrete-latent reading of "the opponent's private state is a KNOWN discrete state" with none of the machinery (no learned posterior, no KL balancing — the privileged value loss grounds the code through the straight-through estimator). Collapse instrument: `player_code_perplexity_{mean,min}` (pinned at 1 = dead group). The belief head (next commit) predicts the code from public rows |
+
+Also in this pass, on the CURRENT lineage: history reads all EIGHT
+`RELEVANT_ENTITY_IDX` columns (was 0..3 against the service's 8 — spread
+rows silently dropped; params-compatible), and `ex.bin` regenerated with
+the opponent channel live (57/58 steps populated; step 0 is the documented
+un-ingested-request race).
 
 ## Removal + addition ledger — 2026-08-31 grid retired, modality-marginal KL
 

@@ -21,6 +21,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 from ml_collections import ConfigDict
 
+from rl.model.constants import SEQUENCE_READ_MASK
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
     FFWMLP,
@@ -43,7 +44,13 @@ class TrunkBlock(nn.Module):
     @nn.compact
     def __call__(self, carry: tuple[jax.Array, jax.Array], _):
         sequence, row_valid = carry
-        mask = create_attention_mask(row_valid, row_valid)
+        # Validity AND the static leak partition (rl/model/constants.py
+        # SEQUENCE_READ_MASK): policy-readable rows have no in-edge from the
+        # learner-only partition at ANY block, so leak-freedom is transitive
+        # across depth by induction -- see the matrix's own comment.
+        mask = create_attention_mask(row_valid, row_valid) & jnp.asarray(
+            SEQUENCE_READ_MASK
+        )
         attended = MultiHeadAttention(
             name="attention",
             num_heads=self.cfg.num_heads,

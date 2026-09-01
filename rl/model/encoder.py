@@ -239,6 +239,36 @@ class Encoder(nn.Module):
         self.private_side_bias = self.param(
             "private_side_bias", embedding_init, (1, entity_size)
         )
+        # The learner-only partition (2026-09-01): the opponent's request
+        # truth enters as 6 OPP_PRIVATE_ENTITY rows, and ONE privileged
+        # value query row (VALUE_CLS) reads them -- SEQUENCE_READ_MASK is
+        # what keeps every policy-readable row blind to both. The rows carry
+        # a Dreamer-style discrete code, not the raw latent: per mon,
+        # `opp_code_logits` maps the pooled private embedding to
+        # (num_groups, num_classes) categoricals, straight-through argmax
+        # picks one class per group, and the row content is the concat of
+        # the groups' code-table vectors. The privileged value loss is the
+        # gradient that GROUNDS the code (through the straight-through
+        # estimator); the belief head later predicts it from public rows.
+        self.opp_private_side_bias = self.param(
+            "opp_private_side_bias", embedding_init, (1, entity_size)
+        )
+        self.value_cls_embedding = self.param(
+            "value_cls_embedding", embedding_init, (1, entity_size)
+        )
+        code_groups = self.cfg.opp_code.num_groups
+        code_classes = self.cfg.opp_code.num_classes
+        assert entity_size % code_groups == 0
+        self.opp_code_logits = nn.Dense(
+            name="opp_code_logits",
+            features=code_groups * code_classes,
+            dtype=self.cfg.dtype,
+        )
+        self.opp_code_embedding = self.param(
+            "opp_code_embedding",
+            embedding_init,
+            (code_groups, code_classes, entity_size // code_groups),
+        )
         # Shared identity tag over the STABLE entity index (identToIndex,
         # revelation order across both sides): row 0 = never fielded /
         # unrevealed filler, rows 1..12 = index + 1. Applied to public rows
@@ -778,6 +808,13 @@ class Encoder(nn.Module):
                     private,
                     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED,
                 ),
+                # Turn-delta staleness of the source request (identically 0
+                # on the own channel; >0 on the opponent channel when their
+                # client lags the observer's build).
+                encode_one_hot_private_entity(
+                    private,
+                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG,
+                ),
             ],
             dtype=self.cfg.dtype,
         )
@@ -1088,6 +1125,37 @@ class Encoder(nn.Module):
     def _embed_private_entities(self, private_team: jax.Array):
         return _lifted_entity_vmap(Encoder._embed_private_entity)(self, private_team)
 
+    def _opp_code_rows(self, opp_private_team: jax.Array):
+        """The opponent sheet as discrete-code rows (2026-09-01).
+
+        Same embedder as my own sheet, then per mon a (G, K) multi-softmax
+        with a 1% unimix floor (keeps classes reachable) and a
+        straight-through argmax: forward sees one hard class per group, the
+        backward flows through the probabilities, so the privileged value
+        loss trains the embedder THROUGH the code and grounds it. Returns
+        (rows, row_valid, code_one_hot); the one-hot is the belief head's
+        label. All-zero deploy/old-shard buffers give row_valid all-False
+        and the trunk mask makes the rows inert.
+        """
+        opp_latents, opp_valid = self._embed_private_entities(opp_private_team)
+        code_groups = self.cfg.opp_code.num_groups
+        code_classes = self.cfg.opp_code.num_classes
+        code_logits = self.opp_code_logits(opp_latents).reshape(
+            opp_latents.shape[0], code_groups, code_classes
+        )
+        code_probs = jax.nn.softmax(code_logits.astype(jnp.float32), axis=-1)
+        code_probs = 0.99 * code_probs + 0.01 / code_classes
+        hard_one_hot = jax.nn.one_hot(
+            jnp.argmax(code_probs, axis=-1), code_classes, dtype=code_probs.dtype
+        )
+        code_one_hot = hard_one_hot + code_probs - jax.lax.stop_gradient(code_probs)
+        rows = jnp.einsum(
+            "egk,gkd->egd",
+            code_one_hot.astype(self.cfg.dtype),
+            self.opp_code_embedding.astype(self.cfg.dtype),
+        ).reshape(opp_latents.shape[0], -1)
+        return rows, opp_valid, code_one_hot
+
     def _embed_action(self, action: jax.Array) -> jax.Array:
         """
         Encode features of a move, including its type, species, and action ID.
@@ -1185,6 +1253,30 @@ class Encoder(nn.Module):
         private_rows = private_rows + jnp.take(
             self.entity_index_tag, private_tag_index, axis=0
         ).astype(private_rows.dtype)
+
+        # ---- the learner-only partition -----------------------------------
+        # The opponent's request truth as discrete-code rows (see
+        # _opp_code_rows) with their OWN side bias and the SAME
+        # entity_index_tag as everything else, so a secret row and the
+        # public row describing the same mon carry the same additive
+        # identity for VALUE_CLS to join on. SEQUENCE_READ_MASK keeps every
+        # policy-readable row blind to these and to VALUE_CLS itself.
+        opp_private_rows, opp_private_valid, opp_code_one_hot = self._opp_code_rows(
+            env_step.opp_private_team
+        )
+        opp_private_rows = opp_private_rows + self.opp_private_side_bias.astype(
+            opp_private_rows.dtype
+        )
+        opp_tag_index = jnp.clip(
+            env_step.opp_private_team[
+                :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+            ],
+            0,
+            NUM_PUBLIC_SLOTS,
+        )
+        opp_private_rows = opp_private_rows + jnp.take(
+            self.entity_index_tag, opp_tag_index, axis=0
+        ).astype(opp_private_rows.dtype)
 
         # ---- my candidate moves, one row per action slot ------------------
         # Row k IS action slot MOVE_INDICES[k], carrying that slot's pp,
@@ -1285,6 +1377,8 @@ class Encoder(nn.Module):
                 history_field_rows,
                 prev_action_rows,
                 info_row.astype(dtype),
+                opp_private_rows.astype(dtype),
+                self.value_cls_embedding.astype(dtype),
             ),
             axis=0,
         )
@@ -1303,6 +1397,12 @@ class Encoder(nn.Module):
                 jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
                 jnp.full(2, has_prev_action),
                 jnp.ones(1, dtype=jnp.bool_),
+                # Secret rows: valid only where the wire carried a real mon
+                # (all-zero deploy/old-shard buffers embed as invalid).
+                opp_private_valid,
+                # VALUE_CLS is always valid, like CLS: the privileged head
+                # reads it every step, terminal or not.
+                jnp.ones(1, dtype=jnp.bool_),
             )
         )
 
@@ -1312,7 +1412,7 @@ class Encoder(nn.Module):
             + self.sequence_row_bias.astype(dtype)
         )
         sequence = jnp.where(row_valid[:, None], sequence, 0)
-        return sequence, row_valid
+        return sequence, row_valid, opp_code_one_hot
 
     def _batched_forward(
         self,
@@ -1329,10 +1429,10 @@ class Encoder(nn.Module):
         has mixed with every other and the reading is behavioural rather than
         structural.
         """
-        sequence, row_valid = self._assemble_sequence(
+        sequence, row_valid, opp_code_one_hot = self._assemble_sequence(
             env_step, history_row_states, history_row_valid, history_field_state
         )
-        return self.trunk(sequence, row_valid)
+        return self.trunk(sequence, row_valid), opp_code_one_hot
 
     def _run_history_encoder(
         self,
@@ -1530,7 +1630,9 @@ class Encoder(nn.Module):
             axis=1,
         )
 
-        # (T, NUM_SEQUENCE_ROWS, entity_size). The heads slice the rows they
-        # own by name (rl/model/constants.py), so no offset is ever written
-        # twice.
+        # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K)). The heads
+        # slice the rows they own by name (rl/model/constants.py), so no
+        # offset is ever written twice; the second element is the opponent
+        # code one-hot -- the belief head's label -- riding out beside the
+        # sequence because it is computed where the secret rows are built.
         return _forward_vmap()(self, env_step, row_states, order_valid, field_state)

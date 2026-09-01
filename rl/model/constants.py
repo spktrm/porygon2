@@ -121,6 +121,13 @@ class SequenceGroup(IntEnum):
     HISTORY_FIELD = 6
     PREV_ACTION = 7
     INFO = 8
+    # The learner-only partition (2026-09-01). OPP_PRIVATE_ENTITY rows carry
+    # the opponent's request truth (their discrete code embedding); VALUE_CLS
+    # is the one row the privileged value head reads. Both sit at the END of
+    # the layout so every pre-existing offset -- and the adjacency the flat
+    # readout pins -- survives unchanged.
+    OPP_PRIVATE_ENTITY = 9
+    VALUE_CLS = 10
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -139,6 +146,8 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.HISTORY_FIELD, NUM_FIELD_ROWS),
     (SequenceGroup.PREV_ACTION, 2),
     (SequenceGroup.INFO, 1),
+    (SequenceGroup.OPP_PRIVATE_ENTITY, NUM_PRIVATE_SLOTS),
+    (SequenceGroup.VALUE_CLS, 1),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -159,12 +168,43 @@ PUBLIC_ROWS = SEQUENCE_SLICES[SequenceGroup.PUBLIC_ENTITY]
 PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVATE_ENTITY]
 MOVE_ROWS = SEQUENCE_SLICES[SequenceGroup.MOVE_SLOT]
 TARGET_ROWS = SEQUENCE_SLICES[SequenceGroup.TARGET_SLOT]
+OPP_PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.OPP_PRIVATE_ENTITY]
+VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
 
-assert NUM_SEQUENCE_ROWS == 61, NUM_SEQUENCE_ROWS
+assert NUM_SEQUENCE_ROWS == 68, NUM_SEQUENCE_ROWS
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
 assert MOVE_ROWS.stop - MOVE_ROWS.start == len(MOVE_INDICES)
 assert TARGET_ROWS.stop - TARGET_ROWS.start == len(TARGET_SLOT_INDICES)
 assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
+
+# ---- the leak partition (2026-09-01) ---------------------------------------
+# R[q, k]: query row q may attend to key row k. Three sets:
+#   POLICY_READABLE -- every pre-existing row (0..60): reads only itself.
+#   SECRET (OPP_PRIVATE_ROWS) -- the opponent's request truth: readable ONLY
+#     by VALUE_CLS; may itself read the policy-readable rows and its
+#     siblings, because a row's READS leak nothing.
+#   VALUE_CLS -- reads everything, read by NOTHING (out-degree 0).
+# Leak-freedom is transitive by induction over blocks: a row's content after
+# block b is a function of its in-edges' contents at block b-1 (plus its own
+# residual), and a policy-readable row's in-edges are policy-readable at
+# every block, so no secret content can enter the set at any depth; and
+# VALUE_CLS, with no out-edge, aggregates without re-broadcasting. The trunk
+# ANDs this matrix into its validity mask every block.
+_is_secret = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
+_is_secret[OPP_PRIVATE_ROWS] = True
+_is_value_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
+_is_value_cls[VALUE_CLS_ROW] = True
+_policy_readable = ~(_is_secret | _is_value_cls)
+SEQUENCE_READ_MASK = np.zeros((NUM_SEQUENCE_ROWS, NUM_SEQUENCE_ROWS), dtype=bool)
+SEQUENCE_READ_MASK[np.ix_(_policy_readable, _policy_readable)] = True
+SEQUENCE_READ_MASK[np.ix_(_is_secret, _policy_readable | _is_secret)] = True
+SEQUENCE_READ_MASK[_is_value_cls, :] = True
+assert not SEQUENCE_READ_MASK[
+    np.ix_(_policy_readable, ~_policy_readable)
+].any(), "leak: a policy-readable row may attend to the learner-only partition"
+assert not SEQUENCE_READ_MASK[:, _is_value_cls][
+    ~_is_value_cls
+].any(), "leak: VALUE_CLS must have out-degree 0"
 
 # Public rows 0-5 are mine and 6-11 theirs, actives first, so my active i is
 # public row i and theirs is row NUM_PUBLIC_SLOTS // 2 + i. The four
