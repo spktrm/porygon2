@@ -16,7 +16,7 @@ from rl.environment.data import (
     PackedSetFeature,
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
-from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature, FieldFeature
+from rl.environment.protos.features_pb2 import FieldFeature
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import major_arg_step_mask
 from rl.model.utils import Params
@@ -38,7 +38,9 @@ from rl.online.training.targets import (
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
+    belief_accuracy_logs,
     calculate_r2,
+    code_usage_logs,
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
     head_param_telemetry,
@@ -310,31 +312,6 @@ def train_step(
             0.0,
         )
 
-    def code_usage_logs(
-        opp_code: jax.Array, opp_private_team: jax.Array, value_mask: jax.Array
-    ):
-        """Per-group usage perplexity of the opponent code -- the collapse
-        instrument: a group whose batch-marginal perplexity pins at 1 has
-        stopped using its classes, i.e. the code is ungrounded there."""
-        species = opp_private_team[
-            ..., EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
-        ]
-        row_live = (species != 0) & value_mask[..., None]
-        weights = row_live[..., None, None].astype(jnp.float32)
-        usage = (opp_code.astype(jnp.float32) * weights).sum(axis=(0, 1, 2))
-        total = jnp.maximum(weights.sum(axis=(0, 1, 2)), 1e-6)
-        usage_probs = usage / total
-        safe_probs = jnp.maximum(usage_probs, 1e-9)
-        group_entropy = -(usage_probs * jnp.log(safe_probs)).sum(axis=-1)
-        group_perplexity = jnp.exp(group_entropy)
-        return {
-            "player_code_perplexity_mean": group_perplexity.mean(),
-            "player_code_perplexity_min": group_perplexity.min(),
-            "player_code_row_frac": average(
-                row_live.any(axis=-1).astype(jnp.float32), value_mask
-            ),
-        }
-
     def player_loss_fn(params: Params):
 
         learner_player_pred = player_state.apply_fn(
@@ -387,14 +364,8 @@ def train_step(
         ).mean(axis=-1)
         belief_mask = learner_player_pred.belief_matched & value_mask[..., None]
         loss_belief = average(belief_ce, belief_mask)
-        belief_accuracy = average(
-            (
-                jnp.argmax(learner_player_pred.belief_logits, axis=-1)
-                == jnp.argmax(belief_labels, axis=-1)
-            )
-            .astype(jnp.float32)
-            .mean(axis=-1),
-            belief_mask,
+        belief_logs = belief_accuracy_logs(
+            learner_player_pred.belief_logits, belief_labels, belief_mask
         )
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
@@ -562,7 +533,7 @@ def train_step(
             player_loss_v_win=loss_v_win,
             player_loss_v_win_priv=loss_v_win_priv,
             player_loss_belief=loss_belief,
-            player_belief_accuracy=belief_accuracy,
+            **belief_logs,
             player_belief_matched_frac=average(
                 learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
                 value_mask,
