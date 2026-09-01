@@ -26,11 +26,9 @@ import logging  # noqa: E402
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
-from flax import linen as nn  # noqa: E402
 
 from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.constants import SEQUENCE_LAYOUT, SEQUENCE_SLICES  # noqa: E402
-from rl.model.encoder import Encoder, _forward_vmap  # noqa: E402
 from rl.model.player_model import get_player_model  # noqa: E402
 from rl.model.trunk import row_homogeneity  # noqa: E402
 from rl.offline import harness  # noqa: E402
@@ -47,18 +45,12 @@ def _sequences(module, actor_input):
     """(assembled input, trunk output) for one chunk; the per-block
     residuals ride out in the "intermediates" collection."""
     encoder = module.encoder
-    inputs = encoder._history_inputs(
+    assembled, _ = encoder.assembled_sequence(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
-    assemble = nn.vmap(
-        Encoder._assemble_sequence,
-        variable_axes={"params": None, "intermediates": 0},
-        split_rngs={"params": False},
-        in_axes=0,
-        out_axes=0,
+    trunk_out, _ = encoder(
+        actor_input.env, actor_input.packed_history, actor_input.history
     )
-    assembled, _, _ = assemble(encoder, actor_input.env, *inputs)
-    trunk_out, _ = _forward_vmap()(encoder, actor_input.env, *inputs)
     return assembled, trunk_out
 
 

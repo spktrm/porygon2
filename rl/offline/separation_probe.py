@@ -70,6 +70,7 @@ from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
+    InfoFeature,
     MovesetFeature,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
@@ -77,7 +78,10 @@ from rl.model.config import get_player_model_config
 from rl.model.constants import (
     ALLY_TARGET_ROWS,
     ENEMY_TARGET_ROWS,
+    HISTORY_ENTITY_ROWS,
+    NUM_PUBLIC_SLOTS,
     PRIVATE_ROWS,
+    PUBLIC_ROWS,
     TARGET_ROWS,
 )
 from rl.model.heads import HeadParams
@@ -144,6 +148,7 @@ def pick_batches(chunks: list[Trajectory], batch: int, pool: int = 1):
 
 
 _SPECIES_PRIV = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
+_ENTITY_IDX = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
 _SPECIES_REV = EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
 _MOVE_ID = MovesetFeature.MOVESET_FEATURE__MOVE_ID
 _HP_RATIO = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
@@ -523,25 +528,52 @@ def fresh_variables(net, batch, seed):
     )
 
 
-def _ridge_r(features: np.ndarray, labels: np.ndarray, train: np.ndarray, alpha=1.0):
-    """Held-out Pearson r of a ridge readout. Train fit is memorisation on a
-    fixed batch (2026-08-27 probe lesson 1), so only held-out is reported."""
+def _ridge_predict(
+    features: np.ndarray, labels: np.ndarray, train: np.ndarray, alpha=1.0
+):
+    """Held-out predictions of a ridge readout, `labels` (n,) or (n, k):
+    (pred_held, y_held), or None when either split is too small. Fit on the
+    train rows only -- train fit is memorisation on a fixed batch (2026-08-27
+    probe lesson 1), so nothing here reports it. The train-mean is added
+    back to the prediction so a one-hot label's argmax is a real class
+    decision, marginal included."""
     held = ~train
     if train.sum() < 32 or held.sum() < 32:
-        return float("nan"), int(held.sum())
+        return None
     x_train = features[train]
     mean = x_train.mean(axis=0)
     scale = x_train.std(axis=0) + 1e-6
     x_train = (x_train - mean) / scale
     x_held = (features[held] - mean) / scale
-    y_train = labels[train] - labels[train].mean()
+    y_mean = labels[train].mean(axis=0)
+    y_train = labels[train] - y_mean
     gram = x_train.T @ x_train + alpha * np.eye(x_train.shape[1], dtype=np.float64)
     weights = np.linalg.solve(gram, x_train.T @ y_train)
-    pred = x_held @ weights
-    y_held = labels[held]
+    return x_held @ weights + y_mean, labels[held]
+
+
+def _ridge_r(features: np.ndarray, labels: np.ndarray, train: np.ndarray, alpha=1.0):
+    """Held-out Pearson r of a ridge readout on a scalar label."""
+    fit = _ridge_predict(features, labels, train, alpha)
+    n_held = int((~train).sum())
+    if fit is None:
+        return float("nan"), n_held
+    pred, y_held = fit
     if pred.std() < 1e-9 or y_held.std() < 1e-9:
-        return 0.0, int(held.sum())
-    return float(np.corrcoef(pred, y_held)[0, 1]), int(held.sum())
+        return 0.0, n_held
+    return float(np.corrcoef(pred, y_held)[0, 1]), n_held
+
+
+def _ridge_accuracy(
+    features: np.ndarray, one_hot: np.ndarray, train: np.ndarray, alpha=1.0
+):
+    """Held-out argmax accuracy of a ridge readout on one-hot labels."""
+    fit = _ridge_predict(features, one_hot, train, alpha)
+    n_held = int((~train).sum())
+    if fit is None:
+        return float("nan"), n_held
+    pred, y_held = fit
+    return float((pred.argmax(-1) == y_held.argmax(-1)).mean()), n_held
 
 
 def _encode_fn(module, actor_input):
@@ -741,13 +773,199 @@ def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float
     return results
 
 
+_PUBLIC_ORDER = slice(
+    InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0,
+    InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11 + 1,
+)
+
+
+def _assembled_and_encoded_fn(module, actor_input):
+    """(trunk input, trunk output) for one chunk: the same rows before and
+    after the six blocks."""
+    encoder = module.encoder
+    assembled, _ = encoder.assembled_sequence(
+        actor_input.env, actor_input.packed_history, actor_input.history
+    )
+    encoded, _ = encoder(
+        actor_input.env, actor_input.packed_history, actor_input.history
+    )
+    return assembled, encoded
+
+
+def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float):
+    """Does a HISTORY_ENTITY row still know WHICH entity it is after the
+    trunk?
+
+    History row i is `gru_state + node_snapshot + entity_index_tag[order+1]`
+    -- three addends summed into one vector, the shape the 2026-09-01 pass
+    deleted one level up -- and its join to public row i is that shared
+    additive tag, which rl/offline/history_addends.py measured at 0.028 of
+    the other two addends' rms on ckpt_00182000 (alarm < 0.05). This is the
+    behavioural read: a ridge readout over the post-trunk history row
+    predicting (1) the entity index the row carries (13-way one-hot of
+    public_order + 1; the index is structural, so a cross-chunk split is
+    valid -- 2026-08-27 lesson 2) and (2) the joined public row's hp ratio,
+    the latest snapshot's hp up to one step of staleness.
+
+    Readouts, all ridge on the same rows so the comparison is of ROUTING:
+
+      test     post-trunk HISTORY row i   -> entity index / hp of public row i
+      control  post-trunk PUBLIC row i    -> the same (matched: same tag,
+               same position, hp on its own token)
+      control  pre-trunk HISTORY row i    -> the same (positive control: the
+               tag is IN the row by construction, so ~1.0 identity says the
+               readout can read it at this rms ratio at all)
+      floor    post-trunk HISTORY row i   -> the labels, shuffled
+
+    Chance is the held-out MAJORITY rate, not 1/12: actives-first ordering
+    makes public_order far from uniform per row.
+
+    History row i and public row i sit at FIXED sequence positions, so their
+    join has a positional fallback (`sequence_row_bias`) whatever the tag
+    does. The sheet does not: PRIVATE row j's only link to its board row is
+    `entity_index_tag[ENTITY_IDX]`, so the same identity read on the sheet
+    rows (label: the wire's ENTITY_IDX, fielded mons only) is the read that
+    decides whether the tag is a join key at all.
+    """
+    apply_both = jax.jit(
+        jax.vmap(
+            lambda variables, actor_input: net.apply(
+                variables, actor_input, method=_assembled_and_encoded_fn
+            ),
+            in_axes=(None, 1),
+            out_axes=1,
+        )
+    )
+    dev_variables = jax.device_put(variables)
+
+    readouts = {
+        "history (post-trunk)": [],
+        "public (post, ctl)": [],
+        "history (pre, ctl)": [],
+    }
+    sheet_readouts = {"sheet (post-trunk)": [], "sheet (pre, ctl)": []}
+    identity, hp, chunk_of = [], [], []
+    sheet_identity, sheet_chunk_of = [], []
+    for start in range(0, len(chunks), batch_size):
+        group = chunks[start : start + batch_size]
+        stacked = stack_batch(group)
+        actor_input = actor_input_of(stacked)
+        assembled, encoded = apply_both(dev_variables, actor_input)
+        assembled = np.asarray(assembled, dtype=np.float32)
+        encoded = np.asarray(encoded, dtype=np.float32)
+        env = stacked.player_transitions.env_output
+        done = np.asarray(env.done)
+        steps = (np.cumsum(done, axis=0) - done) == 0
+        public_order = np.asarray(env.info)[..., _PUBLIC_ORDER]
+        order_valid = (public_order >= 0) & (public_order < NUM_PUBLIC_SLOTS)
+        public_hp = np.asarray(env.public_team)[..., _HP_RATIO] / MAX_RATIO_TOKEN
+        rows = order_valid & steps[..., None]
+        time_index, batch_index, row_index = np.nonzero(rows)
+        readouts["history (post-trunk)"].append(
+            encoded[time_index, batch_index, HISTORY_ENTITY_ROWS.start + row_index]
+        )
+        readouts["public (post, ctl)"].append(
+            encoded[time_index, batch_index, PUBLIC_ROWS.start + row_index]
+        )
+        readouts["history (pre, ctl)"].append(
+            assembled[time_index, batch_index, HISTORY_ENTITY_ROWS.start + row_index]
+        )
+        identity.append(public_order[rows] + 1)
+        hp.append(public_hp[time_index, batch_index, row_index])
+        chunk_of.append(start + batch_index)
+
+        entity_index = np.asarray(env.private_team)[..., _ENTITY_IDX]
+        sheet_rows = (entity_index > 0) & steps[..., None]
+        time_index, batch_index, sheet_index = np.nonzero(sheet_rows)
+        sheet_readouts["sheet (post-trunk)"].append(
+            encoded[time_index, batch_index, PRIVATE_ROWS.start + sheet_index]
+        )
+        sheet_readouts["sheet (pre, ctl)"].append(
+            assembled[time_index, batch_index, PRIVATE_ROWS.start + sheet_index]
+        )
+        sheet_identity.append(entity_index[sheet_rows])
+        sheet_chunk_of.append(start + batch_index)
+
+    identity = np.concatenate(identity)
+    hp = np.concatenate(hp).astype(np.float64)
+    chunk_of = np.concatenate(chunk_of)
+    one_hot = np.eye(NUM_PUBLIC_SLOTS + 1)[identity]
+    rng = np.random.default_rng(seed)
+    held_chunks = set(
+        rng.choice(
+            np.arange(len(chunks)), size=max(1, len(chunks) // 3), replace=False
+        ).tolist()
+    )
+    train = np.array([c not in held_chunks for c in chunk_of], dtype=bool)
+    majority = one_hot[~train].mean(0).max()
+
+    print(
+        "\n=== probe D: does a history row keep its entity index through the trunk? ==="
+    )
+    print(
+        f"rows {len(identity)} (train {train.sum()}, held {(~train).sum()}); "
+        f"held-out majority-class rate {majority:.3f} (uniform 1/12 = 0.083)\n"
+    )
+    header = f"{'readout':<22} {'identity acc':>12} {'hp r':>7} {'hp y-std':>9} {'n_held':>7}"
+    print(header)
+    print("-" * len(header))
+    results = {"majority": float(majority)}
+    for name, features in readouts.items():
+        features = np.concatenate(features).astype(np.float64)
+        accuracy, n_held = _ridge_accuracy(features, one_hot, train, alpha)
+        hp_r, _ = _ridge_r(features, hp, train, alpha)
+        print(
+            f"{name:<22} {accuracy:>12.3f} {hp_r:>7.3f} "
+            f"{hp[~train].std():>9.3f} {n_held:>7}"
+        )
+        results[f"{name}/identity"] = accuracy
+        results[f"{name}/hp"] = hp_r
+        if name == "history (post-trunk)":
+            permutation = rng.permutation(len(identity))
+            accuracy, _ = _ridge_accuracy(features, one_hot[permutation], train, alpha)
+            hp_r, _ = _ridge_r(features, hp[permutation], train, alpha)
+            print(
+                f"{'  shuffled (floor)':<22} {accuracy:>12.3f} {hp_r:>7.3f} "
+                f"{hp[permutation][~train].std():>9.3f} {n_held:>7}"
+            )
+            results["shuffled/identity"] = accuracy
+            results["shuffled/hp"] = hp_r
+
+    sheet_identity = np.concatenate(sheet_identity)
+    sheet_one_hot = np.eye(NUM_PUBLIC_SLOTS + 1)[
+        np.clip(sheet_identity, 0, NUM_PUBLIC_SLOTS)
+    ]
+    sheet_train = np.array(
+        [c not in held_chunks for c in np.concatenate(sheet_chunk_of)], dtype=bool
+    )
+    sheet_majority = sheet_one_hot[~sheet_train].mean(0).max()
+    print(
+        f"\nsheet rows {len(sheet_identity)} (fielded mons only); "
+        f"held-out majority-class rate {sheet_majority:.3f}"
+    )
+    results["sheet/majority"] = float(sheet_majority)
+    for name, features in sheet_readouts.items():
+        features = np.concatenate(features).astype(np.float64)
+        accuracy, n_held = _ridge_accuracy(features, sheet_one_hot, sheet_train, alpha)
+        print(f"{name:<22} {accuracy:>12.3f} {'':>7} {'':>9} {n_held:>7}")
+        results[f"{name}/identity"] = accuracy
+    permutation = rng.permutation(len(sheet_identity))
+    features = np.concatenate(sheet_readouts["sheet (post-trunk)"]).astype(np.float64)
+    accuracy, n_held = _ridge_accuracy(
+        features, sheet_one_hot[permutation], sheet_train, alpha
+    )
+    print(f"{'  shuffled (floor)':<22} {accuracy:>12.3f} {'':>7} {'':>9} {n_held:>7}")
+    results["sheet shuffled/identity"] = accuracy
+    return results
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--games-pkl", default="runtime/discrim_sides_ckpt224773.pkl")
     parser.add_argument("--ckpt", default=None, help="trained params; default fresh")
-    parser.add_argument("--probe", choices=("a", "b", "c", "both"), default="both")
+    parser.add_argument("--probe", choices=("a", "b", "c", "d", "both"), default="both")
     parser.add_argument(
-        "--ridge-alpha", type=float, default=1.0, help="probe C ridge penalty"
+        "--ridge-alpha", type=float, default=1.0, help="probe C/D ridge penalty"
     )
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--steps", type=int, default=1000)
@@ -778,6 +996,9 @@ def main(argv=None):
 
     if args.probe == "c":
         run_probe_c(net, variables, chunks, args.batch, args.seed, args.ridge_alpha)
+        return
+    if args.probe == "d":
+        run_probe_d(net, variables, chunks, args.batch, args.seed, args.ridge_alpha)
         return
 
     if args.probe in ("a", "both"):

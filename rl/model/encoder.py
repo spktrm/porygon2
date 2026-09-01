@@ -1688,6 +1688,30 @@ class Encoder(nn.Module):
         snapshot_rows = jnp.take_along_axis(node_snapshots, aligned_order, axis=1)
         return row_states, order_valid, field_state, snapshot_rows
 
+    def assembled_sequence(
+        self,
+        env_step: PlayerEnvOutput,
+        packed_history_step: PlayerPackedHistoryOutput,
+        history_step: PlayerHistoryOutput,
+    ):
+        """The trunk's INPUT over time, (T, rows, width) with its row_valid --
+        `_assemble_sequence` with the real history inputs and no trunk.
+        Offline reads only (rl/offline/{trunk_homogeneity,separation_probe});
+        nothing in training calls it."""
+        assemble = nn.vmap(
+            Encoder._assemble_sequence,
+            variable_axes={"params": None, "intermediates": 0},
+            split_rngs={"params": False},
+            in_axes=0,
+            out_axes=0,
+        )
+        sequence, row_valid, _ = assemble(
+            self,
+            env_step,
+            *self._history_inputs(env_step, packed_history_step, history_step),
+        )
+        return sequence, row_valid
+
     def __call__(
         self,
         env_step: PlayerEnvOutput,
