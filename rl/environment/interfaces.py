@@ -92,6 +92,10 @@ class PlayerActorOutput:
         default_factory=CategoricalValueHeadOutput
     )
     opp_code: ArrayLike = ()
+    # The belief head: (T, 6, G, K) logits predicting opp_code from the
+    # matched PUBLIC rows, and the per-mon alignment mask.
+    belief_logits: ArrayLike = ()
+    belief_matched: ArrayLike = ()
     # `advantage` and `q` lived here until 2026-08-29: the learner-only
     # Q = V + A decomposition over the flat src x tgt grid, composed in the
     # model by heads.compose_q. The policy stopped reading it at the NashPG

@@ -21,12 +21,15 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
+from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature, InfoFeature
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
     MOVE_ROWS,
+    NUM_PUBLIC_SLOTS,
     PRIVATE_ROWS,
+    PUBLIC_ROWS,
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
@@ -39,12 +42,41 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
+from rl.model.modules import MLP
 from rl.model.utils import get_num_params
 
 
 def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
     """log pi with illegal cells at the dtype's min, for sample_categorical."""
     return jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min)
+
+
+def belief_alignment(opp_private_team: jax.Array, info: jax.Array):
+    """Which public row is opponent sheet row j? (2026-09-01)
+
+    The sheet's ENTITY_IDX (1 + stable index, 0 = never fielded) against
+    PUBLIC_ORDER, restricted to the OPPONENT half of the public rows --
+    a my-side mon can never legitimately match there, so a bogus index
+    cannot alias across sides. Returns (matched (6,), public_row_index (6,)
+    valid only where matched). A still-disguised or never-fielded mon is
+    simply unmatched: the belief loss skips it.
+    """
+    opp_idx = opp_private_team[
+        :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+    ]
+    public_order = info[
+        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
+        + 1
+    ]
+    opp_half = jnp.arange(NUM_PUBLIC_SLOTS) >= NUM_PUBLIC_SLOTS // 2
+    hits = (
+        (public_order[None, :] == (opp_idx[:, None] - 1))
+        & opp_half[None, :]
+        & (opp_idx[:, None] > 0)
+    )
+    matched = hits.any(axis=-1)
+    public_row_index = jnp.argmax(hits, axis=-1)
+    return matched, public_row_index
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -72,6 +104,13 @@ class Porygon2PlayerModel(nn.Module):
         # params exist in the learner-initialised tree and an actor apply
         # never visits them; nothing at deploy consumes its output.
         self.priv_v_head = CategoricalValueLogitHead(self.cfg.priv_v_head)
+        # The belief head (2026-09-01): from each opponent mon's PUBLIC row
+        # (post-trunk, policy-readable -- deduction from what the agent can
+        # see), predict that mon's discrete code. CE against the sg'd code
+        # is belief-state shaping: the act-time information set is
+        # untouched (the partition test pins it), the gradient just asks
+        # public representations to be DECODABLE to the truth.
+        self.belief_head = MLP(**self.cfg.belief_head.mlp.to_dict())
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -311,12 +350,20 @@ class Porygon2PlayerModel(nn.Module):
         )
         learner_only = {}
         if self.cfg.train:
+            matched, public_row_index = belief_alignment(
+                env_step.opp_private_team, env_step.info
+            )
+            matched_rows = sequence[PUBLIC_ROWS][public_row_index]
+            code_shape = opp_code_one_hot.shape
+            belief_logits = self.belief_head(matched_rows).reshape(code_shape)
             learner_only = {
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
                 # The belief label, straight from where the secret rows
                 # were coded.
                 "opp_code": opp_code_one_hot,
+                "belief_logits": belief_logits,
+                "belief_matched": matched,
             }
         return PlayerActorOutput(
             action_head=action_head,

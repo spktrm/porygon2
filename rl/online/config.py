@@ -363,6 +363,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # run continues on the deployable estimator without a lineage break and
     # the privileged head stays an observer.
     player_privileged_targets: bool = True
+    # Belief-state shaping (2026-09-01): CE from the matched public rows'
+    # belief logits to the sg'd opponent code. Bounded (<= log K per group),
+    # pi-free, touches representations not logits; 0.0 is an inert-loss off
+    # (predictor params stay in the tree).
+    player_belief_coef: float = 0.25
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio

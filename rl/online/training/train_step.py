@@ -358,6 +358,29 @@ def train_step(
             ),
             value_mask,
         )
+        # Belief-state shaping: CE from each matched public row's belief
+        # logits to the STOPPED code label (the code trains through the
+        # privileged value CE, never through its own prediction). Mean over
+        # groups so the scale is K-independent; masked to rows where the
+        # alignment holds AND the step counts for value.
+        belief_labels = jax.lax.stop_gradient(
+            learner_player_pred.opp_code.astype(jnp.float32)
+        )
+        belief_ce = optax.softmax_cross_entropy(
+            logits=learner_player_pred.belief_logits.astype(jnp.float32),
+            labels=belief_labels,
+        ).mean(axis=-1)
+        belief_mask = learner_player_pred.belief_matched & value_mask[..., None]
+        loss_belief = average(belief_ce, belief_mask)
+        belief_accuracy = average(
+            (
+                jnp.argmax(learner_player_pred.belief_logits, axis=-1)
+                == jnp.argmax(belief_labels, axis=-1)
+            )
+            .astype(jnp.float32)
+            .mean(axis=-1),
+            belief_mask,
+        )
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
@@ -513,6 +536,7 @@ def train_step(
             # it a matched control for an architecture that is now gone.
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
+            + config.player_belief_coef * loss_belief
             # kl: trust region against the behaviour policy — the
             # replay-staleness guard alongside the PPO clip.
             + config.player_kl_loss_coef * loss_actor_backward_kl
@@ -522,6 +546,12 @@ def train_step(
             **pg_logs,
             player_loss_v_win=loss_v_win,
             player_loss_v_win_priv=loss_v_win_priv,
+            player_loss_belief=loss_belief,
+            player_belief_accuracy=belief_accuracy,
+            player_belief_matched_frac=average(
+                learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
+                value_mask,
+            ),
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,

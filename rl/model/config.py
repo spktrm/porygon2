@@ -205,6 +205,14 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder.opp_code = ConfigDict()
     cfg.encoder.opp_code.num_groups = 16
     cfg.encoder.opp_code.num_classes = 16
+    # The belief head: matched public row -> the mon's (G, K) code logits.
+    cfg.belief_head = ConfigDict()
+    cfg.belief_head.mlp = ConfigDict()
+    cfg.belief_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.encoder.opp_code.num_groups * cfg.encoder.opp_code.num_classes,
+    )
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step
