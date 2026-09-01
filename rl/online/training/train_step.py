@@ -538,6 +538,15 @@ def train_step(
                 learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
                 value_mask,
             ),
+            # Trunk over-smoothing (cosine up / participation down = rows
+            # converging); the offline per-block twin is
+            # rl/offline/trunk_homogeneity.py.
+            player_trunk_row_cosine=average(
+                learner_player_pred.trunk_row_cosine, value_mask
+            ),
+            player_trunk_row_participation=average(
+                learner_player_pred.trunk_row_participation, value_mask
+            ),
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,

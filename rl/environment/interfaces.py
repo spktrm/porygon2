@@ -96,6 +96,11 @@ class PlayerActorOutput:
     # matched PUBLIC rows, and the per-mon alignment mask.
     belief_logits: ArrayLike = ()
     belief_matched: ArrayLike = ()
+    # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
+    # mean off-diagonal cosine and participation ratio over the valid rows
+    # of the trunk's output. The over-smoothing instrument; learner-only.
+    trunk_row_cosine: ArrayLike = ()
+    trunk_row_participation: ArrayLike = ()
     # `advantage` and `q` lived here until 2026-08-29: the learner-only
     # Q = V + A decomposition over the flat src x tgt grid, composed in the
     # model by heads.compose_q. The policy stopped reading it at the NashPG

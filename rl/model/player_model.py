@@ -43,6 +43,7 @@ from rl.model.heads import (
     sample_categorical,
 )
 from rl.model.modules import MLP
+from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params
 
 
@@ -356,6 +357,11 @@ class Porygon2PlayerModel(nn.Module):
             matched_rows = sequence[PUBLIC_ROWS][public_row_index]
             code_shape = opp_code_one_hot.shape
             belief_logits = self.belief_head(matched_rows).reshape(code_shape)
+            # Rows converging to one direction reads on the existing panels
+            # as "entropy at ceiling while the pointer params grow" -- the
+            # phase-1 support-anchor shape -- so it gets its own reading.
+            # Offline twin: rl/offline/trunk_homogeneity.py, per block.
+            row_cosine, row_participation = row_homogeneity(sequence)
             learner_only = {
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
@@ -364,6 +370,8 @@ class Porygon2PlayerModel(nn.Module):
                 "opp_code": opp_code_one_hot,
                 "belief_logits": belief_logits,
                 "belief_matched": matched,
+                "trunk_row_cosine": row_cosine,
+                "trunk_row_participation": row_participation,
             }
         return PlayerActorOutput(
             action_head=action_head,

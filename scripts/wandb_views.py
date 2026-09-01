@@ -323,6 +323,16 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # Rows of the trunk's OUTPUT converging to one direction
+                    # (Noci et al. 2022 rank collapse): cosine rising toward
+                    # 1 / participation falling toward 1 is the alarm
+                    # (> 0.9 / < 4 pre-registered); ckpt_00182000 read
+                    # 0.173 / 10.9 offline, and the first live points
+                    # after that restart must match.
+                    "Trunk row homogeneity",
+                    ["player_trunk_row_cosine", "player_trunk_row_participation"],
+                ),
+                lp(
                     # The 2026-09-01 opponent-code leaves and the shared
                     # entity_index_tag join key against their known init
                     # (all lecun 0.0625). Still there tens of thousands of

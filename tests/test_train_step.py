@@ -145,6 +145,9 @@ def test_train_step_smoke():
         "player_opp_code_logits_grad_norm",
         "player_opp_code_embedding_grad_norm",
         "player_entity_index_tag_grad_norm",
+        # Trunk over-smoothing (plan step c-live).
+        "player_trunk_row_cosine",
+        "player_trunk_row_participation",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
