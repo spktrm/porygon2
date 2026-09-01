@@ -422,11 +422,53 @@ def rl_sections():
             ],
         ),
         ws.Section(
+            # The opponent-belief SSL pair (2026-09-01): the discrete code
+            # the secret rows carry (grounded by the privileged value CE)
+            # and the belief head predicting it from public rows. Split out
+            # of the critic section so the mechanism has its own address.
+            name="3 · Opponent belief (SSL) & code",
+            is_open=True,
+            panels=[
+                lp(
+                    # CE from public rows to the sg'd code, mean over
+                    # groups. Falling = beliefs sharpening.
+                    "Belief loss",
+                    ["player_loss_belief"],
+                ),
+                lp(
+                    # Per-group argmax accuracy (floor 1/16) and the
+                    # fraction of mons with an aligned public row (the
+                    # label supply).
+                    "Belief accuracy & label supply",
+                    [
+                        "player_belief_accuracy",
+                        "player_belief_matched_frac",
+                    ],
+                ),
+                lp(
+                    # Opponent-code usage perplexity per group: min pinned
+                    # at 1 = a dead group = the code is ungrounded there
+                    # (the collapse instrument for the Dreamer code).
+                    "Opponent code perplexity",
+                    [
+                        "player_code_perplexity_mean",
+                        "player_code_perplexity_min",
+                    ],
+                ),
+                lp(
+                    # Fraction of value-masked steps carrying any live
+                    # opponent row -- the wire supply for all of the above.
+                    "Opponent row supply",
+                    ["player_code_row_frac"],
+                ),
+            ],
+        ),
+        ws.Section(
             # Observer critic quality. The policy no longer reads a Q stack
             # (retired 2026-08-26/30; its link to return is the v-trace
             # advantage), but an action-flat critic still voids the matched
             # control and the starvation discriminators above.
-            name="3 · Critic quality & value",
+            name="4 · Critic quality & value",
             is_open=True,
             panels=[
                 lp(
@@ -441,27 +483,6 @@ def rl_sections():
                     # "worth 0.005 value units" number, re-measured live.
                     "Privileged value gap",
                     ["player_priv_value_gap"],
-                ),
-                lp(
-                    # Opponent-code usage perplexity per group: min pinned
-                    # at 1 = a dead group = the code is ungrounded there
-                    # (the collapse instrument for the Dreamer code).
-                    "Opponent code perplexity",
-                    [
-                        "player_code_perplexity_mean",
-                        "player_code_perplexity_min",
-                    ],
-                ),
-                lp(
-                    # Belief head: CE falling + accuracy climbing off the
-                    # 1/16 floor = public rows learning to infer hidden
-                    # state; matched_frac is the label supply.
-                    "Belief head",
-                    [
-                        "player_loss_belief",
-                        "player_belief_accuracy",
-                        "player_belief_matched_frac",
-                    ],
                 ),
                 lp(
                     # Directed-message sanity: fraction of valid history
@@ -510,7 +531,7 @@ def rl_sections():
             # the replay reuse controller is an expectation over the
             # policy, and the capacity probe grades VALUE error, not
             # action-distribution fidelity.
-            name="4 · Staleness, ISR & trust region",
+            name="5 · Staleness, ISR & trust region",
             is_open=True,
             panels=[
                 lp(
@@ -582,7 +603,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="5 · League",
+            name="6 · League",
             is_open=True,
             panels=[
                 # The learner logs the payoff matrix through a custom
@@ -623,7 +644,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="6 · Behaviour & environment",
+            name="7 · Behaviour & environment",
             panels=[
                 lp("Move / switch ratio", ["move_ratio", "switch_ratio"]),
                 lp("Early finish rate", ["early_finish_rate"]),
@@ -670,7 +691,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="7 · Gradient norms by module",
+            name="8 · Gradient norms by module",
             panels=[
                 lp(
                     # Keys are f"player_{module}_gradient_norm" over the
@@ -692,7 +713,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="8 · Throughput & compile",
+            name="9 · Throughput & compile",
             panels=[
                 lp(
                     "Frame counts",
@@ -727,7 +748,7 @@ def rl_sections():
             # process.memoryUsage() write — see index.ts:writeMemoryStats.
             # Process RSS is summarised in "0 · At a glance"; not repeated
             # here.
-            name="9 · Memory",
+            name="10 · Memory",
             panels=[
                 lp(
                     # node's own heap is the tiny GameServer coordinator
