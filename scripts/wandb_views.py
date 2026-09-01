@@ -173,7 +173,14 @@ def rl_sections():
                     # detail in "3 · Critic quality & value" alongside value
                     # loss and calibration.
                     "Value R2 (main head)",
-                    ["player_value_head_r2"],
+                    [
+                        # THE privileged-premise discriminator (2026-09-01):
+                        # priv >= deploy from 20k is the gate; priv < deploy
+                        # sustained past 30k is the abort (the 2026-08-25
+                        # falsification re-run on its own instrument).
+                        "player_value_head_r2",
+                        "player_priv_value_head_r2",
+                    ],
                     range_y=(-1, 1),
                 ),
                 lp(
@@ -423,9 +430,44 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    # The one critic's CE against the v-trace win targets.
-                    "Value loss",
-                    ["player_loss_v_win"],
+                    # Both critics' CE against the SAME v-trace win targets
+                    # (deployable = matched control, privileged = the
+                    # estimator under player_privileged_targets).
+                    "Value loss (deploy vs privileged)",
+                    ["player_loss_v_win", "player_loss_v_win_priv"],
+                ),
+                lp(
+                    # Mean |priv - deploy| expectation: the 2026-08-25
+                    # "worth 0.005 value units" number, re-measured live.
+                    "Privileged value gap",
+                    ["player_priv_value_gap"],
+                ),
+                lp(
+                    # Opponent-code usage perplexity per group: min pinned
+                    # at 1 = a dead group = the code is ungrounded there
+                    # (the collapse instrument for the Dreamer code).
+                    "Opponent code perplexity",
+                    [
+                        "player_code_perplexity_mean",
+                        "player_code_perplexity_min",
+                    ],
+                ),
+                lp(
+                    # Belief head: CE falling + accuracy climbing off the
+                    # 1/16 floor = public rows learning to infer hidden
+                    # state; matched_frac is the label supply.
+                    "Belief head",
+                    [
+                        "player_loss_belief",
+                        "player_belief_accuracy",
+                        "player_belief_matched_frac",
+                    ],
+                ),
+                lp(
+                    # Directed-message sanity: fraction of valid history
+                    # steps with an identified SOURCE row (expect >> 0.5).
+                    "History src fraction",
+                    ["player_history_src_frac"],
                 ),
                 lp(
                     # Fresh-row calibration. Was framed as "Q fresh/replay
