@@ -69,9 +69,15 @@ def make_capacity_probe(network):
             packed_history=batch.player_packed_history,
             history=batch.player_history,
         )
-        # Encoder returns the action stream and the single critic's
-        # (4 * entity_size,) value vector; probe both.
-        action_emb, value_emb = encode(params, actor_input)
+        # The flat-trunk encoder returns ONE (T, B, 61, D) sequence
+        # (2026-08-29); the "action" stream is the contiguous
+        # private|move|target row block the readout consumes, the "value"
+        # stream is the CLS row the critic reads.
+        from rl.model.constants import CLS_ROW, PRIVATE_ROWS, TARGET_ROWS
+
+        sequence = encode(params, actor_input)
+        action_emb = sequence[:, :, PRIVATE_ROWS.start : TARGET_ROWS.stop]
+        value_emb = sequence[:, :, CLS_ROW]
         dones = batch.player_transitions.env_output.done
         valid = (jnp.cumsum(dones, axis=0) - dones) == 0
         logs = {}

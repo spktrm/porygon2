@@ -934,6 +934,46 @@ even a winning kernel moves nothing end-to-end today; the 4.2 steps/sec
 system rate is actor-bound (the learner alone does 12.3). The dead
 commented-out dpa call from the original attempt is deleted.
 
+## Investigation ledger — 2026-09-01 GRU scan: hoisted, unroll retuned, the big claim measured DOWN
+
+The follow-up to the flash-attention close-out: the history GRU scan IS the
+mis-shaped compute (measured 34-56% of the actor forward at buckets 128-512,
+~52us/step under learner contention), and the actor side is what binds the
+4.2 steps/sec system rate. The classic cuDNN-RNN restructure — hoist the
+input-side gate GEMMs out of the scan as one batched GEMM, keep only the
+carry-dependent tail serial — was implemented in pure JAX with an IDENTICAL
+param tree (`SplitGRUCell`: children ir/iz/in/hr/hz/hn mirror flax GRUCell's
+Dense layout exactly, so the live lineage's checkpoint loads unchanged).
+
+**The pre-registered >=30% bar FAILED, and the standalone bench that promised
+-38% was a strawman**: the real scan at full GPU already ran 28us/step (the
+bench replica of it: 55us) — XLA had less headroom than the mock suggested.
+Measured on the real module, full GPU, H=512: scan 14.46 -> 13.82ms (hoist)
+-> 13.22ms (+ SCAN_UNROLL 8 -> 32) = **-8.6%**; H=256: -7.4%. Landed anyway
+as a small verified win with three structural improvements riding along:
+the latest-node stream left the scan carry entirely (a last-touched-value
+recurrence is a parallel cummax + gather — BIT-EXACT vs the old carry), the
+per-step segment_sums moved to batched vmapped precompute, and the stacked
+scan outputs shrank 27 -> 15 rows/step. Equivalence gate on real params +
+ex.bin at H=256: nodes exact, recurrent states max|diff| 0.035 / corr
+0.999998 — the compounding bf16-reassociation class the precision ledger
+predicts, from GEMM splitting; landed at a restart boundary of the live
+lineage (checkpoint-mode resume, param tree unchanged).
+
+**The diagnosis with teeth: the slim scan is DEPENDENCY-LATENCY-bound at
+~26us/step** — kernel count per step barely matters (unroll 32 bought 4%).
+The remaining fix classes are (a) a Pallas whole-scan fused kernel (one
+launch for all H steps; ceiling = ~13ms of the ~20ms H=512 actor forward;
+backward pass is the hard part) or (b) an associative-recurrence
+architecture change — both recorded, neither cheap. ALSO measured while
+here: the system-level actor decomposition (GPU forward vs TS service vs
+python plumbing) is still unmeasured, and the inference server has no
+instrumentation — that measurement outranks any further kernel work.
+Ridealong fix: `rl/model/capacity.py`'s probe still unpacked the
+pre-flat-trunk encoder's two return values — latently broken since
+2026-08-29, exposed by the first current-arch checkpoint, ported to the
+61-row sequence (action = private|move|target block, value = CLS row).
+
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 
 A full read of `rl/model/` against `service/src/server/state.ts`, treating
