@@ -92,6 +92,9 @@ class Learner:
         # The actors' shared timing sink (rl/environment/actor_stats.py),
         # drained into the periodic logs; None for standalone construction.
         self._actor_stats = actor_stats
+        # Wall clock at the last drain, so the learner's own rate lands
+        # on the same cadence as the actor timers it is compared with.
+        self._actor_stats_drained_at = time.perf_counter()
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
         self.debug = debug
@@ -492,6 +495,15 @@ class Learner:
             and step % self.config.actor_stats_log_steps == 0
         ):
             logs.update(self._actor_stats.drain())
+            # The SYSTEM rate: learner steps per wall second over the
+            # drain interval — actor-bound today, and the number the
+            # cross-run comparisons (4.17-4.41 on irqeetfg) were read
+            # by hand from _timestamp deltas until now.
+            now = time.perf_counter()
+            logs["learner_steps_per_sec"] = self.config.actor_stats_log_steps / (
+                now - self._actor_stats_drained_at
+            )
+            self._actor_stats_drained_at = now
 
         # The default x-axis for every metric on the run
         # (wandb.define_metric in main.py): monotonic across resumes AND

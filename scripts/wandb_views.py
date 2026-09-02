@@ -891,8 +891,12 @@ def rl_sections():
                     ["actor_infer_batch_size", "actor_infer_history_level"],
                 ),
                 lp(
-                    "Actor steps/sec (pool aggregate)",
-                    ["actor_steps_per_sec"],
+                    # actor = pool aggregate of env steps; learner = the
+                    # SYSTEM rate (learner steps per wall second over the
+                    # drain interval). The speed comparison reads both
+                    # against the carry-OFF window on the same code.
+                    "Steps/sec: actors (pool) & learner (system rate)",
+                    ["actor_steps_per_sec", "learner_steps_per_sec"],
                 ),
                 lp(
                     # The carry path's own read: steps / packed rows of
