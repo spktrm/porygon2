@@ -29,7 +29,7 @@ from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_num_params, get_player_model
 from rl.model.utils import ParamsContainer
-from rl.online.agent import Agent
+from rl.online.agent import Agent, resolve_actor_device
 from rl.online.artifact import (
     ckpt_root,
     create_train_state,
@@ -282,15 +282,9 @@ def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
         try:
             param_container = actor.pull_own_player()
             new_key = actor.split_rng()
-            # pull_own_player() returns host numpy (league.get_live() ->
-            # jax.device_get()'d params) — device_put it ONCE here, same as
-            # PlayerActor.unroll_and_push does for player_params. Without
-            # this, jax.jit implicitly re-transfers the same host array to
-            # device on every one of unroll()'s ~102 steps instead of once,
-            # across every concurrent builder actor thread, continuously
-            # for the process lifetime — a real memory/throughput cost.
-            builder_params = jax.device_put(param_container.builder_params)
-            actor.unroll(new_key, builder_params)
+            # Host container: the Agent's DeviceParamsCache puts it on the
+            # device ONCE per version, shared by every builder actor.
+            actor.unroll(new_key, param_container)
         except Exception as e:
             logger.error("Error running builder actor", exc_info=True)
             raise e
@@ -441,11 +435,12 @@ def main(args: argparse.Namespace):
     learner_builder_model_config = get_builder_model_config(
         learner_config.generation, train=True
     )
+    actor_device, actor_dtype = resolve_actor_device(learner_config.player_actor_device)
     actor_player_model_config = get_player_model_config(
-        learner_config.generation, train=False
+        learner_config.generation, train=False, dtype=actor_dtype
     )
     actor_builder_model_config = get_builder_model_config(
-        learner_config.generation, train=False
+        learner_config.generation, train=False, dtype=actor_dtype
     )
     learner_player_network = get_player_model(learner_player_model_config)
     learner_builder_network = get_builder_model(learner_builder_model_config)
@@ -472,12 +467,14 @@ def main(args: argparse.Namespace):
     learning_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
+        device=actor_device,
     )
     eval_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
+        device=actor_device,
     )
     # The CROSS-LINEAGE eval arm (2026-08-29). temp=0.5 is not comparable
     # across the flat-readout rewrite: the hierarchical head divided BOTH
@@ -494,23 +491,26 @@ def main(args: argparse.Namespace):
         actor_builder_network.apply,
         player_head_params=HeadParams(temp=1.0),
         builder_head_params=HeadParams(temp=1.0),
+        device=actor_device,
     )
-    # One batched-inference server for ALL training PlayerActors
-    # (rl/online/inference.py). Same apply_fn and
-    # default HeadParams as learning_agent — eval actors stay on
-    # eval_agent's direct path (different sampling temperature, and 3
-    # low-volume threads don't warrant a second server). Builder actors
-    # also stay direct: builder inference is one team-build per game vs.
-    # ~35 player steps, negligible traffic.
-    # Always on: b219d84 deleted the inference_* config fields (the
-    # batch-1 fallback path had no remaining user) but left these reads
-    # behind, which raised AttributeError at the first launch after it.
-    # The server's constructor defaults are the values the fields held.
     # One timing sink shared by every training actor, its env and the
     # server; the learner drains it (actor_stats_log_steps).
     actor_stats = ActorStats()
-    inference_server = InferenceServer(actor_player_network.apply, stats=actor_stats)
-    inference_server.start()
+    # Under "gpu": one batched-inference server for ALL training
+    # PlayerActors (rl/online/inference.py), same apply_fn and default
+    # HeadParams as learning_agent — eval actors stay on eval_agent's
+    # direct path (different sampling temperature, and 3 low-volume
+    # threads don't warrant a second server), and builder actors too
+    # (one team-build per game vs ~35 player steps). The server's
+    # constructor defaults are the values the deleted inference_* config
+    # fields held (b219d84). Under "cpu" there is no server: every actor
+    # is its own batch-1 host forward through learning_agent.
+    inference_server = None
+    if learner_config.player_actor_device == "gpu":
+        inference_server = InferenceServer(
+            actor_player_network.apply, stats=actor_stats
+        )
+        inference_server.start()
 
     logger.info("Loading train state...")
     mode = load_mode
@@ -783,7 +783,8 @@ def main(args: argparse.Namespace):
             "ignored — this takes a few seconds)..."
         )
         executor.shutdown(wait=False, cancel_futures=True)
-        inference_server.stop()
+        if inference_server is not None:
+            inference_server.stop()
         _finish_wandb_bounded(wandb_run, exit_code=1 if crashed else 0)
 
     if crashed:

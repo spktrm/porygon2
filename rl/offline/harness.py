@@ -49,7 +49,8 @@ from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput, Traje
 from rl.model.config import get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
-from rl.online.agent import Agent
+from rl.model.utils import ParamsContainer
+from rl.online.agent import Agent, resolve_actor_device
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.player_actor import PlayerActor
 from rl.online.training.batching import stack_batch
@@ -94,9 +95,18 @@ def play_games(
     order. Games still running at `deadline_s` are abandoned."""
     ctx = OfflineContext()
     ctx.config = get_learner_config()
-    actor_net = get_player_model(get_player_model_config(generation, train=False))
-    agent = Agent(actor_net.apply)
-    dev_params = jax.device_put(params)
+    actor_device, actor_dtype = resolve_actor_device(ctx.config.player_actor_device)
+    actor_net = get_player_model(
+        get_player_model_config(generation, train=False, dtype=actor_dtype)
+    )
+    agent = Agent(actor_net.apply, device=actor_device)
+    container = ParamsContainer(
+        step_count=0,
+        player_frame_count=0,
+        builder_frame_count=0,
+        player_params=params,
+        builder_params=None,
+    )
 
     def play_one(game_no: int) -> list[list[Trajectory]]:
         actors, envs = [], []
@@ -121,7 +131,11 @@ def play_games(
             with cf.ThreadPoolExecutor(2) as ex:
                 futs = [
                     ex.submit(
-                        a.unroll, jax.random.key(seed * 7 + game_no * 2 + i), dev_params
+                        a.unroll,
+                        jax.device_put(
+                            jax.random.key(seed * 7 + game_no * 2 + i), actor_device
+                        ),
+                        container,
                     )
                     for i, a in enumerate(actors)
                 ]

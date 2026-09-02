@@ -22,7 +22,12 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
+def get_player_model_config(
+    generation: int = 3, train: bool = False, dtype: jnp.dtype = DEFAULT_DTYPE
+) -> ConfigDict:
+    """``dtype`` is the forward's COMPUTE dtype (params are stored f32
+    regardless). bf16 on the GPU; the CPU actor path passes f32, since XLA:CPU
+    only emulates bf16."""
     cfg = ConfigDict()
 
     base_size = 64
@@ -33,7 +38,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     cfg.generation = generation
     cfg.entity_size = entity_size
-    cfg.dtype = DEFAULT_DTYPE
+    cfg.dtype = dtype
     cfg.train = train
     # 1 = singles (one flat categorical per request — the historical path,
     # bit-identical). 2 = doubles: two head-level decision stages per turn,
@@ -46,7 +51,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
-    cfg.encoder.dtype = DEFAULT_DTYPE
+    cfg.encoder.dtype = dtype
 
     encoder_num_layers = 1
     encoder_num_heads = num_heads
@@ -235,7 +240,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     return cfg
 
 
-def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
+def get_builder_model_config(
+    generation: int = 3, train: bool = False, dtype: jnp.dtype = DEFAULT_DTYPE
+) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 64
@@ -246,7 +253,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     cfg.entity_size = entity_size
     cfg.generation = generation
-    cfg.dtype = DEFAULT_DTYPE
+    cfg.dtype = dtype
 
     num_layers = 4
     num_heads = num_heads

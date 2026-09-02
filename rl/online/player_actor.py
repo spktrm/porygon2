@@ -27,7 +27,7 @@ from rl.environment.utils import (
 )
 from rl.model.builder_model import get_packed_team_string
 from rl.model.history_encoder import invalid_history_carry
-from rl.model.utils import Params, ParamsContainer
+from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
 from rl.online.inference import InferenceServer
@@ -110,13 +110,16 @@ class PlayerActor:
         env.stats = stats
         self._unroll_length = unroll_length
         self._learner = learner
-        self._rng_key = jax.random.key(rng_seed)
+        # Committed to the agent's device so every key split and every
+        # sampling key stays there: under config.player_actor_device="cpu"
+        # no GPU kernel runs for the actor at all.
+        self._rng_key = jax.device_put(jax.random.key(rng_seed), agent.device)
         # When set, per-step inference goes through the shared batched
         # InferenceServer (rl/online/inference.py) instead of this actor's
-        # own batch-1 Agent.step_player dispatch. Training actors get one;
-        # eval actors deliberately don't (different sampling temperature
-        # via eval_agent's HeadParams, and 3 low-volume threads aren't
-        # worth a second server).
+        # own batch-1 Agent.step_player dispatch. Training actors get one
+        # under config.player_actor_device="gpu"; eval actors never do
+        # (different sampling temperature via eval_agent's HeadParams, and
+        # 3 low-volume threads aren't worth a second server).
         self._inference_client = inference_client
         # Eval actors must never contribute to training data, nor consume the
         # builder replay buffer's reuse budget. This flag gates both.
@@ -201,7 +204,7 @@ class PlayerActor:
     def unroll(
         self,
         rng_key: jax.Array,
-        player_params: Params | ParamsContainer,
+        player_params: ParamsContainer,
     ) -> list[Trajectory]:
         """Run one full game (up to unroll_length steps) and return it as a
         list of fixed-length chunks of player_chunk_length transitions each.
@@ -217,9 +220,10 @@ class PlayerActor:
         trailing partial segment (rare, and those steps have no outcome
         signal to give).
 
-        player_params is device-resident Params on the direct-Agent path,
-        or the host ParamsContainer when routing through the batched
-        InferenceServer (which owns device transfer) — see unroll_and_push."""
+        player_params is the HOST ParamsContainer on both inference paths:
+        the InferenceServer and the Agent each own device transfer behind
+        a versioned cache, so every actor playing one version shares one
+        device copy instead of device_put-ing its own per game."""
 
         player_subkeys = split_rng(rng_key, self._unroll_length)
         player_traj = []
@@ -314,9 +318,6 @@ class PlayerActor:
                     )
             with timed(self._stats, "actor_time_inference"):
                 if self._inference_client is not None:
-                    # player_params is the host ParamsContainer on this
-                    # path (see unroll_and_push) — the server owns device
-                    # transfer.
                     player_agent_output = self._inference_client.step_player(
                         player_subkeys[player_step_index],
                         player_params,
@@ -327,6 +328,7 @@ class PlayerActor:
                         player_subkeys[player_step_index],
                         player_params,
                         player_actor_input_clipped,
+                        stats=self._stats,
                     )
             if self._history_carry_width is not None:
                 carry = player_agent_output.actor_output.history_carry
@@ -414,17 +416,9 @@ class PlayerActor:
 
     def unroll_and_push(self, params_container: ParamsContainer, do_push: bool = True):
         """Run one unroll and send trajectory to learner."""
-        if self._inference_client is not None:
-            # The server owns device transfer behind a versioned cache, so
-            # every actor playing the same params version shares ONE device
-            # copy — the per-actor device_put below made 12 separate copies
-            # of the identical live params, one per actor per game.
-            player_params = params_container
-        else:
-            player_params = jax.device_put(params_container.player_params)
         subkey = self.split_rng()
 
-        chunks = self.unroll(rng_key=subkey, player_params=player_params)
+        chunks = self.unroll(rng_key=subkey, player_params=params_container)
         self.reset_game_id()
 
         if should_push_trajectory(self._is_eval, do_push, self._env.username):

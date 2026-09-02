@@ -199,6 +199,51 @@ def clip_packed_history(
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
 
 
+def joint_history_level(actor_input: PlayerActorInput, min_length: int) -> int:
+    """ONE bucket level across a request's history AND packed_history,
+    read off the axes' lengths (the request arrives clipped, so each axis
+    already sits at its own bucket). Both lengths describe the same fact
+    (how far the game has run), so bucketing them independently makes XLA
+    trace the PRODUCT of the two axes' bucket sets instead of the shared
+    level's count — geometric_bucket's docstring. The inference server
+    groups requests by this level; the direct Agent path pads to it."""
+    field_len = actor_input.history.field.shape[0]
+    packed_len = actor_input.packed_history.revealed_cache.shape[0]
+    return max(
+        _bucket_level(field_len, min_length), _bucket_level(packed_len, min_length)
+    )
+
+
+def _pad_axis0_to(leaf: np.ndarray, target: int) -> np.ndarray:
+    if leaf.shape[0] == target:
+        return leaf
+    if leaf.shape[0] > target:
+        raise ValueError(f"axis 0 is {leaf.shape[0]} rows, past the target {target}")
+    return np.pad(leaf, [(0, target - leaf.shape[0])] + [(0, 0)] * (leaf.ndim - 1))
+
+
+def pad_history_to_level(
+    actor_input: PlayerActorInput, level: int, min_length: int
+) -> PlayerActorInput:
+    """Zero-pads history to ``min_length * 2**level`` steps (capped at
+    NUM_HISTORY) and packed_history to twice that (capped at
+    2 * NUM_HISTORY), the joint-level shape both inference paths run at.
+    Zero IS the history-padding convention (padnstack zero-fills; a zero
+    FIELD_FEATURE__VALID / SPECIES_ENUM___UNSPECIFIED row is an empty
+    slot). Capping only ever pads less, never truncates."""
+    history_target = _bucket_value(level, min_length, NUM_HISTORY)
+    packed_target = _bucket_value(level, min_length, 2 * NUM_HISTORY)
+    return actor_input.replace(
+        history=jax.tree.map(
+            lambda leaf: _pad_axis0_to(leaf, history_target), actor_input.history
+        ),
+        packed_history=jax.tree.map(
+            lambda leaf: _pad_axis0_to(leaf, packed_target),
+            actor_input.packed_history,
+        ),
+    )
+
+
 # All eight RELEVANT_ENTITY_IDX columns (the model's _RELEVANT_ENTITY_
 # FEATURES reads the first four; the service writes up to eight).
 _ALL_RELEVANT_IDX_COLUMNS = np.array(

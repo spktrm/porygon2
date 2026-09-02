@@ -256,6 +256,20 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # on every step, bit-for-bit (the learner never carries either way) —
     # the control arm and the abort switch.
     player_actor_history_carry: bool = True
+    # Where the ACTORS' forward runs (rl/online/main.py). "cpu" = every
+    # PlayerActor (training and eval) and BuilderActor runs its own batch-1
+    # f32 forward on the host through Agent.step_player — no inference
+    # server, no queue, and the GPU stream belongs to the train step
+    # alone. Measured 2026-09-03 beside a live learner: per-actor CPU
+    # inference 23-60 ms against 147 ms through the GPU server (76 of it
+    # queue wait, none of it compute: the server's forward shared one
+    # device stream with the train step). f32 because XLA:CPU only
+    # emulates bf16; params are stored f32 either way, so the actors'
+    # mu differs from the learner's bf16 recompute by bf16 rounding —
+    # player_learner_actor_forward_kl is the watch. "gpu" = the batched
+    # bf16 InferenceServer (rl/online/inference.py), today's path — the
+    # control arm and the abort switch.
+    player_actor_device: str = "cpu"
 
     # OOM guard (learner.py: Learner._check_oom_guard). A self-monitoring
     # safety valve, not a leak fix — added after 1361 crashed, though that

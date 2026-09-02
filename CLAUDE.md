@@ -1093,6 +1093,45 @@ by measurement, not this pass: the server's serial loop under GPU
 contention (queue + lock + forward = 141 of 147 ms), i.e. the learner's
 train step and the actor forward sharing one device stream.
 
+## Removal + addition ledger — 2026-09-03 gpu_lock retired, actors on the CPU
+
+Follows the history-carry pass, which left the actor step at 147 ms of
+inference — queue 76 + lock 17 + forward 48 — none of it compute: the
+server's forward queued behind train-step kernels on ONE device stream,
+while the host sat at load 1.1 on 20 cores. Two commits, one number moved.
+
+| mechanism | what | why |
+|---|---|---|
+| `gpu_lock` (REMOVED, `19d804b`, structure-only) | the learner held it for `device_put(batch)` + the ASYNC dispatch of `train_step` — released before the GPU finished, so it never serialised execution nor bounded VRAM; the server and `Agent.step_player` forwarded on their own device copies (no donation hazard). Its ONE real job — `main.py`'s eval thread reading the learner's LIVE device buffers that the next step donates — became learner-thread publication: `publish_live_params` → `EvalSnapshot(step_count, main, ema)` on `RunState.eval_snapshot`, read lock-free (`create_params_container(run_state, target=...)` gains the EMA side). `actor_infer_lock_wait` panel gone | no lock is simpler than a smaller one: with the reads moved to the thread that owns the buffers, nothing remained to lock |
+| `player_actor_device = "cpu" \| "gpu"` (ADDED) | "cpu": every PlayerActor and BuilderActor runs its own batch-1 forward on the host through `Agent.step_player` — no server, no queue — on an f32 actor network (`get_player_model_config(..., dtype=)`; XLA:CPU only emulates bf16; params stored f32 either way). "gpu": today's batched bf16 InferenceServer, the control arm and the abort switch. Bench 2026-09-03 beside the live learner, ex.bin at the live shapes: suffix 32/32 B=1 17.8 ms; 12 concurrent B=1 threads 60.5 ms/call, 196 fwd/s aggregate (a CPU *server* at B=8 serial: 128/s — declined) | the actors leave the learner's stream entirely; expected ~2x actor throughput and the learner alone at its 12.3 steps/s ceiling |
+| `DeviceParamsCache(device, field)` | the server's `_get_device_params` LRU lifted into ONE object: host `ParamsContainer` → that field committed to `device`, keyed by container IDENTITY (the league hands out one object per version; the eval thread's main and EMA containers share `(step_count, frame_count)` and would alias under `_version_key`, kept for GROUPING only). `Agent` owns two (player, builder) and takes the host container on both paths — the per-game `device_put` in `unroll_and_push` and the builder loop die | 12 actors share one device copy per version instead of 12 x 54 MB per game (the host-RAM lesson) |
+| `joint_history_level` + `pad_history_to_level` | the server's joint bucket pad written once in `rl/environment/utils.py` and applied on the direct path too | bucket combinations multiply: the CPU path compiles one variant per level (5), not per (history level x packed level) pair. `tests/test_actor_device.py` pins the two call sites to one shape |
+| rng keys committed to `agent.device` | `PlayerActor`/`BuilderActor` seed keys `device_put` once; every split stays there | under "cpu" no GPU kernel runs for an actor at all — verified: 2 offline games on ckpt_00216496 through the second service, process GPU footprint 292 MiB before and after (the CUDA context alone) |
+
+`Agent.step_player` records `actor_infer_forward` + `actor_infer_history_level`
+into the shared `ActorStats` (nested inside `actor_time_inference`, NOT a
+`STEP_PARTS` entry); the server-only timers are simply absent under "cpu".
+Three Agent instances each trace `_step_player` (`self` static): 3 x 5
+levels of CPU compiles, once.
+
+**Pre-registered acceptance** (checkpoint-mode resume from the 2026-09-03
+stop; 2k warm-up, then a 2k hold; against the carry-ON window above):
+`actor_time_inference` <= 70 ms (from 147); `actor_steps_per_sec` >= 130
+(from 86.7); `learner_steps_per_sec` >= 8 (from 5.6; solo ceiling 12.3);
+`player_learner_actor_forward_kl` <= 0.012 (from 0.007 — f32-vs-bf16 on
+log-probs is ~3e-3, so inside 2x, else the dtype gap is real);
+`player_replay_realised_ratio` 8.00 (the PI may CUT reuse under fresher
+data, never raise it); `actor_history_recompute_frac` <= 0.05 unchanged.
+**Abort** → `player_actor_device="gpu"` (no revert): forward KL out of
+band; `learner_steps_per_sec` FALLING while actors climb (the CPU pool
+starving the learner's host thread — cap XLA:CPU intra-op threads or drop
+to 8 actors); `service_wait` rising (host load pinning the node service).
+**Declined:** a batched CPU server (above); a narrower lock (nothing left
+to lock); `jit(device=)` (deprecated in jax 0.10.2 — committed inputs carry
+the computation); a second CUDA context / MPS (time-slices the same GPU).
+Follow-up ONLY after a full lineage on "cpu": the server and its level-0
+grouping become dead code and go, taking the flag's off with them.
+
 ## Investigation ledger — 2026-09-01 flash attention: measured, declined
 
 The old objection ("APIs too immature") is RETIRED — jax 0.10.2's

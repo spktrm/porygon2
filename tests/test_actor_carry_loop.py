@@ -25,9 +25,14 @@ class _StubEnv:
         self.history_rewrite_count = 0
 
 
+class _StubAgent:
+    # The actor commits its rng key to the agent's device at construction.
+    device = jax.devices("cpu")[0]
+
+
 def _actor(stats: ActorStats | None) -> PlayerActor:
     return PlayerActor(
-        agent=None,
+        agent=_StubAgent(),
         env=_StubEnv(),
         unroll_length=1,
         learner=None,
@@ -135,7 +140,7 @@ def test_rewrite_and_gap_recompute_from_scratch(full_window):
 def test_no_carry_width_never_records_carry_stats(full_window):
     stats = ActorStats()
     actor = PlayerActor(
-        agent=None, env=_StubEnv(), unroll_length=1, learner=None, stats=stats
+        agent=_StubAgent(), env=_StubEnv(), unroll_length=1, learner=None, stats=stats
     )
     assert actor._history_carry_width is None
     assert "actor_history_recompute_frac" not in stats.drain()
