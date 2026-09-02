@@ -26,13 +26,6 @@ from rl.environment.protos.features_pb2 import EntityEdgeFeature, FieldFeature
 from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
 
-# The scan is latency-bound (hundreds of tiny sequential kernels), not
-# FLOP-bound; unrolling fuses steps per launch. Re-tuned 8 -> 32 for the
-# slimmer 2026-09-01 step (see __call__'s precompute note): with fewer ops
-# per step, more steps fit a launch -- measured 13.82 -> 13.22ms on the
-# H=512 scan.
-SCAN_UNROLL = 32
-
 # The field history carries THREE states, mirroring the env-step field triple
 # that _embed_field already produces (2026-08-28). Hazards are side-differenced
 # — spikes on my side and spikes on theirs are opposite facts — and collapsing
@@ -107,6 +100,53 @@ class PerSlotHistoryOutput:
     step_attention_probs: ArrayLike = ()
     step_row_mask: ArrayLike = ()
     step_source_rows: ArrayLike = ()
+    # The backbone's write gate, mean over units: (H, 12), read against
+    # the (H, 12) touched mask -- only a touched slot's gate is applied.
+    step_slot_gate: ArrayLike = ()
+    step_touched: ArrayLike = ()
+
+
+def _masked_mean(values: jax.Array, weight: jax.Array) -> jax.Array:
+    """Mean of values under a broadcastable bool weight; 0.0 when empty."""
+    weight = jnp.broadcast_to(weight, values.shape).astype(jnp.float32)
+    return (values.astype(jnp.float32) * weight).sum() / weight.sum().clip(min=1.0)
+
+
+def history_step_stats(output: PerSlotHistoryOutput) -> dict[str, jax.Array]:
+    """Per-trajectory scalars for the History panels, from the step GAT's
+    probabilities and the backbone's write gate.
+
+    step_attn_entropy: attention entropy per live query row, normalised by
+    log(live rows), over steps with >= 2 live rows -- 1.0 = the GAT reads
+    every row uniformly, i.e. it has not learned to select.
+    step_attn_to_src: the mass a NON-source row places on the step's source
+    rows, over steps carrying both; beside step_attn_to_src_uniform (the
+    source rows' share of live rows -- what uniform attention would
+    place). Above uniform = "who did this to me" is being read.
+    gate_mean: the slot write gate over touched, valid (step, slot) pairs;
+    pinned at 0 (nothing written) or 1 (memory overwritten every step) is
+    the collapse shape.
+    """
+    probs = output.step_attention_probs.astype(jnp.float32)  # (H, heads, K, K)
+    row_mask = output.step_row_mask & output.step_valid[:, None]  # (H, K)
+    num_live = row_mask.sum(-1)  # (H,)
+    # Padded keys carry exactly 0 mass, so the clip only guards the log.
+    entropy = -(probs * jnp.log(probs.clip(min=1e-9))).sum(-1)  # (H, heads, K)
+    normalised_entropy = entropy / jnp.log(num_live.clip(min=2))[:, None, None]
+    entropy_weight = (row_mask & (num_live >= 2)[:, None])[:, None, :]
+    source = output.step_source_rows & row_mask  # (H, K)
+    to_src = (probs * source[:, None, None, :]).sum(-1)  # (H, heads, K)
+    src_weight = (row_mask & ~source & source.any(-1)[:, None])[:, None, :]
+    src_share = source.sum(-1) / num_live.clip(min=1)  # (H,)
+    gate_weight = output.step_touched & output.step_valid[:, None]  # (H, 12)
+    return {
+        "step_attn_entropy": _masked_mean(normalised_entropy, entropy_weight),
+        "step_attn_to_src": _masked_mean(to_src, src_weight),
+        "step_attn_to_src_uniform": _masked_mean(
+            jnp.broadcast_to(src_share[:, None, None], to_src.shape), src_weight
+        ),
+        "gate_mean": _masked_mean(output.step_slot_gate, gate_weight),
+    }
 
 
 class HistoryAttentionPool(nn.Module):
@@ -271,115 +311,65 @@ class StepAttention(nn.Module):
         return out, probs
 
 
-class _GateParams(nn.Module):
-    """Raw kernel(+bias) with EXACTLY nn.Dense's param layout and init, so a
-    module tree built from these loads a checkpoint written by flax's
-    GRUCell (whose gates are Dense children named ir/iz/in/hr/hz/hn)."""
+class GatedLinearCell(nn.Module):
+    """The minGRU recurrence (Feng et al. 2024): h_t = (1 - z_t) * h_{t-1}
+    + z_t * c_t with z_t = sigmoid(W_z x_t + b_z) and c_t = W_c x_t + b_c.
 
-    features: int
-    in_features: int
-    use_bias: bool
-    kernel_init: nn.initializers.Initializer
-
-    @nn.compact
-    def __call__(self) -> tuple[jax.Array, jax.Array | None]:
-        kernel = self.param(
-            "kernel", self.kernel_init, (self.in_features, self.features)
-        )
-        if self.use_bias:
-            bias = self.param("bias", nn.initializers.zeros_init(), (self.features,))
-        else:
-            bias = None
-        return kernel, bias
-
-
-class SplitGRUCell(nn.Module):
-    """flax.linen.GRUCell with the input-side gate GEMMs SPLITTABLE.
-
-    Same math, same param tree (children ir/iz/in with bias + lecun init,
-    hr/hz/hn orthogonal recurrent init, hn biased -- mirrored from the
-    installed flax source), but the input projections can be applied to a
-    ROW-SLICE of each kernel. That is what lets the scan hoist the
-    precomputable part of its input over the whole history as one batched
-    GEMM and keep only the carry-dependent tail inside the serial chain --
-    the standard cuDNN-RNN restructure, in pure JAX (2026-09-01; table in
-    PerSlotHistoryEncoder.__call__).
+    Gate and candidate read the INPUT only -- never h_{t-1} -- so each
+    step is a per-channel affine map of the carry and the whole sequence
+    is an associative scan (gated_linear_scan) of depth O(log H) instead
+    of a serial chain of H dependent kernels. That is what the GRU it
+    replaces (2026-09-02) could not offer: its scan sat on a ~26us/step
+    dependency-latency floor that hoisting (-8.6%) and unrolling could
+    not move. The price is the candidate's blindness to the carry,
+    accepted for windows of 256-512 steps; the RG-LRU form (a learned
+    per-channel decay in place of 1 - z_t) is the recorded fallback.
+    Selectivity is kept: z_t is input-dependent, so a slot writes what
+    its own message says to write. Coefficients are emitted in the
+    compute dtype and the scan runs them in f32.
     """
 
     features: int
-    input_features: int
     dtype: jnp.dtype
 
-    def setup(self):
-        lecun = nn.initializers.lecun_normal()
-        orthogonal = nn.initializers.orthogonal()
+    @nn.compact
+    def __call__(self, xs: jax.Array) -> tuple[jax.Array, jax.Array]:
+        """xs (..., W) -> (write gate z, candidate c), each (..., features)."""
+        gate = nn.sigmoid(
+            nn.Dense(features=self.features, dtype=self.dtype, name="gate")(xs)
+        )
+        candidate = nn.Dense(
+            features=self.features, dtype=self.dtype, name="candidate"
+        )(xs)
+        return gate, candidate
 
-        def input_gate(name):
-            return _GateParams(
-                features=self.features,
-                in_features=self.input_features,
-                use_bias=True,
-                kernel_init=lecun,
-                name=name,
-            )
 
-        def hidden_gate(name, use_bias):
-            return _GateParams(
-                features=self.features,
-                in_features=self.features,
-                use_bias=use_bias,
-                kernel_init=orthogonal,
-                name=name,
-            )
+def gated_linear_scan(
+    gate: jax.Array, candidate: jax.Array, write: jax.Array, initial: jax.Array
+) -> jax.Array:
+    """States after each step of h_t = a_t * h_{t-1} + b_t, in parallel.
 
-        self.gate_ir = input_gate("ir")
-        self.gate_iz = input_gate("iz")
-        self.gate_in = input_gate("in")
-        self.gate_hr = hidden_gate("hr", use_bias=False)
-        self.gate_hz = hidden_gate("hz", use_bias=False)
-        self.gate_hn = hidden_gate("hn", use_bias=True)
+    gate/candidate (H, N, D) from GatedLinearCell; write (H, N) -- 1 where
+    step t writes unit n, 0 where it leaves it (an untouched slot, an
+    invalid step), which folds in as the identity map (a, b) = (1, 0) so a
+    never-written unit holds `initial` EXACTLY; initial (N, D). Two
+    steps compose as ((a1, b1), (a2, b2)) -> (a1 * a2, a2 * b1 + b2), which
+    is associative, so jax.lax.associative_scan gives every prefix
+    (A_t, B_t) and h_t = A_t * h_0 + B_t. Runs in f32: the coefficient
+    products compound bf16 reassociation across log2(H) levels (the
+    precision ledger's value-recursion rule); returns f32 (H, N, D).
+    """
+    write = write.astype(jnp.float32)[..., None]
+    decay = 1.0 - write * gate.astype(jnp.float32)
+    drive = write * gate.astype(jnp.float32) * candidate.astype(jnp.float32)
 
-    def _input_slice(self, xs, start, with_bias):
-        """(i_r, i_z, i_n) contributions of input columns [start:start+W),
-        where W = xs.shape[-1]. Bias is added iff `with_bias` -- exactly
-        once across the slices of a full input."""
-        width = xs.shape[-1]
-        xs = xs.astype(self.dtype)
-        outs = []
-        for gate in (self.gate_ir, self.gate_iz, self.gate_in):
-            kernel, bias = gate()
-            part = xs @ kernel[start : start + width].astype(self.dtype)
-            if with_bias:
-                part = part + bias.astype(self.dtype)
-            outs.append(part)
-        return tuple(outs)
+    def compose(earlier, later):
+        decay_earlier, drive_earlier = earlier
+        decay_later, drive_later = later
+        return decay_earlier * decay_later, decay_later * drive_earlier + drive_later
 
-    def project_inputs(self, xs):
-        """The hoisted half: gate contributions of the leading input columns
-        (all of them if xs is full width), bias included."""
-        return self._input_slice(xs, 0, with_bias=True)
-
-    def project_carry_inputs(self, xs, start):
-        """The serial half: gate contributions of the carry-dependent input
-        columns starting at `start`. No bias -- project_inputs carried it."""
-        return self._input_slice(xs, start, with_bias=False)
-
-    def advance(self, h, input_gates):
-        """The recurrent half, given precomputed input-side gates."""
-        i_r, i_z, i_n = input_gates
-        h = h.astype(self.dtype)
-
-        def hidden(gate):
-            kernel, bias = gate()
-            out = h @ kernel.astype(self.dtype)
-            if bias is not None:
-                out = out + bias.astype(self.dtype)
-            return out
-
-        r = nn.sigmoid(i_r + hidden(self.gate_hr))
-        z = nn.sigmoid(i_z + hidden(self.gate_hz))
-        n = nn.tanh(i_n + r * hidden(self.gate_hn))
-        return (1.0 - z) * n + z * h
+    cum_decay, cum_drive = jax.lax.associative_scan(compose, (decay, drive), axis=0)
+    return cum_decay * initial.astype(jnp.float32)[None] + cum_drive
 
 
 class PerSlotHistoryEncoder(nn.Module):
@@ -413,27 +403,20 @@ class PerSlotHistoryEncoder(nn.Module):
             dtype=self.cfg.dtype,
             name="step_attention",
         )
-        # SplitGRUCell, not nn.GRUCell: same math, same param tree, but the
-        # input-side gate GEMMs can be hoisted out of the scan (see
-        # __call__). The slot input is [messages ; field_vec ; flat_field]
-        # = 5D wide, of which the first 2D are precomputable per step and
-        # the trailing 3D (the three field states) depend on the carry. A
-        # mean over the other slots' states used to ride here too (the
-        # "gestalt"); it was redundant with flat_field -- which is fed the
-        # SUM of every message -- and with the trunk's read-time attention
-        # over the HISTORY_ENTITY rows, and it was on the serial tail
-        # (deleted 2026-09-02).
-        self.slot_cell = SplitGRUCell(
-            entity_size,
-            input_features=5 * entity_size,
-            dtype=self.cfg.dtype,
-            name="slot_cell",
+        # Two gated linear cells, two parallel scans, zero serial work
+        # (2026-09-02; see _recur). The slot input is [messages ;
+        # field_vec ; flat_field_{t-1}] = 5D wide -- the three field states
+        # after the PREVIOUS step, exactly the carry the GRU read, now an
+        # input column because the field scan runs first. A mean over the
+        # other slots' states used to ride here too (the "gestalt"); it
+        # was redundant with flat_field -- which is fed the SUM of every
+        # message -- and with the trunk's read-time attention over the
+        # HISTORY_ENTITY rows (deleted 2026-09-02).
+        self.slot_cell = GatedLinearCell(
+            entity_size, dtype=self.cfg.dtype, name="slot_cell"
         )
-        self.field_cell = SplitGRUCell(
-            entity_size,
-            input_features=2 * entity_size,
-            dtype=self.cfg.dtype,
-            name="field_cell",
+        self.field_cell = GatedLinearCell(
+            entity_size, dtype=self.cfg.dtype, name="field_cell"
         )
 
     def initial_state(self) -> tuple[jax.Array, jax.Array]:
@@ -443,40 +426,58 @@ class PerSlotHistoryEncoder(nn.Module):
         h_field = self.initial_field_state.astype(self.cfg.dtype)
         return h_slots, h_field
 
-    def _scan_step(self, carry, xs):
-        """One history step -- ONLY the carry-dependent work.
+    def _recur(
+        self,
+        slot_inputs: jax.Array,
+        field_inputs: jax.Array,
+        touched: jax.Array,
+        step_valid: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """The recurrent half: (H, 12, 2D) precomputed slot inputs
+        [messages ; field_vec], (H, 3, 2D) field inputs, (H, 12) bool
+        touched, (H,) bool step_valid -> ((H, 12, D), (H, 3, D)) states
+        after each step, in the compute dtype, plus the (H, 12) mean slot
+        write gate (telemetry: pinned at 0 or 1 is the collapse shape).
 
-        Everything else that used to live here (the per-step segment_sums
-        into slot messages, the latest-node bookkeeping, the input-side gate
-        GEMMs) is precomputed over the whole history in __call__ as batched
-        ops: ~35 GFLOP delivered as one GEMM stream instead of hundreds of
-        dependent 12-row kernels. What remains per step is irreducibly
-        serial: the carry-dependent slice of the slot input (flat_field,
-        shared by all 12 slots, so ONE 3D-wide row), the recurrent gate
-        GEMMs, and the gating.
+        Field scan first -- its inputs are all precomputed -- then its
+        states, shifted one step back (the state BEFORE step t, i.e. the
+        GRU's carry), become the trailing 3D columns of the slot input,
+        and the slot scan follows. A slot reads its own state, its own
+        input and the field states, never another slot's: the scan is a
+        per-unit affine map, so that is by construction, and the tests
+        pin it with controls. Invalid steps and untouched slots write
+        nothing (the identity coefficient).
         """
-        h_slots, h_field = carry
-        slot_pre, field_gates, touched, valid = xs
-
-        # The carry-dependent tail of the slot input: the three field
-        # states, identical for every slot -- projected once as a single
-        # row and broadcast, where the old cell multiplied the same values
-        # through the kernel 12 times.
-        flat_field = h_field.reshape(-1)[None]
-        carry_gates = self.slot_cell.project_carry_inputs(
-            flat_field, start=2 * self.cfg.entity_size
+        h0_slots, h0_field = self.initial_state()
+        field_gate, field_candidate = self.field_cell(field_inputs)
+        field_write = jnp.broadcast_to(step_valid[:, None], field_gate.shape[:2])
+        field_states = gated_linear_scan(
+            field_gate, field_candidate, field_write, h0_field
+        )  # (H, 3, D) f32
+        # (H, 3D): the field states BEFORE each step -- the GRU's carry.
+        previous_field = jnp.concatenate(
+            (h0_field[None], field_states[:-1]), axis=0
+        ).reshape(field_states.shape[0], -1)
+        slot_gate, slot_candidate = self.slot_cell(
+            jnp.concatenate(
+                (
+                    slot_inputs,
+                    jnp.broadcast_to(
+                        previous_field.astype(slot_inputs.dtype)[:, None],
+                        slot_inputs.shape[:2] + previous_field.shape[-1:],
+                    ),
+                ),
+                axis=-1,
+            )
         )
-        slot_gates = tuple(pre + tail for pre, tail in zip(slot_pre, carry_gates))
-
-        new_slots = self.slot_cell.advance(h_slots, slot_gates)
-        slot_gate = (touched * valid)[..., None]
-        h_slots = slot_gate * new_slots + (1 - slot_gate) * h_slots
-
-        new_field = self.field_cell.advance(h_field, field_gates)
-        h_field = valid * new_field + (1 - valid) * h_field
-
-        carry = (h_slots, h_field)
-        return carry, carry
+        slot_states = gated_linear_scan(
+            slot_gate, slot_candidate, touched & step_valid[:, None], h0_slots
+        )  # (H, 12, D) f32
+        return (
+            slot_states.astype(self.cfg.dtype),
+            field_states.astype(self.cfg.dtype),
+            slot_gate.mean(-1),
+        )
 
     def __call__(
         self,
@@ -567,17 +568,11 @@ class PerSlotHistoryEncoder(nn.Module):
         )
 
         # ---- batched precompute (2026-09-01) -----------------------------
-        # Everything the old per-step _observe_step did that does not read
-        # the carry, done once over the whole history: the edge scatter
-        # (vmapped segment_sums), the
-        # latest-node stream (a last-touched-value recurrence, solved in
-        # parallel by a cummax over touched step indices + one gather), and
-        # the input-side GRU gate GEMMs (the hoist -- one (H*rows, width)
-        # GEMM per gate instead of hundreds of 12-row kernels in the serial
-        # chain). Measured on the standalone bench: -33% to -38% fwd+bwd on
-        # the scan at H 256-512; scan share of the actor forward was 34-56%
-        # at the common buckets.
-        valid_f = step_valid.astype(messages.dtype)
+        # Everything that does not read a carry, done once over the whole
+        # history as batched ops: the edge scatter (vmapped segment_sums)
+        # and the latest-node stream (a last-touched-value recurrence,
+        # solved in parallel by a cummax over touched step indices + one
+        # gather). The recurrences themselves are parallel scans (_recur).
         seg = jnp.where(edge_mask & step_valid[:, None], slot_ids, NUM_PUBLIC_SLOTS)
 
         def scatter_step(step_messages, step_nodes, step_seg):
@@ -625,40 +620,20 @@ class PerSlotHistoryEncoder(nn.Module):
             axis=-2,
         )  # (H, 3, D)
 
-        # The hoisted input-side gate GEMMs. Slot input layout is
-        # [messages ; field_vec ; flat_field]; the first 2D columns are
-        # precomputable (projected here, bias included), the carry tail is
-        # projected inside the step. The field input is FULLY precomputable.
-        def per_slot_stream(x):
-            return jnp.broadcast_to(x[:, None, :], slot_messages.shape)
-
-        slot_pre_inputs = jnp.concatenate(
-            (slot_messages, per_slot_stream(field_step_embeddings)), axis=-1
+        slot_inputs = jnp.concatenate(
+            (
+                slot_messages,
+                jnp.broadcast_to(
+                    field_step_embeddings[:, None, :], slot_messages.shape
+                ),
+            ),
+            axis=-1,
         )  # (H, 12, 2D)
-        slot_pre_gates = self.slot_cell.project_inputs(slot_pre_inputs)
         field_inputs = jnp.concatenate(
             (field_row_embeddings.astype(self.cfg.dtype), side_messages), axis=-1
         )  # (H, 3, 2D)
-        field_gates = self.field_cell.project_inputs(field_inputs)
-
-        observe = nn.scan(
-            type(self)._scan_step,
-            variable_broadcast="params",
-            split_rngs={"params": False},
-            in_axes=0,
-            out_axes=0,
-            unroll=SCAN_UNROLL,
-        )
-        h0_slots, h0_field = self.initial_state()
-        _, (slot_snapshots, field_snapshots) = observe(
-            self,
-            (h0_slots, h0_field),
-            (
-                slot_pre_gates,
-                field_gates,
-                touched.astype(h0_slots.dtype),
-                valid_f,
-            ),
+        slot_snapshots, field_snapshots, step_slot_gate = self._recur(
+            slot_inputs, field_inputs, touched, step_valid
         )
 
         return PerSlotHistoryOutput(
@@ -670,6 +645,8 @@ class PerSlotHistoryEncoder(nn.Module):
             step_attention_probs=step_attention_probs,
             step_row_mask=edge_mask,
             step_source_rows=is_src,
+            step_slot_gate=step_slot_gate,
+            step_touched=touched,
         )
 
     def state_at_requests(

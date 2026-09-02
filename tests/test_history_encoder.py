@@ -1,11 +1,13 @@
-"""`PerSlotHistoryEncoder` structural pins, at the scan-step and step-GAT
+"""`PerSlotHistoryEncoder` structural pins, at the recurrence and step-GAT
 level so they run without the shared model fixture.
 
-The gestalt (a mean over the other slots' states fed to every slot's
-input) was deleted 2026-09-02: within one history step, slot k's update
-must read its OWN state, its own precomputed input and the field states
--- never another slot's state. The two controls prove the pin can fail:
-the field carry moves every slot, and a slot's own carry moves itself.
+The recurrence (2026-09-02): two gated linear scans, field first. Slot k's
+state must read its OWN input, its own past and the field states -- never
+another slot's (the gestalt mean was deleted the same day), and the field
+never reads a slot. The controls prove each pin can fail: the field input
+moves every slot, and a slot's own input moves itself. The scan itself is
+pinned against a serial lax.scan of the same recurrence, and a unit no
+step writes holds its initial state bit-exactly.
 """
 
 import jax
@@ -19,15 +21,17 @@ from rl.model.history_encoder import (
     NUM_FIELD_ROWS,
     PerSlotHistoryEncoder,
     StepAttention,
+    gated_linear_scan,
 )
 
 ENTITY_SIZE = 32
 NUM_HEADS = 2
 QK_SIZE = 8
+HISTORY = 6
 
 
 @pytest.fixture(scope="module")
-def scan_step():
+def recur():
     cfg = ConfigDict(
         dict(
             entity_size=ENTITY_SIZE,
@@ -36,65 +40,104 @@ def scan_step():
         )
     )
     module = PerSlotHistoryEncoder(cfg)
-    key = jax.random.key(0)
-    key_params, key_slots, key_field, key_pre, key_gates = jax.random.split(key, 5)
-    h_slots = jax.random.normal(key_slots, (NUM_PUBLIC_SLOTS, ENTITY_SIZE))
-    h_field = jax.random.normal(key_field, (NUM_FIELD_ROWS, ENTITY_SIZE))
-    slot_pre = tuple(
-        jax.random.normal(k, (NUM_PUBLIC_SLOTS, ENTITY_SIZE))
-        for k in jax.random.split(key_pre, 3)
+    key_params, key_slots, key_field = jax.random.split(jax.random.key(0), 3)
+    slot_inputs = jax.random.normal(
+        key_slots, (HISTORY, NUM_PUBLIC_SLOTS, 2 * ENTITY_SIZE)
     )
-    field_gates = tuple(
-        jax.random.normal(k, (NUM_FIELD_ROWS, ENTITY_SIZE))
-        for k in jax.random.split(key_gates, 3)
+    field_inputs = jax.random.normal(
+        key_field, (HISTORY, NUM_FIELD_ROWS, 2 * ENTITY_SIZE)
     )
-    touched = jnp.ones((NUM_PUBLIC_SLOTS,), jnp.float32)
-    valid = jnp.asarray(1.0, jnp.float32)
-    xs = (slot_pre, field_gates, touched, valid)
+    touched = jnp.ones((HISTORY, NUM_PUBLIC_SLOTS), bool)
+    step_valid = jnp.ones((HISTORY,), bool)
     params = module.init(
-        key_params, (h_slots, h_field), xs, method=PerSlotHistoryEncoder._scan_step
+        key_params,
+        slot_inputs,
+        field_inputs,
+        touched,
+        step_valid,
+        method=PerSlotHistoryEncoder._recur,
     )
-    step = jax.jit(
-        lambda carry: module.apply(
-            params, carry, xs, method=PerSlotHistoryEncoder._scan_step
-        )[0]
-    )
-    return step, (h_slots, h_field)
+
+    @jax.jit
+    def run(slot_inputs, field_inputs, touched=touched, step_valid=step_valid):
+        return module.apply(
+            params,
+            slot_inputs,
+            field_inputs,
+            touched,
+            step_valid,
+            method=PerSlotHistoryEncoder._recur,
+        )
+
+    return run, slot_inputs, field_inputs
 
 
-def _perturb_rows(states, rows, scale=1.0):
-    bump = jnp.zeros_like(states).at[rows].set(scale)
-    return states + bump
-
-
-def test_slot_update_never_reads_another_slots_state(scan_step):
-    step, (h_slots, h_field) = scan_step
-    base_slots, _ = step((h_slots, h_field))
-    moved_slots, _ = step((_perturb_rows(h_slots, 3), h_field))
+def test_slot_never_reads_another_slot(recur):
+    run, slot_inputs, field_inputs = recur
+    base_slots, _, _ = run(slot_inputs, field_inputs)
+    moved_slots, _, _ = run(slot_inputs.at[:, 3].add(1.0), field_inputs)
     others = np.arange(NUM_PUBLIC_SLOTS) != 3
     np.testing.assert_array_equal(
-        np.asarray(base_slots)[others], np.asarray(moved_slots)[others]
+        np.asarray(base_slots)[:, others], np.asarray(moved_slots)[:, others]
     )
-    # Positive control 1: the perturbed slot itself moves.
-    assert np.abs(np.asarray(moved_slots - base_slots)[3]).max() > 1e-3
+    # Positive control 1: the perturbed slot itself moves, at every step.
+    per_step = np.abs(np.asarray(moved_slots - base_slots)[:, 3]).max(axis=-1)
+    assert (per_step > 1e-3).all()
 
 
-def test_field_state_reaches_every_slot(scan_step):
-    """Positive control 2: the shared carry the slots DO read. If the pin
-    above passed because the step ignored its carry altogether, this
-    would fail."""
-    step, (h_slots, h_field) = scan_step
-    base_slots, _ = step((h_slots, h_field))
-    moved_slots, _ = step((h_slots, _perturb_rows(h_field, 0)))
-    per_slot = np.abs(np.asarray(moved_slots - base_slots)).max(axis=-1)
+def test_field_state_reaches_every_slot(recur):
+    """Positive control 2: the shared state the slots DO read. The field
+    state after step 0 is an input of every slot from step 1 on."""
+    run, slot_inputs, field_inputs = recur
+    base_slots, _, _ = run(slot_inputs, field_inputs)
+    moved_slots, _, _ = run(slot_inputs, field_inputs.at[0, 0].add(1.0))
+    per_slot = np.abs(np.asarray(moved_slots - base_slots)[1:]).max(axis=-1)
     assert (per_slot > 1e-3).all()
+    np.testing.assert_array_equal(np.asarray(base_slots)[0], np.asarray(moved_slots)[0])
 
 
-def test_field_update_never_reads_slot_states(scan_step):
-    step, (h_slots, h_field) = scan_step
-    _, base_field = step((h_slots, h_field))
-    _, moved_field = step((h_slots + 1.0, h_field))
+def test_field_never_reads_slot_states(recur):
+    run, slot_inputs, field_inputs = recur
+    _, base_field, _ = run(slot_inputs, field_inputs)
+    _, moved_field, _ = run(slot_inputs + 1.0, field_inputs)
     np.testing.assert_array_equal(np.asarray(base_field), np.asarray(moved_field))
+
+
+def test_gated_linear_scan_matches_serial_recurrence():
+    key_gate, key_cand, key_write, key_init = jax.random.split(jax.random.key(3), 4)
+    shape = (37, 5, 8)
+    gate = jax.nn.sigmoid(jax.random.normal(key_gate, shape))
+    candidate = jax.random.normal(key_cand, shape)
+    write = jax.random.bernoulli(key_write, 0.6, shape[:2])
+    initial = jax.random.normal(key_init, shape[1:])
+
+    def serial_step(state, inputs):
+        step_gate, step_candidate, step_write = inputs
+        effective = step_write[:, None] * step_gate
+        state = (1.0 - effective) * state + effective * step_candidate
+        return state, state
+
+    _, expected = jax.lax.scan(
+        serial_step, initial, (gate, candidate, write.astype(jnp.float32))
+    )
+    actual = jax.jit(gated_linear_scan)(gate, candidate, write, initial)
+    assert actual.dtype == jnp.float32
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5)
+
+
+def test_unwritten_units_hold_initial_exactly():
+    key_gate, key_cand, key_init = jax.random.split(jax.random.key(4), 3)
+    shape = (16, 4, 8)
+    gate = jax.nn.sigmoid(jax.random.normal(key_gate, shape))
+    candidate = jax.random.normal(key_cand, shape)
+    initial = jax.random.normal(key_init, shape[1:])
+    write = jnp.ones(shape[:2], bool).at[:, 2].set(False).at[5:, :].set(False)
+    states = np.asarray(jax.jit(gated_linear_scan)(gate, candidate, write, initial))
+    np.testing.assert_array_equal(states[:, 2], np.broadcast_to(initial[2], (16, 8)))
+    # from step 5 on nothing writes: every unit holds its step-4 state
+    np.testing.assert_array_equal(states[5:], np.broadcast_to(states[4], (11, 4, 8)))
+    # control: a written unit does leave its initial state
+    assert np.abs(states[0, 0] - np.asarray(initial[0])).max() > 1e-3
 
 
 # ---- the step GAT ---------------------------------------------------------
