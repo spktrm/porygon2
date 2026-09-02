@@ -56,14 +56,13 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
     PlayerAgentOutput,
 )
-from rl.environment.utils import _bucket_level, _bucket_value
+from rl.environment.utils import (
+    ACTOR_HISTORY_MIN_LENGTH,
+    _bucket_level,
+    _bucket_value,
+)
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
-
-# Must match PlayerActor.clip_actor_history's min_length: incoming history
-# lengths are that clip's geometric bucket values, and the shared level
-# below re-buckets against the same base.
-_HISTORY_MIN_LENGTH = 64
 
 
 @dataclasses.dataclass
@@ -271,8 +270,8 @@ class InferenceServer:
         field_len = request.actor_input.history.field.shape[0]
         packed_len = request.actor_input.packed_history.revealed_cache.shape[0]
         return max(
-            _bucket_level(field_len, _HISTORY_MIN_LENGTH),
-            _bucket_level(packed_len, _HISTORY_MIN_LENGTH),
+            _bucket_level(field_len, ACTOR_HISTORY_MIN_LENGTH),
+            _bucket_level(packed_len, ACTOR_HISTORY_MIN_LENGTH),
         )
 
     def _run_group(self, group: "list[_InferenceRequest]") -> None:
@@ -295,8 +294,8 @@ class InferenceServer:
         # own natural maximum exactly like the learner's version —
         # capping only ever pads less, never truncates data.
         level = self._history_level(group[0])
-        history_target = _bucket_value(level, _HISTORY_MIN_LENGTH, NUM_HISTORY)
-        packed_target = _bucket_value(level, _HISTORY_MIN_LENGTH, 2 * NUM_HISTORY)
+        history_target = _bucket_value(level, ACTOR_HISTORY_MIN_LENGTH, NUM_HISTORY)
+        packed_target = _bucket_value(level, ACTOR_HISTORY_MIN_LENGTH, 2 * NUM_HISTORY)
 
         with timed(self._stats, "actor_infer_stack"):
             stacked = PlayerActorInput(

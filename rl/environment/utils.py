@@ -320,6 +320,71 @@ def clip_history_windows_tail(
     )
 
 
+# The actor path's geometric-bucket base for BOTH history axes: the actor
+# clips to these bucket values and the inference server re-buckets the
+# batch against the same base (a shared level per group), so the two must
+# agree -- written once, read by both.
+ACTOR_HISTORY_MIN_LENGTH = 64
+
+
+def clip_history_suffix(
+    actor_input: PlayerActorInput,
+    last_step_index: int,
+    min_length: int = ACTOR_HISTORY_MIN_LENGTH,
+) -> tuple[PlayerActorInput | None, int]:
+    """The actor's incremental window: the field steps AFTER absolute step
+    ``last_step_index`` (FIELD_FEATURE__INDEX, the carry's last consumed
+    step; -1 = nothing consumed) and exactly the packed rows they reference,
+    each axis rounded up to its own geometric bucket -> (the clipped input,
+    the number of new steps). Returns (None, 0) when the window cannot be
+    resumed from that point -- the carried step is neither in the window
+    nor immediately before it -- and the caller recomputes from scratch.
+    Zero new steps is a valid suffix: an all-zero window, from which the
+    encoder returns the carry itself."""
+    field = np.asarray(actor_input.history.field)
+    valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
+    index = field[:valid_steps, FieldFeature.FIELD_FEATURE__INDEX]
+    first = int(np.searchsorted(index, last_step_index, side="right"))
+    if first == 0:
+        if valid_steps == 0:
+            contiguous = last_step_index == -1
+        else:
+            contiguous = int(index[0]) == last_step_index + 1
+    else:
+        contiguous = int(index[first - 1]) == last_step_index
+    if not contiguous:
+        return None, 0
+
+    keep_steps = valid_steps - first
+    packed_end = _packed_valid_rows(actor_input.packed_history)
+    if keep_steps > 0:
+        start_row = int(field[first, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0])
+    else:
+        start_row = packed_end
+    history_rows = _bucket_value(
+        _bucket_level(keep_steps, min_length), min_length, field.shape[0]
+    )
+    packed_rows = _bucket_value(
+        _bucket_level(packed_end - start_row, min_length),
+        min_length,
+        actor_input.packed_history.revealed_cache.shape[0],
+    )
+    history, packed_history = _cut_history_windows(
+        actor_input.history,
+        actor_input.packed_history,
+        start_step=first,
+        keep_steps=keep_steps,
+        start_row=start_row,
+        packed_end=packed_end,
+        history_rows=history_rows,
+        packed_rows=packed_rows,
+    )
+    return (
+        actor_input.replace(history=history, packed_history=packed_history),
+        keep_steps,
+    )
+
+
 def _cells_from_structured_mask(mask: ActionMask) -> np.ndarray:
     """The block-space legal mask (NUM_ACTION_CELLS,) from the wire's mask.
 

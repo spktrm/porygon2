@@ -15,6 +15,7 @@ from rl.environment.interfaces import (
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import (
+    ACTOR_HISTORY_MIN_LENGTH,
     NUM_PACKED_SET_FEATURES,
     clip_history,
     clip_history_windows_tail,
@@ -100,7 +101,9 @@ class PlayerActor:
         # opponent side is never trainable.
         self._pinned_opponent = pinned_opponent
 
-    def clip_actor_history(self, timestep: PlayerActorInput, min_length: int = 64):
+    def clip_actor_history(
+        self, timestep: PlayerActorInput, min_length: int = ACTOR_HISTORY_MIN_LENGTH
+    ):
         return PlayerActorInput(
             env=timestep.env,
             packed_history=clip_packed_history(
