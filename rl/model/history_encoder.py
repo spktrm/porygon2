@@ -323,12 +323,17 @@ class PerSlotHistoryEncoder(nn.Module):
         )
         # SplitGRUCell, not nn.GRUCell: same math, same param tree, but the
         # input-side gate GEMMs can be hoisted out of the scan (see
-        # __call__). The slot input is [messages ; field_vec ; ctx ;
-        # flat_field] = 6D wide, of which the first 2D are precomputable
-        # per step and the trailing 4D depend on the carry.
+        # __call__). The slot input is [messages ; field_vec ; flat_field]
+        # = 5D wide, of which the first 2D are precomputable per step and
+        # the trailing 3D (the three field states) depend on the carry. A
+        # mean over the other slots' states used to ride here too (the
+        # "gestalt"); it was redundant with flat_field -- which is fed the
+        # SUM of every message -- and with the trunk's read-time attention
+        # over the HISTORY_ENTITY rows, and it was on the serial tail
+        # (deleted 2026-09-02).
         self.slot_cell = SplitGRUCell(
             entity_size,
-            input_features=6 * entity_size,
+            input_features=5 * entity_size,
             dtype=self.cfg.dtype,
             name="slot_cell",
         )
@@ -354,22 +359,20 @@ class PerSlotHistoryEncoder(nn.Module):
         GEMMs) is precomputed over the whole history in __call__ as batched
         ops: ~35 GFLOP delivered as one GEMM stream instead of hundreds of
         dependent 12-row kernels. What remains per step is irreducibly
-        serial: the carry-dependent slice of the slot input ([ctx ;
-        flat_field], shared by all 12 slots, so ONE 4D-wide row), the
-        recurrent gate GEMMs, and the gating.
+        serial: the carry-dependent slice of the slot input (flat_field,
+        shared by all 12 slots, so ONE 3D-wide row), the recurrent gate
+        GEMMs, and the gating.
         """
         h_slots, h_field = carry
         slot_pre, field_gates, touched, valid = xs
 
-        # The carry-dependent tail of the slot input: battle gestalt + the
-        # three field states, identical for every slot -- projected once as
-        # a single row and broadcast, where the old cell multiplied the same
-        # values through the kernel 12 times.
-        ctx = h_slots.mean(axis=-2)
-        flat_field = h_field.reshape(-1)
-        carry_vec = jnp.concatenate((ctx, flat_field))[None]
+        # The carry-dependent tail of the slot input: the three field
+        # states, identical for every slot -- projected once as a single
+        # row and broadcast, where the old cell multiplied the same values
+        # through the kernel 12 times.
+        flat_field = h_field.reshape(-1)[None]
         carry_gates = self.slot_cell.project_carry_inputs(
-            carry_vec, start=2 * self.cfg.entity_size
+            flat_field, start=2 * self.cfg.entity_size
         )
         slot_gates = tuple(pre + tail for pre, tail in zip(slot_pre, carry_gates))
 
@@ -531,7 +534,7 @@ class PerSlotHistoryEncoder(nn.Module):
         )  # (H, 3, D)
 
         # The hoisted input-side gate GEMMs. Slot input layout is
-        # [messages ; field_vec ; ctx ; flat_field]; the first 2D columns are
+        # [messages ; field_vec ; flat_field]; the first 2D columns are
         # precomputable (projected here, bias included), the carry tail is
         # projected inside the step. The field input is FULLY precomputable.
         def per_slot_stream(x):
