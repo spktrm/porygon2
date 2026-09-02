@@ -1051,7 +1051,47 @@ steps/sec at 1k-4k / 4k-8k / 8k-13.8k, vs d7zdz8hw 3.66 and yt3qp960
 comes from the relaunch itself: a bounded `player_actor_history_carry=
 False` window on the SAME code (the timers live, the carry off), then
 the carry on — the matched pair the speed comparison is read from.
-Numbers to be appended here once both windows have run.
+**Matched pair, read 2026-09-02** (same code, same box, irqeetfg resumed
+from ckpt_00042422; OFF = lifetime_step 43.0k-47.66k, ON = 47.9k-49.4k;
+window means over the 10-step drains, ms):
+
+| | carry OFF | carry ON | |
+|---|---|---|---|
+| `learner_steps_per_sec` (system rate) | 5.18 | 5.60 | **+8%** |
+| `actor_steps_per_sec` (pool) | 77.7 | 86.7 | **+11%** |
+| `actor_time_step_total` | 199 | 176 | -11% |
+| `actor_time_inference` | 170 | 147 | -13% |
+| `actor_infer_queue_wait` | 118 | 76 | **-36%** |
+| `actor_infer_forward` | 33.1 | 47.9 | +45% (see below) |
+| `actor_infer_batch_size` | 2.94 | 4.74 | |
+| `actor_infer_forward` PER REQUEST | 11.2 | 10.1 | -10% |
+| `actor_infer_lock_wait` | 12.1 | 17.4 | |
+| `actor_infer_history_level` | 1.42 | 0.004 | as designed |
+| `actor_time_history_clip` | 0.27 | 1.17 | the suffix cut's python |
+| `actor_history_recompute_frac` | - | 0.035 (all game starts) | gate <= 0.05 PASS |
+| `actor_history_suffix_{steps,rows}` | - | 2.6 / 4.1 | ex.bin predicted ~3 / ~5 |
+| `player_learner_actor_forward_kl` | 0.008 | 0.007 | in band |
+| `player_replay_realised_ratio` | 8.00 | 8.00 | in band |
+| `player_policy_prob_switch` | 0.033 | 0.034 | unchanged |
+
+**Verdict: a real but modest win, and the "forward down by the history
+share" clause of the acceptance FAILED on its own instrument, for a
+reason the panel makes legible.** Every request now lands at level 0
+(32 rows), so the grouping key no longer scatters the queue across
+levels 1-2 and the server takes bigger groups (2.9 -> 4.7); the forward
+grew in absolute terms with the batch and shrank only 10% per request.
+The 34-56% history share was measured on an UNCONTENDED GPU; under a
+live learner the server's forward is dominated by stream contention
+(lock wait and forward both inflate with the train step), so removing
+the history compute moved the per-request forward by a tenth, not a
+third. The win that did arrive is in the QUEUE: -36% wait, which is
+what the actors actually spend a step on (queue 76 of 147 ms inference,
+of 176 ms step). Both windows also sit above irqeetfg's pre-stop
+4.17-4.41 (5.2 / 5.6) — the extra level-0 bucket and the restart are
+confounded there; only the OFF-vs-ON pair is the clean read. Next lever
+by measurement, not this pass: the server's serial loop under GPU
+contention (queue + lock + forward = 141 of 147 ms), i.e. the learner's
+train step and the actor forward sharing one device stream.
 
 ## Investigation ledger — 2026-09-01 flash attention: measured, declined
 
