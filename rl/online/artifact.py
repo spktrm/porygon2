@@ -515,22 +515,50 @@ def load_from_checkpoint(
         # Fallback if league is missing in ckpt
         league = _init_league(learner_config, player_state, builder_state)
 
+    # Every tree is merged BY PATH onto the fresh state's own (2026-09-02):
+    # a param leaf added since the checkpoint keeps its fresh init and, in
+    # the optimiser state, its fresh ZERO moments; a leaf the architecture
+    # no longer has is dropped rather than riding along dead in every
+    # checkpoint after. The manifest check above still refuses a genuinely
+    # different architecture; this handles the one-leaf deltas that used to
+    # force params mode -- and with it a fresh league and a fresh Adam.
     player_state = player_state.replace(
-        params=ckpt_player_state["params"],
-        target_params=ckpt_player_state["target_params"],
+        params=_merged(
+            "player params", player_state.params, ckpt_player_state["params"]
+        ),
+        target_params=_merged(
+            "player target_params",
+            player_state.target_params,
+            ckpt_player_state["target_params"],
+        ),
         # Checkpoints from before the reference policy existed seed it
         # from the target (KL 0 at resume; the next snap takes over from there).
-        reg_params=ckpt_player_state.get(
-            "reg_params", jax.tree.map(jnp.copy, ckpt_player_state["target_params"])
+        reg_params=_merged(
+            "player reg_params",
+            player_state.reg_params,
+            ckpt_player_state.get(
+                "reg_params",
+                jax.tree.map(jnp.copy, ckpt_player_state["target_params"]),
+            ),
         ),
-        opt_state=ckpt_player_state["opt_state"],
+        opt_state=merge_opt_state(
+            player_state.opt_state, ckpt_player_state["opt_state"]
+        ),
     )
     player_state = apply_player_scalars(player_state, player_scalars)
 
     builder_state = builder_state.replace(
-        params=ckpt_builder_state["params"],
-        target_params=ckpt_builder_state["target_params"],
-        opt_state=ckpt_builder_state["opt_state"],
+        params=_merged(
+            "builder params", builder_state.params, ckpt_builder_state["params"]
+        ),
+        target_params=_merged(
+            "builder target_params",
+            builder_state.target_params,
+            ckpt_builder_state["target_params"],
+        ),
+        opt_state=merge_opt_state(
+            builder_state.opt_state, ckpt_builder_state["opt_state"]
+        ),
         step_count=builder_scalars["step_count"],
         frame_count=builder_scalars["frame_count"],
     )
@@ -555,17 +583,18 @@ def load_from_checkpoint(
     )
 
 
-def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
+def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str], list[str]]:
     """Overlay checkpoint params onto a freshly initialized tree.
 
     Keys present in both trees with matching leaf shapes take the loaded
     (trained) value; keys only in the fresh tree (newly added modules) keep
     their random/zero init; keys only in the checkpoint (removed modules)
     are dropped; shape mismatches fall back to fresh init. Returns the
-    merged tree plus the paths that kept their fresh initialization, so a
-    resume across architecture changes is auditable.
+    merged tree plus the paths that kept their fresh initialization and
+    the paths dropped, so a resume across architecture changes is auditable.
     """
     kept_fresh: list[str] = []
+    dropped: list[str] = []
 
     def _merge(fresh_node, loaded_node, path: str):
         if isinstance(fresh_node, Mapping):
@@ -577,6 +606,10 @@ def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
                 else:
                     out[key] = fresh_child
                     kept_fresh.append(child_path)
+            if isinstance(loaded_node, Mapping):
+                for key in loaded_node:
+                    if key not in fresh_node:
+                        dropped.append(f"{path}/{key}")
             return out
         fresh_shape = getattr(fresh_node, "shape", None)
         loaded_shape = getattr(loaded_node, "shape", None)
@@ -585,7 +618,52 @@ def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
         kept_fresh.append(f"{path} (shape {loaded_shape} -> {fresh_shape})")
         return fresh_node
 
-    return _merge(fresh, loaded, ""), kept_fresh
+    return _merge(fresh, loaded, ""), kept_fresh, dropped
+
+
+def _merged(label: str, fresh: Params, loaded: Params) -> Params:
+    """merge_params with its audit printed: which paths kept fresh init and
+    which were dropped, under `label`, or nothing when the trees agree."""
+    merged, kept_fresh, dropped = merge_params(fresh, loaded)
+    for verb, paths in (("kept fresh init", kept_fresh), ("dropped", dropped)):
+        if paths:
+            tqdm.write(f"{label}: {len(paths)} subtrees {verb}:")
+            for path in paths:
+                tqdm.write(f"  {path}")
+    return merged
+
+
+def merge_opt_state(fresh, loaded):
+    """Overlay a checkpoint optimiser state onto a fresh one by param path.
+
+    optax states are (named) tuples whose param-shaped members are
+    Mappings: every Mapping node merges exactly as params do -- a leaf
+    added since the checkpoint keeps its fresh ZERO moments, a removed one
+    is dropped -- and every other leaf (the step counts) is the
+    checkpoint's. A container shape the two disagree on is a different
+    optimiser, not a param delta, and raises.
+    """
+    if isinstance(fresh, Mapping):
+        if not isinstance(loaded, Mapping):
+            raise ValueError(
+                f"optimiser state mismatch: {type(loaded)} for a param tree"
+            )
+        merged, _, _ = merge_params(fresh, loaded)
+        return merged
+    if isinstance(fresh, tuple):
+        if not isinstance(loaded, tuple) or len(fresh) != len(loaded):
+            raise ValueError(
+                f"optimiser state mismatch: {type(fresh).__name__}[{len(fresh)}] "
+                f"vs {type(loaded).__name__}[{len(loaded)}]"
+            )
+        merged = [
+            merge_opt_state(fresh_child, loaded_child)
+            for fresh_child, loaded_child in zip(fresh, loaded)
+        ]
+        if hasattr(fresh, "_fields"):
+            return type(fresh)(*merged)
+        return tuple(merged)
+    return loaded
 
 
 def apply_br_init(
@@ -672,17 +750,8 @@ def load_from_params(
     loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
     loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
 
-    player_params, player_kept_fresh = merge_params(
-        player_state.params, loaded_player_params
-    )
-    builder_params, builder_kept_fresh = merge_params(
-        builder_state.params, loaded_builder_params
-    )
-    for name, kept in (("player", player_kept_fresh), ("builder", builder_kept_fresh)):
-        if kept:
-            tqdm.write(f"{name}: {len(kept)} param subtrees kept fresh init:")
-            for path in kept:
-                tqdm.write(f"  {path}")
+    player_params = _merged("player", player_state.params, loaded_player_params)
+    builder_params = _merged("builder", builder_state.params, loaded_builder_params)
 
     player_params = apply_br_init(player_params, player_state.init_fn, learner_config)
 
