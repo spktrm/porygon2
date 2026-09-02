@@ -37,7 +37,6 @@ def test_opp_code_leaves_read_their_init(real_model_and_trajectory):
     for key in (
         "player_opp_code_logits_grad_norm",
         "player_opp_code_embedding_grad_norm",
-        "player_entity_index_tag_grad_norm",
     ):
         assert key in _GRAD_SUBTREES
         assert float(logs[key]) == 0.0, key

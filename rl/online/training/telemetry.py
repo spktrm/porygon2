@@ -283,27 +283,22 @@ _TRUNK_LEAVES = {
         ("encoder", "trunk", "blocks", "ffw", "Dense_1", "kernel"),
     ),
 }
-# The 2026-09-01 opponent-code / alignment-key leaves. The code trains ONLY
-# through the privileged value CE via a straight-through argmax, and the
-# belief head predicts it: `player_code_perplexity` cannot tell a random
-# hash at init from a trained code (both read ~8), so these are the panels
-# that can. Expected at init, all lecun 0.0625 at fan-in 256 (measured
-# 0.0627 / 0.0626 / 0.0634 / 0.0623): opp_code_logits is a Dense;
-# entity_index_tag (13, 256) is variance_scaling out_axis=0 so fan-in is
-# 256; opp_code_embedding (16, 16, 16) has in_axis=-2, fan-in 16*16 = 256.
-# Still 0.0625 tens of thousands of steps in = the leaf never trained and
-# whatever reads it is reading init noise. Straight-through gives
-# opp_code_embedding gradient on ONE row per (mon, group), so the whole-
-# table rms UNDERSTATES its drift and a perplexity-1 group shows as a single
-# row absorbing the grad norm -- read beside player_code_perplexity_min.
-# entity_index_tag is the join key the sheet rows carry to their board row;
-# rl/offline/history_addends.py measured it at 0.028 of the history row's
-# other addends on ckpt_00182000 (alarm < 0.05), so its growth here is what
-# would rescue that join.
+# The 2026-09-01 opponent-code leaves. The code trains ONLY through the
+# privileged value CE via a straight-through argmax, and the belief head
+# predicts it: `player_code_perplexity` cannot tell a random hash at init
+# from a trained code (both read ~8), so these are the panels that can.
+# Expected at init, all lecun 0.0625 at fan-in 256 (measured 0.0627 /
+# 0.0626 / 0.0623): opp_code_logits is a Dense; opp_code_embedding
+# (16, 16, 16) has in_axis=-2, fan-in 16*16 = 256. Still 0.0625 tens of
+# thousands of steps in = the leaf never trained and whatever reads it is
+# reading init noise. Straight-through gives opp_code_embedding gradient on
+# ONE row per (mon, group), so the whole-table rms UNDERSTATES its drift and
+# a perplexity-1 group shows as a single row absorbing the grad norm -- read
+# beside player_code_perplexity_min. (entity_index_tag was read here for one
+# day: it sat at 0.0661 after 182k steps and was deleted 2026-09-02.)
 _OPP_CODE_LEAVES = {
     "player_opp_code_logits_rms": (("encoder", "opp_code_logits", "kernel"),),
     "player_opp_code_embedding_rms": (("encoder", "opp_code_embedding"),),
-    "player_entity_index_tag_rms": (("encoder", "entity_index_tag"),),
     "player_belief_head_out_rms": (("belief_head", "Dense_2", "kernel"),),
 }
 # player_belief_head_gradient_norm already exists in train_step; not
@@ -313,7 +308,6 @@ _GRAD_SUBTREES = {
     "player_trunk_grad_norm": ("encoder", "trunk"),
     "player_opp_code_logits_grad_norm": ("encoder", "opp_code_logits"),
     "player_opp_code_embedding_grad_norm": ("encoder", "opp_code_embedding"),
-    "player_entity_index_tag_grad_norm": ("encoder", "entity_index_tag"),
 }
 
 

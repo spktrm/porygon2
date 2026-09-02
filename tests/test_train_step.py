@@ -140,11 +140,9 @@ def test_train_step_smoke():
         # noise with the same perplexity.
         "player_opp_code_logits_rms",
         "player_opp_code_embedding_rms",
-        "player_entity_index_tag_rms",
         "player_belief_head_out_rms",
         "player_opp_code_logits_grad_norm",
         "player_opp_code_embedding_grad_norm",
-        "player_entity_index_tag_grad_norm",
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",

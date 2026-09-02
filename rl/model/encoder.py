@@ -274,17 +274,6 @@ class Encoder(nn.Module):
             embedding_init,
             (code_groups, code_classes, entity_size // code_groups),
         )
-        # Shared identity tag over the STABLE entity index (identToIndex,
-        # revelation order across both sides): row 0 = never fielded /
-        # unrevealed filler, rows 1..12 = index + 1. Applied to public rows
-        # via PUBLIC_ORDER and to private rows via the wire's ENTITY_IDX, so
-        # a sheet row and the public row describing the same mon carry the
-        # SAME additive tag -- an exact correspondence the trunk can read,
-        # where the species match is forme-fragile and, under a my-side
-        # Illusion, actively wrong.
-        self.entity_index_tag = self.param(
-            "entity_index_tag", embedding_init, (NUM_PUBLIC_SLOTS + 1, entity_size)
-        )
         # Whose side a field token describes. Row 1 = mine, row 0 = theirs —
         # the SIDE convention, written once. Until 2026-08-28 these two
         # tokens borrowed pos_bias rows 1/0, but pos_bias is indexed by
@@ -1257,66 +1246,35 @@ class Encoder(nn.Module):
             env_step.private_team
         )
         private_rows = private_rows + self.private_side_bias.astype(private_rows.dtype)
-
-        # The shared identity tag (see setup): public rows keyed by
-        # PUBLIC_ORDER, private rows by the wire's ENTITY_IDX (already the
-        # +1 form, 0 = never fielded). A -1 (filler) public row keys row 0,
-        # same as a never-fielded reserve -- both mean "no public identity".
-        public_order = env_step.info[
-            InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
-            + 1
-        ]
-        public_tag_index = jnp.clip(public_order + 1, 0, NUM_PUBLIC_SLOTS)
-        public_rows = public_rows + jnp.take(
-            self.entity_index_tag, public_tag_index, axis=0
-        ).astype(public_rows.dtype)
-        private_tag_index = jnp.clip(
-            env_step.private_team[
-                :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
-            ],
-            0,
-            NUM_PUBLIC_SLOTS,
-        )
-        private_rows = private_rows + jnp.take(
-            self.entity_index_tag, private_tag_index, axis=0
-        ).astype(private_rows.dtype)
+        # No learned join key between a sheet row and its public row
+        # (entity_index_tag, 2026-08-31 -> 2026-09-02): it never trained
+        # (rms 0.0634 -> 0.0661 over 182k steps, ~3% of the row's norm) and
+        # a public-only read from the sheet row scored no higher after the
+        # trunk than before it, so the tag joined nothing. What relates the
+        # two rows is their shared content -- one species/ability/item/move
+        # embedder feeds both -- and the wire's ENTITY_IDX survives ONLY as
+        # the belief head's alignment (player_model.belief_alignment).
 
         # ---- history as its own rows (2026-09-01) --------------------------
         # Entity i's diary: GRU slot state + the latest raw node snapshot
         # (the TGN embedding module's memory + raw-features pair), aligned
-        # to public row i by Encoder.__call__'s PUBLIC_ORDER gather and
-        # tagged with the SAME entity_index_tag, so diary and board row
-        # share their join key. Group/row biases below give them their own
-        # identity.
-        history_entity_rows = (
-            history_row_states.astype(dtype)
-            + history_node_snapshots.astype(dtype)
-            + jnp.take(self.entity_index_tag, public_tag_index, axis=0).astype(dtype)
-        )
+        # to public row i by Encoder.__call__'s PUBLIC_ORDER gather; the
+        # group/row biases below are its identity, and row i's bias is what
+        # pairs it with public row i.
+        history_entity_rows = history_row_states.astype(
+            dtype
+        ) + history_node_snapshots.astype(dtype)
 
         # ---- the learner-only partition -----------------------------------
         # The opponent's request truth as discrete-code rows (see
-        # _opp_code_rows) with their OWN side bias and the SAME
-        # entity_index_tag as everything else, so a secret row and the
-        # public row describing the same mon carry the same additive
-        # identity for VALUE_CLS to join on. SEQUENCE_READ_MASK keeps every
-        # policy-readable row blind to these and to VALUE_CLS itself.
+        # _opp_code_rows) with their OWN side bias. SEQUENCE_READ_MASK keeps
+        # every policy-readable row blind to these and to VALUE_CLS itself.
         opp_private_rows, opp_private_valid, opp_code_one_hot = self._opp_code_rows(
             env_step.opp_private_team
         )
         opp_private_rows = opp_private_rows + self.opp_private_side_bias.astype(
             opp_private_rows.dtype
         )
-        opp_tag_index = jnp.clip(
-            env_step.opp_private_team[
-                :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
-            ],
-            0,
-            NUM_PUBLIC_SLOTS,
-        )
-        opp_private_rows = opp_private_rows + jnp.take(
-            self.entity_index_tag, opp_tag_index, axis=0
-        ).astype(opp_private_rows.dtype)
 
         # ---- my candidate moves, one row per action slot ------------------
         # Row k IS action slot MOVE_INDICES[k], carrying that slot's pp,
@@ -1661,8 +1619,8 @@ class Encoder(nn.Module):
     ):
         """The history pathway's four inputs to the sequence, in PUBLIC-ROW
         order: (row_states, order_valid, field_state, snapshot_rows). The
-        one place the slot-to-row alignment is written; the offline history
-        addend read (rl/offline/history_addends.py) calls it directly.
+        one place the slot-to-row alignment is written; offline reads call
+        it directly.
         """
         slot_states, field_state, node_snapshots = self.encode_history(
             env_step, packed_history_step, history_step

@@ -200,30 +200,21 @@ def test_private_condition_reaches_only_its_own_sheet_row(
     ].any(), "condition must be entity-local at assembly time"
 
 
-def test_entity_index_tag_links_private_to_public(real_model_and_trajectory):
-    """The alignment key: perturbing the shared entity_index_tag table moves
-    BOTH public and private rows (one table, applied twice), and changing a
-    private row's ENTITY_IDX on the wire moves only that row. idx 0 (never
-    fielded) keys the absent row, same as a filler public row."""
+def test_entity_idx_is_not_row_content(real_model_and_trajectory):
+    """The wire's ENTITY_IDX names a sheet row's public twin for the belief
+    head's alignment ONLY (player_model.belief_alignment): since the
+    entity_index_tag was deleted (2026-09-02) it enters no row, so rekeying
+    a private row leaves every assembled row bit-identical. The positive
+    control that the same column-set mechanism DOES move a row is the hp
+    test directly above."""
     from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
-    from rl.model.constants import PUBLIC_ROWS
 
     network, params, actor_input, _ = real_model_and_trajectory
     base = _assembled_rows(network, params, actor_input)
-
-    moved = _assembled_rows(
-        network, _perturbed(params, ("entity_index_tag",)), actor_input
-    )
-    assert not np.allclose(base[PRIVATE_ROWS], moved[PRIVATE_ROWS], atol=1e-6)
-    assert not np.allclose(base[PUBLIC_ROWS], moved[PUBLIC_ROWS], atol=1e-6)
-
     rekeyed_input = _with_private_column(
         actor_input,
         1,
         EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX,
         12,
     )
-    rekeyed = _assembled_rows(network, params, rekeyed_input)[PRIVATE_ROWS]
-    changed_rows = ~np.all(np.isclose(base[PRIVATE_ROWS], rekeyed, atol=1e-6), axis=-1)
-    assert changed_rows[1]
-    assert not changed_rows[[0, 2, 3, 4, 5]].any()
+    assert np.array_equal(base, _assembled_rows(network, params, rekeyed_input))

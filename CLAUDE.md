@@ -939,6 +939,34 @@ Also in this pass: player Adam eps 1e-8 -> 1e-5 (the reference diff's flagged
 proof that mass + strength coexist under a zero-avoider, and the measurement
 that priced the row form's WHICH-tax.
 
+## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
+
+The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by
+the wire's ENTITY_IDX and to its public row (and history row, and opp
+secret row) by PUBLIC_ORDER, so the two rows describing one mon carried
+the same additive tag for attention to match on. Three reads on
+ckpt_00182000, all one way (`docs/lineage-instrumentation-plan.md` §6a):
+
+| read | number |
+|---|---|
+| tag rms, init → 182k | 0.0634 → 0.0661 (4%; `sequence_row_bias` moved 40% in the same window) — never trained |
+| tag / other addends, history rows | 0.028 (alarm < 0.05) — drowned from step 0 |
+| public-ONLY content (boosts, active) read from the sheet row, post- vs pre-trunk | 0.129/0.067/0.682 vs 0.143/0.092/0.771 (ceiling on the public row 0.310/0.247/0.843) — post ≤ pre on every label |
+
+The third read is key-agnostic: it asks whether ANY public-only content
+crossed onto the sheet row, and it did not — not via the tag, and not via
+the far stronger shared content (one species/ability/item/move embedder
+feeds both rows; species is unique per side in randbats). So the join was
+dead, not the key drowned, and the tag was neither helping nor hindering
+(3% of a row's norm, unchanged from init). The explicit gather fix (hits
+matrix @ public rows through a zero-init projection, §9 of the plan) was
+scoped and DECLINED by the user in favour of removal; the design is on
+record there if the switch axis ever demands it.
+
+| mechanism | symbols | note |
+|---|---|---|
+| `entity_index_tag` | the param, its four add sites in `_assemble_sequence`, `player_entity_index_tag_{rms,grad_norm}`, `rl/offline/history_addends.py`, `test_entity_index_tag_links_private_to_public` (→ `test_entity_idx_is_not_row_content`, the inverse pin) | the wire column `ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX` STAYS — `belief_alignment` matches sheet row to public row through it, structurally, not through any learned tag. History rows keep their positional pairing (row bias i ↔ public row i). Resumed in checkpoint mode via the new by-path merge (233f707): leaf dropped from all four trees, league and Adam intact |
+
 ## Investigation ledger — 2026-09-01 flash attention: measured, declined
 
 The old objection ("APIs too immature") is RETIRED — jax 0.10.2's

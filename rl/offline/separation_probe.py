@@ -805,12 +805,13 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
     """Does a HISTORY_ENTITY row still know WHICH entity it is after the
     trunk?
 
-    History row i is `gru_state + node_snapshot + entity_index_tag[order+1]`
-    -- three addends summed into one vector, the shape the 2026-09-01 pass
-    deleted one level up -- and its join to public row i is that shared
-    additive tag, which rl/offline/history_addends.py measured at 0.028 of
-    the other two addends' rms on ckpt_00182000 (alarm < 0.05). This is the
-    behavioural read: a ridge readout over the post-trunk history row
+    History row i is `gru_state + node_snapshot` (+ its group and row bias)
+    -- addends summed into one vector, the shape the 2026-09-01 pass
+    deleted one level up -- and its join to public row i is positional.
+    Until 2026-09-02 both also carried a shared `entity_index_tag`, measured
+    at 0.028 of the other addends' rms on ckpt_00182000 and deleted for
+    never training. This is the behavioural read: a ridge readout over the
+    post-trunk history row
     predicting (1) the entity index the row carries (13-way one-hot of
     public_order + 1; the index is structural, so a cross-chunk split is
     valid -- 2026-08-27 lesson 2) and (2) the joined public row's hp ratio,
@@ -819,22 +820,23 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
     Readouts, all ridge on the same rows so the comparison is of ROUTING:
 
       test     post-trunk HISTORY row i   -> entity index / hp of public row i
-      control  post-trunk PUBLIC row i    -> the same (matched: same tag,
-               same position, hp on its own token)
+      control  post-trunk PUBLIC row i    -> the same (matched: same
+               position, hp on its own token)
       control  pre-trunk HISTORY row i    -> the same (positive control: the
-               tag is IN the row by construction, so ~1.0 identity says the
-               readout can read it at this rms ratio at all)
+               row bias is IN the row by construction, so ~1.0 identity
+               says the readout can read it at all)
       floor    post-trunk HISTORY row i   -> the labels, shuffled
 
     Chance is the held-out MAJORITY rate, not 1/12: actives-first ordering
     makes public_order far from uniform per row.
 
-    History row i and public row i sit at FIXED sequence positions, so their
-    join has a positional fallback (`sequence_row_bias`) whatever the tag
-    does. The sheet does not: PRIVATE row j's only link to its board row is
-    `entity_index_tag[ENTITY_IDX]`, so the same identity read on the sheet
-    rows (label: the wire's ENTITY_IDX, fielded mons only) is the read that
-    decides whether the tag is a join key at all.
+    History row i and public row i sit at FIXED sequence positions, so
+    their join is positional (`sequence_row_bias`). The sheet's is not:
+    PRIVATE row j relates to its board row only through shared content (one
+    species/ability/item/move embedder feeds both), so the same identity
+    read on the sheet rows (label: the wire's ENTITY_IDX, fielded mons
+    only) and the public-only join read below are what say whether that
+    relation is ever used.
     """
     apply_both = jax.jit(
         jax.vmap(
@@ -861,9 +863,9 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
     sheet_identity, sheet_chunk_of = [], []
     # The JOIN read (2026-09-02): features that exist ONLY on the public
     # row, read from the sheet row of the same entity. Probe D's identity
-    # read measures whether the tag is legible; this measures whether the
-    # trunk moved the joined row's content across, which attention can do
-    # by species content with no tag at all.
+    # read measures whether the index is legible; this measures whether the
+    # trunk moved the joined row's content across at all, which attention
+    # can only do by shared content (species/ability/item/moves) now.
     joined_labels = {key: [] for key in _JOINED_PUBLIC_ONLY}
     for start in range(0, len(chunks), batch_size):
         group = chunks[start : start + batch_size]
