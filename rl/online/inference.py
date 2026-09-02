@@ -1,18 +1,19 @@
 """Centralized, zero-wait batched inference for training PlayerActors.
 
 Every training actor thread used to dispatch its own batch-1
-``Agent.step_player`` under the shared gpu_lock — ~20 concurrent actors
-each paying full dispatch/kernel-launch overhead per environment step,
-serialized against each other AND against the learner's train_step by
-that same lock. One inference-server thread now runs ONE vmapped
-forward over however many requests are pending, so each gpu_lock
-acquisition serves a whole batch instead of one step.
+``Agent.step_player`` — ~20 concurrent actors each paying full
+dispatch/kernel-launch overhead per environment step. One
+inference-server thread now runs ONE vmapped forward over however many
+requests are pending, so one dispatch serves a whole batch instead of
+one step. (Until 2026-09-03 those dispatches were also serialised
+against the learner's train step by a shared gpu_lock; the lock ordered
+host dispatch only — JAX dispatch is asynchronous, so it never bounded
+GPU execution or VRAM — and it was deleted.)
 
 Batching is ZERO-WAIT (the Sample Factory / SEED RL scheme): the server
 never waits for a batch to fill and never runs a timer — it takes
 whatever is queued at the moment it becomes free. While the GPU runs
-the current forward (or the learner holds the gpu_lock for a train
-step), new requests pile up naturally: GPU busy-time is the batching
+the current forward, new requests pile up naturally: GPU busy-time is the batching
 window. A lone request runs at batch 1 immediately — exactly the old
 path's latency — and under load batches self-size up to
 inference_max_batch. There is deliberately NO min-batch and NO max-wait
@@ -42,7 +43,6 @@ import queue
 import threading
 import time
 from collections import OrderedDict
-from contextlib import ExitStack, nullcontext
 
 import jax
 import jax.numpy as jnp
@@ -147,7 +147,6 @@ class InferenceServer:
     def __init__(
         self,
         player_apply_fn,
-        gpu_lock=None,
         head_params: HeadParams = HeadParams(),
         max_batch: int = 16,
         params_cache_size: int = 16,
@@ -165,7 +164,6 @@ class InferenceServer:
         # threads then wedged the interpreter's exit-time join (the
         # 2026-08-23 post-checkpoint hang).
         self._stop = threading.Event()
-        self._gpu_lock = gpu_lock or nullcontext()
         self._max_batch = max_batch
         # LRU of device-resident params, keyed by version — see module
         # docstring. Only ever touched by the server thread; no lock.
@@ -362,12 +360,9 @@ class InferenceServer:
         # forward = dispatch + completion: device_get blocked on the
         # result anyway, so block_until_ready only moves the wait onto
         # its own timer rather than adding one.
-        with ExitStack() as held:
-            with timed(self._stats, "actor_infer_lock_wait"):
-                held.enter_context(self._gpu_lock)
-            with timed(self._stats, "actor_infer_forward"):
-                batched_output = self._forward(params, rng_keys, stacked)
-                jax.block_until_ready(batched_output)
+        with timed(self._stats, "actor_infer_forward"):
+            batched_output = self._forward(params, rng_keys, stacked)
+            jax.block_until_ready(batched_output)
         # One transfer for the whole batch; actors receive plain numpy.
         with timed(self._stats, "actor_infer_device_get"):
             batched_output = jax.device_get(batched_output)

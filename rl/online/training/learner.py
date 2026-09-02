@@ -1,4 +1,4 @@
-"""The Learner: owns the League, the gpu_lock and the training loop."""
+"""The Learner: owns the League and the training loop."""
 
 import logging
 import os
@@ -6,8 +6,6 @@ import pickle
 import queue
 import threading
 import time
-from _thread import LockType
-from contextlib import nullcontext
 from typing import Callable
 
 import jax
@@ -38,11 +36,11 @@ from rl.online.training.diagnostics import (
 )
 from rl.online.training.league_ops import (
     add_player_to_league,
-    create_params_container,
     get_league_winrate_heatmap,
     get_league_winrates,
     get_usage_counts,
     publish_br_snapshot,
+    publish_live_params,
     should_add_new_player,
 )
 from rl.online.training.run_state import RunState
@@ -70,7 +68,7 @@ class OOMGuardTriggered(Exception):
 
 
 class Learner:
-    """Owns the League, the gpu_lock, the compiled train_step and the one
+    """Owns the League, the compiled train_step and the one
     live RunState. The MainExploiter/LeagueExploiter populations were
     removed 2026-08-21 — see CLAUDE.md 9 for the design and why it never
     ran on this box."""
@@ -82,7 +80,6 @@ class Learner:
         player_state: Porygon2PlayerTrainState,
         builder_state: Porygon2BuilderTrainState,
         main_wandb_run: wandb.wandb_run.Run,
-        gpu_lock: LockType | None = None,
         debug: bool = False,
         controller_bytes: bytes | None = None,
         spawn_actor_pool: "Callable[[], None] | None" = None,
@@ -96,7 +93,6 @@ class Learner:
         # on the same cadence as the actor timers it is compared with.
         self._actor_stats_drained_at = time.perf_counter()
         self.league = league
-        self.gpu_lock = gpu_lock or nullcontext()
         self.debug = debug
         # Lets main.py spin up the actor pool once the run state exists
         # (main.py owns PlayerActor/BuilderActor construction — Learner
@@ -183,9 +179,11 @@ class Learner:
                 desc="batches", smoothing=0.1, position=next_tqdm_position()
             ),
         )
-        run_state.run_gate.set()
         self._restore_controller_state(run_state, controller_bytes)
-        self.league.update_live(MAIN_KEY, create_params_container(run_state))
+        # Before the gate opens: the eval thread reads eval_snapshot
+        # unguarded the moment the gate lets it through.
+        publish_live_params(run_state, self.league)
+        run_state.run_gate.set()
         return run_state
 
     def enqueue_traj(self, traj: Trajectory):
@@ -269,8 +267,8 @@ class Learner:
 
     def train(self):
         """Training loop. Each tick: check readiness (_ready_run_state),
-        pull one batch from the device_q, train via the compiled train_step
-        under the gpu_lock, run the periodic tasks. The actor pool runs
+        pull one batch from the device_q, train via the compiled train_step,
+        run the periodic tasks. The actor pool runs
         continuously and independently."""
         start_workers(self.run_state, self.config)
         try:
@@ -298,9 +296,8 @@ class Learner:
                     batch = run_state.device_q.get_nowait()
                 except queue.Empty:
                     continue
-                with self.gpu_lock:
-                    batch = jax.device_put(batch)
-                    logs = self._train_step(run_state, batch)
+                batch = jax.device_put(batch)
+                logs = self._train_step(run_state, batch)
 
                 run_state.host_step += 1
                 run_state.lifetime_step += 1
@@ -384,7 +381,7 @@ class Learner:
         real batch and a COPY of the train states (the jit donates its
         state args; outputs are discarded), so the dispatch cache is
         warm and any compile-time OOM happens at launch, before hours of
-        training are at stake. Runs under the caller's gpu_lock.
+        training are at stake.
 
         Resizing pads the T axis by repeating each chunk's final row —
         the actor's own padding convention, so no all-invalid mask rows
@@ -515,7 +512,7 @@ class Learner:
         # so this is what makes the actors play the CURRENT policy rather
         # than the one they were started with.
         if step % self.config.main_player_update_steps == 0:
-            self.league.update_live(MAIN_KEY, create_params_container(run_state))
+            publish_live_params(run_state, self.league)
 
         if step % self.config.save_interval_steps == 0:
             self._write_checkpoint(run_state)

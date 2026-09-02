@@ -879,7 +879,6 @@ def rl_sections():
                     [
                         "actor_infer_queue_wait",
                         "actor_infer_stack",
-                        "actor_infer_lock_wait",
                         "actor_infer_forward",
                         "actor_infer_device_get",
                     ],

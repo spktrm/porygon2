@@ -34,7 +34,6 @@ import concurrent.futures as cf
 import logging
 import os
 import pickle
-import threading
 import time
 from dataclasses import dataclass, field
 from typing import Iterator
@@ -96,7 +95,7 @@ def play_games(
     ctx = OfflineContext()
     ctx.config = get_learner_config()
     actor_net = get_player_model(get_player_model_config(generation, train=False))
-    agent = Agent(actor_net.apply, gpu_lock=threading.Lock())
+    agent = Agent(actor_net.apply)
     dev_params = jax.device_put(params)
 
     def play_one(game_no: int) -> list[list[Trajectory]]:

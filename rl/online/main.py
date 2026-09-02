@@ -180,11 +180,8 @@ def run_eval_heuristic(
     learner_config: Porygon2LearnerConfig,
 ):
     """Runs an actor to produce num_trajectories trajectories."""
-    learner = actor._learner
-    main_run_state = learner.run_state
-
-    with learner.gpu_lock:
-        step_count = np.array(main_run_state.player_state.step_count).item()
+    main_run_state = actor._learner.run_state
+    step_count = main_run_state.eval_snapshot.step_count
 
     # Metric identity comes from the eval thread's name (set at spawn:
     # EvalActor-simpleheuristic-0, ...), not the env username, so renaming
@@ -204,48 +201,27 @@ def run_eval_heuristic(
         if not main_run_state.run_gate.wait(timeout=1.0):
             continue
         try:
-            with learner.gpu_lock:
-                new_step_count = np.array(main_run_state.player_state.step_count).item()
-            if new_step_count > step_count:
-                step_count = new_step_count
+            # Host snapshots published by the learner thread
+            # (league_ops.publish_live_params) — this thread never reads
+            # device state, so nothing here can observe a buffer the train
+            # step donated. EMA target params by default — the
+            # deployment/league params — with an occasional main-params
+            # game as a divergence check (the two lag by only ~1/ema_rate
+            # steps).
+            snapshot = main_run_state.eval_snapshot
+            if snapshot.step_count > step_count:
+                step_count = snapshot.step_count
                 games += 1
-
-                # Snapshot params to host under the lock: the learner's train
-                # step donates its state buffers, so holding live device
-                # references across an unroll would read deleted arrays.
-                # EMA target params by default — the deployment/league
-                # params — with an occasional main-params game as a
-                # divergence check (the two lag by only ~1/ema_rate steps).
                 use_main = (
                     learner_config.eval_main_params_every > 0
                     and games % learner_config.eval_main_params_every == 0
                 )
                 if use_main:
                     prefix = "main"
-                    with learner.gpu_lock:
-                        player_params = jax.device_get(
-                            main_run_state.player_state.params
-                        )
-                        builder_params = jax.device_get(
-                            main_run_state.builder_state.params
-                        )
+                    player = snapshot.main
                 else:
                     prefix = "ema"
-                    with learner.gpu_lock:
-                        player_params = jax.device_get(
-                            main_run_state.player_state.target_params
-                        )
-                        builder_params = jax.device_get(
-                            main_run_state.builder_state.target_params
-                        )
-
-                player = ParamsContainer(
-                    step_count=step_count,
-                    player_frame_count=0,
-                    builder_frame_count=0,
-                    player_params=player_params,
-                    builder_params=builder_params,
-                )
+                    player = snapshot.ema
 
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
@@ -489,20 +465,17 @@ def main(args: argparse.Namespace):
     )
 
     # Shared by the learner and the actors — same architecture, so one
-    # Agent/gpu_lock serves everyone. Constructing a separate Agent per
+    # Agent serves everyone. Constructing a separate Agent per
     # extra network would trigger redundant jax.jit traces of the identical
     # apply_fn for no reason (rl/online/agent.py's Agent is already fully
     # stateless w.r.t. "which model": params are a per-call argument).
-    gpu_lock = threading.Lock()
     learning_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
-        gpu_lock=gpu_lock,
     )
     eval_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
-        gpu_lock=gpu_lock,
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
     )
@@ -519,7 +492,6 @@ def main(args: argparse.Namespace):
     eval_agent_untempered = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
-        gpu_lock=gpu_lock,
         player_head_params=HeadParams(temp=1.0),
         builder_head_params=HeadParams(temp=1.0),
     )
@@ -537,9 +509,7 @@ def main(args: argparse.Namespace):
     # One timing sink shared by every training actor, its env and the
     # server; the learner drains it (actor_stats_log_steps).
     actor_stats = ActorStats()
-    inference_server = InferenceServer(
-        actor_player_network.apply, gpu_lock=gpu_lock, stats=actor_stats
-    )
+    inference_server = InferenceServer(actor_player_network.apply, stats=actor_stats)
     inference_server.start()
 
     logger.info("Loading train state...")
@@ -775,7 +745,6 @@ def main(args: argparse.Namespace):
         player_state=player_state,
         builder_state=builder_state,
         main_wandb_run=wandb_run,
-        gpu_lock=gpu_lock,
         debug=debug,
         controller_bytes=controller_bytes,
         spawn_actor_pool=spawn_actor_pool,

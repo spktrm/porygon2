@@ -1,7 +1,5 @@
 import functools
-from _thread import LockType
 from collections.abc import Callable
-from contextlib import nullcontext
 from typing import overload
 
 import jax
@@ -36,7 +34,6 @@ class Agent:
         builder_apply_fn: (
             Callable[[Params, BuilderEnvOutput], BuilderAgentOutput] | None
         ) = None,
-        gpu_lock: LockType | None = None,
         player_head_params: HeadParams = HeadParams(),
         builder_head_params: HeadParams = HeadParams(),
     ):
@@ -56,15 +53,13 @@ class Agent:
         # baked-in python float would turn into one recompile per value.
         self._player_apply_fn = player_apply_fn or _no_apply
         self._builder_apply_fn = builder_apply_fn or _no_apply
-        self._gpu_lock = gpu_lock or nullcontext()
 
     def step_builder(
         self, rng_key: jax.Array, params: Params, actor_input: BuilderEnvOutput
     ) -> BuilderAgentOutput:
-        with self._gpu_lock:
-            return self._step_builder(
-                rng_key, params, actor_input, self.builder_head_params
-            )
+        return self._step_builder(
+            rng_key, params, actor_input, self.builder_head_params
+        )
 
     def step_player(
         self,
@@ -72,10 +67,7 @@ class Agent:
         params: Params,
         actor_input: PlayerActorInput,
     ) -> PlayerAgentOutput:
-        with self._gpu_lock:
-            return self._step_player(
-                rng_key, params, actor_input, self.player_head_params
-            )
+        return self._step_player(rng_key, params, actor_input, self.player_head_params)
 
     @overload
     def _step_builder(

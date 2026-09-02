@@ -4,11 +4,12 @@ import dataclasses
 import logging
 import queue
 import threading
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import wandb.wandb_run
 
 import wandb
+from rl.model.utils import ParamsContainer
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
 from rl.online.training.controllers import PILogController
@@ -21,6 +22,16 @@ logger = logging.getLogger(__name__)
 AddReason = Literal["initial", "dominant", "overdue"]
 
 
+class EvalSnapshot(NamedTuple):
+    """Host copies of the main and EMA-target params at one train step,
+    published by the learner thread (league_ops.publish_live_params) for
+    the eval thread, which must never read device state itself."""
+
+    step_count: int
+    main: ParamsContainer
+    ema: ParamsContainer
+
+
 @dataclasses.dataclass
 class RunState:
     """The training run's mutable state.
@@ -28,8 +39,8 @@ class RunState:
     Kept as a container rather than flattened onto Learner because it
     draws a clean line: everything here is per-lineage and mutable (train
     state, replay stores, controller EMAs, queues, worker threads), while
-    Learner owns the process-wide singletons (the League, the gpu_lock,
-    the compiled train_step). Was PopulationState until 2026-08-21, when
+    Learner owns the process-wide singletons (the League, the compiled
+    train_step). Was PopulationState until 2026-08-21, when
     the MainExploiter/LeagueExploiter populations were removed and the
     dict-of-one plus its single-inhabitant Literal went with them.
     """
@@ -60,6 +71,7 @@ class RunState:
     # the whole run; kept because the actor threads wait on it between
     # games and shutdown relies on that same wait.
     run_gate: "threading.Event" = None
+    eval_snapshot: EvalSnapshot | None = None
     replay_pi: PILogController | None = None
     # Fixed at config.player_replay_kl_target — the ExploitabilityController
     # that used to scale it was removed 2026-08-14 (last of the adaptive
