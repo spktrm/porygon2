@@ -55,28 +55,39 @@ _RELEVANT_ENTITY_FEATURES = np.array(
 )
 
 
+def relevant_edges(history_field: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """A step's edges are the cache rows named by its RELEVANT_ENTITY_IDX
+    columns, capped by NUM_RELEVANT: (H, K) row indices and the (H, K)
+    bool mask of the live ones. Written once -- the encoder's gather and
+    the wire-side telemetry must agree on it."""
+    relevant = history_field[:, _RELEVANT_ENTITY_FEATURES]  # (H, K)
+    num_relevant = history_field[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
+    edge_mask = jnp.arange(relevant.shape[1])[None] < num_relevant[:, None]
+    return relevant, edge_mask
+
+
+def source_rows(edge_major_args: jax.Array, edge_mask: jax.Array) -> jax.Array:
+    """(H, K) bool: the step's SOURCE rows -- the mover of a move, switch,
+    faint or cant -- i.e. the live rows whose MAJOR_ARG is a real protocol
+    arg (anything past the UNSPECIFIED/NULL/PAD sentinels). A
+    self-targeting move's row is both source and affected."""
+    is_real = edge_major_args > BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___PAD
+    return is_real & edge_mask
+
+
 def major_arg_step_mask(history_field: jax.Array, edge_cache: jax.Array) -> jax.Array:
     """(H,) bool: history steps that carry at least one battle major arg.
-
-    Mirrors the relevant-edge gather of PerSlotHistoryEncoder.__call__: a
-    step's edges are the cache rows named by its RELEVANT_ENTITY_IDX
-    columns, capped by NUM_RELEVANT. A step counts as major when any such
-    edge's MAJOR_ARG is a real protocol arg (anything past the
-    UNSPECIFIED/NULL/PAD sentinels — moves, switches, faints, cant, ...).
     These are the integrated history critic's supervision points, matching
     the offline critic's convention of scoring at decision-bearing events
     rather than every residual/chip line.
     """
-    relevant = history_field[:, _RELEVANT_ENTITY_FEATURES]  # (H, K)
-    num_relevant = history_field[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
-    edge_mask = np.arange(relevant.shape[1])[None] < num_relevant[:, None]
+    relevant, edge_mask = relevant_edges(history_field)
     major = jnp.take(
         edge_cache[:, EntityEdgeFeature.ENTITY_EDGE_FEATURE__MAJOR_ARG],
         relevant,
         axis=0,
     )  # (H, K)
-    is_real = major > BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___PAD
-    return (edge_mask & is_real).any(axis=-1)
+    return source_rows(major, edge_mask).any(axis=-1)
 
 
 @chex.dataclass
@@ -90,6 +101,12 @@ class PerSlotHistoryOutput:
     node_snapshots: ArrayLike = ()
     step_valid: ArrayLike = ()
     step_request_count: ArrayLike = ()
+    # The step GAT's read, for telemetry: (H, heads, K, K) attention
+    # probabilities (zero on padded keys), the (H, K) live-row mask and
+    # the (H, K) source-row mask they are read against.
+    step_attention_probs: ArrayLike = ()
+    step_row_mask: ArrayLike = ()
+    step_source_rows: ArrayLike = ()
 
 
 class HistoryAttentionPool(nn.Module):
@@ -184,6 +201,74 @@ class NodeHistoryRead(nn.Module):
             ),
         )
         return node_states + gate * attended
+
+
+class StepAttention(nn.Module):
+    """One GAT-style attention layer over the rows of a single history
+    step -- every live row attends to every live row, itself included.
+
+    A step is one major log line and the minor lines until the next: up to
+    K = 8 rows, one per mon touched, each carrying its own node snapshot,
+    its own edge (what happened to it), its side and whether it was the
+    MOVER (a self-targeting move is one row on both counts). The relation
+    "X did N to Y" lives across two of those rows, and this is the layer
+    where they meet, weighted by content: the source mean it replaces was
+    invertible in singles (2-source steps are 2-row steps) and lossy in
+    doubles (a spread move: 2 movers, 3 targets, one average for all).
+
+    Not modules.MultiHeadAttention: that carries trunk-sized plumbing (qk
+    layer norm, rope, a query-side validity mask) for a 61-row sequence;
+    this is 8 rows. Padded rows get a -1e9 floor AND their probabilities
+    re-masked, so a 1-row step is exactly its own value. The output
+    projection is zeros-init -- one zero factor over live inputs, the
+    FlatActionReadout argument -- so the messages are identity at step 0
+    and the projection moves at step 1.
+    """
+
+    num_heads: int
+    qk_size: int
+    features: int
+    dtype: jnp.dtype
+
+    @nn.compact
+    def __call__(
+        self, rows: jax.Array, row_mask: jax.Array
+    ) -> tuple[jax.Array, jax.Array]:
+        """rows (H, K, W), row_mask (H, K) bool -> (H, K, features) and
+        the (H, heads, K, K) probabilities."""
+        num_steps, num_rows = row_mask.shape
+
+        def project(name, width, init):
+            return nn.Dense(
+                features=self.num_heads * width,
+                use_bias=False,
+                dtype=self.dtype,
+                kernel_init=init,
+                name=name,
+            )(rows).reshape(num_steps, num_rows, self.num_heads, width)
+
+        lecun = nn.initializers.lecun_normal()
+        query = project("query", self.qk_size, lecun)
+        key = project("key", self.qk_size, lecun)
+        value = project("value", self.features // self.num_heads, lecun)
+        logits = jnp.einsum("hiad,hjad->haij", query, key) / jnp.sqrt(
+            jnp.asarray(self.qk_size, self.dtype)
+        )
+        key_mask = row_mask[:, None, None, :]  # (H, 1, 1, K)
+        logits = jnp.where(key_mask, logits, -1e9)
+        probs = jax.nn.softmax(logits, axis=-1)
+        probs = jnp.where(key_mask, probs, 0)
+        attended = jnp.einsum("haij,hjad->hiad", probs, value).reshape(
+            num_steps, num_rows, -1
+        )
+        out = nn.Dense(
+            features=self.features,
+            use_bias=False,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.zeros_init(),
+            name="attn_out",
+        )(attended)
+        return out, probs
 
 
 class _GateParams(nn.Module):
@@ -312,14 +397,21 @@ class PerSlotHistoryEncoder(nn.Module):
         self.initial_field_state = self.param(
             "initial_field_state", init, (NUM_FIELD_ROWS, entity_size)
         )
-        # Projects [node ; edge ; field ; side ; src_node ; src_edge ;
-        # is_src] into a directed slot message (the last three blocks are
-        # the 2026-09-01 TGN source half).
+        # Projects [node ; edge ; side ; is_src ; field] into a slot message;
+        # the step GAT below adds what the OTHER rows of the step carry.
         self.message_projection = nn.Dense(
             features=entity_size,
             use_bias=False,
             dtype=self.cfg.dtype,
             name="message_projection",
+        )
+        step_cfg = self.cfg.history_step
+        self.step_attention = StepAttention(
+            num_heads=step_cfg.num_heads,
+            qk_size=step_cfg.qk_size,
+            features=entity_size,
+            dtype=self.cfg.dtype,
+            name="step_attention",
         )
         # SplitGRUCell, not nn.GRUCell: same math, same param tree, but the
         # input-side gate GEMMs can be hoisted out of the scan (see
@@ -416,9 +508,7 @@ class PerSlotHistoryEncoder(nn.Module):
             step_request_count: (H,) request count of each history step.
             step_valid: (H,) bool.
         """
-        relevant = history_field[:, _RELEVANT_ENTITY_FEATURES]  # (H, K)
-        num_relevant = history_field[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
-        edge_mask = jnp.arange(relevant.shape[1])[None] < num_relevant[:, None]
+        relevant, edge_mask = relevant_edges(history_field)  # (H, K)
         step_valid = step_valid & edge_mask.any(axis=-1)
 
         node_embeddings = jnp.take(node_embedding_cache, relevant, axis=0)  # (H, K, D)
@@ -438,40 +528,42 @@ class PerSlotHistoryEncoder(nn.Module):
         )  # (H, K, 2)
         edge_is_mine = edge_sides == SIDE_MINE
 
-        # ---- the directed edge (TGN message, 2026-09-01) ------------------
+        # ---- the directed message (TGN, 2026-09-01; step GAT 2026-09-02) --
         # A step's SOURCE rows are the ones carrying a real major arg (the
-        # mover of a move/switch/faint/cant); their masked-mean node+edge
-        # latents ride EVERY message of the step, so mover and target
-        # finally coexist in one vector -- the relation "move X did N to Y"
-        # the per-slot scatter used to destroy. TGN proper uses the source's
-        # MEMORY here; that is carry-dependent and hence serial, so against
-        # the ~26us/step dependency-latency bound the source's raw cache
-        # embedding (its revealed state at event time) stands in, keeping
-        # the whole message batch precomputable.
+        # mover of a move/switch/faint/cant). Each row's message is its own
+        # [node ; edge ; side ; is_src] plus what the step GAT reads off the
+        # OTHER rows of the step -- so mover and target coexist in one
+        # vector, the relation "move X did N to Y" the per-slot scatter
+        # used to destroy, without the masked source mean that conflated
+        # a doubles spread move's two movers. TGN proper would use the
+        # source's MEMORY here; that is carry-dependent and hence serial,
+        # so the rows' raw cache embeddings (their revealed state at event
+        # time) stand in, keeping the whole message batch precomputable.
         edge_majors = jnp.take(edge_major_args, relevant, axis=0)  # (H, K)
-        is_src = (
-            edge_majors > BattlemajorargsEnum.BATTLEMAJORARGS_ENUM___PAD
-        ) & edge_mask
-        src_weights = is_src.astype(node_embeddings.dtype)[..., None]
-        src_denom = src_weights.sum(axis=-2).clip(min=1)
-        src_node = (node_embeddings * src_weights).sum(axis=-2) / src_denom
-        src_edge = (edge_embeddings * src_weights).sum(axis=-2) / src_denom
-
-        messages = self.message_projection(
-            jnp.concatenate(
-                (
-                    node_embeddings,
-                    edge_embeddings,
-                    jnp.broadcast_to(
-                        field_step_embeddings[:, None], node_embeddings.shape
+        is_src = source_rows(edge_majors, edge_mask)
+        row_inputs = jnp.concatenate(
+            (
+                node_embeddings,
+                edge_embeddings,
+                side_onehot,
+                is_src.astype(node_embeddings.dtype)[..., None],
+            ),
+            axis=-1,
+        )  # (H, K, 2D + 3)
+        attended, step_attention_probs = self.step_attention(row_inputs, edge_mask)
+        messages = (
+            self.message_projection(
+                jnp.concatenate(
+                    (
+                        row_inputs,
+                        jnp.broadcast_to(
+                            field_step_embeddings[:, None], node_embeddings.shape
+                        ),
                     ),
-                    side_onehot,
-                    jnp.broadcast_to(src_node[:, None], node_embeddings.shape),
-                    jnp.broadcast_to(src_edge[:, None], edge_embeddings.shape),
-                    src_weights,
-                ),
-                axis=-1,
+                    axis=-1,
+                )
             )
+            + attended
         )
 
         # ---- batched precompute (2026-09-01) -----------------------------
@@ -575,6 +667,9 @@ class PerSlotHistoryEncoder(nn.Module):
             node_snapshots=node_snapshots,
             step_valid=step_valid,
             step_request_count=step_request_count,
+            step_attention_probs=step_attention_probs,
+            step_row_mask=edge_mask,
+            step_source_rows=is_src,
         )
 
     def state_at_requests(
