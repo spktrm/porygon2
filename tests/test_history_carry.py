@@ -191,62 +191,100 @@ def test_suffix_carry_replays_the_game_within_bf16(
 ):
     """Test (a): every request of the ex.bin game served from the previous
     request's carry over its suffix alone matches the full-window forward
-    on log_policy and value log-probs to 0.05 (the bf16 GEMM leading-dim
-    class, tests/test_chunking.py), and the carried f32 states at the end
-    match the full scan's. Control: a shifted carry moves the policy."""
-    from rl.environment.interfaces import PlayerActorOutput
-    from rl.environment.utils import clip_history_suffix
+    on log_policy and value log-probs within the bf16 GEMM leading-dim
+    class (tests/test_chunking.py), and the carried f32 states at the end
+    match the full scan's. Control: a shifted carry moves the policy.
+
+    The bound is MEASURED, not assumed: the same window tail-clipped to
+    the learner's stored width with no carry is pure shape noise (content
+    identical, leading dims different), and the carry may not exceed
+    that floor or 0.05, whichever is larger. Under the opened readout the
+    floor on log_policy reads ~0.14 (2026-09-02: carry worst 0.093
+    against it; value log-probs 0.022 against a 0.026 floor) -- the
+    chunking test's 0.05 was calibrated on value log-probs alone."""
+    from rl.environment.utils import clip_history_suffix, clip_history_windows_tail
     from rl.model.history_encoder import invalid_history_carry
+    from rl.online.config import get_learner_config
     from rl.online.player_actor import _last_step_index
 
-    network, _, full_window, _ = real_model_and_trajectory
+    network, _, full_window, full_output = real_model_and_trajectory
     params = carry_params
     width = _width(params)
     num_requests = int(np.asarray(full_window.env.done).shape[0])
 
-    def forward(actor_input):
+    def forward(actor_input, request_count):
+        # The session model is train=True: the readout is teacher-forced
+        # on the stored action, so hand it the trajectory's own row.
+        taken = jax.tree.map(
+            lambda x: np.asarray(x)[request_count : request_count + 1], full_output
+        )
         return _squeeze_request(
-            real_model_apply(params, actor_input, PlayerActorOutput(), HeadParams())
+            real_model_apply(params, actor_input, taken, HeadParams())
         )
 
+    def policy_diff(left, right) -> float:
+        return float(
+            np.abs(
+                np.asarray(left.action_head.log_policy, np.float32)
+                - np.asarray(right.action_head.log_policy, np.float32)
+            ).max()
+        )
+
+    def value_diff(left, right) -> float:
+        return float(
+            np.abs(
+                np.asarray(left.value_head.log_probs, np.float32)
+                - np.asarray(right.value_head.log_probs, np.float32)
+            ).max()
+        )
+
+    # The floor: the same window at the learner's stored width (the
+    # tail clip every chunk goes through), no carry -- content-identical,
+    # shapes differ, and that alone moves the bf16 GEMMs.
+    stored_history_length = get_learner_config().player_history_length
     carry = None
     last_step_index = -1
     worst_policy = 0.0
     worst_value = 0.0
+    floor_policy = 0.0
+    floor_value = 0.0
     for request_count in range(num_requests):
         window = _window_at(full_window, request_count)
-        full = forward(window.replace(history_carry=invalid_history_carry(width)))
+        full = forward(
+            window.replace(history_carry=invalid_history_carry(width)), request_count
+        )
+        tail_history, tail_packed = clip_history_windows_tail(
+            window.history, window.packed_history, stored_history_length
+        )
+        tail = forward(
+            window.replace(
+                history=tail_history,
+                packed_history=tail_packed,
+                history_carry=invalid_history_carry(width),
+            ),
+            request_count,
+        )
+        floor_policy = max(floor_policy, policy_diff(full, tail))
+        floor_value = max(floor_value, value_diff(full, tail))
         suffix, _ = clip_history_suffix(window, last_step_index)
         assert suffix is not None
         if carry is None:
             resumed_input = suffix.replace(history_carry=invalid_history_carry(width))
         else:
             resumed_input = suffix.replace(history_carry=carry)
-        resumed = forward(resumed_input)
-        worst_policy = max(
-            worst_policy,
-            float(
-                np.abs(
-                    np.asarray(full.action_head.log_policy, np.float32)
-                    - np.asarray(resumed.action_head.log_policy, np.float32)
-                ).max()
-            ),
-        )
-        worst_value = max(
-            worst_value,
-            float(
-                np.abs(
-                    np.asarray(full.value_head.log_probs, np.float32)
-                    - np.asarray(resumed.value_head.log_probs, np.float32)
-                ).max()
-            ),
-        )
+        resumed = forward(resumed_input, request_count)
+        worst_policy = max(worst_policy, policy_diff(full, resumed))
+        worst_value = max(worst_value, value_diff(full, resumed))
         carry = resumed.history_carry
         last_step_index = _last_step_index(window)
-    assert worst_policy <= 0.05, worst_policy
-    assert worst_value <= 0.05, worst_value
+    policy_bound = max(0.05, floor_policy)
+    value_bound = max(0.05, floor_value)
+    assert worst_policy <= policy_bound, (worst_policy, floor_policy)
+    assert worst_value <= value_bound, (worst_value, floor_value)
 
-    final_full = forward(window.replace(history_carry=invalid_history_carry(width)))
+    final_full = forward(
+        window.replace(history_carry=invalid_history_carry(width)), request_count
+    )
     np.testing.assert_allclose(
         np.asarray(carry.slot_states),
         np.asarray(final_full.history_carry.slot_states),
@@ -266,8 +304,11 @@ def test_suffix_carry_replays_the_game_within_bf16(
     # Control: the tolerance can fail -- a shifted carry moves what the
     # test compares.
     shifted = carry.replace(slot_states=np.asarray(carry.slot_states) + 1.0)
-    moved = forward(suffix.replace(history_carry=shifted))
-    assert _max_diff(moved, resumed) > 0.05
+    moved = forward(suffix.replace(history_carry=shifted), request_count)
+    assert policy_diff(moved, resumed) > policy_bound, (
+        policy_diff(moved, resumed),
+        policy_bound,
+    )
 
 
 def test_server_mixed_group_matches_single_forwards(
@@ -285,10 +326,22 @@ def test_server_mixed_group_matches_single_forwards(
     from rl.online.inference import InferenceServer, _InferenceRequest
     from rl.online.player_actor import _last_step_index
 
-    network, _, full_window, _ = real_model_and_trajectory
+    network, _, full_window, full_output = real_model_and_trajectory
     params = carry_params
     width = _width(params)
-    server = InferenceServer(player_apply_fn=network.apply)
+    # The session model is train=True, so it teacher-forces the stored
+    # action rather than sampling one (the actor network emits no
+    # log_policy to compare on). The server's apply signature is kept; the
+    # placeholder output it passes is swapped for one stored row -- the
+    # given index only picks which log_prob is reported.
+    taken = jax.tree.map(lambda x: np.asarray(x)[21:22], full_output)
+
+    def teacher_forced_apply(params, actor_input, _placeholder, head_params, rngs):
+        return network.apply(
+            params, actor_input, taken, head_params=head_params, rngs=rngs
+        )
+
+    server = InferenceServer(player_apply_fn=teacher_forced_apply)
     container = ParamsContainer(
         step_count=0,
         player_frame_count=0,
@@ -298,10 +351,14 @@ def test_server_mixed_group_matches_single_forwards(
     )
 
     def request(rng_seed, actor_input):
+        # A server request's env has no T axis (_run_group adds it);
+        # _window_at keeps the [T=1] slice the jitted apply expects.
         return _InferenceRequest(
             container=container,
             rng_key=jax.random.key(rng_seed),
-            actor_input=actor_input,
+            actor_input=actor_input.replace(
+                env=jax.tree.map(lambda x: np.asarray(x)[0], actor_input.env)
+            ),
             done=threading.Event(),
         )
 
@@ -326,17 +383,20 @@ def test_server_mixed_group_matches_single_forwards(
     (single_carrying,) = run([request(1, carrying)])
     (single_plain,) = run([request(2, plain)])
     mixed_carrying, mixed_plain = run([request(1, carrying), request(2, plain)])
-
-    for single, mixed in (
-        (single_carrying, mixed_carrying),
-        (single_plain, mixed_plain),
+    # Batch 1 vs batch 2 is a bf16 GEMM leading-dim change, and the noise
+    # it makes is content-dependent (0.042 on the plain request, 0.067 on
+    # the carrying one, 2026-09-02, opened readout), so the read is
+    # structural: each grouped output sits within the shape-noise class
+    # of ITS OWN single forward and far from the other's -- a dropped or
+    # misrouted carry lands ~2.0 from its single (the plain/carrying
+    # separation) and would fail both halves.
+    shape_noise = 0.15
+    for single, other, mixed in (
+        (single_carrying, single_plain, mixed_carrying),
+        (single_plain, single_carrying, mixed_plain),
     ):
-        np.testing.assert_allclose(
-            np.asarray(single.action_head.log_policy, np.float32),
-            np.asarray(mixed.action_head.log_policy, np.float32),
-            atol=0.05,
-        )
-        assert single.action_head.action_index == mixed.action_head.action_index
+        assert _max_diff(single, mixed) <= shape_noise, _max_diff(single, mixed)
+        assert _max_diff(other, mixed) > 1.0, _max_diff(other, mixed)
     # The fill is the from-scratch forward: the plain request equals the
     # same window sent with an explicit invalid carry ...
     (explicit_invalid,) = run(
