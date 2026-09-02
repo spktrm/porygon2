@@ -1691,6 +1691,9 @@ export class EdgeBuffer {
 
     numEdges: number;
     maxEdges: number;
+    // Count of in-place rewrites of rows already handed out (see
+    // `remapEntitySlot`); serialised as `history_rewrite_count`.
+    rewriteCount: number;
 
     constructor(player: TrainablePlayerAI) {
         this.player = player;
@@ -1712,6 +1715,7 @@ export class EdgeBuffer {
         this.fieldData = new DynamicArray(maxEdges, numFieldFeatures);
 
         this.numEdges = 0;
+        this.rewriteCount = 0;
     }
 
     addEdge(edge: Edge) {
@@ -1781,6 +1785,10 @@ export class EdgeBuffer {
         speciesToken?: number;
     }) {
         const { fromSlot, toSlot, startPackedRow, speciesToken } = args;
+        // Counted per call, not per row touched: the consumer's question is
+        // "may any row I already saw have changed", and a call that finds
+        // nothing to move costs it one spurious recompute at most.
+        this.rewriteCount += 1;
         const numRows = this.entityPublicData.size();
         for (let row = startPackedRow; row < numRows; row++) {
             const entityIdxIndex =
@@ -4916,6 +4924,9 @@ export class StateHandler {
         state.setHistoryField(historyField);
         state.setHistoryLength(historyLength);
         state.setHistoryPackedLength(historyPackedLength);
+        state.setHistoryRewriteCount(
+            this.player.eventHandler.edgeBuffer.rewriteCount,
+        );
 
         const privateTeam = this.getPrivateTeam(this.player);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));

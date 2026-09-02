@@ -244,6 +244,9 @@ export class EnvironmentState extends jspb.Message {
   getOppPrivateTeam_asB64(): string;
   setOppPrivateTeam(value: Uint8Array | string): void;
 
+  getHistoryRewriteCount(): number;
+  setHistoryRewriteCount(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): EnvironmentState.AsObject;
   static toObject(includeInstance: boolean, msg: EnvironmentState): EnvironmentState.AsObject;
@@ -273,6 +276,7 @@ export namespace EnvironmentState {
     historyPackedLength: number,
     structuredActionMask?: ActionMask.AsObject,
     oppPrivateTeam: Uint8Array | string,
+    historyRewriteCount: number,
   }
 }
 

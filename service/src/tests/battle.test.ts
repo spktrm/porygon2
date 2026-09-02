@@ -42,6 +42,32 @@ describe("battle invariants", () => {
         },
     );
 
+    // Positive control for the `history_rewrite_count` invariant in the
+    // controller: p1 always runs the gen9ou Zoroark sample team, so a
+    // mirror gen9ou battle has an Illusion to reveal. Whether Zoroark is
+    // actually revealed in a given battle is up to the random actions,
+    // hence the bounded retry until one battle remaps; on that battle the
+    // wire's final reading must equal the buffer's count (the done state
+    // is built after the last line is ingested), proving the counter
+    // reaches the wire rather than only the buffer.
+    test("history_rewrite_count reaches the wire on an Illusion reveal", async () => {
+        let remapped: Awaited<ReturnType<typeof runBattle>>[number] | undefined;
+        for (
+            let attempt = 0;
+            attempt < 8 && remapped === undefined;
+            attempt++
+        ) {
+            const results = await runBattle({
+                smogonFormat: "gen9ou",
+                controlledOpponent: true,
+            });
+            remapped = results.find((result) => result.bufferRewriteCount > 0);
+        }
+        expect(remapped).toBeDefined();
+        expect(remapped!.rewriteCount).toBeGreaterThan(0);
+        expect(remapped!.rewriteCount).toBe(remapped!.bufferRewriteCount);
+    });
+
     test.each(singlesFormats)(
         "mirror (both controlled): %s",
         { retry: 2 },

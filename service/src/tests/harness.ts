@@ -323,7 +323,8 @@ function assertMaskMatchesDecoder(
 export async function playerController(player: TrainablePlayerAI) {
     let historyLength = 0,
         packedHistoryLength = 0,
-        stateCount = 0;
+        stateCount = 0,
+        rewriteCount = 0;
     while (true) {
         // Only the stream read is guarded: a closed stream ends the loop
         // cleanly, while invariant violations below THROW upward so the
@@ -337,6 +338,30 @@ export async function playerController(player: TrainablePlayerAI) {
             break;
         }
         {
+            // `history_rewrite_count` (2026-09-02): the service's count of
+            // in-place rewrites of rows it already handed out. Read on
+            // EVERY state, the done state included, so a |replace| that
+            // lands after the last decision still reaches the wire; it must
+            // never go backwards within a game, and the wire can only lag
+            // the buffer (rows rewritten after this build are counted there
+            // first), never lead it.
+            const wireRewriteCount = state.getHistoryRewriteCount();
+            if (wireRewriteCount < rewriteCount) {
+                throw new Error(
+                    `history_rewrite_count went backwards: ` +
+                        `${rewriteCount} -> ${wireRewriteCount}`,
+                );
+            }
+            const bufferRewriteCount =
+                player.eventHandler.edgeBuffer.rewriteCount;
+            if (wireRewriteCount > bufferRewriteCount) {
+                throw new Error(
+                    `history_rewrite_count ${wireRewriteCount} on the wire ` +
+                        `exceeds the EdgeBuffer's ${bufferRewriteCount}`,
+                );
+            }
+            rewriteCount = wireRewriteCount;
+
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];
             if (done) {
@@ -470,6 +495,10 @@ export async function playerController(player: TrainablePlayerAI) {
         historyLength,
         packedHistoryLength,
         stateCount,
+        rewriteCount,
+        // The count of |replace| handler calls that reached a remap -- the
+        // positive control's ground truth for `rewriteCount` above.
+        bufferRewriteCount: player.eventHandler.edgeBuffer.rewriteCount,
     };
 }
 

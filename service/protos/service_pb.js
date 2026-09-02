@@ -1463,7 +1463,8 @@ field: msg.getField_asB64(),
 rqid: jspb.Message.getFieldWithDefault(msg, 14, 0),
 historyPackedLength: jspb.Message.getFieldWithDefault(msg, 15, 0),
 structuredActionMask: (f = msg.getStructuredActionMask()) && proto.servicev2.ActionMask.toObject(includeInstance, f),
-oppPrivateTeam: msg.getOppPrivateTeam_asB64()
+oppPrivateTeam: msg.getOppPrivateTeam_asB64(),
+historyRewriteCount: jspb.Message.getFieldWithDefault(msg, 18, 0)
   };
 
   if (includeInstance) {
@@ -1568,6 +1569,10 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
     case 17:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setOppPrivateTeam(value);
+      break;
+    case 18:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setHistoryRewriteCount(value);
       break;
     default:
       reader.skipField();
@@ -1715,6 +1720,13 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
   if (f.length > 0) {
     writer.writeBytes(
       17,
+      f
+    );
+  }
+  f = message.getHistoryRewriteCount();
+  if (f !== 0) {
+    writer.writeInt32(
+      18,
       f
     );
   }
@@ -2355,6 +2367,24 @@ proto.servicev2.EnvironmentState.prototype.getOppPrivateTeam_asU8 = function() {
  */
 proto.servicev2.EnvironmentState.prototype.setOppPrivateTeam = function(value) {
   return jspb.Message.setProto3BytesField(this, 17, value);
+};
+
+
+/**
+ * optional int32 history_rewrite_count = 18;
+ * @return {number}
+ */
+proto.servicev2.EnvironmentState.prototype.getHistoryRewriteCount = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 18, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.servicev2.EnvironmentState} returns this
+ */
+proto.servicev2.EnvironmentState.prototype.setHistoryRewriteCount = function(value) {
+  return jspb.Message.setProto3IntField(this, 18, value);
 };
 
 

@@ -179,6 +179,14 @@ message EnvironmentState {
     // opp_private_team's number, so this channel takes 17 -- never reuse a
     // freed number here.
     bytes opp_private_team = 17;
+    // How many times a PAST history row has been rewritten in place this
+    // game (2026-09-02) -- incremented by `EdgeBuffer.remapEntitySlot`, the
+    // one writer of already-serialised rows (an Illusion |replace| moves the
+    // disguised period's edges onto the true pokemon's slot). Monotone
+    // non-decreasing within a game. An actor carrying history state across
+    // requests recomputes from scratch when this moves; every other
+    // consumer ignores it. Not a model input.
+    int32 history_rewrite_count = 18;
 }
 
 message EnvironmentTrajectory {

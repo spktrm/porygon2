@@ -64,6 +64,10 @@ class SinglePlayerSyncEnvironment:
 
         self.username = username
         self.rqid = None
+        # The service's in-place-rewrite counter for this game (proto
+        # `history_rewrite_count`): an actor carrying history state across
+        # requests recomputes from scratch when it moves.
+        self.history_rewrite_count = 0
         self.last_state = None
         self.game_id = None
 
@@ -117,12 +121,16 @@ class SinglePlayerSyncEnvironment:
                 raise BattleError(worker_response.error_response.trace)
             environment_response = worker_response.environment_response
             self.rqid = environment_response.state.rqid
+            self.history_rewrite_count = (
+                environment_response.state.history_rewrite_count
+            )
 
             self.last_state = process_state(environment_response.state)
         return self.last_state
 
     def reset(self, packed_team: list[int] = None):
         self.rqid = None
+        self.history_rewrite_count = 0
         reset_message = ClientRequest(
             reset=ResetRequest(
                 username=self.username,
