@@ -95,6 +95,9 @@ class PlayerActorOutput:
     # The belief head: (T, 6, G, K) logits predicting opp_code from the
     # matched PUBLIC rows, and the per-mon alignment mask.
     belief_logits: ArrayLike = ()
+    # The species-only matched control: the same (T, 6, G, K) logits from
+    # a table keyed on the matched public row's species token alone.
+    species_belief_logits: ArrayLike = ()
     belief_matched: ArrayLike = ()
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows

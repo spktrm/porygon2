@@ -342,6 +342,7 @@ def rl_sections():
                         "player_opp_code_logits_rms",
                         "player_opp_code_embedding_rms",
                         "player_belief_head_out_rms",
+                        "player_species_belief_rms",
                     ],
                 ),
                 lp(
@@ -490,6 +491,25 @@ def rl_sections():
                         "player_belief_accuracy_above_marginal",
                         "player_belief_majority_rate",
                     ],
+                ),
+                lp(
+                    # The species-only matched control (2026-09-02): a
+                    # table keyed on the public row's species, scored on
+                    # the same labels and rows. Gain = belief minus
+                    # species accuracy: > 0.05 = the head reads public
+                    # evidence beyond species; <= 0 = a species lookup.
+                    # Read only once the table's own accuracy plateaus
+                    # (~2-5k steps after it lands).
+                    "Belief gain over species control",
+                    [
+                        "player_belief_gain_over_species",
+                        "player_species_belief_accuracy",
+                        "player_species_belief_accuracy_above_marginal",
+                    ],
+                ),
+                lp(
+                    "Species control loss",
+                    ["player_loss_species_belief"],
                 ),
                 lp(
                     # Opponent-code usage perplexity per group: min pinned

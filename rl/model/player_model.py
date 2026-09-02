@@ -12,6 +12,7 @@ from ml_collections import ConfigDict
 from rl.environment.data import (
     CELL_MODALITY_MASK,
     NUM_MODALITY_FEATURES,
+    NUM_SPECIES,
     NUM_SWITCH_CELLS,
 )
 from rl.environment.interfaces import (
@@ -21,7 +22,11 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
-from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature, InfoFeature
+from rl.environment.protos.features_pb2 import (
+    EntityPrivateNodeFeature,
+    EntityRevealedNodeFeature,
+    InfoFeature,
+)
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
@@ -112,6 +117,22 @@ class Porygon2PlayerModel(nn.Module):
         # untouched (the partition test pins it), the gradient just asks
         # public representations to be DECODABLE to the truth.
         self.belief_head = MLP(**self.cfg.belief_head.mlp.to_dict())
+        # The species-only matched control (2026-09-02): the same (G, K)
+        # logits from NOTHING but the matched public row's species token,
+        # a table lookup. The belief head reads a post-trunk row that
+        # already carries the species (one shared species embedder feeds
+        # both rows), so `player_belief_accuracy` alone cannot tell "this
+        # species' typical code" from a belief formed from what the
+        # opponent has shown. Its input is an integer: no shared param
+        # ever receives its gradient, and its CE enters the loss unscaled
+        # because a coefficient could only ever be 1.0.
+        code = self.cfg.encoder.opp_code
+        self.species_belief = nn.Embed(
+            NUM_SPECIES,
+            code.num_groups * code.num_classes,
+            dtype=self.cfg.dtype,
+            name="species_belief",
+        )
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -357,6 +378,16 @@ class Porygon2PlayerModel(nn.Module):
             matched_rows = sequence[PUBLIC_ROWS][public_row_index]
             code_shape = opp_code_one_hot.shape
             belief_logits = self.belief_head(matched_rows).reshape(code_shape)
+            # Keyed on the PUBLIC row's species, never the private one: under
+            # Illusion the board shows the disguise, and a control that sees
+            # more than the row it is matched against is not matched.
+            public_species = env_step.revealed_team[
+                public_row_index,
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES,
+            ]
+            species_belief_logits = self.species_belief(public_species).reshape(
+                code_shape
+            )
             # Rows converging to one direction reads on the existing panels
             # as "entropy at ceiling while the pointer params grow" -- the
             # phase-1 support-anchor shape -- so it gets its own reading.
@@ -369,6 +400,7 @@ class Porygon2PlayerModel(nn.Module):
                 # were coded.
                 "opp_code": opp_code_one_hot,
                 "belief_logits": belief_logits,
+                "species_belief_logits": species_belief_logits,
                 "belief_matched": matched,
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,

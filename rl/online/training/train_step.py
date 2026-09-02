@@ -367,6 +367,21 @@ def train_step(
         belief_logs = belief_accuracy_logs(
             learner_player_pred.belief_logits, belief_labels, belief_mask
         )
+        # The species-only matched control: the same CE on the same labels
+        # and rows from a table keyed on the public row's species token.
+        # `player_belief_gain_over_species` is what the belief head reads
+        # from the public row BEYOND its species; ~0 says it is a lookup.
+        species_ce = optax.softmax_cross_entropy(
+            logits=learner_player_pred.species_belief_logits.astype(jnp.float32),
+            labels=belief_labels,
+        ).mean(axis=-1)
+        loss_species_belief = average(species_ce, belief_mask)
+        species_logs = belief_accuracy_logs(
+            learner_player_pred.species_belief_logits,
+            belief_labels,
+            belief_mask,
+            prefix="player_species_belief",
+        )
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
@@ -523,6 +538,10 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
             + config.player_belief_coef * loss_belief
+            # The species control, unscaled: its only param is the table
+            # (an integer input has no gradient), and its gradient norm is
+            # O(0.05) against a total of ~10, so the global clip is unmoved.
+            + loss_species_belief
             # kl: trust region against the behaviour policy — the
             # replay-staleness guard alongside the PPO clip.
             + config.player_kl_loss_coef * loss_actor_backward_kl
@@ -534,6 +553,10 @@ def train_step(
             player_loss_v_win_priv=loss_v_win_priv,
             player_loss_belief=loss_belief,
             **belief_logs,
+            player_loss_species_belief=loss_species_belief,
+            **species_logs,
+            player_belief_gain_over_species=belief_logs["player_belief_accuracy"]
+            - species_logs["player_species_belief_accuracy"],
             player_belief_matched_frac=average(
                 learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
                 value_mask,

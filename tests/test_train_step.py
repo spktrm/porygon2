@@ -143,6 +143,12 @@ def test_train_step_smoke():
         "player_belief_head_out_rms",
         "player_opp_code_logits_grad_norm",
         "player_opp_code_embedding_grad_norm",
+        # The species-only matched control (plan step a2).
+        "player_species_belief_rms",
+        "player_loss_species_belief",
+        "player_species_belief_accuracy",
+        "player_species_belief_accuracy_above_marginal",
+        "player_belief_gain_over_species",
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",

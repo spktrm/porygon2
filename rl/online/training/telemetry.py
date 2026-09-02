@@ -300,6 +300,9 @@ _OPP_CODE_LEAVES = {
     "player_opp_code_logits_rms": (("encoder", "opp_code_logits", "kernel"),),
     "player_opp_code_embedding_rms": (("encoder", "opp_code_embedding"),),
     "player_belief_head_out_rms": (("belief_head", "Dense_2", "kernel"),),
+    # The species-only control table (2026-09-02): flax Embed init is
+    # variance_scaling fan_in over its 256 features, so 0.0625 again.
+    "player_species_belief_rms": (("species_belief", "embedding"),),
 }
 # player_belief_head_gradient_norm already exists in train_step; not
 # duplicated here.
@@ -575,9 +578,15 @@ def code_usage_logs(
 
 
 def belief_accuracy_logs(
-    belief_logits: jax.Array, belief_labels: jax.Array, belief_mask: jax.Array
+    belief_logits: jax.Array,
+    belief_labels: jax.Array,
+    belief_mask: jax.Array,
+    prefix: str = "player_belief",
 ) -> dict[str, jax.Array]:
     """The belief head's accuracy, and the same number made honest.
+
+    `prefix` names the predictor: the belief head, or the species-only
+    matched control scored on the SAME labels and rows.
 
     `player_belief_accuracy` alone cannot tell a belief from a lookup of the
     batch marginal: a group whose code has collapsed to one class is
@@ -597,7 +606,7 @@ def belief_accuracy_logs(
     group_accuracy = (hit * weights).sum(axis=(0, 1, 2)) / total
     majority = _code_marginal(belief_labels, belief_mask).max(axis=-1)
     return {
-        "player_belief_accuracy": group_accuracy.mean(),
-        "player_belief_majority_rate": majority.mean(),
-        "player_belief_accuracy_above_marginal": (group_accuracy - majority).mean(),
+        f"{prefix}_accuracy": group_accuracy.mean(),
+        f"{prefix}_majority_rate": majority.mean(),
+        f"{prefix}_accuracy_above_marginal": (group_accuracy - majority).mean(),
     }
