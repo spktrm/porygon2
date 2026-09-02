@@ -76,7 +76,6 @@ from rl.model.history_encoder import (
     HistoryAttentionPool,
     NodeHistoryRead,
     PerSlotHistoryEncoder,
-    mask_outcome_features,
 )
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
@@ -1524,52 +1523,6 @@ class Encoder(nn.Module):
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         return self.history_encoder.state_at_requests(history_output, request_count)
-
-    def encode_history_with_announced(
-        self,
-        env_step: PlayerEnvOutput,
-        packed_history_step: PlayerPackedHistoryOutput,
-        history_step: PlayerHistoryOutput,
-    ) -> tuple[
-        tuple[jax.Array, jax.Array, jax.Array],
-        tuple[jax.Array, jax.Array, jax.Array],
-    ]:
-        """encode_history plus, per request, the ANNOUNCED state: the
-        previous request's recurrent state advanced one extra step with
-        outcome-masked messages of the request's own turn (both players'
-        revealed choices, chance unresolved). The scan and both embedding
-        caches run once; only the masked edge cache is embedded extra.
-
-        Returns ((slot states, field state, node snapshots) as
-        encode_history, (announced slot states, announced field state,
-        pre-turn node snapshots)), each per request.
-        """
-        (
-            history_output,
-            edge_slot_ids,
-            node_sides,
-            step_field_vec,
-            step_field_rows,
-        ) = self._run_history_encoder(packed_history_step, history_step)
-        request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        states = self.history_encoder.state_at_requests(history_output, request_count)
-
-        masked_cache, row_is_announcement = mask_outcome_features(
-            packed_history_step.edge_cache
-        )
-        announced_edge_embedding_cache, _ = jax.vmap(self._embed_edge)(masked_cache)
-        announced = self.history_encoder.announced_states_at_requests(
-            history_output=history_output,
-            history_field=history_step.field,
-            announced_edge_embedding_cache=announced_edge_embedding_cache,
-            edge_slot_ids=edge_slot_ids,
-            node_sides=node_sides,
-            row_is_announcement=row_is_announcement,
-            field_step_embeddings=step_field_vec,
-            field_row_embeddings=step_field_rows,
-            request_counts=request_count,
-        )
-        return states, announced
 
     def read_history_into_nodes(
         self,

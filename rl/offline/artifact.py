@@ -20,9 +20,6 @@ events offline and live — the frozen Φ carries no train/serve
 distribution bias into RL training.
 """
 
-import functools
-import json
-import os
 from collections.abc import Callable, Sequence
 
 import jax
@@ -54,26 +51,6 @@ def has_rating_conditioning(params: Params) -> bool:
     return "rating_embed" in params.get("params", {})
 
 
-def has_announced_states(artifact_paths: str | Sequence[str]) -> bool:
-    """True when EVERY artifact's manifest marks announced-state training.
-
-    Φ_ann adds no parameters, so — unlike rating conditioning — the
-    capability cannot be read off the param tree: any checkpoint can
-    compute Φ_ann, but only checkpoints trained at announced evaluation
-    points produce calibrated values. A missing manifest or flag means a
-    pre-Φ_ann artifact and dice-excised shaping must not run on it."""
-    if isinstance(artifact_paths, str):
-        artifact_paths = (artifact_paths,)
-    for path in artifact_paths:
-        try:
-            with open(os.path.join(path, "manifest.json")) as f:
-                if not json.load(f).get("announced_states", False):
-                    return False
-        except (OSError, ValueError):
-            return False
-    return True
-
-
 def make_potential_apply(
     generation: int,
     uncertainty_scale: float = 0.0,
@@ -81,7 +58,6 @@ def make_potential_apply(
     with_aux: bool = False,
     rating_conditioning: bool = False,
     condition_rating: int = 0,
-    announced: bool = False,
 ) -> Callable[[Params, PlayerActorInput], jax.Array]:
     """Builds the frozen-critic potential: (stacked params, (T, B, ...)
     actor input) -> Φ in [-1, 1] with shape (T, B), float32, stop-gradient.
@@ -119,28 +95,14 @@ def make_potential_apply(
     players of THAT rating resolve from here" — e.g. condition high to
     shape RL toward strong-play outcome beliefs instead of ladder-average
     conversion. 0 leaves the input's ratings alone (live self-play carries
-    none, so the critic falls back to its unknown-rating bucket).
-
-    With ``announced=True`` (requires announced-trained artifacts — check
-    has_announced_states) the function returns ``(phi, phi_ann)`` (or
-    ``((phi, phi_ann), aux)`` with aux): Φ_ann is the same readout at the
-    per-step ANNOUNCED state — both players' choices revealed, chance
-    unresolved — gated by its own ensemble std. This is the pair
-    dice-excised PBRS consumes (γ·Φ_ann(t+1) − Φ(t)). Each member's Φ_ann
-    is mirror-antisymmetric and both stds are mirror-invariant, so the
-    excised shaping stays exactly zero-sum."""
+    none, so the critic falls back to its unknown-rating bucket)."""
     if readout not in ("margin", "win"):
         raise ValueError(f"unknown potential readout: {readout!r}")
     model = Porygon2OfflineCritic(
         get_player_model_config(generation, train=False),
         rating_conditioning=rating_conditioning,
     )
-    apply = (
-        functools.partial(model.apply, method=Porygon2OfflineCritic.announced)
-        if announced
-        else model.apply
-    )
-    single = jax.vmap(apply, in_axes=(None, 1), out_axes=1)
+    single = jax.vmap(model.apply, in_axes=(None, 1), out_axes=1)
     ensemble = jax.vmap(single, in_axes=(0, None))
 
     def gated_readout(value_head, scale) -> tuple[jax.Array, dict[str, jax.Array]]:
@@ -172,15 +134,6 @@ def make_potential_apply(
                 condition_rating
             )
             actor_input = actor_input.replace(env=actor_input.env.replace(info=info))
-        if announced:
-            value_head, announced_head = ensemble(params, actor_input)
-            gated, aux = gated_readout(value_head, uncertainty_scale)
-            gated_ann, ann_aux = gated_readout(announced_head, uncertainty_scale)
-            result = jax.lax.stop_gradient((gated, gated_ann))
-            if not with_aux:
-                return result
-            aux.update({f"announced_{k}": v for k, v in ann_aux.items()})
-            return result, jax.lax.stop_gradient(aux)
         value_head = ensemble(params, actor_input)
         gated, aux = gated_readout(value_head, uncertainty_scale)
         gated = jax.lax.stop_gradient(gated)

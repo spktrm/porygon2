@@ -967,6 +967,16 @@ record there if the switch axis ever demands it.
 |---|---|---|
 | `entity_index_tag` | the param, its four add sites in `_assemble_sequence`, `player_entity_index_tag_{rms,grad_norm}`, `rl/offline/history_addends.py`, `test_entity_index_tag_links_private_to_public` (→ `test_entity_idx_is_not_row_content`, the inverse pin) | the wire column `ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX` STAYS — `belief_alignment` matches sheet row to public row through it, structurally, not through any learned tag. History rows keep their positional pairing (row bias i ↔ public row i). Resumed in checkpoint mode via the new by-path merge (233f707): leaf dropped from all four trees, league and Adam intact |
 
+## Removal ledger — 2026-09-02 history encoder restructure (in progress)
+
+One deletion per commit; the through-line and the design are in the
+2026-09-02 plan (parallel-scan backbone, gestalt out, step GAT in; fresh
+lineage). Each row's commit is its revert handle.
+
+| mechanism | symbols | why |
+|---|---|---|
+| Announced-state path (Φ_ann) | `history_encoder.{mask_outcome_features, _ANNOUNCEMENT_EDGE_COLUMNS, _OUTCOME_MAJOR_ARGS, SplitGRUCell.__call__, PerSlotHistoryEncoder._advance, announced_states_at_requests}`, `encoder.encode_history_with_announced`, offline `Porygon2OfflineCritic.{_history_tokens_with_announced, announced, with_aux_and_announced}`, `train.{_announced_metrics, _announced_enabled, _train_method, _unpack_outputs}` + the `announced_*` eval keys and manifest flag, `artifact.has_announced_states` + the `announced=` potential arg, `announced_loss_weight`/`announced_distill_weight`, the offline "Announced head" wandb section | broken since the 2026-09-01 GRU hoist (`announced_states_at_requests` called the pre-hoist `project_inputs` signature) and ON BY DEFAULT in the offline trainer (`announced_loss_weight` 1.0) — the one-step masked advance was the only caller of the per-step `_advance`, i.e. the serial GRU cell the parallel-scan backbone deletes. The skill/luck decomposition (decision = Φ_ann(t+1) − Φ(t), dice = Φ(t+1) − Φ_ann(t+1)) and dice-excised PBRS it existed for never shipped a validated critic (announced-movement ratio ~0.15, 2026-07-30 — SGD never built the circuit unpaid). Structure-only: the RL forward is untouched |
+
 ## Investigation ledger — 2026-09-01 flash attention: measured, declined
 
 The old objection ("APIs too immature") is RETIRED — jax 0.10.2's

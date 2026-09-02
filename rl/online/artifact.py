@@ -5,9 +5,8 @@ which trained RL products are created, saved, restored and merged.
 Checkpoints are written with a manifest.json capturing the architecture
 capabilities (entity size, decision slots, policy-head variant) so loads
 across architecture changes fail with a sentence instead of a pytree
-error — the same fail-loudly convention as the offline critic's
-announced-states manifest flag. rl/checkpoint.py stays the shared
-low-level serialisation beneath both.
+error. rl/checkpoint.py stays the shared low-level serialisation beneath
+both.
 """
 
 import functools

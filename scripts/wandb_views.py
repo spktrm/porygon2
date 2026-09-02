@@ -856,10 +856,7 @@ def offline_sections():
                     ["eval_accuracy_mean", "eval_accuracy_last_step_mean"],
                 ),
                 lp("Margin MAE", members("eval_margin_mae")),
-                lp(
-                    "Margin std (train batch)",
-                    ["margin_std_mean", "announced_margin_std_mean"],
-                ),
+                lp("Margin std (train batch)", ["margin_std_mean"]),
             ],
         ),
         ws.Section(
@@ -869,18 +866,6 @@ def offline_sections():
                 lp("Member disagreement (std)", ["eval_gate_member_std"]),
                 lp("Gated |Φ| (scale 5)", ["eval_gate_abs_phi"]),
                 lp("Gated sign accuracy", ["eval_gate_accuracy"]),
-            ],
-        ),
-        ws.Section(
-            name="2 · Announced head (Φ_ann)",
-            is_open=True,
-            panels=[
-                lp("Held-out announced loss", members("eval_announced_loss")),
-                lp("Announced sign accuracy", members("eval_announced_accuracy")),
-                lp(
-                    "Distill KL (realised ↔ announced)",
-                    members("eval_announced_distill_kl"),
-                ),
             ],
         ),
         ws.Section(
