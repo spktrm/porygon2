@@ -237,6 +237,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # negligible at this interval.
     memory_diag_interval: int = 5_000
 
+    # Actor step-timing drain cadence (rl/environment/actor_stats.py):
+    # every N learner steps the shared ActorStats sink is drained into
+    # the logs as per-timer means. 10 steps is ~2.5s, ~100+ actor steps
+    # across the pool — enough samples per point without a per-step
+    # dict merge. The actor-step decomposition it feeds (service wait /
+    # decode / history clip / inference, and the inference server's own
+    # phases) is the baseline the history-carry pass is judged against.
+    actor_stats_log_steps: int = 10
+
     # OOM guard (learner.py: Learner._check_oom_guard). A self-monitoring
     # safety valve, not a leak fix — added after 1361 crashed, though that
     # specific crash turned out to be an unrelated websocket failure to the

@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 import wandb
 from rl import checkpoint
+from rl.environment.actor_stats import ActorStats
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import BattleError, SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
@@ -528,7 +529,12 @@ def main(args: argparse.Namespace):
     # batch-1 fallback path had no remaining user) but left these reads
     # behind, which raised AttributeError at the first launch after it.
     # The server's constructor defaults are the values the fields held.
-    inference_server = InferenceServer(actor_player_network.apply, gpu_lock=gpu_lock)
+    # One timing sink shared by every training actor, its env and the
+    # server; the learner drains it (actor_stats_log_steps).
+    actor_stats = ActorStats()
+    inference_server = InferenceServer(
+        actor_player_network.apply, gpu_lock=gpu_lock, stats=actor_stats
+    )
     inference_server.start()
 
     logger.info("Loading train state...")
@@ -691,6 +697,7 @@ def main(args: argparse.Namespace):
                         rng_seed=len(new_threads) + salt + slot,
                         inference_client=inference_server,
                         pinned_opponent=pinned_opponent,
+                        stats=actor_stats,
                     )
                 )
             new_threads.append(
@@ -765,6 +772,7 @@ def main(args: argparse.Namespace):
         debug=debug,
         controller_bytes=controller_bytes,
         spawn_actor_pool=spawn_actor_pool,
+        actor_stats=actor_stats,
     )
     spawn_actor_pool()
 

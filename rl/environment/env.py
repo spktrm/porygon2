@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 from websockets.sync.client import connect
 
+from rl.environment.actor_stats import timed
 from rl.environment.data import (
     NUM_MOVES,
     NUM_PACKED_SET_FEATURES,
@@ -77,6 +78,9 @@ class SinglePlayerSyncEnvironment:
         # down, so a receive that will never be answered raises instead
         # of pinning this thread for the rest of the process's life.
         self.stop_check = None
+        # Set by PlayerActor on training actors: the ActorStats sink for
+        # the receive-wait and decode timers below. None = no timing.
+        self.stats = None
 
     def close(self) -> None:
         """Releases the websocket. Offline harnesses construct one env per
@@ -94,22 +98,27 @@ class SinglePlayerSyncEnvironment:
         self.game_id = None
 
     def _recv(self):
-        while True:
-            try:
-                recv_data = self.websocket.recv(timeout=RECV_POLL_SECONDS)
-                break
-            except TimeoutError:
-                if self.stop_check is not None and self.stop_check():
-                    raise ActorStopped(
-                        "training stopped while waiting on the game server"
-                    )
-        worker_response = WorkerResponse.FromString(recv_data)
-        if worker_response.HasField("error_response"):
-            raise BattleError(worker_response.error_response.trace)
-        environment_response = worker_response.environment_response
-        self.rqid = environment_response.state.rqid
+        # service_wait is "until the game server answers": in self-play
+        # that includes the OPPONENT actor's whole step (both sides must
+        # choose before the sim advances), so it is not service CPU.
+        with timed(self.stats, "actor_time_service_wait"):
+            while True:
+                try:
+                    recv_data = self.websocket.recv(timeout=RECV_POLL_SECONDS)
+                    break
+                except TimeoutError:
+                    if self.stop_check is not None and self.stop_check():
+                        raise ActorStopped(
+                            "training stopped while waiting on the game server"
+                        )
+        with timed(self.stats, "actor_time_process_state"):
+            worker_response = WorkerResponse.FromString(recv_data)
+            if worker_response.HasField("error_response"):
+                raise BattleError(worker_response.error_response.trace)
+            environment_response = worker_response.environment_response
+            self.rqid = environment_response.state.rqid
 
-        self.last_state = process_state(environment_response.state)
+            self.last_state = process_state(environment_response.state)
         return self.last_state
 
     def reset(self, packed_team: list[int] = None):

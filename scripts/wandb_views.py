@@ -847,6 +847,56 @@ def rl_sections():
             ],
         ),
         ws.Section(
+            # Fed by the ActorStats sink (rl/environment/actor_stats.py):
+            # every training actor, its env and the InferenceServer record
+            # wall-time per phase, drained every actor_stats_log_steps as
+            # means over the pool. Where an actor's step goes — the
+            # system rate is actor-bound (learner alone ~3x faster), and
+            # this is the baseline the history-carry pass is judged on.
+            name="9b · Actor step timing",
+            panels=[
+                lp(
+                    # service_wait includes the OPPONENT actor's whole
+                    # step in self-play (both sides choose before the sim
+                    # advances) — "waiting on the game server", not
+                    # service CPU. other = step_total minus the four.
+                    "Actor step decomposition (ms)",
+                    [
+                        "actor_time_step_total",
+                        "actor_time_service_wait",
+                        "actor_time_process_state",
+                        "actor_time_history_clip",
+                        "actor_time_inference",
+                        "actor_time_other",
+                    ],
+                ),
+                lp(
+                    # Inside step_player on the server: queue_wait is
+                    # enqueue -> group start; forward is dispatch +
+                    # block_until_ready, so the history share of the
+                    # actor forward is read here against the bucket level.
+                    "Inference server phases (ms)",
+                    [
+                        "actor_infer_queue_wait",
+                        "actor_infer_stack",
+                        "actor_infer_lock_wait",
+                        "actor_infer_forward",
+                        "actor_infer_device_get",
+                    ],
+                ),
+                lp(
+                    # level 0 = the smallest history bucket; a carried
+                    # suffix request should sit there.
+                    "Inference batch size & history level",
+                    ["actor_infer_batch_size", "actor_infer_history_level"],
+                ),
+                lp(
+                    "Actor steps/sec (pool aggregate)",
+                    ["actor_steps_per_sec"],
+                ),
+            ],
+        ),
+        ws.Section(
             # Fed by learner.py's _log_memory_diagnostics (main-only, every
             # memory_diag_interval steps) plus the service's own 10s
             # process.memoryUsage() write — see index.ts:writeMemoryStats.

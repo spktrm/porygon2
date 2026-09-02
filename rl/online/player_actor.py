@@ -1,6 +1,9 @@
+import time
+
 import jax
 import numpy as np
 
+from rl.environment.actor_stats import STEP_TOTAL, ActorStats, timed
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import ActorStopped, SinglePlayerSyncEnvironment
 from rl.environment.interfaces import (
@@ -66,12 +69,18 @@ class PlayerActor:
         is_eval: bool = False,
         inference_client: InferenceServer | None = None,
         pinned_opponent: ParamsContainer | None = None,
+        stats: ActorStats | None = None,
     ):
         self._agent = agent
         self._env = env
         # The env polls this while blocked on the game server so a game
         # whose other side has already unwound can't pin this thread.
         env.stop_check = self._stop_requested
+        # Step-timing sink (rl/environment/actor_stats.py), training
+        # actors only — eval actors run the direct batch-1 path and would
+        # pollute the inference timer.
+        self._stats = stats
+        env.stats = stats
         self._unroll_length = unroll_length
         self._learner = learner
         self._rng_key = jax.random.key(rng_seed)
@@ -196,27 +205,38 @@ class PlayerActor:
         window_snapshots: dict[int, tuple] = {}
 
         # Rollout the player environment.
+        # One STEP_TOTAL sample per loop iteration (clip + inference +
+        # env.step's receive), taken at the top of the next one.
+        iteration_start = None
         for player_step_index in range(player_subkeys.shape[0]):
             if self._stop_requested():
                 # Bail on the STEP boundary rather than playing the game
                 # out: at shutdown this trajectory is going nowhere, and a
                 # game can still have hundreds of steps to run.
                 raise ActorStopped("training stopped mid-unroll")
-            player_actor_input_clipped = self.clip_actor_history(player_actor_input)
-            if self._inference_client is not None:
-                # player_params is the host ParamsContainer on this path
-                # (see unroll_and_push) — the server owns device transfer.
-                player_agent_output = self._inference_client.step_player(
-                    player_subkeys[player_step_index],
-                    player_params,
-                    player_actor_input_clipped,
-                )
-            else:
-                player_agent_output = self._agent.step_player(
-                    player_subkeys[player_step_index],
-                    player_params,
-                    player_actor_input_clipped,
-                )
+            if self._stats is not None:
+                now = time.perf_counter()
+                if iteration_start is not None:
+                    self._stats.record(STEP_TOTAL, (now - iteration_start) * 1e3)
+                iteration_start = now
+            with timed(self._stats, "actor_time_history_clip"):
+                player_actor_input_clipped = self.clip_actor_history(player_actor_input)
+            with timed(self._stats, "actor_time_inference"):
+                if self._inference_client is not None:
+                    # player_params is the host ParamsContainer on this
+                    # path (see unroll_and_push) — the server owns device
+                    # transfer.
+                    player_agent_output = self._inference_client.step_player(
+                        player_subkeys[player_step_index],
+                        player_params,
+                        player_actor_input_clipped,
+                    )
+                else:
+                    player_agent_output = self._agent.step_player(
+                        player_subkeys[player_step_index],
+                        player_params,
+                        player_actor_input_clipped,
+                    )
             player_transition = PlayerTransition(
                 env_output=player_actor_input_clipped.env,
                 agent_output=player_agent_output,

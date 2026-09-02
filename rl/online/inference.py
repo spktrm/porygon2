@@ -40,14 +40,16 @@ import dataclasses
 import functools
 import queue
 import threading
+import time
 from collections import OrderedDict
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from constants import NUM_HISTORY
+from rl.environment.actor_stats import ActorStats, timed
 from rl.environment.env import ActorStopped
 from rl.environment.interfaces import (
     PlayerActorInput,
@@ -70,6 +72,9 @@ class _InferenceRequest:
     rng_key: jax.Array
     actor_input: PlayerActorInput
     done: threading.Event
+    # perf_counter at step_player's enqueue — queue wait is measured
+    # from here to the start of the group that serves the request.
+    enqueued_at: float = 0.0
     output: PlayerAgentOutput | None = None
     error: BaseException | None = None
 
@@ -122,8 +127,11 @@ class InferenceServer:
         head_params: HeadParams = HeadParams(),
         max_batch: int = 16,
         params_cache_size: int = 16,
+        stats: ActorStats | None = None,
     ):
         self._queue: "queue.SimpleQueue[_InferenceRequest]" = queue.SimpleQueue()
+        # Per-phase timing sink for _run_group (rl/environment/actor_stats.py).
+        self._stats = stats
         # Set by stop() at shutdown: step_player polls its result wait
         # against it and unwinds the calling actor thread with
         # ActorStopped, the same poll-against-stop the game-server
@@ -186,6 +194,7 @@ class InferenceServer:
             rng_key=rng_key,
             actor_input=actor_input,
             done=threading.Event(),
+            enqueued_at=time.perf_counter(),
         )
         self._queue.put(request)
         while not request.done.wait(timeout=_STOP_POLL_SECONDS):
@@ -267,6 +276,16 @@ class InferenceServer:
         )
 
     def _run_group(self, group: "list[_InferenceRequest]") -> None:
+        group_start = time.perf_counter()
+        if self._stats is not None:
+            for request in group:
+                self._stats.record(
+                    "actor_infer_queue_wait", (group_start - request.enqueued_at) * 1e3
+                )
+            self._stats.record("actor_infer_batch_size", len(group))
+            self._stats.record(
+                "actor_infer_history_level", self._history_level(group[0])
+            )
         params = self._get_device_params(
             self._version_key(group[0].container), group[0].container
         )
@@ -279,43 +298,52 @@ class InferenceServer:
         history_target = _bucket_value(level, _HISTORY_MIN_LENGTH, NUM_HISTORY)
         packed_target = _bucket_value(level, _HISTORY_MIN_LENGTH, 2 * NUM_HISTORY)
 
-        stacked = PlayerActorInput(
-            # [B, T=1, ...]: each vmap slice must see env with the same
-            # leading T=1 axis Agent._step_player's `t[None, ...]` adds —
-            # history/packed_history pass through un-expanded there, so
-            # they stack to [B, H, ...] with no extra axis.
-            env=jax.tree.map(
-                lambda *xs: np.expand_dims(np.stack(xs), 1),
-                *[r.actor_input.env for r in group],
-            ),
-            packed_history=jax.tree.map(
-                _stack_axis0_to(packed_target),
-                *[r.actor_input.packed_history for r in group],
-            ),
-            history=jax.tree.map(
-                _stack_axis0_to(history_target),
-                *[r.actor_input.history for r in group],
-            ),
-        )
-        # Pad the batch axis up to the next power of two by replicating
-        # row 0 (extra rows' outputs are simply never read back) — keeps
-        # the traced batch sizes to log2(max_batch)+1 distinct values.
-        batch = len(group)
-        padded_batch = 1 << (batch - 1).bit_length()
-        if padded_batch > batch:
-            pad = padded_batch - batch
-            stacked = jax.tree.map(
-                lambda x: np.concatenate([x, np.repeat(x[:1], pad, axis=0)]),
-                stacked,
+        with timed(self._stats, "actor_infer_stack"):
+            stacked = PlayerActorInput(
+                # [B, T=1, ...]: each vmap slice must see env with the same
+                # leading T=1 axis Agent._step_player's `t[None, ...]` adds —
+                # history/packed_history pass through un-expanded there, so
+                # they stack to [B, H, ...] with no extra axis.
+                env=jax.tree.map(
+                    lambda *xs: np.expand_dims(np.stack(xs), 1),
+                    *[r.actor_input.env for r in group],
+                ),
+                packed_history=jax.tree.map(
+                    _stack_axis0_to(packed_target),
+                    *[r.actor_input.packed_history for r in group],
+                ),
+                history=jax.tree.map(
+                    _stack_axis0_to(history_target),
+                    *[r.actor_input.history for r in group],
+                ),
             )
-        rng_keys = jnp.stack(
-            [r.rng_key for r in group] + [group[0].rng_key] * (padded_batch - batch)
-        )
+            # Pad the batch axis up to the next power of two by replicating
+            # row 0 (extra rows' outputs are simply never read back) — keeps
+            # the traced batch sizes to log2(max_batch)+1 distinct values.
+            batch = len(group)
+            padded_batch = 1 << (batch - 1).bit_length()
+            if padded_batch > batch:
+                pad = padded_batch - batch
+                stacked = jax.tree.map(
+                    lambda x: np.concatenate([x, np.repeat(x[:1], pad, axis=0)]),
+                    stacked,
+                )
+            rng_keys = jnp.stack(
+                [r.rng_key for r in group] + [group[0].rng_key] * (padded_batch - batch)
+            )
 
-        with self._gpu_lock:
-            batched_output = self._forward(params, rng_keys, stacked)
+        # forward = dispatch + completion: device_get blocked on the
+        # result anyway, so block_until_ready only moves the wait onto
+        # its own timer rather than adding one.
+        with ExitStack() as held:
+            with timed(self._stats, "actor_infer_lock_wait"):
+                held.enter_context(self._gpu_lock)
+            with timed(self._stats, "actor_infer_forward"):
+                batched_output = self._forward(params, rng_keys, stacked)
+                jax.block_until_ready(batched_output)
         # One transfer for the whole batch; actors receive plain numpy.
-        batched_output = jax.device_get(batched_output)
+        with timed(self._stats, "actor_infer_device_get"):
+            batched_output = jax.device_get(batched_output)
 
         for i, request in enumerate(group):
             request.output = PlayerAgentOutput(

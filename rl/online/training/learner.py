@@ -17,6 +17,7 @@ import wandb.wandb_run
 from tqdm import tqdm
 
 import wandb
+from rl.environment.actor_stats import ActorStats
 from rl.environment.interfaces import Batch, Trajectory
 from rl.environment.utils import next_tqdm_position
 from rl.online.artifact import (
@@ -85,8 +86,12 @@ class Learner:
         debug: bool = False,
         controller_bytes: bytes | None = None,
         spawn_actor_pool: "Callable[[], None] | None" = None,
+        actor_stats: ActorStats | None = None,
     ):
         self.config = config
+        # The actors' shared timing sink (rl/environment/actor_stats.py),
+        # drained into the periodic logs; None for standalone construction.
+        self._actor_stats = actor_stats
         self.league = league
         self.gpu_lock = gpu_lock or nullcontext()
         self.debug = debug
@@ -481,6 +486,12 @@ class Learner:
             and step % self.config.memory_diag_interval == 0
         ):
             log_memory_diagnostics(run_state, self.league, logs)
+
+        if (
+            self._actor_stats is not None
+            and step % self.config.actor_stats_log_steps == 0
+        ):
+            logs.update(self._actor_stats.drain())
 
         # The default x-axis for every metric on the run
         # (wandb.define_metric in main.py): monotonic across resumes AND
