@@ -967,7 +967,7 @@ record there if the switch axis ever demands it.
 |---|---|---|
 | `entity_index_tag` | the param, its four add sites in `_assemble_sequence`, `player_entity_index_tag_{rms,grad_norm}`, `rl/offline/history_addends.py`, `test_entity_index_tag_links_private_to_public` (→ `test_entity_idx_is_not_row_content`, the inverse pin) | the wire column `ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX` STAYS — `belief_alignment` matches sheet row to public row through it, structurally, not through any learned tag. History rows keep their positional pairing (row bias i ↔ public row i). Resumed in checkpoint mode via the new by-path merge (233f707): leaf dropped from all four trees, league and Adam intact |
 
-## Removal ledger — 2026-09-02 history encoder restructure (in progress)
+## Removal ledger — 2026-09-02 history encoder restructure
 
 One deletion per commit; the through-line and the design are in the
 2026-09-02 plan (parallel-scan backbone, gestalt out, step GAT in; fresh
@@ -979,6 +979,79 @@ lineage). Each row's commit is its revert handle.
 | Slot gestalt (`ctx = h_slots.mean(-2)` on the slot input) | `_scan_step`'s ctx concat; `slot_cell` input 6D → 5D (`[messages ; field_vec ; flat_field]`) | redundant twice over — `flat_field` is fed the SUM of every message, and the trunk attends over the HISTORY_ENTITY rows at read time — diluted by every untouched slot sitting at `initial_slot_state`, and on the serial carry tail. Fresh params (kernel shape moved). `tests/test_history_encoder.py` pins it at the scan-step level: slot k's update never reads slot j's state, with the field carry (moves every slot) and the slot's own carry as the two positive controls |
 | Masked SOURCE MEAN in the history message (the 2026-09-01 TGN source half) | `src_node`/`src_edge`/`src_weights` in `__call__`; `message_projection` input 5D+3 → 2D+3 (`[node ; edge ; side ; is_src ; field]`); the `is_src` predicate and the relevant-edge gather written once (`source_rows`, `relevant_edges`) for the encoder and the wire-side `player_history_src_frac` | replaced by `StepAttention` — ONE GAT layer over the live rows of a step, self included, `q`/`k`/`v` lecun over `[node ; edge ; side ; is_src]`, −1e9 floor AND re-masked probs on padded keys (a 1-row step is exactly its own value), `attn_out` zeros-init (one zero factor over live inputs — messages are `message_projection` alone at step 0, the projection moves at step 1). The mean was invertible in singles (2-source steps are 2-row steps: other = 2·mean − self) and lossy in doubles (a spread move: 2 movers, 3 targets, one average for all); mover/affected are row FEATURES, never a key partition (self-targeting moves are one row on both ends). `cfg.encoder.history_step` (2 heads × qk 32); probs/masks ride `PerSlotHistoryOutput` for the Step-5 panels. Tests: silent-at-init WITH the live-kernel control, non-zero `attn_out` grad at init, padded row places and receives no mass WITH the live-row control, 1-row step probs exactly one-hot |
 | GRU backbone (`SplitGRUCell` + `nn.scan`) | `SplitGRUCell`, `_GateParams`, `_scan_step`, the `nn.scan` call, `SCAN_UNROLL`, the hoisted `project_inputs` calls; per cell the three orthogonal D×D recurrent Denses (`hr/hz/hn`) → `GatedLinearCell` (minGRU, Feng et al. 2024: `z = σ(W_z x)`, `h̃ = W_h x`, `h = (1−z)h_prev + z h̃`; the candidate no longer reads the carry) + `gated_linear_scan` (f32 `jax.lax.associative_scan` over the affine coefficients `(1 − write·z, write·z·h̃)`; write = 0 is the identity, so untouched slots hold `initial_slot_state` bit-exactly); two parallel scans — field first, its shifted states become an `xs` column of the slot gates — ZERO serial work | **the bench gate CLEARED** (real module, full GPU, B=16 broadcast of the ex.bin trajectory, median of 50; actor forward GRU → linear): H=256 B=1 7.72 → 2.15 ms (−72%), B=4 8.11 → 4.16 (−49%), B=8 11.36 → 7.08 (−38%), B=12 14.43 → 9.85 (−32%), B=16 17.44 → 12.76 (−27%); H=512 B=1 13.82 → 2.88 (−79%), B=4 14.32 → 6.70 (−53%), B=8 20.87 → 12.34 (−41%), B=12 25.56 → 17.05 (−33%), B=16 31.95 → 22.92 (−28%). The GRU is LATENCY-bound (near-flat in B — the ~26µs/step floor the 2026-09-01 hoist could not move) and the scan is throughput-bound, so the win shrinks with batch; the inference server has 12 actors, so B=16 is never realised and the ≥30% bar clears at every live batch. Recorded honestly: it is an actor-cost read of THIS lineage only — after the stored-state pass (§3b) a per-request scan is ~5 steps and the parallel form's payoff moves to the learner. `test_chunking` window invariance on the new backbone: value log-prob max diff 0.0337 against the 0.05 tolerance (the bf16 GEMM shape-dependence survives an f32 recursion; not tightened, not loosened). The recursion lives in a free function, so no dtype-allowlist entry. Tests: slot isolation WITH the moved-slot control, field-into-every-slot, field-never-reads-slots, scan == serial `lax.scan` to 1e-5, unwritten units hold init exactly |
+
+## Addition ledger — 2026-09-02 actor-side history carry (incremental inference)
+
+Follows the parallel-scan restructure directly. Every actor request used
+to re-run the whole history pathway over the full window — packed-cache
+embedding (≤1024 rows), message projection + step GAT (≤512 steps), both
+scans, the cummax — bucketed to ≥64 steps, when a request adds ~3 steps
+/ ~5 packed rows (ex.bin: 168 steps, 268 rows over 58 requests). The
+minGRU scan is `h_t = A_t⊙h_0 + B_t` with `h_0` already an argument, so
+resuming from a carried post-window state over the new suffix is the SAME
+function, exact up to the bf16 GEMM leading-dim class (0.05 on log-probs,
+`tests/test_chunking.py`). Three user decisions shaped it: **actor-side
+only** (learner path, chunk contract, buffer, shape lattice untouched —
+`player_chunk_history_underrun` 0.0000 over 3000 samples says the 256-row
+window always holds whole games, so an actor carrying from h0 over the
+game computes what the learner computes; that panel is the watch that
+would say otherwise), **the carry is optional** (`valid=False` or `()`
+leaves is today's function bit for bit; the inference server is
+stateless), and **the wire is unchanged plus one int**
+(`history_rewrite_count`; the actor slices the suffix itself).
+
+| piece | what | why |
+|---|---|---|
+| `ActorStats` + `actor_time_*` / `actor_infer_*` panels (§9b) | lock-guarded mean sink drained by the learner every `actor_stats_log_steps`; per-step timers (service wait, decode, clip, inference) and the server's phases (queue wait, stack, lock wait, forward, device_get, batch size, history level) | the actors logged nothing; this is the baseline the pass is judged against. `service_wait` includes the OPPONENT actor's whole step in self-play — "waiting on the game server", not service CPU |
+| `EnvironmentState.history_rewrite_count = 18` | incremented INSIDE `EdgeBuffer.remapEntitySlot` — the one place past rows are rewritten (an Illusion `\|replace\|`) — so a second caller can never forget it; harness asserts monotone, vitest positive control on the Illusion team class | the carry's only invalidation the window itself cannot show. Field 17 is the opponent request; never reuse |
+| `HistoryCarry` (slot f32 (12,D), field f32 (3,D), node snapshots (12,D), `valid`) on `PlayerActorInput`/`PlayerActorOutput`, `resolve_initial`, `history_carry_from`, `invalid_history_carry` | every leaf defaults to `()`; `isinstance(valid, tuple)` is the STATIC no-carry branch (no `where` in the learner trace — bit-identical by construction, verified on 100 leaves), else `jnp.where(valid, carried, h0)` per leaf. The returned carry is the post-window f32 state taken BEFORE the cfg.dtype cast; request-count stamping makes the gather select the last valid step, so no alignment leaf is needed. The actor strips it before the row is stored (`without_history_carry`) | the f32 leaves are the scan's own recursion state — the value-recursion rule, not a dtype-policy breach |
+| `_cut_history_windows` + `clip_history_suffix` + `ACTOR_HISTORY_MIN_LENGTH` | the joint cut and IDX rebase written ONCE (the tail clip calls it); the suffix = steps with `FIELD_FEATURE__INDEX` after the carried step and exactly the packed rows they reference, each axis on its own bucket; `None` when the window no longer continues from the carried step; zero new steps is a valid all-zero window (the encoder returns the carry itself). The "must match" constant between actor and server is one symbol | token-for-token reconstruction and rebase pinned in `tests/test_history_suffix.py` |
+| `PlayerActor(history_carry_width)` ← `player_actor_history_carry` (default True) | per game: carry, last consumed index, rewrite count; recompute with an INVALID carry (leaves present so a server batch always stacks, `valid` False) at game start / rewrite / gap, each counted (`actor_history_recompute_{frac,game_start,rewrite,gap}`, `actor_history_suffix_{steps,rows}`); `Agent._step_player` forwards the carry, `_run_group` stacks carry leaves on axis 0 and fills a no-carry request in a mixed group with an invalid one | False = today's full-window request on every step — the control arm and the abort switch |
+| `ACTOR_HISTORY_MIN_LENGTH` 64 → 32 | levels 32/64/128/256/512: one extra forward-only compile per batch bucket on the ACTOR family only | the suffix runs at the smallest bucket; the scan is O(log H) so 16 buys little over 32 |
+
+**The plan's params-version guard is OMITTED as vacuous**: `ParamsContainer`
+is an immutable NamedTuple and `unroll` runs a whole game on ONE
+container, so a mid-game version change is structurally impossible; a
+future refactor that hands actors a mutable container must add the guard
+(recompute on `_version_key` change), not inherit its absence.
+
+**Tests** (`tests/test_history_carry.py`, gpu/slow; `tests/test_actor_carry_loop.py`
+plain python): (a) the 58 ex.bin requests served from the previous carry
+over the suffix alone match the full-window forward within 0.05 on
+log_policy and value log-probs, carried f32 states within 0.05 of the
+full scan's at the end, shifted-carry control; (b) garbage leaves under
+`valid=False` == the from-scratch forward bit for bit, same garbage under
+`valid=True` differs; (c) a zero-step window returns the carry itself /
+h0; (d) suffix reconstruction; (e) reason dispatch + stats; (f) a mixed
+server group vs single forwards. The carry tests open the zero-init
+readout (`open_zero_init_paths(..., ["action_head"])`) — on fresh params
+every logit is exactly 0, so a "the carry moves the policy" control would
+pass or fail vacuously. **(a)/(b)/(c)/(f) are OWED a run**: landed
+against a live learner, fast suite green, slow suite at the next stop.
+
+**Pre-registered acceptance (hold 2k learner steps):** `actor_steps_per_sec`
+up and `actor_time_inference` down against the Step-0 baseline below;
+`actor_infer_forward` down by the history share at the live batch
+(34-56% at levels 128-512); system steps/sec above irqeetfg's 4.17-4.41 at
+matched lifetime_step; `actor_history_recompute_frac` ≤ 0.05 (> 0.1 = a
+continuity bug); `player_learner_actor_forward_kl{,_switch,_move}` and
+`player_replay_realised_ratio` inside their pre-change band. **Abort** →
+`player_actor_history_carry=False` (no revert). **Declined, recorded:**
+delta wire (gated on the service_wait / process_state share), server-side
+carry table (identity + eviction for no numeric gain), stored-state chunks
+(underrun 0 — nothing to fix), gating the returned carry on `cfg.train`
+(two paths for a leaf XLA drops anyway). The parallel scan's payoff after
+this pass is the recompute fallback and the learner's chunk-length scans.
+
+**Reference numbers.** irqeetfg (launched on f478015, BEFORE the Step-0
+telemetry commit — so it carries NO `actor_*` panels; the plan's "lands
+first" was not honoured by a restart) system rate 4.17 / 4.25 / 4.41
+steps/sec at 1k-4k / 4k-8k / 8k-13.8k, vs d7zdz8hw 3.66 and yt3qp960
+3.53 (steady 4.12); learner alone 12.3. The per-phase baseline therefore
+comes from the relaunch itself: a bounded `player_actor_history_carry=
+False` window on the SAME code (the timers live, the carry off), then
+the carry on — the matched pair the speed comparison is read from.
+Numbers to be appended here once both windows have run.
 
 ## Investigation ledger — 2026-09-01 flash attention: measured, declined
 
