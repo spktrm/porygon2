@@ -21,6 +21,7 @@ import numpy as np
 from jaxtyping import ArrayLike
 from ml_collections import ConfigDict
 
+from rl.environment.interfaces import HistoryCarry
 from rl.environment.protos.enums_pb2 import BattlemajorargsEnum
 from rl.environment.protos.features_pb2 import EntityEdgeFeature, FieldFeature
 from rl.model.constants import NUM_PUBLIC_SLOTS
@@ -92,6 +93,13 @@ class PerSlotHistoryOutput:
     # entity's current snapshot, unmixed by GRU gating — what a hand
     # evaluator reads. Parameter-free carry.
     node_snapshots: ArrayLike = ()
+    # The two recursions' states after the window's last step, in f32
+    # (before the compute-dtype cast the snapshots go through): (12, D)
+    # and (3, D). Padding is trailing and invalid steps compose as the
+    # identity, so these ARE the state after the last valid step -- the
+    # actor's carry (`history_carry_from`).
+    final_slot_state: ArrayLike = ()
+    final_field_state: ArrayLike = ()
     step_valid: ArrayLike = ()
     step_request_count: ArrayLike = ()
     # The step GAT's read, for telemetry: (H, heads, K, K) attention
@@ -104,6 +112,20 @@ class PerSlotHistoryOutput:
     # the (H, 12) touched mask -- only a touched slot's gate is applied.
     step_slot_gate: ArrayLike = ()
     step_touched: ArrayLike = ()
+
+
+def history_carry_from(output: PerSlotHistoryOutput) -> HistoryCarry:
+    """The state after the window: what the next request's suffix resumes
+    from. Post-window regardless of the request-aligned gather -- edges are
+    stamped with the request count they were ingested under, so at request
+    N every window step has count <= N and the gather selects the last
+    valid step anyway."""
+    return HistoryCarry(
+        slot_states=output.final_slot_state,
+        field_states=output.final_field_state,
+        node_snapshots=output.node_snapshots[-1],
+        valid=jnp.ones((), dtype=jnp.bool_),
+    )
 
 
 def _masked_mean(values: jax.Array, weight: jax.Array) -> jax.Array:
@@ -426,18 +448,47 @@ class PerSlotHistoryEncoder(nn.Module):
         h_field = self.initial_field_state.astype(self.cfg.dtype)
         return h_slots, h_field
 
+    def resolve_initial(
+        self, carry: HistoryCarry
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """What the window starts from: ((12, D) f32 slot states, (3, D)
+        f32 field states, (12, D) node snapshots in the compute dtype).
+
+        With no carry leaves (the default everywhere but the actor) this is
+        the learned h0 and an all-zero snapshot, with no select in the
+        trace -- the from-scratch function, bit for bit. With leaves
+        present, `valid` selects per call between the carried state and
+        that same h0, so the actor's full-window recompute is the same
+        function too.
+        """
+        h0_slots, h0_field = self.initial_state()
+        h0_slots = h0_slots.astype(jnp.float32)
+        h0_field = h0_field.astype(jnp.float32)
+        node0 = jnp.zeros(h0_slots.shape, self.cfg.dtype)
+        if isinstance(carry.valid, tuple):
+            return h0_slots, h0_field, node0
+        return (
+            jnp.where(carry.valid, carry.slot_states.astype(jnp.float32), h0_slots),
+            jnp.where(carry.valid, carry.field_states.astype(jnp.float32), h0_field),
+            jnp.where(carry.valid, carry.node_snapshots.astype(self.cfg.dtype), node0),
+        )
+
     def _recur(
         self,
         slot_inputs: jax.Array,
         field_inputs: jax.Array,
         touched: jax.Array,
         step_valid: jax.Array,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        h0_slots: jax.Array,
+        h0_field: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         """The recurrent half: (H, 12, 2D) precomputed slot inputs
         [messages ; field_vec], (H, 3, 2D) field inputs, (H, 12) bool
-        touched, (H,) bool step_valid -> ((H, 12, D), (H, 3, D)) states
-        after each step, in the compute dtype, plus the (H, 12) mean slot
-        write gate (telemetry: pinned at 0 or 1 is the collapse shape).
+        touched, (H,) bool step_valid, the f32 (12, D) / (3, D) states the
+        window starts from -> ((H, 12, D), (H, 3, D)) states after each
+        step, in the compute dtype, the (H, 12) mean slot write gate
+        (telemetry: pinned at 0 or 1 is the collapse shape), and the two
+        post-window states in f32 (the carry).
 
         Field scan first -- its inputs are all precomputed -- then its
         states, shifted one step back (the state BEFORE step t, i.e. the
@@ -448,7 +499,6 @@ class PerSlotHistoryEncoder(nn.Module):
         pin it with controls. Invalid steps and untouched slots write
         nothing (the identity coefficient).
         """
-        h0_slots, h0_field = self.initial_state()
         field_gate, field_candidate = self.field_cell(field_inputs)
         field_write = jnp.broadcast_to(step_valid[:, None], field_gate.shape[:2])
         field_states = gated_linear_scan(
@@ -477,6 +527,8 @@ class PerSlotHistoryEncoder(nn.Module):
             slot_states.astype(self.cfg.dtype),
             field_states.astype(self.cfg.dtype),
             slot_gate.mean(-1),
+            slot_states[-1],
+            field_states[-1],
         )
 
     def __call__(
@@ -491,6 +543,7 @@ class PerSlotHistoryEncoder(nn.Module):
         field_row_embeddings: jax.Array,
         step_request_count: jax.Array,
         step_valid: jax.Array,
+        carry: HistoryCarry = HistoryCarry(),
     ) -> PerSlotHistoryOutput:
         """Scan the slot bank along the history axis.
 
@@ -508,7 +561,10 @@ class PerSlotHistoryEncoder(nn.Module):
                 token triple per step, one input per field state.
             step_request_count: (H,) request count of each history step.
             step_valid: (H,) bool.
+            carry: the state the window starts from (`resolve_initial`);
+                the default is the learned h0.
         """
+        h0_slots, h0_field, node0 = self.resolve_initial(carry)
         relevant, edge_mask = relevant_edges(history_field)  # (H, K)
         step_valid = step_valid & edge_mask.any(axis=-1)
 
@@ -594,9 +650,10 @@ class PerSlotHistoryEncoder(nn.Module):
         )
         touched = counts > 0  # (H, 12)
 
-        # Latest-node stream: node_means at the last touched step <= t, or 0
-        # before any touch -- exactly the old scan's latest_nodes carry,
-        # without the carry.
+        # Latest-node stream: node_means at the last touched step <= t, or
+        # the window's starting snapshot (0 from scratch, the carried one
+        # on a suffix) before any touch -- exactly the old scan's
+        # latest_nodes carry, without the carry.
         step_index = jnp.arange(touched.shape[0])[:, None]
         last_touched = jax.lax.cummax(
             jnp.where(touched, step_index, -1), axis=0
@@ -604,9 +661,9 @@ class PerSlotHistoryEncoder(nn.Module):
         gathered = jnp.take_along_axis(
             node_means, last_touched.clip(min=0)[..., None], axis=0
         )
-        node_snapshots = jnp.where((last_touched >= 0)[..., None], gathered, 0).astype(
-            self.cfg.dtype
-        )
+        node_snapshots = jnp.where(
+            (last_touched >= 0)[..., None], gathered, node0[None]
+        ).astype(self.cfg.dtype)
 
         # (all, mine, theirs) message sums for the three field states.
         live = (edge_mask & step_valid[:, None]).astype(messages.dtype)[..., None]
@@ -632,14 +689,22 @@ class PerSlotHistoryEncoder(nn.Module):
         field_inputs = jnp.concatenate(
             (field_row_embeddings.astype(self.cfg.dtype), side_messages), axis=-1
         )  # (H, 3, 2D)
-        slot_snapshots, field_snapshots, step_slot_gate = self._recur(
-            slot_inputs, field_inputs, touched, step_valid
+        (
+            slot_snapshots,
+            field_snapshots,
+            step_slot_gate,
+            final_slot_state,
+            final_field_state,
+        ) = self._recur(
+            slot_inputs, field_inputs, touched, step_valid, h0_slots, h0_field
         )
 
         return PerSlotHistoryOutput(
             slot_snapshots=slot_snapshots,
             field_snapshots=field_snapshots,
             node_snapshots=node_snapshots,
+            final_slot_state=final_slot_state,
+            final_field_state=final_field_state,
             step_valid=step_valid,
             step_request_count=step_request_count,
             step_attention_probs=step_attention_probs,
@@ -650,13 +715,20 @@ class PerSlotHistoryEncoder(nn.Module):
         )
 
     def state_at_requests(
-        self, history_output: PerSlotHistoryOutput, request_counts: jax.Array
+        self,
+        history_output: PerSlotHistoryOutput,
+        request_counts: jax.Array,
+        carry: HistoryCarry = HistoryCarry(),
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         """For each request, gather the state after the last history step whose
-        request_count <= the request's.
-        (T,) -> ((T, 12, D) slot states, (T, D) field state,
+        request_count <= the request's; with no such step, what the window
+        started from (`resolve_initial` of the same carry the scan ran on --
+        a zero-new-steps suffix returns the carry itself).
+        (T,) -> ((T, 12, D) slot states, (T, 3, D) field states,
         (T, 12, D) latest node snapshots)."""
-        h0_slots, h0_field = self.initial_state()
+        h0_slots, h0_field, node0 = self.resolve_initial(carry)
+        h0_slots = h0_slots.astype(self.cfg.dtype)
+        h0_field = h0_field.astype(self.cfg.dtype)
         step_indices = jnp.arange(history_output.step_valid.shape[0])
 
         def gather_one(request_count: jax.Array):
@@ -673,9 +745,7 @@ class PerSlotHistoryEncoder(nn.Module):
                 has_history, history_output.field_snapshots[safe_idx], h0_field
             )
             nodes = jnp.where(
-                has_history,
-                history_output.node_snapshots[safe_idx],
-                jnp.zeros_like(h0_slots),
+                has_history, history_output.node_snapshots[safe_idx], node0
             )
             return slots, field, nodes
 

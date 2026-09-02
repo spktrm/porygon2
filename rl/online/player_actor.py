@@ -237,9 +237,13 @@ class PlayerActor:
                         player_params,
                         player_actor_input_clipped,
                     )
+            # The carry is actor-only: strip it before the row is stored,
+            # or every chunk would carry (12 + 3 + 12, D) of scan state.
             player_transition = PlayerTransition(
                 env_output=player_actor_input_clipped.env,
-                agent_output=player_agent_output,
+                agent_output=player_agent_output.replace(
+                    actor_output=player_agent_output.actor_output.without_history_carry()
+                ),
             )
             player_traj.append(player_transition)
             if player_step_index > 0 and player_step_index % stride == 0:

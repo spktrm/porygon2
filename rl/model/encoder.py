@@ -19,6 +19,7 @@ from rl.environment.data import (
     TARGET_SLOT_INDICES,
 )
 from rl.environment.interfaces import (
+    HistoryCarry,
     PlayerEnvOutput,
     PlayerHistoryOutput,
     PlayerPackedHistoryOutput,
@@ -76,6 +77,7 @@ from rl.model.history_encoder import (
     HistoryAttentionPool,
     NodeHistoryRead,
     PerSlotHistoryEncoder,
+    history_carry_from,
     history_step_stats,
 )
 from rl.model.modules import (
@@ -1443,10 +1445,12 @@ class Encoder(nn.Module):
         self,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
+        carry: HistoryCarry = HistoryCarry(),
     ):
         """Shared front half of the history pathway: embeds the packed
-        caches and field rows once and runs the recurrent scan. Returns
-        (scan output, edge_slot_ids, node_sides, per-step field vectors)."""
+        caches and field rows once and runs the recurrent scan from
+        `carry` (the learned h0 by default). Returns (scan output,
+        edge_slot_ids, node_sides, per-step field vectors)."""
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
         node_embedding_cache, _ = _lifted_entity_vmap(Encoder._embed_public_entity)(
@@ -1487,6 +1491,7 @@ class Encoder(nn.Module):
             field_row_embeddings=step_field_embeddings,
             step_request_count=step_request_count,
             step_valid=step_valid.squeeze(-1),
+            carry=carry,
         )
         return (
             history_output,
@@ -1501,6 +1506,7 @@ class Encoder(nn.Module):
         env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
+        carry: HistoryCarry = HistoryCarry(),
     ):
         """Recurrent history pathway over the shared trajectory history.
 
@@ -1518,14 +1524,16 @@ class Encoder(nn.Module):
         per-step PerSlotHistoryOutput for the telemetry that reads it.
         """
         history_output, *_ = self._run_history_encoder(
-            packed_history_step, history_step
+            packed_history_step, history_step, carry
         )
 
         # Read the recurrent state as of each request: the snapshot after the
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
         return (
-            *self.history_encoder.state_at_requests(history_output, request_count),
+            *self.history_encoder.state_at_requests(
+                history_output, request_count, carry
+            ),
             history_output,
         )
 
@@ -1574,6 +1582,7 @@ class Encoder(nn.Module):
         env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
+        carry: HistoryCarry = HistoryCarry(),
     ):
         """The history pathway's four inputs to the sequence, in PUBLIC-ROW
         order: (row_states, order_valid, field_state, snapshot_rows), plus
@@ -1582,7 +1591,7 @@ class Encoder(nn.Module):
         directly.
         """
         slot_states, field_state, node_snapshots, history_output = self.encode_history(
-            env_step, packed_history_step, history_step
+            env_step, packed_history_step, history_step, carry
         )
 
         # History-encoder slots are keyed by the stable entity index that
@@ -1634,17 +1643,25 @@ class Encoder(nn.Module):
         env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
+        carry: HistoryCarry = HistoryCarry(),
     ):
         # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K), history
-        # stats). The heads slice the rows they own by name
+        # stats, history carry). The heads slice the rows they own by name
         # (rl/model/constants.py), so no offset is ever written twice; the
         # second element is the opponent code one-hot -- the belief head's
         # label -- riding out beside the sequence because it is computed
         # where the secret rows are built. The third is the per-trajectory
         # History-panel scalars (history_step_stats); the actor path drops
-        # them, and XLA drops the computation with them.
+        # them, and XLA drops the computation with them. The fourth is the
+        # post-window history state (history_carry_from), the actor's next
+        # carry; the learner drops that one the same way.
         *history_inputs, history_output = self._history_inputs(
-            env_step, packed_history_step, history_step
+            env_step, packed_history_step, history_step, carry
         )
         sequence, opp_code_one_hot = _forward_vmap()(self, env_step, *history_inputs)
-        return sequence, opp_code_one_hot, history_step_stats(history_output)
+        return (
+            sequence,
+            opp_code_one_hot,
+            history_step_stats(history_output),
+            history_carry_from(history_output),
+        )

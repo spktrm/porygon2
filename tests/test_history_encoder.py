@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 from ml_collections import ConfigDict
 
+from rl.environment.interfaces import HistoryCarry
 from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.model.history_encoder import (
     NUM_FIELD_ROWS,
@@ -50,11 +51,19 @@ def recur():
     touched = jnp.ones((HISTORY, NUM_PUBLIC_SLOTS), bool)
     step_valid = jnp.ones((HISTORY,), bool)
     params = module.init(
+        key_params, HistoryCarry(), method=PerSlotHistoryEncoder.resolve_initial
+    )
+    h0_slots, h0_field, _ = module.apply(
+        params, HistoryCarry(), method=PerSlotHistoryEncoder.resolve_initial
+    )
+    params = module.init(
         key_params,
         slot_inputs,
         field_inputs,
         touched,
         step_valid,
+        h0_slots,
+        h0_field,
         method=PerSlotHistoryEncoder._recur,
     )
 
@@ -66,6 +75,8 @@ def recur():
             field_inputs,
             touched,
             step_valid,
+            h0_slots,
+            h0_field,
             method=PerSlotHistoryEncoder._recur,
         )
 
@@ -74,8 +85,8 @@ def recur():
 
 def test_slot_never_reads_another_slot(recur):
     run, slot_inputs, field_inputs = recur
-    base_slots, _, _ = run(slot_inputs, field_inputs)
-    moved_slots, _, _ = run(slot_inputs.at[:, 3].add(1.0), field_inputs)
+    base_slots, *_ = run(slot_inputs, field_inputs)
+    moved_slots, *_ = run(slot_inputs.at[:, 3].add(1.0), field_inputs)
     others = np.arange(NUM_PUBLIC_SLOTS) != 3
     np.testing.assert_array_equal(
         np.asarray(base_slots)[:, others], np.asarray(moved_slots)[:, others]
@@ -89,8 +100,8 @@ def test_field_state_reaches_every_slot(recur):
     """Positive control 2: the shared state the slots DO read. The field
     state after step 0 is an input of every slot from step 1 on."""
     run, slot_inputs, field_inputs = recur
-    base_slots, _, _ = run(slot_inputs, field_inputs)
-    moved_slots, _, _ = run(slot_inputs, field_inputs.at[0, 0].add(1.0))
+    base_slots, *_ = run(slot_inputs, field_inputs)
+    moved_slots, *_ = run(slot_inputs, field_inputs.at[0, 0].add(1.0))
     per_slot = np.abs(np.asarray(moved_slots - base_slots)[1:]).max(axis=-1)
     assert (per_slot > 1e-3).all()
     np.testing.assert_array_equal(np.asarray(base_slots)[0], np.asarray(moved_slots)[0])
@@ -98,8 +109,8 @@ def test_field_state_reaches_every_slot(recur):
 
 def test_field_never_reads_slot_states(recur):
     run, slot_inputs, field_inputs = recur
-    _, base_field, _ = run(slot_inputs, field_inputs)
-    _, moved_field, _ = run(slot_inputs + 1.0, field_inputs)
+    _, base_field, *_ = run(slot_inputs, field_inputs)
+    _, moved_field, *_ = run(slot_inputs + 1.0, field_inputs)
     np.testing.assert_array_equal(np.asarray(base_field), np.asarray(moved_field))
 
 

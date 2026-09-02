@@ -16,6 +16,7 @@ from rl.environment.data import (
     NUM_SWITCH_CELLS,
 )
 from rl.environment.interfaces import (
+    HistoryCarry,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
@@ -361,13 +362,14 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
         history_stats: dict[str, jax.Array],
+        history_carry: HistoryCarry,
     ):
         """Each head slices the rows it owns, by name. No head ever carries a
         row offset -- rl/model/constants.py derives them once.
 
-        history_stats is per TRAJECTORY (the history is shared across the
-        requests); closed over rather than mapped, so the vmap in __call__
-        broadcasts it to one copy per step."""
+        history_stats and history_carry are per TRAJECTORY (the history is
+        shared across the requests); closed over rather than mapped, so the
+        vmap in __call__ broadcasts them to one copy per step."""
         action_head = self._forward_action_head(
             (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             env_step.action_mask,
@@ -422,6 +424,7 @@ class Porygon2PlayerModel(nn.Module):
             action_head=action_head,
             # The CLS row, and only the CLS row.
             value_head=self.v_head(sequence[CLS_ROW]),
+            history_carry=history_carry,
             **learner_only,
         )
 
@@ -434,8 +437,11 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        sequence, opp_code_one_hot, history_stats = self.encoder(
-            actor_input.env, actor_input.packed_history, actor_input.history
+        sequence, opp_code_one_hot, history_stats, history_carry = self.encoder(
+            actor_input.env,
+            actor_input.packed_history,
+            actor_input.history,
+            actor_input.history_carry,
         )
 
         return jax.vmap(
@@ -443,6 +449,7 @@ class Porygon2PlayerModel(nn.Module):
                 self.get_head_outputs,
                 head_params=head_params,
                 history_stats=history_stats,
+                history_carry=history_carry,
             )
         )(sequence, opp_code_one_hot, actor_input.env, actor_output)
 

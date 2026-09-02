@@ -39,12 +39,35 @@ class PlayerHistoryOutput:
 
 
 @dataclass
+class HistoryCarry:
+    """The history encoder's state after a window (2026-09-02), so an actor
+    can feed the NEXT request's new steps alone and resume the recursion
+    instead of re-running the whole window. Optional by construction: every
+    leaf defaults to () and the encoder then starts from its learned h0
+    exactly as it always has (the learner, the offline tools and any caller
+    sending a full window never build one); with leaves present, `valid`
+    selects between the carried state and h0 per call, so a False carry is
+    also the from-scratch function. slot_states (12, D) and field_states
+    (3, D) are f32 -- the scan's own recursion state, taken before the
+    compute-dtype cast; node_snapshots (12, D) is the compute dtype.
+    """
+
+    slot_states: ArrayLike = ()
+    field_states: ArrayLike = ()
+    node_snapshots: ArrayLike = ()
+    valid: ArrayLike = ()
+
+
+@dataclass
 class PlayerActorInput:
     env: PlayerEnvOutput = field(default_factory=PlayerEnvOutput)
     packed_history: PlayerPackedHistoryOutput = field(
         default_factory=PlayerPackedHistoryOutput
     )
     history: PlayerHistoryOutput = field(default_factory=PlayerHistoryOutput)
+    # Actor-only: the state after the window the PREVIOUS request was
+    # answered from, when `history` holds only the steps since. () = none.
+    history_carry: HistoryCarry = field(default_factory=HistoryCarry)
 
 
 @dataclass
@@ -112,6 +135,16 @@ class PlayerActorOutput:
     history_step_attn_to_src: ArrayLike = ()
     history_step_attn_to_src_uniform: ArrayLike = ()
     history_gate_mean: ArrayLike = ()
+    # The history state after this forward's window (`valid` always True
+    # here), for the actor to hand back as the next request's
+    # `PlayerActorInput.history_carry`. Stripped before a transition is
+    # stored (`without_history_carry`): chunks never carry (12, D) tensors,
+    # and the learner's forward drops the computation as unread.
+    history_carry: HistoryCarry = field(default_factory=HistoryCarry)
+
+    def without_history_carry(self) -> "PlayerActorOutput":
+        return self.replace(history_carry=HistoryCarry())
+
     # `advantage` and `q` lived here until 2026-08-29: the learner-only
     # Q = V + A decomposition over the flat src x tgt grid, composed in the
     # model by heads.compose_q. The policy stopped reading it at the NashPG
