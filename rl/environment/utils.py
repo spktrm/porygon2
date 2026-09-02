@@ -206,6 +206,62 @@ _ALL_RELEVANT_IDX_COLUMNS = np.array(
 )
 
 
+def _packed_valid_rows(packed_history: PlayerPackedHistoryOutput) -> int:
+    """Occupied packed-cache rows, inferred from the species sentinel (the
+    known-open derivation -- CLAUDE.md; the suffix cut and the tail cut
+    share it so both flip together)."""
+    return int(
+        np.asarray(
+            packed_history.revealed_cache[
+                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+            ]
+            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
+        ).sum()
+    )
+
+
+def _cut_history_windows(
+    history: PlayerHistoryOutput,
+    packed_history: PlayerPackedHistoryOutput,
+    start_step: int,
+    keep_steps: int,
+    start_row: int,
+    packed_end: int,
+    history_rows: int,
+    packed_rows: int,
+) -> tuple[PlayerHistoryOutput, PlayerPackedHistoryOutput]:
+    """Cut field steps [start_step, start_step + keep_steps) and packed rows
+    [start_row, packed_end) into zero-padded windows of exactly
+    (history_rows, packed_rows), rebasing every RELEVANT_ENTITY_IDX column
+    of the kept steps by -start_row -- the ONE place the two axes are cut
+    together (state.ts getHistory's counterpart), shared by the trailing
+    window and the actor's suffix."""
+    field = np.asarray(history.field)
+    new_field = np.zeros((history_rows, field.shape[1]), dtype=field.dtype)
+    new_field[:keep_steps] = field[start_step : start_step + keep_steps]
+    if start_row > 0 and keep_steps > 0:
+        # Rebase every index column of the kept rows; entries past a row's
+        # NUM_RELEVANT are padding the consumers mask out — clip keeps them
+        # in gather range regardless.
+        rebase_at = np.ix_(np.arange(keep_steps), _ALL_RELEVANT_IDX_COLUMNS)
+        new_field[rebase_at] = np.clip(
+            new_field[rebase_at] - start_row, 0, packed_rows - 1
+        )
+
+    keep_rows = max(0, packed_end - start_row)
+
+    def cut_packed(x) -> np.ndarray:
+        x = np.asarray(x)
+        out = np.zeros((packed_rows, *x.shape[1:]), dtype=x.dtype)
+        out[:keep_rows] = x[start_row:packed_end]
+        return out
+
+    return (
+        history.replace(field=new_field),
+        jax.tree.map(cut_packed, packed_history),
+    )
+
+
 def clip_history_windows_tail(
     history: PlayerHistoryOutput,
     packed_history: PlayerPackedHistoryOutput,
@@ -226,14 +282,7 @@ def clip_history_windows_tail(
     from that row, and rebase the index columns to the new start."""
     field = np.asarray(history.field)
     valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
-    packed_valid = int(
-        np.asarray(
-            packed_history.revealed_cache[
-                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
-            ]
-            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
-        ).sum()
-    )
+    packed_valid = _packed_valid_rows(packed_history)
     max_packed_rows = 2 * history_length
 
     keep_steps = min(valid_steps, history_length)
@@ -258,30 +307,16 @@ def clip_history_windows_tail(
             field[valid_steps - 1, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0]
         )
 
-    start_step = valid_steps - keep_steps
-    new_field = np.zeros((history_length, field.shape[1]), dtype=field.dtype)
-    new_field[:keep_steps] = field[start_step:valid_steps]
-    if start_row > 0 and keep_steps > 0:
-        # Rebase every index column of the kept rows; entries past a row's
-        # NUM_RELEVANT are padding the consumers mask out — clip keeps them
-        # in gather range regardless.
-        rebase_at = np.ix_(np.arange(keep_steps), _ALL_RELEVANT_IDX_COLUMNS)
-        new_field[rebase_at] = np.clip(
-            new_field[rebase_at] - start_row, 0, max_packed_rows - 1
-        )
-
     packed_end = min(packed_valid, start_row + max_packed_rows)
-    keep_rows = max(0, packed_end - start_row)
-
-    def cut_packed(x) -> np.ndarray:
-        x = np.asarray(x)
-        out = np.zeros((max_packed_rows, *x.shape[1:]), dtype=x.dtype)
-        out[:keep_rows] = x[start_row:packed_end]
-        return out
-
-    return (
-        history.replace(field=new_field),
-        jax.tree.map(cut_packed, packed_history),
+    return _cut_history_windows(
+        history,
+        packed_history,
+        start_step=valid_steps - keep_steps,
+        keep_steps=keep_steps,
+        start_row=start_row,
+        packed_end=packed_end,
+        history_rows=history_length,
+        packed_rows=max_packed_rows,
     )
 
 
