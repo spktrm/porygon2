@@ -894,6 +894,28 @@ def rl_sections():
                     "Actor steps/sec (pool aggregate)",
                     ["actor_steps_per_sec"],
                 ),
+                lp(
+                    # The carry path's own read: steps / packed rows of
+                    # the suffix a request actually sends (ex.bin ~3 / ~5
+                    # per request against the 64/128+ a full window pads
+                    # to).
+                    "History carry: suffix size per request",
+                    ["actor_history_suffix_steps", "actor_history_suffix_rows"],
+                ),
+                lp(
+                    # Fraction of requests recomputed from h0, by reason.
+                    # game_start ~ 1/60; rewrite = an Illusion |replace|
+                    # rewrote past rows; gap = the window no longer holds
+                    # the carried step. Total > 0.1 = a continuity bug,
+                    # not a tuning question.
+                    "History carry: recompute fraction",
+                    [
+                        "actor_history_recompute_frac",
+                        "actor_history_recompute_game_start",
+                        "actor_history_recompute_rewrite",
+                        "actor_history_recompute_gap",
+                    ],
+                ),
             ],
         ),
         ws.Section(

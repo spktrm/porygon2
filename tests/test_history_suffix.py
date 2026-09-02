@@ -13,9 +13,9 @@ from rl.environment.utils import (
     ACTOR_HISTORY_MIN_LENGTH,
     _bucket_level,
     _bucket_value,
-    _packed_valid_rows,
     clip_history_suffix,
     get_ex_player_step,
+    packed_valid_rows,
 )
 
 VALID = FieldFeature.FIELD_FEATURE__VALID
@@ -42,7 +42,7 @@ def test_nothing_consumed_is_the_full_window(full_window):
     field_cut = np.asarray(suffix.history.field)
     assert np.array_equal(field_cut[:valid_steps], field_full[:valid_steps])
     assert not field_cut[valid_steps:].any()
-    packed_valid = _packed_valid_rows(full_window.packed_history)
+    packed_valid = packed_valid_rows(full_window.packed_history)
     for name in ("revealed_cache", "public_cache", "edge_cache"):
         full = np.asarray(getattr(full_window.packed_history, name))
         cut = np.asarray(getattr(suffix.packed_history, name))
@@ -71,7 +71,7 @@ def test_suffix_is_the_tail_token_for_token(full_window, consumed):
     assert not field_cut[new_steps:].any()
 
     # Every live reference resolves to the same packed row it did before.
-    packed_valid = _packed_valid_rows(full_window.packed_history)
+    packed_valid = packed_valid_rows(full_window.packed_history)
     for name in ("revealed_cache", "public_cache", "edge_cache"):
         full = np.asarray(getattr(full_window.packed_history, name))
         cut = np.asarray(getattr(suffix.packed_history, name))

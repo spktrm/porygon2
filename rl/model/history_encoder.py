@@ -114,6 +114,18 @@ class PerSlotHistoryOutput:
     step_touched: ArrayLike = ()
 
 
+def invalid_history_carry(width: int) -> HistoryCarry:
+    """The actor's full-window request: leaves PRESENT, so a batch of
+    requests stacks whether or not each one resumes, and `valid` False, so
+    the encoder starts from its learned h0 -- the from-scratch forward."""
+    return HistoryCarry(
+        slot_states=np.zeros((NUM_PUBLIC_SLOTS, width), np.float32),
+        field_states=np.zeros((NUM_FIELD_ROWS, width), np.float32),
+        node_snapshots=np.zeros((NUM_PUBLIC_SLOTS, width), np.float32),
+        valid=np.zeros((), np.bool_),
+    )
+
+
 def history_carry_from(output: PerSlotHistoryOutput) -> HistoryCarry:
     """The state after the window: what the next request's suffix resumes
     from. Post-window regardless of the request-aligned gather -- edges are

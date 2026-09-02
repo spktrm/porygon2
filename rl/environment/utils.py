@@ -206,7 +206,7 @@ _ALL_RELEVANT_IDX_COLUMNS = np.array(
 )
 
 
-def _packed_valid_rows(packed_history: PlayerPackedHistoryOutput) -> int:
+def packed_valid_rows(packed_history: PlayerPackedHistoryOutput) -> int:
     """Occupied packed-cache rows, inferred from the species sentinel (the
     known-open derivation -- CLAUDE.md; the suffix cut and the tail cut
     share it so both flip together)."""
@@ -282,7 +282,7 @@ def clip_history_windows_tail(
     from that row, and rebase the index columns to the new start."""
     field = np.asarray(history.field)
     valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
-    packed_valid = _packed_valid_rows(packed_history)
+    packed_valid = packed_valid_rows(packed_history)
     max_packed_rows = 2 * history_length
 
     keep_steps = min(valid_steps, history_length)
@@ -356,7 +356,7 @@ def clip_history_suffix(
         return None, 0
 
     keep_steps = valid_steps - first
-    packed_end = _packed_valid_rows(actor_input.packed_history)
+    packed_end = packed_valid_rows(actor_input.packed_history)
     if keep_steps > 0:
         start_row = int(field[first, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0])
     else:

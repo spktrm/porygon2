@@ -7,22 +7,26 @@ from rl.environment.actor_stats import STEP_TOTAL, ActorStats, timed
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import ActorStopped, SinglePlayerSyncEnvironment
 from rl.environment.interfaces import (
+    HistoryCarry,
     PlayerActorInput,
     PlayerAgentOutput,
     PlayerTransition,
     Trajectory,
 )
-from rl.environment.protos.features_pb2 import PackedSetFeature
+from rl.environment.protos.features_pb2 import FieldFeature, PackedSetFeature
 from rl.environment.protos.service_pb2 import Action
 from rl.environment.utils import (
     ACTOR_HISTORY_MIN_LENGTH,
     NUM_PACKED_SET_FEATURES,
     clip_history,
+    clip_history_suffix,
     clip_history_windows_tail,
     clip_packed_history,
+    packed_valid_rows,
     split_rng,
 )
 from rl.model.builder_model import get_packed_team_string
+from rl.model.history_encoder import invalid_history_carry
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
@@ -57,6 +61,20 @@ def chunk_spans(
     return spans
 
 
+_RECOMPUTE_REASONS = ("game_start", "rewrite", "gap")
+
+
+def _last_step_index(actor_input: PlayerActorInput) -> int:
+    """Absolute FIELD_FEATURE__INDEX of the last valid step of the FULL
+    window -- what the carry has consumed after a forward over it (the
+    suffix path consumes exactly the same steps). -1 for an empty window."""
+    field = np.asarray(actor_input.history.field)
+    valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
+    if valid_steps == 0:
+        return -1
+    return int(field[valid_steps - 1, FieldFeature.FIELD_FEATURE__INDEX])
+
+
 class PlayerActor:
     """Manages the state of a single agent/environment interaction loop."""
 
@@ -71,8 +89,16 @@ class PlayerActor:
         inference_client: InferenceServer | None = None,
         pinned_opponent: ParamsContainer | None = None,
         stats: ActorStats | None = None,
+        history_carry_width: int | None = None,
     ):
         self._agent = agent
+        # Width of the encoder's history state (cfg.entity_size). None =
+        # no carry: every request is the full window, exactly as before
+        # (config.player_actor_history_carry). With a width the actor
+        # resumes each request from the carried post-window state over
+        # the steps since the last one (clip_history_suffix), falling back
+        # to the full window whenever it cannot (see unroll).
+        self._history_carry_width = history_carry_width
         self._env = env
         # The env polls this while blocked on the game server so a game
         # whose other side has already unwound can't pin this thread.
@@ -112,6 +138,48 @@ class PlayerActor:
             history=clip_history(timestep.history, min_length=min_length),
         )
 
+    def _carry_history(
+        self,
+        actor_input: PlayerActorInput,
+        carry: HistoryCarry | None,
+        last_step_index: int,
+        last_rewrite_count: int,
+    ) -> PlayerActorInput:
+        """The request on the carry path: the suffix since ``last_step_index``
+        with ``carry``, or the full window with an invalid carry when the
+        game just started, the service rewrote past rows since the carry
+        was taken, or the window no longer continues from the carried
+        step. Every recompute is counted by its reason."""
+        if carry is None:
+            reason = "game_start"
+        elif self._env.history_rewrite_count != last_rewrite_count:
+            reason = "rewrite"
+        else:
+            suffix, suffix_steps = clip_history_suffix(actor_input, last_step_index)
+            if suffix is None:
+                reason = "gap"
+            else:
+                reason = None
+        if self._stats is not None:
+            self._stats.record(
+                "actor_history_recompute_frac", float(reason is not None)
+            )
+            for name in _RECOMPUTE_REASONS:
+                self._stats.record(
+                    f"actor_history_recompute_{name}", float(reason == name)
+                )
+        if reason is not None:
+            return self.clip_actor_history(actor_input).replace(
+                history_carry=invalid_history_carry(self._history_carry_width)
+            )
+        if self._stats is not None:
+            self._stats.record("actor_history_suffix_steps", float(suffix_steps))
+            self._stats.record(
+                "actor_history_suffix_rows",
+                float(packed_valid_rows(suffix.packed_history)),
+            )
+        return suffix.replace(history_carry=carry)
+
     def player_agent_output_to_action(self, agent_output: PlayerAgentOutput):
         """Post-processes the actor step to ensure it has the correct shape."""
         return Action(cell=agent_output.actor_output.action_head.action_index.item())
@@ -119,10 +187,11 @@ class PlayerActor:
     def _snapshot_window(self, actor_input: PlayerActorInput):
         """Fixed-length trailing history window as of ``actor_input``'s
         step — the burn-in-plus-chunk context stored with a chunk whose
-        LAST row this step is. The recurrent history scan runs from h0
-        over exactly such a trailing window at act time too (the service's
-        getHistory windows to NUM_HISTORY the same way), so training on
-        these windows matches acting with no stored-carry staleness."""
+        LAST row this step is. The learner sees the stored window, not the
+        actor's carry: it scans from h0 over the trailing window, and the
+        actor's carry-resumed scan is the same function as long as the
+        window holds the whole game (`player_chunk_history_underrun` 0 —
+        the panel that would say otherwise)."""
         history_length = self._learner.config.player_history_length
         history_window, packed_window = clip_history_windows_tail(
             actor_input.history, actor_input.packed_history, history_length
@@ -207,6 +276,18 @@ class PlayerActor:
         # at — one per chunk boundary, plus the final step's.
         window_snapshots: dict[int, tuple] = {}
 
+        # History carry (history_carry_width set): the encoder's post-window
+        # state after the previous request, plus the absolute index of the
+        # last field step it consumed and the service's rewrite count at
+        # the time. A step whose window continues from `last_step_index`
+        # and whose past rows are untouched sends only the new suffix with
+        # the carry; anything else sends the full window with an INVALID
+        # carry (leaves present, so a server batch always stacks; valid
+        # False, so the encoder starts from h0 — the from-scratch forward).
+        carry = None
+        last_step_index = -1
+        last_rewrite_count = self._env.history_rewrite_count
+
         # Rollout the player environment.
         # One STEP_TOTAL sample per loop iteration (clip + inference +
         # env.step's receive), taken at the top of the next one.
@@ -223,7 +304,14 @@ class PlayerActor:
                     self._stats.record(STEP_TOTAL, (now - iteration_start) * 1e3)
                 iteration_start = now
             with timed(self._stats, "actor_time_history_clip"):
-                player_actor_input_clipped = self.clip_actor_history(player_actor_input)
+                if self._history_carry_width is None:
+                    player_actor_input_clipped = self.clip_actor_history(
+                        player_actor_input
+                    )
+                else:
+                    player_actor_input_clipped = self._carry_history(
+                        player_actor_input, carry, last_step_index, last_rewrite_count
+                    )
             with timed(self._stats, "actor_time_inference"):
                 if self._inference_client is not None:
                     # player_params is the host ParamsContainer on this
@@ -240,6 +328,10 @@ class PlayerActor:
                         player_params,
                         player_actor_input_clipped,
                     )
+            if self._history_carry_width is not None:
+                carry = player_agent_output.actor_output.history_carry
+                last_step_index = _last_step_index(player_actor_input)
+                last_rewrite_count = self._env.history_rewrite_count
             # The carry is actor-only: strip it before the row is stored,
             # or every chunk would carry (12 + 3 + 12, D) of scan state.
             player_transition = PlayerTransition(

@@ -475,6 +475,11 @@ def main(args: argparse.Namespace):
     learner_builder_network = get_builder_model(learner_builder_model_config)
     actor_player_network = get_player_model(actor_player_model_config)
     actor_builder_network = get_builder_model(actor_builder_model_config)
+    # Every PlayerActor (training and eval) carries history across a game's
+    # requests when the flag is on; None is the full-window path.
+    history_carry_width = None
+    if learner_config.player_actor_history_carry:
+        history_carry_width = actor_player_model_config.entity_size
 
     player_state, builder_state = create_train_state(
         learner_player_network,
@@ -696,6 +701,7 @@ def main(args: argparse.Namespace):
                         learner=learner,
                         rng_seed=len(new_threads) + salt + slot,
                         inference_client=inference_server,
+                        history_carry_width=history_carry_width,
                         pinned_opponent=pinned_opponent,
                         stats=actor_stats,
                     )
@@ -742,6 +748,7 @@ def main(args: argparse.Namespace):
                 learner=learner,
                 rng_seed=len(new_threads) + salt,
                 is_eval=True,
+                history_carry_width=history_carry_width,
             )
             new_threads.append(
                 threading.Thread(

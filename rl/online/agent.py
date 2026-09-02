@@ -138,6 +138,7 @@ class Agent:
                 lambda t: t[:, ...], actor_input.packed_history
             ),
             history=jax.tree.map(lambda t: t[:, ...], actor_input.history),
+            history_carry=actor_input.history_carry,
         )
 
         actor_output = self._player_apply_fn(

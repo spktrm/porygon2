@@ -245,6 +245,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # decode / history clip / inference, and the inference server's own
     # phases) is the baseline the history-carry pass is judged against.
     actor_stats_log_steps: int = 10
+    # Actor-side history carry (rl/online/player_actor.py, PlayerActor.unroll):
+    # each request runs the history scan over only the steps SINCE the last
+    # request, resumed from the carried post-window state, instead of the
+    # whole window from h0 — the same function (the minGRU scan takes h0 as
+    # an argument), exact up to the bf16 GEMM leading-dim class. Recompute
+    # from scratch at game start, after the service rewrites past rows
+    # (`history_rewrite_count`, an Illusion |replace|) or when the window no
+    # longer contains the carried step. False = today's full-window request
+    # on every step, bit-for-bit (the learner never carries either way) —
+    # the control arm and the abort switch.
+    player_actor_history_carry: bool = True
 
     # OOM guard (learner.py: Learner._check_oom_guard). A self-monitoring
     # safety valve, not a leak fix — added after 1361 crashed, though that

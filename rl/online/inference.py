@@ -52,6 +52,7 @@ from constants import NUM_HISTORY
 from rl.environment.actor_stats import ActorStats, timed
 from rl.environment.env import ActorStopped
 from rl.environment.interfaces import (
+    HistoryCarry,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerAgentOutput,
@@ -62,6 +63,7 @@ from rl.environment.utils import (
     _bucket_value,
 )
 from rl.model.heads import HeadParams
+from rl.model.history_encoder import invalid_history_carry
 from rl.model.utils import Params, ParamsContainer
 
 
@@ -76,6 +78,29 @@ class _InferenceRequest:
     enqueued_at: float = 0.0
     output: PlayerAgentOutput | None = None
     error: BaseException | None = None
+
+
+def _stack_history_carries(carries: "list[HistoryCarry]") -> HistoryCarry:
+    """Carry leaves stack on axis 0 like rng_keys — a request that resumes
+    and one that does not differ only in `valid`. A request with NO carry
+    (empty leaves, a caller that never carries) in a group beside one that
+    does gets an invalid carry of the same width, so the group still
+    stacks and that request still computes from h0; a group with no carry
+    leaves at all keeps the empty carry (the encoder's static h0 branch)."""
+    widths = [
+        carry.slot_states.shape[-1]
+        for carry in carries
+        if not isinstance(carry.slot_states, tuple)
+    ]
+    if not widths:
+        return HistoryCarry()
+    filled = []
+    for carry in carries:
+        if isinstance(carry.slot_states, tuple):
+            filled.append(invalid_history_carry(widths[0]))
+        else:
+            filled.append(carry)
+    return jax.tree.map(lambda *xs: np.stack(xs), *filled)
 
 
 def _stack_axis0_to(target: int):
@@ -314,6 +339,9 @@ class InferenceServer:
                 history=jax.tree.map(
                     _stack_axis0_to(history_target),
                     *[r.actor_input.history for r in group],
+                ),
+                history_carry=_stack_history_carries(
+                    [r.actor_input.history_carry for r in group]
                 ),
             )
             # Pad the batch axis up to the next power of two by replicating
