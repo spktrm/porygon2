@@ -276,7 +276,7 @@ class Porygon2OfflineCritic(nn.Module):
         return mixed[:, :-1, :], mixed[:, -1, :]
 
     def _history_tokens(self, actor_input: PlayerActorInput):
-        slot_states, field_state, node_states = self.encoder.encode_history(
+        slot_states, field_state, node_states, _ = self.encoder.encode_history(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
         return self._tokens_from_states(

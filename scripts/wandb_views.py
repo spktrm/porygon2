@@ -358,6 +358,21 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # The 2026-09-02 history-encoder leaves. attn_out is
+                    # ZERO-init and must leave 0 within ~200 steps (still
+                    # flat at 2k = the two-factor stall; fallback is a
+                    # lecun attn_out behind a zero-init scalar gate);
+                    # query/key start at lecun ~0.044, the slot write gate
+                    # at ~0.028.
+                    "History encoder: drift from init",
+                    [
+                        "player_history_step_attn_out_rms",
+                        "player_history_step_attn_qk_rms",
+                        "player_history_slot_gate_rms",
+                        "player_history_step_attn_grad_norm",
+                    ],
+                ),
+                lp(
                     # Realised outcome of voluntary switches minus moves at
                     # matched V(s). Offline: pooled -0.147 -> matched
                     # -0.048±0.054. Per-batch n is tiny; read smoothed and
@@ -555,6 +570,29 @@ def rl_sections():
                     # steps with an identified SOURCE row (expect >> 0.5).
                     "History src fraction",
                     ["player_history_src_frac"],
+                ),
+                lp(
+                    # The step GAT reading "who did this to me": the mass a
+                    # NON-source row places on the step's source rows,
+                    # beside what uniform attention would place (the source
+                    # rows' share of live rows). Above uniform = the
+                    # relation is being read; at uniform with the
+                    # normalised entropy pinned at 1.0 = the GAT never
+                    # learned to select (read with attn_out rms).
+                    "History step attention",
+                    [
+                        "player_history_step_attn_to_src",
+                        "player_history_step_attn_to_src_uniform",
+                        "player_history_step_attn_entropy",
+                    ],
+                ),
+                lp(
+                    # The backbone's mean slot write gate over touched
+                    # steps. Pinned at 0 (nothing written) or 1 (memory
+                    # overwritten every step) is the collapse shape;
+                    # pre-registered band (0.1, 0.9).
+                    "History write gate",
+                    ["player_history_gate_mean"],
                 ),
                 lp(
                     # Fresh-row calibration. Was framed as "Q fresh/replay

@@ -570,6 +570,21 @@ def train_step(
             player_trunk_row_participation=average(
                 learner_player_pred.trunk_row_participation, value_mask
             ),
+            # The history encoder's step GAT and write gate
+            # (history_encoder.history_step_stats): per-trajectory scalars
+            # broadcast over T, so this is the valid-step-weighted batch mean.
+            player_history_step_attn_entropy=average(
+                learner_player_pred.history_step_attn_entropy, value_mask
+            ),
+            player_history_step_attn_to_src=average(
+                learner_player_pred.history_step_attn_to_src, value_mask
+            ),
+            player_history_step_attn_to_src_uniform=average(
+                learner_player_pred.history_step_attn_to_src_uniform, value_mask
+            ),
+            player_history_gate_mean=average(
+                learner_player_pred.history_gate_mean, value_mask
+            ),
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,

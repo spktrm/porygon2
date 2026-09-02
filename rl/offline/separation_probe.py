@@ -586,7 +586,7 @@ def _ridge_accuracy(
 
 
 def _encode_fn(module, actor_input):
-    sequence, _ = module.encoder(
+    sequence, _, _ = module.encoder(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
     return sequence

@@ -34,7 +34,7 @@ params = jax.jit(net.init)(jax.random.key(0), actor_input, actor_output, HeadPar
 
 
 def encode(module, actor_input):
-    sequence, _ = module.encoder(
+    sequence, _, _ = module.encoder(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
     return sequence

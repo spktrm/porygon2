@@ -104,6 +104,14 @@ class PlayerActorOutput:
     # of the trunk's output. The over-smoothing instrument; learner-only.
     trunk_row_cosine: ArrayLike = ()
     trunk_row_participation: ArrayLike = ()
+    # History-encoder telemetry (history_encoder.history_step_stats), one
+    # per-trajectory scalar broadcast over T: the step GAT's normalised
+    # attention entropy, the mass non-source rows place on source rows
+    # beside its uniform baseline, and the backbone's mean write gate.
+    history_step_attn_entropy: ArrayLike = ()
+    history_step_attn_to_src: ArrayLike = ()
+    history_step_attn_to_src_uniform: ArrayLike = ()
+    history_gate_mean: ArrayLike = ()
     # `advantage` and `q` lived here until 2026-08-29: the learner-only
     # Q = V + A decomposition over the flat src x tgt grid, composed in the
     # model by heads.compose_q. The policy stopped reading it at the NashPG

@@ -76,6 +76,7 @@ from rl.model.history_encoder import (
     HistoryAttentionPool,
     NodeHistoryRead,
     PerSlotHistoryEncoder,
+    history_step_stats,
 )
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
@@ -1500,7 +1501,7 @@ class Encoder(nn.Module):
         env_step: PlayerEnvOutput,
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    ):
         """Recurrent history pathway over the shared trajectory history.
 
         Consumes ONLY the public event stream — packed public entity/edge
@@ -1510,10 +1511,11 @@ class Encoder(nn.Module):
         same inputs) and reuse live without any distribution projection;
         the offline outcome critic (rl/offline/model.py) builds on it.
 
-        Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) GRU slot states,
+        Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) slot states,
         (T, D) field state, (T, NUM_PUBLIC_SLOTS, D) latest raw node
-        snapshot per slot — the entity's current state unmixed by GRU
-        gating, which outcome readouts need verbatim).
+        snapshot per slot — the entity's current state unmixed by the
+        recurrence, which outcome readouts need verbatim), and the whole
+        per-step PerSlotHistoryOutput for the telemetry that reads it.
         """
         history_output, *_ = self._run_history_encoder(
             packed_history_step, history_step
@@ -1522,7 +1524,10 @@ class Encoder(nn.Module):
         # Read the recurrent state as of each request: the snapshot after the
         # last history step whose request_count <= the request's.
         request_count = env_step.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
-        return self.history_encoder.state_at_requests(history_output, request_count)
+        return (
+            *self.history_encoder.state_at_requests(history_output, request_count),
+            history_output,
+        )
 
     def read_history_into_nodes(
         self,
@@ -1571,11 +1576,12 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
     ):
         """The history pathway's four inputs to the sequence, in PUBLIC-ROW
-        order: (row_states, order_valid, field_state, snapshot_rows). The
-        one place the slot-to-row alignment is written; offline reads call
-        it directly.
+        order: (row_states, order_valid, field_state, snapshot_rows), plus
+        the per-step PerSlotHistoryOutput they were read from. The one
+        place the slot-to-row alignment is written; offline reads call it
+        directly.
         """
-        slot_states, field_state, node_snapshots = self.encode_history(
+        slot_states, field_state, node_snapshots, history_output = self.encode_history(
             env_step, packed_history_step, history_step
         )
 
@@ -1597,7 +1603,7 @@ class Encoder(nn.Module):
         # TGN staleness fix the RL path used to discard (only the offline
         # critic read it; "the GRU-only readout loses the latest node").
         snapshot_rows = jnp.take_along_axis(node_snapshots, aligned_order, axis=1)
-        return row_states, order_valid, field_state, snapshot_rows
+        return row_states, order_valid, field_state, snapshot_rows, history_output
 
     def assembled_sequence(
         self,
@@ -1629,13 +1635,16 @@ class Encoder(nn.Module):
         packed_history_step: PlayerPackedHistoryOutput,
         history_step: PlayerHistoryOutput,
     ):
-        # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K)). The heads
-        # slice the rows they own by name (rl/model/constants.py), so no
-        # offset is ever written twice; the second element is the opponent
-        # code one-hot -- the belief head's label -- riding out beside the
-        # sequence because it is computed where the secret rows are built.
-        return _forward_vmap()(
-            self,
-            env_step,
-            *self._history_inputs(env_step, packed_history_step, history_step),
+        # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K), history
+        # stats). The heads slice the rows they own by name
+        # (rl/model/constants.py), so no offset is ever written twice; the
+        # second element is the opponent code one-hot -- the belief head's
+        # label -- riding out beside the sequence because it is computed
+        # where the secret rows are built. The third is the per-trajectory
+        # History-panel scalars (history_step_stats); the actor path drops
+        # them, and XLA drops the computation with them.
+        *history_inputs, history_output = self._history_inputs(
+            env_step, packed_history_step, history_step
         )
+        sequence, opp_code_one_hot = _forward_vmap()(self, env_step, *history_inputs)
+        return sequence, opp_code_one_hot, history_step_stats(history_output)

@@ -304,6 +304,26 @@ _OPP_CODE_LEAVES = {
     # variance_scaling fan_in over its 256 features, so 0.0625 again.
     "player_species_belief_rms": (("species_belief", "embedding"),),
 }
+# The 2026-09-02 history-encoder leaves. step_attention/attn_out is
+# ZERO-init (the FlatActionReadout argument: one zero factor over live
+# inputs, so its gradient is live at step 1) -- still 0.0 past ~200 steps
+# is the stall, and the pre-registered fallback is a lecun attn_out behind
+# a zero-init scalar gate. query/key are lecun over the (2D+3)-wide row
+# input: ~0.0440 at fan-in 515. The backbone's gate/candidate Denses read
+# beside them: the slot cell's input is [messages ; field ; previous
+# field] (5D = 1280), lecun ~0.0279.
+_HISTORY_LEAVES = {
+    "player_history_step_attn_out_rms": (
+        ("encoder", "history_encoder", "step_attention", "attn_out", "kernel"),
+    ),
+    "player_history_step_attn_qk_rms": (
+        ("encoder", "history_encoder", "step_attention", "query", "kernel"),
+        ("encoder", "history_encoder", "step_attention", "key", "kernel"),
+    ),
+    "player_history_slot_gate_rms": (
+        ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
+    ),
+}
 # player_belief_head_gradient_norm already exists in train_step; not
 # duplicated here.
 _GRAD_SUBTREES = {
@@ -311,6 +331,11 @@ _GRAD_SUBTREES = {
     "player_trunk_grad_norm": ("encoder", "trunk"),
     "player_opp_code_logits_grad_norm": ("encoder", "opp_code_logits"),
     "player_opp_code_embedding_grad_norm": ("encoder", "opp_code_embedding"),
+    "player_history_step_attn_grad_norm": (
+        "encoder",
+        "history_encoder",
+        "step_attention",
+    ),
 }
 
 
@@ -325,6 +350,7 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
         **_ACTION_HEAD_LEAVES,
         **_TRUNK_LEAVES,
         **_OPP_CODE_LEAVES,
+        **_HISTORY_LEAVES,
     }.items():
         leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
         logs[key] = jnp.mean(

@@ -51,7 +51,7 @@ def make_capacity_probe(network):
     both trunk embedding streams, keyed capacity_{action,value}_emb_*."""
 
     def encoder_only(module, actor_input: PlayerActorInput):
-        sequence, _ = module.encoder(
+        sequence, _, _ = module.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
         return sequence

@@ -360,9 +360,14 @@ class Porygon2PlayerModel(nn.Module):
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
+        history_stats: dict[str, jax.Array],
     ):
         """Each head slices the rows it owns, by name. No head ever carries a
-        row offset -- rl/model/constants.py derives them once."""
+        row offset -- rl/model/constants.py derives them once.
+
+        history_stats is per TRAJECTORY (the history is shared across the
+        requests); closed over rather than mapped, so the vmap in __call__
+        broadcasts it to one copy per step."""
         action_head = self._forward_action_head(
             (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             env_step.action_mask,
@@ -404,6 +409,14 @@ class Porygon2PlayerModel(nn.Module):
                 "belief_matched": matched,
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
+                # The History panels: the step GAT's read and the
+                # backbone's write gate (history_encoder.history_step_stats).
+                "history_step_attn_entropy": history_stats["step_attn_entropy"],
+                "history_step_attn_to_src": history_stats["step_attn_to_src"],
+                "history_step_attn_to_src_uniform": history_stats[
+                    "step_attn_to_src_uniform"
+                ],
+                "history_gate_mean": history_stats["gate_mean"],
             }
         return PlayerActorOutput(
             action_head=action_head,
@@ -421,12 +434,16 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        sequence, opp_code_one_hot = self.encoder(
+        sequence, opp_code_one_hot, history_stats = self.encoder(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
 
         return jax.vmap(
-            functools.partial(self.get_head_outputs, head_params=head_params)
+            functools.partial(
+                self.get_head_outputs,
+                head_params=head_params,
+                history_stats=history_stats,
+            )
         )(sequence, opp_code_one_hot, actor_input.env, actor_output)
 
 
