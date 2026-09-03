@@ -1631,11 +1631,10 @@ class Encoder(nn.Module):
             in_axes=0,
             out_axes=0,
         )
-        sequence, row_valid, _ = assemble(
-            self,
-            env_step,
-            *self._history_inputs(env_step, packed_history_step, history_step),
+        *history_inputs, _ = self._history_inputs(
+            env_step, packed_history_step, history_step
         )
+        sequence, row_valid, _ = assemble(self, env_step, *history_inputs)
         return sequence, row_valid
 
     def __call__(

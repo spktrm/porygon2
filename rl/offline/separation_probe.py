@@ -795,7 +795,7 @@ def _assembled_and_encoded_fn(module, actor_input):
     assembled, _ = encoder.assembled_sequence(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
-    encoded, _ = encoder(
+    encoded, *_ = encoder(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
     return assembled, encoded

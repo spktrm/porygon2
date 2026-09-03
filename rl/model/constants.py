@@ -278,3 +278,12 @@ CELL_BANK_TGT = np.concatenate(
     ]
 ).astype(np.int32)
 assert len(CELL_BANK_SRC) == len(CELL_BANK_TGT) == NUM_ACTION_CELLS
+
+# Which block cells are a wildcard (tera / mega / Z) move: the move-block
+# cells whose source slot is a wildcard shadow. What an offline intervention
+# masks to hold tera back.
+_cell_move_slot = CELL_BANK_SRC - _BANK_MOVE_OFFSET
+_cell_is_move = (_cell_move_slot >= 0) & (_cell_move_slot < len(MOVE_INDICES))
+IS_WILDCARD_CELL = np.zeros(NUM_ACTION_CELLS, dtype=bool)
+IS_WILDCARD_CELL[_cell_is_move] = IS_WILDCARD_MOVE_SLOT[_cell_move_slot[_cell_is_move]]
+assert IS_WILDCARD_CELL.sum() == len(WILDCARD_MOVE_INDICES) * len(TARGET_SLOT_INDICES)

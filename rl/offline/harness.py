@@ -36,7 +36,7 @@ import os
 import pickle
 import time
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Callable, Iterator
 
 import jax
 import jax.numpy as jnp
@@ -46,7 +46,9 @@ from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput, Trajectory
+from rl.environment.protos.features_pb2 import InfoFeature
 from rl.model.config import get_player_model_config
+from rl.model.constants import IS_WILDCARD_CELL
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.model.utils import ParamsContainer
@@ -59,6 +61,40 @@ logger = logging.getLogger(__name__)
 
 # rl/online/main.py's EVAL_BASELINE_NAMES: {0: random, 1: default, 2: simpleheuristic}.
 SIMPLE_HEURISTIC_BASELINE_INDEX = 2
+
+# An offline intervention: rewrites the actor input the environment hands
+# back (reset and step alike). The actor never sees the unfiltered one.
+ActorInputFilter = Callable[[PlayerActorInput], PlayerActorInput]
+
+
+class FilteredEnvironment(SinglePlayerSyncEnvironment):
+    def __init__(self, filter_fn: ActorInputFilter, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._filter_fn = filter_fn
+
+    def reset(self, packed_team: list[int] = None):
+        return self._filter_fn(super().reset(packed_team))
+
+    def step(self, action):
+        return self._filter_fn(super().step(action))
+
+
+def hold_tera(min_turn: int) -> ActorInputFilter:
+    """Masks the wildcard (tera) cells while `turn < min_turn`, leaving the
+    mask alone when nothing else is legal. The model teras at its first
+    legal opportunity, so this shifts WHEN it teras, nothing else."""
+
+    def filter_fn(actor_input: PlayerActorInput) -> PlayerActorInput:
+        env = actor_input.env
+        turn = int(np.asarray(env.info)[InfoFeature.INFO_FEATURE__TURN])
+        mask = np.asarray(env.action_mask)
+        if turn >= min_turn or not (mask & ~IS_WILDCARD_CELL).any():
+            return actor_input
+        return actor_input.replace(
+            env=env.replace(action_mask=mask & ~IS_WILDCARD_CELL)
+        )
+
+    return filter_fn
 
 
 class _RunState:
@@ -93,6 +129,7 @@ def play_games(
     smogon_format: str = "randombattle",
     seed: int = 0,
     opponent: str = "self",
+    side_filters: dict[int, ActorInputFilter] | None = None,
 ) -> list[list[Trajectory]]:
     """Plays n_games games, `pairs` at a time, and returns one chunk list
     per PARAMS-DRIVEN side in completion order: `opponent="self"` is
@@ -100,7 +137,8 @@ def play_games(
     `params` against the service's SimpleHeuristic bot (1 list per game,
     routed by the eval-heuristic username the service's
     isEvalUser/evalActionMapping read). Games still running at
-    `deadline_s` are abandoned."""
+    `deadline_s` are abandoned. `side_filters` maps a params-driven side
+    (0 or 1) to an intervention on its actor inputs (e.g. `hold_tera`)."""
     if opponent not in ("self", "heuristic"):
         raise ValueError(f"opponent must be 'self' or 'heuristic', got {opponent!r}")
     ctx = OfflineContext()
@@ -128,11 +166,20 @@ def play_games(
                 f"eval-heuristic-{tag}-g{game_no}:{SIMPLE_HEURISTIC_BASELINE_INDEX:04d}"
             ]
         for p, username in enumerate(usernames):
-            env = SinglePlayerSyncEnvironment(
-                username,
-                generation=generation,
-                smogon_format=smogon_format,
-            )
+            filter_fn = (side_filters or {}).get(p)
+            if filter_fn is None:
+                env = SinglePlayerSyncEnvironment(
+                    username,
+                    generation=generation,
+                    smogon_format=smogon_format,
+                )
+            else:
+                env = FilteredEnvironment(
+                    filter_fn,
+                    username,
+                    generation=generation,
+                    smogon_format=smogon_format,
+                )
             envs.append(env)
             actor = PlayerActor(
                 agent,

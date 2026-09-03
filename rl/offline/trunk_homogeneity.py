@@ -48,7 +48,7 @@ def _sequences(module, actor_input):
     assembled, _ = encoder.assembled_sequence(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
-    trunk_out, _ = encoder(
+    trunk_out, *_ = encoder(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
     return assembled, trunk_out
