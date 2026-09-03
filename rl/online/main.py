@@ -139,6 +139,19 @@ def run_training_actor_pair(
                 raise ActorStopped("training stopped")
             battle_errors = [e for e in errors if isinstance(e, BattleError)]
             if battle_errors:
+                # The abort is usually the SYMPTOM: the other side died
+                # first (2026-09-03: league snapshots from a superseded
+                # param tree raised on their first forward, p0 then sat
+                # 600 s on the service watchdog), and raising the abort
+                # alone hid that for an hour. Log every other exception
+                # before it goes.
+                for error in errors:
+                    if error is not None and not isinstance(error, BattleError):
+                        logger.error(
+                            "%s: actor failed before the service abort",
+                            worker_id,
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
                 raise battle_errors[0]
             trajectory = future1.result()
             future2.result()
