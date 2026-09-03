@@ -34,7 +34,7 @@ from rl.model.constants import (
 )
 from rl.model.player_model import dynamics_alignment
 from rl.model.utils import open_zero_init_paths
-from rl.online.training.train_step import dynamics_losses
+from rl.online.training.train_step import DYNAMICS_SCALE_FLOOR, dynamics_losses
 
 _ORDER = slice(
     InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0,
@@ -282,3 +282,34 @@ def test_dynamics_gradient_reaches_the_trunk_and_not_the_critics(
     assert "encoder" in reached
     for critic in ("value_head", "priv_value_head", "belief_head", "action_head"):
         assert critic not in reached, critic
+
+
+def test_zero_delta_group_is_floored_not_divided_by_zero():
+    """A batch on which a group's rows did not move (the field rows, most
+    batches) must not turn a small non-zero prediction into a loss of
+    hundreds: the normaliser is floored at DYNAMICS_SCALE_FLOOR. Control:
+    the same prediction against an ordinary-scale delta scores the plain
+    ratio, well under the floored value."""
+    num_steps, width = 4, 8
+    rng = np.random.default_rng(1)
+    content = rng.normal(size=(NUM_DYNAMICS_ROWS, width)).astype(np.float32)
+    orders = [np.arange(12, dtype=np.int32) for _ in range(num_steps)]
+    target = np.stack([content for _ in orders])[:, None]
+    env = _batch_env(orders, np.arange(1, 7, dtype=np.int32))
+    acted = jnp.ones((num_steps, 1), bool)
+    valid = jnp.ones((num_steps, 1), bool)
+    small = jnp.full(target.shape, 0.02, jnp.float32)
+    loss, logs = dynamics_losses(small, jnp.asarray(target), env, acted, valid)
+    for group in DYNAMICS_GROUP_SLICES:
+        assert float(logs[f"player_dynamics_scale_{group}"]) == 0.0
+    expected = width * 0.02**2 / DYNAMICS_SCALE_FLOOR
+    assert float(loss) == pytest.approx(expected, rel=1e-4)
+    assert float(loss) < 1.0
+    assert bool(jnp.isfinite(loss))
+    # Control: an ordinary delta scale is above the floor, so the floor is
+    # inert and the loss is the raw ratio.
+    moving = target + rng.normal(size=target.shape).astype(np.float32) * 0.5
+    loss_moving, logs = dynamics_losses(small, jnp.asarray(moving), env, acted, valid)
+    for group in DYNAMICS_GROUP_SLICES:
+        assert float(logs[f"player_dynamics_scale_{group}"]) > DYNAMICS_SCALE_FLOOR
+    assert float(loss_moving) == pytest.approx(1.0, abs=0.1)

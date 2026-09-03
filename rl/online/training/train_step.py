@@ -54,7 +54,16 @@ from rl.utils import average
 logger = logging.getLogger(__name__)
 
 
-DYNAMICS_SCALE_EPS = 1e-6
+# Floor on a group's per-batch normaliser (mean squared delta, row units).
+# The field rows move on few steps, so on a small batch their mean squared
+# delta is often ~0.03 and sometimes EXACTLY 0 (nothing on the field
+# changed in any chunk); under a 1e-6 eps that batch scored loss ~400 and a
+# 2.5e4 head gradient norm, which the global clip (10) turned into a wasted
+# step for every other loss (irqeetfg @633-637k, ~1 logged step in 5). The
+# floor is ~1/50 of the public scale (0.53) and under the field scale on
+# every normal batch read, so it only binds where the ratio is degenerate;
+# the gradient amplification of the normaliser is bounded at 1/floor.
+DYNAMICS_SCALE_FLOOR = 1e-2
 
 
 def dynamics_hp_basis(params: Params) -> jax.Array:
@@ -98,15 +107,17 @@ def dynamics_losses(
     Per group g of DYNAMICS_GROUP_SLICES, f32:
 
         num_g   = average(|pred - delta|^2, mask_g)
-        scale_g = sg(average(|delta|^2, mask_g)) + eps
-        loss_g  = num_g / scale_g
+        scale_g = sg(average(|delta|^2, mask_g))
+        loss_g  = num_g / max(scale_g, floor)
 
     and the loss is the mean over groups, so the field rows' small deltas
     neither vanish under the public scale nor dominate it. The zero
     predictor -- "nothing changes" -- scores exactly 1 per group, and the
     zero-init head starts there; `gain_g = 1 - loss_g` is the R^2 of the
     change (0 = copy, negative = worse than copy). An all-masked group
-    averages to 0 on both sides and contributes 0.
+    averages to 0 on both sides and contributes 0; a group whose rows did
+    not move on the batch is normalised at DYNAMICS_SCALE_FLOOR instead of
+    dividing by ~0.
 
     `player_dynamics_gain_hp_moved` is the public gain on the rows whose
     wire HP_RATIO changed across the step, scaled on that subset: the
@@ -128,7 +139,7 @@ def dynamics_losses(
     def normalised(rows_mask):
         num = average(sq_err, rows_mask)
         scale = jax.lax.stop_gradient(average(sq_delta, rows_mask))
-        return num / (scale + DYNAMICS_SCALE_EPS), scale
+        return num / jnp.maximum(scale, DYNAMICS_SCALE_FLOOR), scale
 
     logs = dict(
         player_dynamics_rows_frac=average(
@@ -160,7 +171,7 @@ def dynamics_losses(
     if hp_basis is not None:
         hp_energy = jnp.square(delta @ hp_basis).sum(-1)
         logs["player_dynamics_hp_share"] = average(hp_energy, public_mask) / (
-            average(sq_delta, public_mask) + DYNAMICS_SCALE_EPS
+            jnp.maximum(average(sq_delta, public_mask), DYNAMICS_SCALE_FLOOR)
         )
     return loss, logs
 
