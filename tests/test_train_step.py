@@ -152,21 +152,28 @@ def test_train_step_smoke():
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",
-        # The dynamics head (2026-09-03): the loss beside its copy
-        # baseline, the per-group split and the head's drift/gradient.
+        # The delta dynamics head (2026-09-04): normalised MSE with the
+        # copy baseline at exactly 1, the per-group gains and scales, the
+        # hp-moved subset, the two normaliser-gaming instruments and the
+        # head's drift/gradient.
         "player_loss_dynamics",
-        "player_dynamics_copy_loss",
-        "player_dynamics_gain_over_copy",
         "player_dynamics_rows_frac",
-        "player_dynamics_loss_public",
-        "player_dynamics_copy_public",
-        "player_dynamics_loss_private",
-        "player_dynamics_copy_private",
-        "player_dynamics_loss_field",
-        "player_dynamics_copy_field",
+        "player_dynamics_gain_public",
+        "player_dynamics_gain_private",
+        "player_dynamics_gain_field",
+        "player_dynamics_scale_public",
+        "player_dynamics_scale_private",
+        "player_dynamics_scale_field",
+        "player_dynamics_gain_hp_moved",
+        "player_dynamics_hp_moved_frac",
+        "player_dynamics_hp_share",
+        "player_state_kernel_rms_hp",
+        "player_state_kernel_rms_status",
+        "player_state_kernel_rms_boosts",
+        "player_state_kernel_rms_other",
         "player_dynamics_head_in_rms",
         "player_dynamics_head_out_rms",
-        "player_dynamics_head_gradient_norm",
+        "player_dynamics_delta_head_gradient_norm",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key

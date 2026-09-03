@@ -389,6 +389,10 @@ class MLP(nn.Module):
     use_layer_norm: bool = True
     use_bias: bool = True
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    # The LAST layer's kernel init when it should differ -- zeros for a
+    # head whose output must start at a known point (the delta dynamics
+    # head starts AT the copy baseline). None = `kernel_init` throughout.
+    final_kernel_init: nn.initializers.Initializer | None = None
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -408,13 +412,16 @@ class MLP(nn.Module):
         if isinstance(layer_sizes, int):
             layer_sizes = (layer_sizes,)
 
-        for _, size in enumerate(layer_sizes):
+        for index, size in enumerate(layer_sizes):
+            kernel_init = self.kernel_init
+            if self.final_kernel_init is not None and index == len(layer_sizes) - 1:
+                kernel_init = self.final_kernel_init
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
             x = nn.Dense(
                 size,
-                kernel_init=self.kernel_init,
+                kernel_init=kernel_init,
                 dtype=x.dtype,
                 use_bias=self.use_bias,
             )(x)

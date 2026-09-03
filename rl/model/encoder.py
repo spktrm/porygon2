@@ -12,7 +12,6 @@ from rl.environment.data import (
     MOVE_INDICES,
     NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
-    NUM_MOVES,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
     OTHER_CELL_OFFSET,
@@ -34,7 +33,6 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import (
     EntityEdgeFeature,
-    EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
     FieldFeature,
@@ -60,17 +58,13 @@ from rl.model.constants import (
 from rl.model.features import (
     binary_scale_encoding,
     encode_divided_one_hot_edge,
-    encode_divided_one_hot_public_entity,
     encode_one_hot_action,
     encode_one_hot_edge,
     encode_one_hot_field,
     encode_one_hot_info,
-    encode_one_hot_private_entity,
-    encode_one_hot_public_entity,
     encode_reg_boosts,
     encode_spe_boosts,
     encode_sqrt_one_hot_action,
-    encode_sqrt_one_hot_public_entity,
     get_private_entity_mask,
     get_public_entity_mask,
 )
@@ -85,6 +79,12 @@ from rl.model.modules import (
     COLLECT_INTERMEDIATES,
     SumEmbeddings,
     one_hot_concat_jax,
+)
+from rl.model.state_features import (
+    PUBLIC_MOVE_INDICES,
+    private_state_features,
+    public_persistent_features,
+    public_transient_features,
 )
 from rl.model.trunk import Trunk
 
@@ -445,143 +445,18 @@ class Encoder(nn.Module):
         pooled vector carries. Split out from `_embed_public_entity` so the
         current-state path can pool the tokens ACROSS entities while the
         history cache keeps pooling them entity-locally."""
-        # Encode volatile and type-change indices using the binary encoder.
-        encode_hex = jax.vmap(
-            functools.partial(
-                binary_scale_encoding, dtype=self.cfg.dtype, world_dim=65535
-            )
+        # The three state linears' inputs (and their column layout) live in
+        # `rl.model.state_features`, once, beside the telemetry that reads
+        # the kernels by block.
+        persistent_features, _ = public_persistent_features(
+            public, revealed, self.cfg.dtype
         )
-        volatiles_indices = public[
-            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0 : EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES8
-            + 1
-        ]
-        volatiles_encoding = encode_hex(volatiles_indices).reshape(-1)
+        transient_features, _ = public_transient_features(public, self.cfg.dtype)
 
-        typechange_indices = public[
-            EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE0 : EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE1
-            + 1
-        ]
-        typechange_encoding = encode_hex(typechange_indices).reshape(-1)
-
-        hp_ratio = (
-            public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO]
-            / MAX_RATIO_TOKEN
-        ).astype(self.cfg.dtype)
-        hp_features = jnp.concatenate(
-            [
-                hp_ratio[..., None],
-                jax.nn.one_hot(jnp.floor(32 * hp_ratio), 32, dtype=self.cfg.dtype),
-            ],
-            axis=-1,
-        ).reshape(-1)
-
-        reg_boost_features = public[
-            np.array(
-                [
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_DEF_VALUE,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPA_VALUE,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPD_VALUE,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_SPE_VALUE,
-                ]
-            )
-        ]
-        spe_boost_features = public[
-            np.array(
-                [
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ACCURACY_VALUE,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_EVASION_VALUE,
-                ]
-            )
-        ]
-
-        # Persistent condition: survives switching out, meaningful on the
-        # bench. The active-only overlay (volatiles, boosts, typechange,
-        # trapped/called-back/newly-switched, toxic counter) all resets on
-        # switch, so it becomes its own token, masked by the ACTIVE flag.
-        persistent_code = one_hot_concat_jax(
-            [
-                encode_sqrt_one_hot_public_entity(
-                    public,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__LEVEL,
-                    dtype=self.cfg.dtype,
-                ),
-                encode_divided_one_hot_public_entity(
-                    public,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO,
-                    MAX_RATIO_TOKEN / 32,
-                ),
-                encode_one_hot_public_entity(
-                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__GENDER
-                ),
-                encode_one_hot_public_entity(
-                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS
-                ),
-                encode_one_hot_public_entity(
-                    public,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ITEM_EFFECT,
-                ),
-                encode_one_hot_public_entity(
-                    public,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS,
-                ),
-                encode_one_hot_public_entity(
-                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
-                ),
-            ],
-            dtype=self.cfg.dtype,
-        )
-        transient_code = one_hot_concat_jax(
-            [
-                encode_one_hot_public_entity(
-                    public,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BEING_CALLED_BACK,
-                ),
-                encode_one_hot_public_entity(
-                    public, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TRAPPED
-                ),
-                encode_one_hot_public_entity(
-                    public,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__NEWLY_SWITCHED,
-                ),
-                encode_one_hot_public_entity(
-                    public,
-                    EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS,
-                ),
-            ],
-            dtype=self.cfg.dtype,
-        )
-
-        move_indices = np.array(
-            [
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0,
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID1,
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID2,
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID3,
-            ]
-        )
-        move_pp_indices = np.array(
-            [
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP0,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP1,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP2,
-                EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MOVEPP3,
-            ]
-        )
-        move_tokens = revealed[move_indices]
-        move_pp_tokens = public[move_pp_indices]
-
+        move_tokens = revealed[PUBLIC_MOVE_INDICES]
         is_valid_move = (move_tokens != MovesEnum.MOVES_ENUM___NULL) & (
             move_tokens != MovesEnum.MOVES_ENUM___UNSPECIFIED
         )
-        move_pp_ratios = is_valid_move * (move_pp_tokens / 31).astype(self.cfg.dtype)
-        move_pp_onehot = (
-            jnp.zeros(NUM_MOVES, dtype=move_pp_ratios.dtype)
-            .at[move_tokens]
-            .set(move_pp_ratios)
-            .clip(min=0, max=1)
-        )
-
         move_embeddings = jax.vmap(self._embed_move)(move_tokens)
 
         species_token = revealed[
@@ -593,31 +468,6 @@ class Encoder(nn.Module):
         item_token = revealed[
             EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM
         ]
-        teratype_token = revealed[
-            EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE
-        ]
-
-        persistent_features = jnp.concatenate(
-            [
-                persistent_code,
-                hp_features,
-                move_pp_onehot,
-                jax.nn.one_hot(
-                    teratype_token, NUM_TYPECHART, dtype=move_embeddings.dtype
-                ),
-            ],
-            axis=-1,
-        )
-        transient_features = jnp.concatenate(
-            [
-                transient_code,
-                volatiles_encoding,
-                typechange_encoding,
-                encode_reg_boosts(reg_boost_features).astype(self.cfg.dtype),
-                encode_spe_boosts(spe_boost_features).astype(self.cfg.dtype),
-            ],
-            axis=-1,
-        )
 
         pos_bias = self.pos_bias(
             public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE]
@@ -688,15 +538,7 @@ class Encoder(nn.Module):
         `_public_entity_tokens`. NOTE the index constants below are the
         REVEALED enum applied to a PRIVATE row: legal only because
         SPECIES/ITEM/ABILITY/MOVEID0-3 are 1..7 in both enums."""
-        move_indices = np.array(
-            [
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0,
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID1,
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID2,
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID3,
-            ]
-        )
-        move_tokens = private[move_indices]
+        move_tokens = private[PUBLIC_MOVE_INDICES]
 
         move_embeddings = jax.vmap(self._embed_move)(move_tokens)
 
@@ -710,93 +552,11 @@ class Encoder(nn.Module):
             EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM
         ]
 
-        boolean_code = one_hot_concat_jax(
-            [
-                encode_one_hot_private_entity(
-                    private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE,
-                ),
-            ],
-            dtype=self.cfg.dtype,
-        )
-
-        stat_features = private[
-            np.array(
-                [
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_STAT,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ATK_STAT,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__DEF_STAT,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPA_STAT,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPD_STAT,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT,
-                ]
-            )
-        ].astype(self.cfg.dtype)
-
-        stat_encoding = stat_features.astype(jnp.float32) / np.array(
-            [714, 526, 658, 535, 658, 548], dtype=np.float32
-        )
-        freqs = (2.0 ** np.arange(num_stat_bands) * np.pi).astype(np.float32)
-        # Phases reach 2^7.pi ~ 400 rad, where bf16 spacing is ~1 rad: cast
-        # before sin/cos and the top bands are quantisation noise. Bands
-        # in f32, cast after.
-        phase = stat_encoding[..., None] * freqs[None]
-        stat_encoding = (
-            jnp.concatenate((jnp.sin(phase), jnp.cos(phase)), axis=-1)
-            .reshape(-1)
-            .astype(self.cfg.dtype)
-        )
-
-        # The truth channel (2026-08-31): current condition, written from
-        # the request side, so a switch candidate's own row finally says
-        # whether it is hurt, statused or fainted -- probe C measured the
-        # trunk's public-row workaround at the floor. Same encodings as the
-        # public path: hp scalar + 32-bin one-hot, StatusEnum one-hot,
-        # toxic/sleep counters, fainted.
-        private_hp_ratio = (
-            private[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO]
-            / MAX_RATIO_TOKEN
-        ).astype(self.cfg.dtype)
-        private_hp_features = jnp.concatenate(
-            [
-                private_hp_ratio[..., None],
-                jax.nn.one_hot(
-                    jnp.floor(32 * private_hp_ratio), 32, dtype=self.cfg.dtype
-                ),
-            ],
-            axis=-1,
-        ).reshape(-1)
-        condition_code = one_hot_concat_jax(
-            [
-                encode_one_hot_private_entity(
-                    private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__STATUS,
-                ),
-                encode_one_hot_private_entity(
-                    private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS,
-                ),
-                encode_one_hot_private_entity(
-                    private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS,
-                ),
-                encode_one_hot_private_entity(
-                    private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS,
-                ),
-                encode_one_hot_private_entity(
-                    private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED,
-                ),
-                # Turn-delta staleness of the source request (identically 0
-                # on the own channel; >0 on the opponent channel when their
-                # client lags the observer's build).
-                encode_one_hot_private_entity(
-                    private,
-                    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG,
-                ),
-            ],
-            dtype=self.cfg.dtype,
+        # Tera type, the request-side condition block (the truth channel,
+        # 2026-08-31), hp and the stats' Fourier bands -- built in
+        # `rl.model.state_features` beside the public path's.
+        state_features, _ = private_state_features(
+            private, self.cfg.dtype, num_stat_bands
         )
 
         tokens = jnp.concatenate(
@@ -809,17 +569,7 @@ class Encoder(nn.Module):
                     )
                 ),
                 move_embeddings,
-                self.private_state_linear(
-                    jnp.concatenate(
-                        (
-                            boolean_code,
-                            condition_code,
-                            private_hp_features,
-                            stat_encoding,
-                        ),
-                        axis=-1,
-                    )
-                )[None],
+                self.private_state_linear(state_features)[None],
             ),
             axis=0,
         )

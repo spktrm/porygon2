@@ -191,22 +191,33 @@ class Porygon2PlayerModel(nn.Module):
         # opponent has shown. Its input is an integer: no shared param
         # ever receives its gradient, and its CE enters the loss unscaled
         # because a coefficient could only ever be 1.0.
-        # The dynamics head (2026-09-03): one-step latent self-prediction.
-        # Per target row (DYNAMICS_TARGET_ROWS), from the POST-trunk row and
-        # the taken cell's own readout rows, predict the row's NEXT-step
-        # pre-trunk content under the EMA params (the learner's target
-        # forward). The action enters as the move/target rows themselves,
-        # never a cell index, so "this move against that mon -> their row
-        # next turn" puts the gradient on the operands the readout scores;
-        # the elementwise product term makes that interaction one layer
-        # away. Called only under cfg.train.
-        self.dynamics_head = MLP(**self.cfg.dynamics_head.mlp.to_dict())
         code = self.cfg.encoder.opp_code
         self.species_belief = nn.Embed(
             NUM_SPECIES,
             code.num_groups * code.num_classes,
             dtype=self.cfg.dtype,
             name="species_belief",
+        )
+        # The delta dynamics head (2026-09-03, delta form 2026-09-04): one-
+        # step latent self-prediction. Per target row (DYNAMICS_TARGET_ROWS),
+        # from the POST-trunk row and the taken cell's own readout rows,
+        # predict the CHANGE of the row's pre-trunk content to the next
+        # step under the EMA params (the learner's target forward). The sum
+        # pool is linear in the wire tokens with a static divisor, so the
+        # delta cancels every static token exactly (species, ability,
+        # item, learnset, already-revealed moves) and what is left is the
+        # state change, the newly revealed tokens and the active/benched
+        # bias jump. The action enters as the move/target rows themselves,
+        # never a cell index, so "this move against that mon -> their row
+        # next turn" puts the gradient on the operands the readout scores;
+        # the elementwise product term makes that interaction one layer
+        # away. The output kernel is ZERO-init: the head starts AT the copy
+        # baseline (loss exactly 1 under the normalised MSE), one zero
+        # factor over live inputs, not a two-factor stall. Called only
+        # under cfg.train.
+        self.dynamics_delta_head = MLP(
+            **self.cfg.dynamics_head.mlp.to_dict(),
+            final_kernel_init=nn.initializers.zeros,
         )
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
@@ -430,7 +441,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_dynamics_head(self, sequence: jax.Array, action_cell: jax.Array):
         """(NUM_DYNAMICS_ROWS, width): each target row's prediction of its own
-        next-step content. Reads policy-readable rows only, so the partition
+        next-step CHANGE. Reads policy-readable rows only, so the partition
         test can pin it bit-identical under opponent-truth perturbation."""
         rows = jnp.take(sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0)
         chosen_src, chosen_tgt = chosen_bank_rows(
@@ -444,7 +455,7 @@ class Porygon2PlayerModel(nn.Module):
         features = jnp.concatenate(
             (rows, chosen_src, chosen_tgt, rows * chosen_src), axis=-1
         )
-        return self.dynamics_head(features)
+        return self.dynamics_delta_head(features)
 
     def get_head_outputs(
         self,

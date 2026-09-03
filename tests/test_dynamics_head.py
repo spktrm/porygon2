@@ -1,10 +1,14 @@
-"""The dynamics head (2026-09-03): one-step latent self-prediction of the
-public / my-private / field rows' next pre-trunk content.
+"""The delta dynamics head (2026-09-03; delta form 2026-09-04): one-step
+latent self-prediction of the public / my-private / field rows' CHANGE
+in pre-trunk content.
 
 Fast half: the alignment across a step and the loss bracket on synthetic
-rows, each with the control that proves the test can fail. Slow half: on
-the real model, the loss gradient reaches the head AND the encoder/trunk
-(the term exists to shape them) and never the value heads.
+rows, each with the control that proves the test can fail -- the zero
+predictor scores exactly 1, a perfect one 0, and a constant added to both
+rows (a persisted token) leaves the loss unchanged. Slow half: on the
+real model, the loss gradient reaches the head AND the encoder/trunk (the
+term exists to shape them) and never the value heads, and the zero-init
+output kernel receives a non-zero gradient at init.
 """
 
 import jax
@@ -12,9 +16,16 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from rl.environment.data import NUM_ENTITY_PRIVATE_FEATURES
+from rl.environment.data import (
+    NUM_ENTITY_PRIVATE_FEATURES,
+    NUM_ENTITY_PUBLIC_FEATURES,
+)
 from rl.environment.interfaces import PlayerEnvOutput
-from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature, InfoFeature
+from rl.environment.protos.features_pb2 import (
+    EntityPrivateNodeFeature,
+    EntityPublicNodeFeature,
+    InfoFeature,
+)
 from rl.model.constants import (
     DYNAMICS_GROUP_SLICES,
     NUM_DYNAMICS_ROWS,
@@ -29,14 +40,22 @@ _ORDER = slice(
     InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11 + 1,
 )
 _IDX = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+_HP = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
 
 
-def _env(order, entity_idx):
+def _env(order, entity_idx, hp=None):
     info = np.zeros(len(InfoFeature.keys()), dtype=np.int32)
     info[_ORDER] = order
     private = np.zeros((NUM_PRIVATE_SLOTS, NUM_ENTITY_PRIVATE_FEATURES), np.int32)
     private[:, _IDX] = entity_idx
-    return PlayerEnvOutput(info=jnp.asarray(info), private_team=jnp.asarray(private))
+    public = np.zeros((NUM_PUBLIC_SLOTS, NUM_ENTITY_PUBLIC_FEATURES), np.int32)
+    if hp is not None:
+        public[:, _HP] = hp
+    return PlayerEnvOutput(
+        info=jnp.asarray(info),
+        private_team=jnp.asarray(private),
+        public_team=jnp.asarray(public),
+    )
 
 
 def test_alignment_follows_the_public_resort_and_the_private_key():
@@ -77,9 +96,11 @@ def test_alignment_follows_the_public_resort_and_the_private_key():
     assert other_index[public][:11].tolist() != next_index[public][:11].tolist()
 
 
-def _batch_env(orders, entity_idx):
+def _batch_env(orders, entity_idx, hps=None):
     """(T, B=1) env with the given per-step public orders."""
-    steps = [_env(order, entity_idx) for order in orders]
+    if hps is None:
+        hps = [None] * len(orders)
+    steps = [_env(order, entity_idx, hp) for order, hp in zip(orders, hps)]
     return jax.tree.map(lambda *leaves: jnp.stack(leaves)[:, None], *steps)
 
 
@@ -105,43 +126,111 @@ def test_losses_align_the_target_across_the_resort():
     valid = jnp.ones((num_steps, 1), bool)
     pred = jnp.asarray(target)  # any (T, B, R, D); only [:-1] is read
 
-    _, logs = dynamics_losses(pred, jnp.asarray(target), env, acted, valid)
-    assert float(logs["player_dynamics_copy_loss"]) == pytest.approx(0.0, abs=1e-6)
+    zero = jnp.zeros_like(pred)
+    loss, logs = dynamics_losses(zero, jnp.asarray(target), env, acted, valid)
+    # Content is per entity, so every ALIGNED delta is exactly 0: the zero
+    # predictor is perfect and each group's scale is 0 -- only if the
+    # alignment undoes the resort. Control: the unaligned rows do see it.
     assert float(logs["player_dynamics_rows_frac"]) == 1.0
-    # Control: the same rows scored WITHOUT the alignment (identity map)
-    # see the resort as change on the two swapped rows.
+    assert float(loss) == 0.0
+    for group in DYNAMICS_GROUP_SLICES:
+        assert float(logs[f"player_dynamics_scale_{group}"]) == 0.0
     swapped = jnp.asarray(target[1:]) - jnp.asarray(target[:-1])
     assert float(jnp.abs(swapped).max()) > 0.0
 
-    # A perfect predictor of the ALIGNED next row scores 0 too, and a
-    # negated one scores the maximum 2 -- the loss reads the prediction.
+    # Real change: perturb the next-step content per entity so the delta
+    # is non-zero; a perfect predictor of the ALIGNED delta scores 0, the
+    # zero predictor exactly 1, and the negated delta exactly 4.
+    drift = rng.normal(size=target.shape).astype(np.float32) * 0.1
+    target_moving = target + drift
     _, next_index = jax.vmap(jax.vmap(dynamics_alignment))(
         jax.tree.map(lambda leaf: leaf[:-1], env),
         jax.tree.map(lambda leaf: leaf[1:], env),
     )
     aligned_next = jnp.take_along_axis(
-        jnp.asarray(target[1:]), next_index[..., None], axis=2
+        jnp.asarray(target_moving[1:]), next_index[..., None], axis=2
     )
-    perfect = jnp.concatenate([aligned_next, aligned_next[-1:]], axis=0)
-    loss, _ = dynamics_losses(perfect, jnp.asarray(target), env, acted, valid)
-    assert float(loss) == pytest.approx(0.0, abs=1e-6)
-    loss, _ = dynamics_losses(-perfect, jnp.asarray(target), env, acted, valid)
-    assert float(loss) == pytest.approx(2.0, abs=1e-6)
+    delta = aligned_next - jnp.asarray(target_moving[:-1])
+    perfect = jnp.concatenate([delta, delta[-1:]], axis=0)
+    label = jnp.asarray(target_moving)
+    loss, logs = dynamics_losses(perfect, label, env, acted, valid)
+    assert float(loss) == pytest.approx(0.0, abs=1e-5)
+    for group in DYNAMICS_GROUP_SLICES:
+        assert float(logs[f"player_dynamics_scale_{group}"]) > 0.0
+    loss, _ = dynamics_losses(jnp.zeros_like(perfect), label, env, acted, valid)
+    assert float(loss) == pytest.approx(1.0, abs=1e-5)
+    loss, _ = dynamics_losses(-perfect, label, env, acted, valid)
+    assert float(loss) == pytest.approx(4.0, abs=1e-4)
+
+    # Copy-invariance: a constant added to BOTH rows of every entity (a
+    # persisted token under the linear pool) leaves the loss unchanged --
+    # the property the cosine form lacked. Control: adding it to the
+    # next row only IS a change, and moves the loss.
+    constant = rng.normal(size=(1, 1, 1, width)).astype(np.float32) * 3.0
+    loss_shifted, _ = dynamics_losses(-perfect, label + constant, env, acted, valid)
+    assert float(loss_shifted) == pytest.approx(4.0, abs=1e-4)
+    label_next_only = label.at[1:].add(constant)
+    loss_next_only, _ = dynamics_losses(-perfect, label_next_only, env, acted, valid)
+    assert abs(float(loss_next_only) - 4.0) > 0.1
 
     # Masks: the done row at t contributes nothing; a never-fielded mon
     # (ENTITY_IDX 0) is unmatched and lowers the row supply.
     acted_done = acted.at[1, 0].set(False)
-    _, logs = dynamics_losses(-perfect, jnp.asarray(target), env, acted_done, valid)
+    _, logs = dynamics_losses(-perfect, label, env, acted_done, valid)
     assert float(logs["player_dynamics_rows_frac"]) == 1.0
     unfielded_idx = entity_idx.copy()
     unfielded_idx[5] = 0
     env_unfielded = _batch_env(orders, unfielded_idx)
-    _, logs = dynamics_losses(
-        -perfect, jnp.asarray(target), env_unfielded, acted, valid
-    )
+    _, logs = dynamics_losses(-perfect, label, env_unfielded, acted, valid)
     assert float(logs["player_dynamics_rows_frac"]) == pytest.approx(
         (NUM_DYNAMICS_ROWS - 1) / NUM_DYNAMICS_ROWS
     )
+    # An all-masked group is 0 and finite, not NaN: no valid step at all.
+    loss, logs = dynamics_losses(-perfect, label, env, jnp.zeros_like(acted), valid)
+    assert float(loss) == 0.0
+    assert np.isfinite(float(logs["player_dynamics_gain_hp_moved"]))
+
+
+def test_hp_moved_gain_reads_the_hp_rows_only():
+    """`gain_hp_moved` is the public gain on rows whose wire HP_RATIO
+    changed across the step (aligned), scaled on that subset; `hp_share`
+    is the public delta's energy in the given subspace."""
+    num_steps, width = 3, 8
+    rng = np.random.default_rng(1)
+    orders = [np.arange(12, dtype=np.int32) for _ in range(num_steps)]
+    entity_idx = np.arange(1, 7, dtype=np.int32)
+    hps = [np.full(12, 100, np.int32) for _ in range(num_steps)]
+    hps[1][2] = 60  # row 2 loses hp across step 0 -> 1
+    hps[2][2] = 60
+    env = _batch_env(orders, entity_idx, hps)
+    acted = jnp.ones((num_steps, 1), bool)
+    target = jnp.asarray(rng.normal(size=(num_steps, 1, NUM_DYNAMICS_ROWS, width)))
+    delta = target[1:] - target[:-1]
+    perfect = jnp.concatenate([delta, delta[-1:]], axis=0)
+    # Perfect on the moved row only: the moved-subset gain reads 1 while
+    # the public gain is well below it.
+    only_moved = jnp.zeros_like(perfect).at[:, :, 2].set(perfect[:, :, 2])
+    _, logs = dynamics_losses(only_moved, target, env, acted, acted)
+    assert float(logs["player_dynamics_gain_hp_moved"]) == pytest.approx(1.0, abs=1e-5)
+    assert float(logs["player_dynamics_gain_public"]) < 0.5
+    assert float(logs["player_dynamics_hp_moved_frac"]) == pytest.approx(
+        1 / 24, abs=1e-6
+    )
+    # Control: the same prediction with hp unchanged has no moved rows.
+    env_still = _batch_env(orders, entity_idx)
+    _, logs = dynamics_losses(only_moved, target, env_still, acted, acted)
+    assert float(logs["player_dynamics_hp_moved_frac"]) == 0.0
+    assert float(logs["player_dynamics_gain_hp_moved"]) == pytest.approx(1.0)
+    # hp_share: a basis spanning the whole space reads 1; the empty
+    # (zero-column) basis reads 0.
+    _, logs = dynamics_losses(
+        only_moved, target, env, acted, acted, hp_basis=jnp.eye(width)
+    )
+    assert float(logs["player_dynamics_hp_share"]) == pytest.approx(1.0, rel=1e-4)
+    _, logs = dynamics_losses(
+        only_moved, target, env, acted, acted, hp_basis=jnp.zeros((width, 2))
+    )
+    assert float(logs["player_dynamics_hp_share"]) == 0.0
 
 
 @pytest.mark.gpu
@@ -169,7 +258,14 @@ def test_dynamics_gradient_reaches_the_trunk_and_not_the_critics(
         keys = tuple(entry.key for entry in path)
         if float(jnp.abs(leaf).max()) > 0.0:
             reached.add(keys[1])
-    assert "dynamics_head" in reached
+    assert "dynamics_delta_head" in reached
     assert "encoder" in reached
+    # The output kernel is zero at init (the copy baseline) and still
+    # receives a non-zero gradient: one zero factor over live inputs.
+    head = params["params"]["dynamics_delta_head"]
+    out_kernel = head["Dense_1"]["kernel"]
+    assert float(jnp.abs(out_kernel).max()) == 0.0
+    out_grad = grads["params"]["dynamics_delta_head"]["Dense_1"]["kernel"]
+    assert float(jnp.abs(out_grad).max()) > 0.0
     for critic in ("value_head", "priv_value_head", "belief_head", "action_head"):
         assert critic not in reached, critic

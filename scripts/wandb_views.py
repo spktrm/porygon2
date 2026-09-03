@@ -545,50 +545,85 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # The dynamics head (2026-09-03): one-step latent self-
-            # prediction of the public / my-private / field rows' NEXT
-            # pre-trunk content (EMA target) from the post-trunk row and
-            # the taken cell's own readout rows. The raw loss is NOT the
-            # read -- the opponent's simultaneous action is not in the
-            # chunk, so the head fits a conditional mean; judge it on the
-            # gain over the copy baseline (the loss of "nothing changes").
+            # The delta dynamics head (2026-09-03; delta form 2026-09-04):
+            # one-step latent self-prediction of the CHANGE in the public /
+            # my-private / field rows' pre-trunk content (EMA target) from
+            # the post-trunk row and the taken cell's own readout rows.
+            # Under the linear sum pool the static tokens (species, item,
+            # learnset, revealed moves) cancel in the delta exactly, so the
+            # target is the state change alone. Loss = per-group normalised
+            # MSE: the zero predictor ("nothing changes") scores exactly 1,
+            # a perfect one 0; gain = 1 - loss = R^2 of the change. The
+            # opponent's simultaneous action is not in the chunk, so the
+            # head fits a conditional mean; the gain is the read.
             name="3b · Dynamics (SSL)",
             is_open=True,
             panels=[
                 lp(
-                    # Cosine distance in [0, 2], head vs copy. Gain > 0 and
-                    # rising = the head predicts change; pinned ~0 = it has
-                    # learnt the copy and nothing else.
-                    "Dynamics loss vs copy baseline",
+                    # Mean over the three groups; 1 = the copy baseline the
+                    # zero-init head starts AT, down is good.
+                    "Dynamics loss (1 = copy baseline)",
+                    ["player_loss_dynamics"],
+                ),
+                lp(
+                    # R^2 of the change per group, up is good: 0 = copy,
+                    # negative = worse than copy (fitting noise). Public is
+                    # where the opponent's row changes under my move -- the
+                    # interaction the head exists for; field rows are
+                    # near-copy by nature.
+                    "Dynamics gain per group (R^2 of the change)",
                     [
-                        "player_loss_dynamics",
-                        "player_dynamics_copy_loss",
-                        "player_dynamics_gain_over_copy",
+                        "player_dynamics_gain_public",
+                        "player_dynamics_gain_private",
+                        "player_dynamics_gain_field",
                     ],
                 ),
                 lp(
-                    # The public group is where the opponent's row changes
-                    # under my move -- the interaction the head exists for.
-                    "Dynamics: public rows (loss vs copy)",
+                    # gain_public restricted to rows whose wire HP_RATIO
+                    # moved across the step (scaled on that subset) -- the
+                    # rows where the interaction lives, free of the
+                    # counters (turn, toxic, sleep, lag) that inflate R^2
+                    # on every row. Beside it the subset's share of rows.
+                    "Dynamics gain on hp-moved rows",
                     [
-                        "player_dynamics_loss_public",
-                        "player_dynamics_copy_public",
+                        "player_dynamics_gain_hp_moved",
+                        "player_dynamics_hp_moved_frac",
                     ],
                 ),
                 lp(
-                    "Dynamics: private rows (loss vs copy)",
+                    # Mean squared delta per group -- how far the rows move
+                    # per step in row units, the normaliser of each gain.
+                    "Dynamics delta scale per group",
                     [
-                        "player_dynamics_loss_private",
-                        "player_dynamics_copy_private",
+                        "player_dynamics_scale_public",
+                        "player_dynamics_scale_private",
+                        "player_dynamics_scale_field",
                     ],
                 ),
                 lp(
-                    # Field rows are near-copy by nature; a loss above copy
-                    # here is the head fitting noise.
-                    "Dynamics: field rows (loss vs copy)",
+                    # THE gaming instrument. The normaliser is learnable
+                    # (the state linears train under every loss, the EMA
+                    # copies them), so a normalised MSE can SHRINK the
+                    # unpredictable directions instead of predicting them.
+                    # hp_share = the public delta's energy in the hp input
+                    # subspace of public_persistent_linear; falling while
+                    # gain_public rises = hp made small, not predicted (the
+                    # abort -> whiten the delta).
+                    "Dynamics: hp share of the public delta",
+                    ["player_dynamics_hp_share"],
+                ),
+                lp(
+                    # Column-block rms of the three state kernels (public
+                    # persistent / transient, private) by feature group,
+                    # against "other" (level, gender, item effect, pp, tera,
+                    # volatiles, stats). hp falling relative to other is the
+                    # same gaming shape read on the parameter.
+                    "State kernel rms by feature group",
                     [
-                        "player_dynamics_loss_field",
-                        "player_dynamics_copy_field",
+                        "player_state_kernel_rms_hp",
+                        "player_state_kernel_rms_status",
+                        "player_state_kernel_rms_boosts",
+                        "player_state_kernel_rms_other",
                     ],
                 ),
                 lp(
@@ -598,16 +633,18 @@ def rl_sections():
                     ["player_dynamics_rows_frac"],
                 ),
                 lp(
-                    # The head's leaves against lecun init (~0.031 in,
-                    # ~0.044 out) and its pre-clip grad norm beside the
-                    # value head's -- drift with the gain pinned at ~0 is
-                    # the abort; a grad norm dwarfing the value head's is
-                    # the aux term stealing the trunk.
+                    # The head's leaves against init (in ~0.031 lecun, out
+                    # exactly 0 -- one zero factor over live inputs, so it
+                    # must leave 0 within ~200 steps) and its pre-clip grad
+                    # norm beside the value head's: out_rms leaving 0 with
+                    # gain pinned at 0 is fitting noise (coef 0.25); a grad
+                    # norm dwarfing the value head's is the aux term
+                    # stealing the trunk.
                     "Dynamics head: drift and gradient",
                     [
                         "player_dynamics_head_in_rms",
                         "player_dynamics_head_out_rms",
-                        "player_dynamics_head_gradient_norm",
+                        "player_dynamics_delta_head_gradient_norm",
                         "player_value_head_gradient_norm",
                     ],
                 ),

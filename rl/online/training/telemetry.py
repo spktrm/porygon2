@@ -26,6 +26,11 @@ from rl.environment.protos.features_pb2 import (
     PackedSetFeature,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
+from rl.model.state_features import (
+    STATE_KERNEL_GROUPS,
+    STATE_KERNELS,
+    state_kernel_blocks,
+)
 from rl.online.config import Porygon2LearnerConfig
 from rl.utils import average
 
@@ -324,14 +329,15 @@ _HISTORY_LEAVES = {
         ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
     ),
 }
-# The 2026-09-03 dynamics head: MLP (2D, D) over the (4D)-wide row input
-# [row ; src ; tgt ; row * src], so Dense_0 is lecun at fan-in 1024
-# (~0.0313) and the output Dense_1 at fan-in 512 (~0.0442). Read beside
-# player_dynamics_gain_over_copy: rms drifting with the gain pinned at ~0
-# is the head fitting noise (the pre-registered abort).
+# The delta dynamics head (2026-09-04): MLP (2D, D) over the (4D)-wide
+# row input [row ; src ; tgt ; row * src], so Dense_0 is lecun at fan-in
+# 1024 (~0.0313) and the output Dense_1 is ZERO-init -- the head starts at
+# the copy baseline. Read beside player_dynamics_gain_public: the output
+# rms leaving 0 with the gain pinned at 0 is the head fitting noise (the
+# pre-registered abort, coef 0.25).
 _DYNAMICS_LEAVES = {
-    "player_dynamics_head_in_rms": (("dynamics_head", "Dense_0", "kernel"),),
-    "player_dynamics_head_out_rms": (("dynamics_head", "Dense_1", "kernel"),),
+    "player_dynamics_head_in_rms": (("dynamics_delta_head", "Dense_0", "kernel"),),
+    "player_dynamics_head_out_rms": (("dynamics_delta_head", "Dense_1", "kernel"),),
 }
 # player_belief_head_gradient_norm already exists in train_step; not
 # duplicated here.
@@ -368,6 +374,30 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
         )
     for key, path in _GRAD_SUBTREES.items():
         logs[key] = optax.global_norm(_get(g, path))
+    logs.update(state_kernel_telemetry(p))
+    return logs
+
+
+def state_kernel_telemetry(params) -> dict[str, jax.Array]:
+    """`player_state_kernel_rms_{hp,status,boosts,other}`: rms of the three
+    state linears' kernels over the input rows of each coarse feature
+    group, pooled across the kernels (a kernel without the group -- no
+    boosts on the private path -- contributes nothing). The delta dynamics
+    loss normalises by the target's own scale, and that scale is these
+    kernels: hp falling relative to other is the normaliser being gamed
+    rather than the change predicted."""
+    blocks = state_kernel_blocks()
+    groups = list(STATE_KERNEL_GROUPS) + ["other"]
+    logs = {}
+    for group in groups:
+        rows = []
+        for kernel in STATE_KERNELS:
+            weight = jnp.asarray(params["encoder"][kernel]["kernel"], jnp.float32)
+            for block in blocks[kernel][group]:
+                rows.append(weight[block].reshape(-1))
+        logs[f"player_state_kernel_rms_{group}"] = jnp.sqrt(
+            jnp.mean(jnp.square(jnp.concatenate(rows)))
+        )
     return logs
 
 

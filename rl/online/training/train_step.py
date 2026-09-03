@@ -16,18 +16,18 @@ from rl.environment.data import (
     PackedSetFeature,
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
-from rl.environment.protos.features_pb2 import FieldFeature
+from rl.environment.protos.features_pb2 import EntityPublicNodeFeature, FieldFeature
 from rl.model.constants import DYNAMICS_GROUP_SLICES
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import major_arg_step_mask
 from rl.model.player_model import dynamics_alignment
+from rl.model.state_features import hp_input_rows
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
-    cosine_distance,
     factorised_entropies,
     forward_kl_loss,
     mse_value_loss,
@@ -54,55 +54,114 @@ from rl.utils import average
 logger = logging.getLogger(__name__)
 
 
+DYNAMICS_SCALE_EPS = 1e-6
+
+
+def dynamics_hp_basis(params: Params) -> jax.Array:
+    """(D, r): an orthonormal basis of the subspace the public row's hp
+    tokens write into -- QR of the EMA `public_persistent_linear` kernel's
+    hp input rows. The instrument for the delta loss's known shortcoming:
+    the target's per-feature scale is learnable (the state linears train
+    under every loss and the EMA copies them), so a normalised MSE can
+    shrink the unpredictable directions' share of the normaliser instead
+    of predicting them. `player_dynamics_hp_share` reads the public delta's
+    variance in this subspace; falling while the public gain rises is the
+    gaming shape."""
+    kernel = params["params"]["encoder"]["public_persistent_linear"]["kernel"]
+    rows = kernel[hp_input_rows("public_persistent_linear")].astype(jnp.float32)
+    basis, _ = jnp.linalg.qr(rows.T)
+    return jax.lax.stop_gradient(basis)
+
+
 def dynamics_losses(
     pred: jax.Array,
     target: jax.Array,
     env_output,
     acted_mask: jax.Array,
     value_mask: jax.Array,
+    hp_basis: jax.Array | None = None,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
-    """The dynamics head's loss and its panels (2026-09-03).
+    """The delta dynamics head's loss and its panels (2026-09-04).
 
     `pred` (T, B, R, D) is the online head's prediction at step t of each
-    target row's content at t+1; `target` is the EMA forward's pre-trunk
-    content, already stop-gradiented by being computed outside the loss
-    fn. Row j at t is matched to its next-step row through
-    `dynamics_alignment` (public rows re-sort every step). A row counts
-    when it is matched, an action was taken at t (`acted_mask`, which
-    drops the done row) and t+1 is a real state (`value_mask` -- the
-    bootstrap-only final row is a valid TARGET). Forced rows stay in: the
-    transition is real even when the choice was not.
+    target row's CHANGE from t to t+1; `target` is the EMA forward's
+    pre-trunk content, already stop-gradiented by being computed outside
+    the loss fn. Row j at t is matched to its next-step row through
+    `dynamics_alignment` (public rows re-sort every step) and the label is
+    `delta = target_next - target_now`, which cancels every static token
+    of the sum pool exactly. A row counts when it is matched, an action was
+    taken at t (`acted_mask`, which drops the done row) and t+1 is a real
+    state (`value_mask` -- the bootstrap-only final row is a valid TARGET).
+    Forced rows stay in: the transition is real even when the choice was
+    not.
 
-    The copy baseline is the same distance from the ALIGNED target at t --
-    the loss of a predictor that says nothing changes -- and
-    `gain_over_copy` is the head's only honest yardstick, since the
-    opponent's simultaneous action is not in the chunk and the head fits a
-    conditional mean.
+    Per group g of DYNAMICS_GROUP_SLICES, f32:
+
+        num_g   = average(|pred - delta|^2, mask_g)
+        scale_g = sg(average(|delta|^2, mask_g)) + eps
+        loss_g  = num_g / scale_g
+
+    and the loss is the mean over groups, so the field rows' small deltas
+    neither vanish under the public scale nor dominate it. The zero
+    predictor -- "nothing changes" -- scores exactly 1 per group, and the
+    zero-init head starts there; `gain_g = 1 - loss_g` is the R^2 of the
+    change (0 = copy, negative = worse than copy). An all-masked group
+    averages to 0 on both sides and contributes 0.
+
+    `player_dynamics_gain_hp_moved` is the public gain on the rows whose
+    wire HP_RATIO changed across the step, scaled on that subset: the
+    counters (turn, toxic, sleep) inflate R^2 on every row, and this
+    subset is where the interaction the head exists for lives.
     """
     matched, next_index = jax.vmap(jax.vmap(dynamics_alignment))(
         jax.tree.map(lambda leaf: leaf[:-1], env_output),
         jax.tree.map(lambda leaf: leaf[1:], env_output),
     )
+    target = target.astype(jnp.float32)
     target_next = jnp.take_along_axis(target[1:], next_index[..., None], axis=2)
-    target_now = target[:-1]
-    mask = matched & (acted_mask[:-1] & value_mask[1:])[..., None]
-    distance = cosine_distance(pred[:-1], target_next)
-    copy_distance = cosine_distance(target_now, target_next)
-    loss = average(distance, mask)
-    copy_loss = average(copy_distance, mask)
+    delta = target_next - target[:-1]
+    valid_step = acted_mask[:-1] & value_mask[1:]
+    mask = matched & valid_step[..., None]
+    sq_err = jnp.square(pred[:-1].astype(jnp.float32) - delta).sum(-1)
+    sq_delta = jnp.square(delta).sum(-1)
+
+    def normalised(rows_mask):
+        num = average(sq_err, rows_mask)
+        scale = jax.lax.stop_gradient(average(sq_delta, rows_mask))
+        return num / (scale + DYNAMICS_SCALE_EPS), scale
+
     logs = dict(
-        player_loss_dynamics=loss,
-        player_dynamics_copy_loss=copy_loss,
-        player_dynamics_gain_over_copy=copy_loss - loss,
         player_dynamics_rows_frac=average(
-            mask.astype(jnp.float32).mean(-1), acted_mask[:-1] & value_mask[1:]
+            mask.astype(jnp.float32).mean(-1), valid_step
         ),
     )
+    group_losses = []
     for group, rows in DYNAMICS_GROUP_SLICES.items():
-        group_loss = average(distance[..., rows], mask[..., rows])
-        group_copy = average(copy_distance[..., rows], mask[..., rows])
-        logs[f"player_dynamics_loss_{group}"] = group_loss
-        logs[f"player_dynamics_copy_{group}"] = group_copy
+        group_mask = jnp.zeros_like(mask).at[..., rows].set(mask[..., rows])
+        group_loss, group_scale = normalised(group_mask)
+        group_losses.append(group_loss)
+        logs[f"player_dynamics_gain_{group}"] = 1.0 - group_loss
+        logs[f"player_dynamics_scale_{group}"] = group_scale
+    loss = jnp.mean(jnp.stack(group_losses))
+    logs["player_loss_dynamics"] = loss
+
+    public = DYNAMICS_GROUP_SLICES["public"]
+    public_mask = jnp.zeros_like(mask).at[..., public].set(mask[..., public])
+    hp_ratio = env_output.public_team[
+        ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
+    ]
+    hp_next = jnp.take_along_axis(hp_ratio[1:], next_index[..., public], axis=2)
+    hp_moved = jnp.zeros_like(mask).at[..., public].set(hp_ratio[:-1] != hp_next)
+    moved_loss, _ = normalised(public_mask & hp_moved)
+    logs["player_dynamics_gain_hp_moved"] = 1.0 - moved_loss
+    logs["player_dynamics_hp_moved_frac"] = average(
+        hp_moved[..., public].astype(jnp.float32).mean(-1), valid_step
+    )
+    if hp_basis is not None:
+        hp_energy = jnp.square(delta @ hp_basis).sum(-1)
+        logs["player_dynamics_hp_share"] = average(hp_energy, public_mask) / (
+            average(sq_delta, public_mask) + DYNAMICS_SCALE_EPS
+        )
     return loss, logs
 
 
@@ -438,16 +497,17 @@ def train_step(
             prefix="player_species_belief",
         )
 
-        # The dynamics head: one-step latent self-prediction of the target
-        # rows' next pre-trunk content under the EMA params. The label is
-        # `player_target_pred`'s, computed outside this fn, so it carries
-        # no gradient by construction.
+        # The delta dynamics head: one-step latent self-prediction of the
+        # target rows' CHANGE in pre-trunk content under the EMA params.
+        # The label is `player_target_pred`'s, computed outside this fn, so
+        # it carries no gradient by construction.
         loss_dynamics, dynamics_logs = dynamics_losses(
             learner_player_pred.dynamics_pred,
             player_target_pred.dynamics_target,
             player_transitions.env_output,
             acted_mask,
             value_mask,
+            hp_basis=dynamics_hp_basis(player_state.target_params),
         )
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
