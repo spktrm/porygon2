@@ -408,7 +408,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # [0, 2] per row, pi-free, shapes the trunk and the readout's operands
     # rather than the logits; judged on gain over the copy baseline. 0.0
     # is an inert-loss off (head params stay in the tree).
-    player_dynamics_coef: float = 0.0
+    player_dynamics_coef: float = 0.5
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
