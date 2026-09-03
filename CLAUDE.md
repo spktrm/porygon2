@@ -1147,8 +1147,8 @@ type one-hots as the 0.987 control) located the loss:
 
 | operands of the move x target bilinear | held-out acc |
 |---|---|
-| attention-pooled rows, pre-trunk (today's readout input) | 0.600 (train 0.937) |
-| attention-pooled rows, post-trunk | 0.503 (train 0.992) |
+| attention-pooled rows, pre-trunk (the assembled input) | 0.600 (train 0.937) |
+| attention-pooled rows, post-trunk (TODAY'S READOUT INPUT — `player_model.py` scores the trunk's output rows) | 0.503 (train 0.992) |
 | type-supervised bottleneck on the same pre-trunk rows | 0.813 |
 | raw attribute multi-hots, rank 64 / 256 | 0.801 / 0.804 |
 | **SUMMED rows** (learned linear per attribute, no attention) | **0.793** |
@@ -1165,6 +1165,45 @@ shortcut inside the multi-hot itself.
 | mechanism | symbols | why |
 |---|---|---|
 | `EntityAttentionPool` (1-layer self-attention over ~10 attribute tokens + a learned-query `TransformerDecoder` read, rematted) | → `EntitySumPool`: `sum(mask · (token + token_bias[type])) / sqrt(num_tokens)` — STATIC divisor as in `simple_sum_embeddings`, so the row is linear in its attribute multi-hots; absent tokens contribute nothing, a fully masked set is zeros; `token_bias` (the field identity) stays. `cfg.encoder.intra_entity_{encoder,pool}`, `transformer_{encoder,decoder}_kwargs`, the `decoder_*` config vars, `encoder_init_residual_scale` (0.05 — the 2026-08-24 gate-init lesson, now moot), `modules.{DecoderBlock,TransformerDecoder}` (last consumer) all deleted; `TransformerEncoder` stays for the builder | the within-entity interactions it was meant to form (species x item x moveset) never showed on any read, and the one interaction a decision measurably turns on — my move's type x their species' types — is a BILINEAR of two entities, which no intra-entity block can form and which the readout already has the form for. Also runs on every packed history-cache row, so the actor forward and the learner's history precompute both shrink |
+
+**Kind-confounding probe (`rl/offline/kind_probe.py`, 2026-09-03, run on
+ckpt_00260000 of the attention-pool lineage BEFORE any launch, with a
+fresh-init trunk as the control).** The follow-up question was whether the
+trunk — one attention and ONE shared MLP over ~10 row kinds told apart only
+by additive biases, with `player_trunk_row_participation` falling 7.1 → 4.5
+over the run — was mixing the kinds into one subspace. Three reads per
+block, all held out by chunk:
+
+| read (higher = better) | input | block 6 trained | block 6 FRESH |
+|---|---|---|---|
+| kind identity (ridge, kind-balanced acc) | 0.96 | 0.94 | 0.90 |
+| cross-kind subspace overlap, public↔target (rank 16) | 0.54 | 0.22 | 0.41 |
+| own legibility: public row → species types (argmax hit) | 0.998 | 0.880 | 0.858 |
+| own legibility: move row → move type | 0.995 | **0.534** | 0.458 |
+| own legibility: move row → base power (r) | 0.994 | 0.856 | 0.831 |
+| own legibility: private row → species types | 0.739 | 0.630 | 0.652 |
+| own legibility: history row → species types | 0.401 | 0.353 | 0.826 |
+
+**Verdict: kinds are NOT confounded** — identity holds at every block and
+training pulls the kinds' subspaces APART (every cross-kind overlap falls
+from input to output, and ends well below the random trunk's). What the
+trunk does do is DILUTE: a move row's own type is half as linearly legible
+on the row the readout scores as on the row that entered, and the fresh
+control loses the same amount — this is what six ungated residual
+additions do to a linear direction, not something training built, and
+training preserved slightly more of it than random. It is the mechanism
+behind the ceiling's post ≤ pre. So a per-kind MLP / input projection is
+NOT indicated by this data; the cheap structural answer if the sum-pool
+lineage still reads its move rows dimly is a readout that ALSO sees the
+assembled input row (a skip past the trunk), its own commit and gate.
+Side reads: the private (sheet) row carries species type at 0.74 even at
+the input, against the public row's 0.998, fresh and trained alike (the
+pool, not learning — re-read under the sum pool); trained history rows
+carry hp 0.95 / active 0.82 but types 0.40 (fresh 0.94: the GRU state
+displaces the node snapshot); the trunk writes almost nothing into history
+rows (flat through the blocks). Read the `n` column: the target-row types
+read (0.64) is n-limited — the opp-active public row at the SAME steps
+reads 0.644 against 0.998 at 9x the rows.
 
 **Declined, recorded.** (1) An explicit hand-written type-interaction row
 (typechart lookup of my move type x their types): rejected by the user
