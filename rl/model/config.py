@@ -171,6 +171,14 @@ def get_player_model_config(
         entity_size,
         cfg.encoder.opp_code.num_groups * cfg.encoder.opp_code.num_classes,
     )
+    # The revealed-row control (2026-09-04): the belief head's (G, K)
+    # logits again, from NOTHING but the matched mon's own PRE-trunk
+    # public row (stop-gradient) -- no history, no other rows. Same
+    # widths as the belief head, so the two differ only in what they may
+    # read; their accuracy gap is inference from CONTEXT.
+    cfg.revealed_belief = ConfigDict()
+    cfg.revealed_belief.mlp = ConfigDict()
+    cfg.revealed_belief.mlp.layer_sizes = cfg.belief_head.mlp.layer_sizes
     # The dynamics head (2026-09-03): per target row, [post-trunk row ; the
     # taken cell's source row ; its target row ; row * source row] -> the
     # row's NEXT-step pre-trunk content (rl/model/constants.DYNAMICS_TARGET_ROWS).

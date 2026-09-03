@@ -343,6 +343,7 @@ def rl_sections():
                         "player_opp_code_embedding_rms",
                         "player_belief_head_out_rms",
                         "player_species_belief_rms",
+                        "player_revealed_belief_rms",
                     ],
                 ),
                 lp(
@@ -523,8 +524,24 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    "Species control loss",
-                    ["player_loss_species_belief"],
+                    # The revealed-row control: an MLP over the matched
+                    # mon's own PRE-trunk public row alone (species, revealed
+                    # moves, item, ability, state), same labels and rows.
+                    # Margin = belief minus its accuracy = inference from
+                    # CONTEXT (history, the other rows); up is good. B3
+                    # rule (2026-09-04): >= 0.15 and not falling after a 20k
+                    # hold = the head stays; ~0 or falling = it reads the
+                    # row's own tokens -> hidden-token code, own commit.
+                    "Belief context margin over revealed-row control",
+                    [
+                        "player_belief_context_margin",
+                        "player_revealed_belief_accuracy",
+                        "player_revealed_belief_accuracy_above_marginal",
+                    ],
+                ),
+                lp(
+                    "Control losses",
+                    ["player_loss_species_belief", "player_loss_revealed_belief"],
                 ),
                 lp(
                     # Opponent-code usage perplexity per group: min pinned

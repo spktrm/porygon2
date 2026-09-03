@@ -308,6 +308,7 @@ _OPP_CODE_LEAVES = {
     # The species-only control table (2026-09-02): flax Embed init is
     # variance_scaling fan_in over its 256 features, so 0.0625 again.
     "player_species_belief_rms": (("species_belief", "embedding"),),
+    "player_revealed_belief_rms": (("revealed_belief", "Dense_2", "kernel"),),
 }
 # The 2026-09-02 history-encoder leaves. step_attention/attn_out is
 # ZERO-init (the FlatActionReadout argument: one zero factor over live

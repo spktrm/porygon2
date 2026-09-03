@@ -121,6 +121,9 @@ class PlayerActorOutput:
     # The species-only matched control: the same (T, 6, G, K) logits from
     # a table keyed on the matched public row's species token alone.
     species_belief_logits: ArrayLike = ()
+    # The revealed-row matched control (2026-09-04): the same logits from
+    # an MLP over the matched mon's own PRE-trunk public row alone.
+    revealed_belief_logits: ArrayLike = ()
     belief_matched: ArrayLike = ()
     # The dynamics head (2026-09-03): (T, NUM_DYNAMICS_ROWS, D) pre-trunk
     # content of the target rows (the EMA forward's copy is the label) and

@@ -149,6 +149,12 @@ def test_train_step_smoke():
         "player_species_belief_accuracy",
         "player_species_belief_accuracy_above_marginal",
         "player_belief_gain_over_species",
+        # The revealed-row matched control (2026-09-04).
+        "player_revealed_belief_rms",
+        "player_loss_revealed_belief",
+        "player_revealed_belief_accuracy",
+        "player_revealed_belief_accuracy_above_marginal",
+        "player_belief_context_margin",
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",

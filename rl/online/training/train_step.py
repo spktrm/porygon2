@@ -496,6 +496,23 @@ def train_step(
             belief_mask,
             prefix="player_species_belief",
         )
+        # The revealed-row matched control: the same CE again from an MLP
+        # over the matched mon's own pre-trunk public row (stop-gradient),
+        # so it scores everything that row says in isolation.
+        # `player_belief_context_margin` = belief minus this: what the head
+        # infers from CONTEXT (history, the other rows); ~0 says the head
+        # only reads the mon's own revealed tokens.
+        revealed_ce = optax.softmax_cross_entropy(
+            logits=learner_player_pred.revealed_belief_logits.astype(jnp.float32),
+            labels=belief_labels,
+        ).mean(axis=-1)
+        loss_revealed_belief = average(revealed_ce, belief_mask)
+        revealed_logs = belief_accuracy_logs(
+            learner_player_pred.revealed_belief_logits,
+            belief_labels,
+            belief_mask,
+            prefix="player_revealed_belief",
+        )
 
         # The delta dynamics head: one-step latent self-prediction of the
         # target rows' CHANGE in pre-trunk content under the EMA params.
@@ -670,6 +687,9 @@ def train_step(
             # (an integer input has no gradient), and its gradient norm is
             # O(0.05) against a total of ~10, so the global clip is unmoved.
             + loss_species_belief
+            # The revealed-row control, likewise unscaled: its input is under
+            # stop_gradient, so only its own MLP receives the gradient.
+            + loss_revealed_belief
             # kl: trust region against the behaviour policy — the
             # replay-staleness guard alongside the PPO clip.
             + config.player_kl_loss_coef * loss_actor_backward_kl
@@ -685,6 +705,10 @@ def train_step(
             **species_logs,
             player_belief_gain_over_species=belief_logs["player_belief_accuracy"]
             - species_logs["player_species_belief_accuracy"],
+            player_loss_revealed_belief=loss_revealed_belief,
+            **revealed_logs,
+            player_belief_context_margin=belief_logs["player_belief_accuracy"]
+            - revealed_logs["player_revealed_belief_accuracy"],
             player_belief_matched_frac=average(
                 learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
                 value_mask,

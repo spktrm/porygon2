@@ -198,6 +198,17 @@ class Porygon2PlayerModel(nn.Module):
             dtype=self.cfg.dtype,
             name="species_belief",
         )
+        # The revealed-row matched control (2026-09-04): the same (G, K)
+        # logits from the matched mon's own PRE-trunk public row and
+        # nothing else -- species, revealed moves, item, ability, learnset,
+        # state, active, exactly what that row says in isolation. The
+        # species table brackets the belief head from below by species
+        # only; this one brackets it by everything the mon has SHOWN, so
+        # `player_belief_context_margin` (belief minus this) is the part
+        # of the belief formed from context: history, the other rows, what
+        # the opponent has and has not done. Input under stop_gradient: no
+        # shared param receives its gradient; its CE enters unscaled.
+        self.revealed_belief = MLP(**self.cfg.revealed_belief.mlp.to_dict())
         # The delta dynamics head (2026-09-03, delta form 2026-09-04): one-
         # step latent self-prediction. Per target row (DYNAMICS_TARGET_ROWS),
         # from the POST-trunk row and the taken cell's own readout rows,
@@ -499,6 +510,12 @@ class Porygon2PlayerModel(nn.Module):
             species_belief_logits = self.species_belief(public_species).reshape(
                 code_shape
             )
+            revealed_rows = jax.lax.stop_gradient(
+                dynamics_rows[DYNAMICS_GROUP_SLICES["public"]][public_row_index]
+            )
+            revealed_belief_logits = self.revealed_belief(revealed_rows).reshape(
+                code_shape
+            )
             # Rows converging to one direction reads on the existing panels
             # as "entropy at ceiling while the pointer params grow" -- the
             # phase-1 support-anchor shape -- so it gets its own reading.
@@ -517,6 +534,7 @@ class Porygon2PlayerModel(nn.Module):
                 "opp_code": opp_code_one_hot,
                 "belief_logits": belief_logits,
                 "species_belief_logits": species_belief_logits,
+                "revealed_belief_logits": revealed_belief_logits,
                 "belief_matched": matched,
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
