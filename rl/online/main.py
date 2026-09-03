@@ -528,7 +528,12 @@ def main(args: argparse.Namespace):
     logger.info("Loading train state...")
     mode = load_mode
     player_state, builder_state, league, controller_bytes = load_train_state(
-        learner_config, player_state, builder_state, mode=mode, ckpt_path=init_ckpt
+        learner_config,
+        player_state,
+        builder_state,
+        mode=mode,
+        ckpt_path=init_ckpt,
+        reset_league=args.reset_league,
     )
     player_state = jax.device_put(player_state)
     builder_state = jax.device_put(builder_state)
@@ -893,6 +898,14 @@ if __name__ == "__main__":
         help="Explicit source checkpoint for checkpoint/params mode "
         "(default: most recent under this run's root). A missing explicit "
         "path fails loudly instead of falling back to scratch.",
+    )
+    parser.add_argument(
+        "--reset-league",
+        action="store_true",
+        default=False,
+        help="Checkpoint mode only: drop the serialised league roster and "
+        "resume main-only (the one-shot for snapshots left on a superseded "
+        "param tree). The next restart picks up the new roster as usual.",
     )
     parser.add_argument(
         "--num-steps",

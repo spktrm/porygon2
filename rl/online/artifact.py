@@ -483,6 +483,7 @@ def load_from_checkpoint(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
+    reset_league: bool = False,
 ) -> tuple[
     Porygon2PlayerTrainState,
     Porygon2BuilderTrainState,
@@ -492,6 +493,14 @@ def load_from_checkpoint(
     """
     Full restoration: loads params, opt_state, step counts, league and the
     host-side controller state.
+
+    reset_league drops the serialised roster and starts main-only, keeping
+    everything else (optimiser, counts, EMA, magnet reference, wandb run).
+    The one-shot for an architecture change carried through the by-path
+    merge: the snapshots on disk are the OLD tree, and League.materialize
+    loads them raw, so under the new tree they are not the policies the
+    payoff table describes (2026-09-03 — the attention-pool snapshots
+    raised on the first forward and the pair handler masked it).
     """
     tqdm.write(f"Loading checkpoint from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=True)
@@ -508,7 +517,14 @@ def load_from_checkpoint(
     tqdm.write(pformat(player_scalars))
     tqdm.write(pformat(builder_scalars))
 
-    if ckpt_league_bytes is not None:
+    if reset_league:
+        logger.warning(
+            "Resetting the league to main-only: the roster serialised in %s "
+            "is dropped, the checkpoint's snapshots stay on disk unreferenced.",
+            ckpt_path,
+        )
+        league = _init_league(learner_config, player_state, builder_state)
+    elif ckpt_league_bytes is not None:
         league = League.deserialize(ckpt_league_bytes)
     else:
         # Fallback if league is missing in ckpt
@@ -783,6 +799,7 @@ def load_train_state(
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
     ckpt_path: str | None = None,
+    reset_league: bool = False,
 ) -> tuple[
     Porygon2PlayerTrainState,
     Porygon2BuilderTrainState,
@@ -797,6 +814,12 @@ def load_train_state(
     implicit most-recent lookup, where "no checkpoint yet" is a normal
     first launch.
     """
+    if reset_league and mode != "checkpoint":
+        raise ValueError(
+            f"reset_league only applies to mode='checkpoint' (got {mode!r}) "
+            "— scratch and params modes already start main-only"
+        )
+
     # 1. Force Scratch
     if mode == "scratch":
         if ckpt_path is not None:
@@ -838,5 +861,9 @@ def load_train_state(
 
     # 4. Standard Checkpoint Load (Default)
     return load_from_checkpoint(
-        latest_ckpt, learner_config, player_state, builder_state
+        latest_ckpt,
+        learner_config,
+        player_state,
+        builder_state,
+        reset_league=reset_league,
     )
