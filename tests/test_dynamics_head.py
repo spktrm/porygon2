@@ -33,6 +33,7 @@ from rl.model.constants import (
     NUM_PUBLIC_SLOTS,
 )
 from rl.model.player_model import dynamics_alignment
+from rl.model.utils import open_zero_init_paths
 from rl.online.training.train_step import dynamics_losses
 
 _ORDER = slice(
@@ -252,20 +253,32 @@ def test_dynamics_gradient_reaches_the_trunk_and_not_the_critics(
         loss, _ = dynamics_losses(pred, target, env, acted, acted)
         return loss
 
-    grads = jax.jit(jax.grad(dynamics_only))(params)
-    reached = set()
-    for path, leaf in jax.tree_util.tree_leaves_with_path(grads):
-        keys = tuple(entry.key for entry in path)
-        if float(jnp.abs(leaf).max()) > 0.0:
-            reached.add(keys[1])
+    grad_fn = jax.jit(jax.grad(dynamics_only))
+
+    def reached_by(grads):
+        reached = set()
+        for path, leaf in jax.tree_util.tree_leaves_with_path(grads):
+            keys = tuple(entry.key for entry in path)
+            if float(jnp.abs(leaf).max()) > 0.0:
+                reached.add(keys[1])
+        return reached
+
+    # Fresh params: the output kernel is zero at init (the copy baseline)
+    # and still receives a non-zero gradient -- one zero factor over live
+    # inputs -- while NOTHING behind it does yet: the gradient into the
+    # head's input is W_out^T times the residual, identically zero at step
+    # 0. So the reach into the encoder is asserted on OPENED params below,
+    # the two-halves rule for a zero-init path.
+    fresh_grads = grad_fn(params)
+    head = params["params"]["dynamics_delta_head"]
+    assert float(jnp.abs(head["Dense_1"]["kernel"]).max()) == 0.0
+    out_grad = fresh_grads["params"]["dynamics_delta_head"]["Dense_1"]["kernel"]
+    assert float(jnp.abs(out_grad).max()) > 0.0
+    assert reached_by(fresh_grads) == {"dynamics_delta_head"}
+
+    opened = open_zero_init_paths(params, ["dynamics_delta_head"])
+    reached = reached_by(grad_fn(opened))
     assert "dynamics_delta_head" in reached
     assert "encoder" in reached
-    # The output kernel is zero at init (the copy baseline) and still
-    # receives a non-zero gradient: one zero factor over live inputs.
-    head = params["params"]["dynamics_delta_head"]
-    out_kernel = head["Dense_1"]["kernel"]
-    assert float(jnp.abs(out_kernel).max()) == 0.0
-    out_grad = grads["params"]["dynamics_delta_head"]["Dense_1"]["kernel"]
-    assert float(jnp.abs(out_grad).max()) > 0.0
     for critic in ("value_head", "priv_value_head", "belief_head", "action_head"):
         assert critic not in reached, critic
