@@ -15,6 +15,7 @@ import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, RewardTracker, StateHandler } from "./state";
 import { cellToEnumPair } from "./data";
 import { Protocol } from "@pkmn/protocol";
+import fs from "fs";
 import {
     Action,
     ActionEnum,
@@ -556,6 +557,19 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.done = true;
 
         this.sendFinalState();
+        this.dumpBattleLog();
+    }
+
+    // Offline diagnostics only: with BATTLE_LOG_DIR set, p1 writes the
+    // battle's full protocol log (both sides' lines, its own hp absolute,
+    // the opponent's in %) at the end — the same text a downloaded human
+    // replay carries, so one parser reads both populations.
+    dumpBattleLog() {
+        const dir = process.env.BATTLE_LOG_DIR;
+        if (!dir || this.getPlayerIndex() !== 0) return;
+        const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        const path = `${dir}/${this.userName.replace(/[^A-Za-z0-9_-]/g, "_")}-${stamp}.log`;
+        fs.writeFileSync(path, this.log.join("\n") + "\n");
     }
 
     // One-shot battle-stream teardown shared by BOTH players of a game,

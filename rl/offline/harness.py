@@ -57,6 +57,9 @@ from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
 
+# rl/online/main.py's EVAL_BASELINE_NAMES: {0: random, 1: default, 2: simpleheuristic}.
+SIMPLE_HEURISTIC_BASELINE_INDEX = 2
+
 
 class _RunState:
     done = False
@@ -89,10 +92,17 @@ def play_games(
     generation: int = 9,
     smogon_format: str = "randombattle",
     seed: int = 0,
+    opponent: str = "self",
 ) -> list[list[Trajectory]]:
-    """Plays n_games self-play games (both sides `params`), `pairs` at a
-    time, and returns one chunk list per SIDE (2 per game) in completion
-    order. Games still running at `deadline_s` are abandoned."""
+    """Plays n_games games, `pairs` at a time, and returns one chunk list
+    per PARAMS-DRIVEN side in completion order: `opponent="self"` is
+    self-play (both sides `params`, 2 lists per game); "heuristic" pits
+    `params` against the service's SimpleHeuristic bot (1 list per game,
+    routed by the eval-heuristic username the service's
+    isEvalUser/evalActionMapping read). Games still running at
+    `deadline_s` are abandoned."""
+    if opponent not in ("self", "heuristic"):
+        raise ValueError(f"opponent must be 'self' or 'heuristic', got {opponent!r}")
     ctx = OfflineContext()
     ctx.config = get_learner_config()
     actor_device, actor_dtype = resolve_actor_device(ctx.config.player_actor_device)
@@ -110,9 +120,16 @@ def play_games(
 
     def play_one(game_no: int) -> list[list[Trajectory]]:
         actors, envs = [], []
-        for p in range(2):
+        if opponent == "self":
+            usernames = [f"{tag}:g{game_no}p{p}" for p in range(2)]
+        else:
+            # SIMPLE_HEURISTIC_BASELINE_INDEX is the evalActionMapping slot.
+            usernames = [
+                f"eval-heuristic-{tag}-g{game_no}:{SIMPLE_HEURISTIC_BASELINE_INDEX:04d}"
+            ]
+        for p, username in enumerate(usernames):
             env = SinglePlayerSyncEnvironment(
-                f"{tag}:g{game_no}p{p}",
+                username,
                 generation=generation,
                 smogon_format=smogon_format,
             )
@@ -128,7 +145,7 @@ def play_games(
             actor.set_game_id(f"{tag}-{game_no}")
             actors.append(actor)
         try:
-            with cf.ThreadPoolExecutor(2) as ex:
+            with cf.ThreadPoolExecutor(len(actors)) as ex:
                 futs = [
                     ex.submit(
                         a.unroll,
