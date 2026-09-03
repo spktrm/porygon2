@@ -512,7 +512,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 }
             }
 
-            if (this.done || this.finishedEarly) {
+            if (this.done || this.finishedEarly || this.destroyed) {
                 break;
             }
 
@@ -535,6 +535,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
                         const choice = await this.getChoices();
 
+                        // The battle may have been torn down while the
+                        // choice was pending (an abort, or the harness
+                        // destroying a concluded game): the sim's Battle is
+                        // nulled and its stream ended, so a late choose is
+                        // an unhandled rejection inside the sim's own
+                        // `void write` -- unreachable from the catch below.
+                        if (this.destroyed) break;
+
                         choices.push(choice);
 
                         // Process the received action
@@ -556,6 +564,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.done = true;
 
+        // An aborted battle has no consumer left: abortBattle cleared the
+        // outgoing queue and dropped the player from the worker's mapping.
+        if (this.destroyed) return;
         this.sendFinalState();
         this.dumpBattleLog();
     }
@@ -586,7 +597,16 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // (see the 2026-08-13 service crash).
     endBattleStream: (() => void) | undefined;
 
+    // Set by destroy(): the client Battles null their sides, so nothing
+    // may build a state from them afterwards. `start()`'s loop exits when
+    // destroy() ends the stream and would otherwise build the final state
+    // on the torn-down battle -- an unhandled rejection that took the
+    // WORKER down with every other game on it (2026-09-03, at a watchdog
+    // abort: `Cannot read properties of null (reading 'team')`).
+    destroyed = false;
+
     destroy() {
+        this.destroyed = true;
         this.privateBattle.destroy();
         this.publicBattle.destroy();
         this.endBattleStream?.();
@@ -677,8 +697,11 @@ export function createBattle(
     p1.endBattleStream = endBattleStream;
     p2.endBattleStream = endBattleStream;
 
-    p1.start();
-    p2.start();
+    // A rejection from either loop must stay this game's failure, never
+    // the worker's: the abort path tears the game down and the worker
+    // reports it; an uncaught rejection here would exit the process.
+    p1.start().catch((err) => console.error(`p1 loop failed: ${err}`));
+    p2.start().catch((err) => console.error(`p2 loop failed: ${err}`));
 
     void streams.omniscient.write(`>start ${JSON.stringify(spec)}
 >player p1 ${JSON.stringify(p1spec)}
