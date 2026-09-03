@@ -128,6 +128,27 @@ class PolicyQKHead(nn.Module):
 NUM_MARGIN_BINS = 13
 
 
+def chosen_bank_rows(
+    private_rows: jax.Array,
+    move_rows: jax.Array,
+    target_rows: jax.Array,
+    action_cell: jax.Array,
+):
+    """The readout rows that produced a block cell's logit.
+
+    The bank is private(6) | move(16) | target(17), and `CELL_BANK_SRC` /
+    `CELL_BANK_TGT` name a cell's (source, target) row in it: a switch cell
+    its private row twice, a move cell its move row and its target row, a
+    standalone cell its target row twice. Written once (2026-09-03) for
+    `SlotConditioning` and the dynamics head, which both condition on the
+    taken action through its OWN rows rather than a cell index.
+    """
+    bank = jnp.concatenate((private_rows, move_rows, target_rows), axis=0)
+    src_row = jnp.take(jnp.asarray(CELL_BANK_SRC), action_cell)
+    tgt_row = jnp.take(jnp.asarray(CELL_BANK_TGT), action_cell)
+    return jnp.take(bank, src_row, axis=0), jnp.take(bank, tgt_row, axis=0)
+
+
 class SlotConditioning(nn.Module):
     """Doubles: condition slot 2's rows on the cell slot 1 chose.
 
@@ -153,12 +174,8 @@ class SlotConditioning(nn.Module):
     ):
         private_rows, move_rows, target_rows = sequence_rows
         width = private_rows.shape[-1]
-        bank = jnp.concatenate((private_rows, move_rows, target_rows), axis=0)
-        src_row = jnp.take(jnp.asarray(CELL_BANK_SRC), action_cell)
-        tgt_row = jnp.take(jnp.asarray(CELL_BANK_TGT), action_cell)
-
         chosen = jnp.concatenate(
-            (jnp.take(bank, src_row, axis=0), jnp.take(bank, tgt_row, axis=0)),
+            chosen_bank_rows(private_rows, move_rows, target_rows, action_cell),
             axis=-1,
         )
         delta = nn.Dense(

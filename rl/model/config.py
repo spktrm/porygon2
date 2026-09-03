@@ -171,6 +171,12 @@ def get_player_model_config(
         entity_size,
         cfg.encoder.opp_code.num_groups * cfg.encoder.opp_code.num_classes,
     )
+    # The dynamics head (2026-09-03): per target row, [post-trunk row ; the
+    # taken cell's source row ; its target row ; row * source row] -> the
+    # row's NEXT-step pre-trunk content (rl/model/constants.DYNAMICS_TARGET_ROWS).
+    cfg.dynamics_head = ConfigDict()
+    cfg.dynamics_head.mlp = ConfigDict()
+    cfg.dynamics_head.mlp.layer_sizes = (2 * entity_size, entity_size)
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step

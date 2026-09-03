@@ -38,6 +38,31 @@ def test_merge_params_reports_added_and_dropped():
     assert np.all(merged["params"]["head"]["kernel"] == 1)
 
 
+def test_merge_keeps_an_added_subtree_fresh_everywhere():
+    """A whole new top-level module (the 2026-09-03 dynamics_head) resumed
+    in checkpoint mode: its params keep their fresh init and its Adam
+    moments start at zero, while the shared leaves take the checkpoint's."""
+    fresh = _tree({}, scale=0.0)
+    fresh["params"]["dynamics_head"] = {"Dense_0": {"kernel": jnp.full((3, 2), 0.5)}}
+    loaded = _tree({}, scale=1.0)
+    merged, kept_fresh, dropped = merge_params(fresh, loaded)
+    assert kept_fresh == ["/params/dynamics_head"]
+    assert dropped == []
+    assert np.all(merged["params"]["dynamics_head"]["Dense_0"]["kernel"] == 0.5)
+    assert np.all(merged["params"]["encoder"]["kernel"] == 1)
+
+    optimiser = optax.adam(1e-3)
+    fresh_state = optimiser.init(fresh)
+    loaded_state = optimiser.init(loaded)
+    grads = jax.tree.map(jnp.ones_like, loaded)
+    _, loaded_state = optimiser.update(grads, loaded_state, loaded)
+    merged_state = merge_opt_state(fresh_state, loaded_state)
+    adam = merged_state[0]
+    assert int(adam.count) == 1
+    assert np.all(adam.mu["params"]["dynamics_head"]["Dense_0"]["kernel"] == 0)
+    assert np.all(adam.mu["params"]["encoder"]["kernel"] != 0)
+
+
 def test_merge_opt_state_walks_optax_containers():
     optimiser = optax.chain(optax.clip_by_global_norm(10.0), optax.adam(1e-3))
     fresh = optimiser.init(_tree({"new_leaf": jnp.zeros((4,))}))

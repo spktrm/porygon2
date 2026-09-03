@@ -177,6 +177,26 @@ TARGET_ROWS = SEQUENCE_SLICES[SequenceGroup.TARGET_SLOT]
 OPP_PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.OPP_PRIVATE_ENTITY]
 HISTORY_ENTITY_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ENTITY]
 VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
+FIELD_ROWS = SEQUENCE_SLICES[SequenceGroup.FIELD]
+
+# The dynamics head's rows (2026-09-03): the entity rows whose NEXT-step
+# pre-trunk content is a prediction target -- public 12, my private 6, the
+# field triple, in that order. One index array so the encoder's target slice
+# and the head's input slice cannot disagree; the per-group panels split it
+# by these offsets.
+DYNAMICS_TARGET_ROWS = np.concatenate(
+    [
+        np.arange(PUBLIC_ROWS.start, PUBLIC_ROWS.stop),
+        np.arange(PRIVATE_ROWS.start, PRIVATE_ROWS.stop),
+        np.arange(FIELD_ROWS.start, FIELD_ROWS.stop),
+    ]
+).astype(np.int32)
+DYNAMICS_GROUP_SLICES = {
+    "public": slice(0, NUM_PUBLIC_SLOTS),
+    "private": slice(NUM_PUBLIC_SLOTS, NUM_PUBLIC_SLOTS + NUM_PRIVATE_SLOTS),
+    "field": slice(NUM_PUBLIC_SLOTS + NUM_PRIVATE_SLOTS, len(DYNAMICS_TARGET_ROWS)),
+}
+NUM_DYNAMICS_ROWS = len(DYNAMICS_TARGET_ROWS)
 
 assert NUM_SEQUENCE_ROWS == 80, NUM_SEQUENCE_ROWS
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS

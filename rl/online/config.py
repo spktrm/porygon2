@@ -402,6 +402,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # pi-free, touches representations not logits; 0.0 is an inert-loss off
     # (predictor params stay in the tree).
     player_belief_coef: float = 0.25
+    # The dynamics head (2026-09-03): cosine distance from each target
+    # row's predicted next-step content (post-trunk row + the taken cell's
+    # readout rows) to the EMA forward's pre-trunk row at t+1. Bounded in
+    # [0, 2] per row, pi-free, shapes the trunk and the readout's operands
+    # rather than the logits; judged on gain over the copy baseline. 0.0
+    # is an inert-loss off (head params stay in the tree).
+    player_dynamics_coef: float = 0.0
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio

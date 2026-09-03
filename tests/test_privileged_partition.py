@@ -169,6 +169,16 @@ def test_opp_private_team_cannot_reach_the_policy(
         np.asarray(base.value_head.log_probs, dtype=np.float32),
         np.asarray(moved.value_head.log_probs, dtype=np.float32),
     )
+    # The dynamics head (2026-09-03) reads policy-readable rows only, and
+    # its target rows are pre-trunk content of the same rows: both pinned.
+    np.testing.assert_array_equal(
+        np.asarray(base.dynamics_pred, dtype=np.float32),
+        np.asarray(moved.dynamics_pred, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(base.dynamics_target, dtype=np.float32),
+        np.asarray(moved.dynamics_target, dtype=np.float32),
+    )
     # Controls: the privileged head and the code labels DO move.
     assert not np.allclose(
         np.asarray(base.priv_value_head.expectation, dtype=np.float32),

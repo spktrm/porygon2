@@ -193,3 +193,14 @@ def forward_kl_loss(
         policy_ratio=policy_ratio, log_policy_ratio=log_policy_ratio
     )
     return average(loss, valid)
+
+
+def cosine_distance(pred: jax.Array, target: jax.Array) -> jax.Array:
+    """1 - cos(pred, target) over the last axis, in f32, in [0, 2]. The
+    dynamics head's loss (2026-09-03): scale-free, so a target row that is
+    linear in its wire multi-hots is judged on direction alone."""
+    pred = pred.astype(jnp.float32)
+    target = target.astype(jnp.float32)
+    dot = (pred * target).sum(axis=-1)
+    norms = jnp.linalg.norm(pred, axis=-1) * jnp.linalg.norm(target, axis=-1)
+    return 1.0 - dot / jnp.maximum(norms, 1e-6)

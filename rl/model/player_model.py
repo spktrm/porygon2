@@ -32,7 +32,10 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
+    DYNAMICS_GROUP_SLICES,
+    DYNAMICS_TARGET_ROWS,
     MOVE_ROWS,
+    NUM_PRIVATE_SLOTS,
     NUM_PUBLIC_SLOTS,
     PRIVATE_ROWS,
     PUBLIC_ROWS,
@@ -45,6 +48,7 @@ from rl.model.heads import (
     FlatActionReadout,
     HeadParams,
     SlotConditioning,
+    chosen_bank_rows,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -84,6 +88,66 @@ def belief_alignment(opp_private_team: jax.Array, info: jax.Array):
     matched = hits.any(axis=-1)
     public_row_index = jnp.argmax(hits, axis=-1)
     return matched, public_row_index
+
+
+def _match_rows(key_now: jax.Array, key_next: jax.Array, valid_now, valid_next):
+    """Row i now -> the row carrying the same key next step. (matched, index)."""
+    hits = (
+        (key_now[:, None] == key_next[None, :])
+        & valid_now[:, None]
+        & valid_next[None, :]
+    )
+    return hits.any(axis=-1), jnp.argmax(hits, axis=-1)
+
+
+def dynamics_alignment(env_now: PlayerEnvOutput, env_next: PlayerEnvOutput):
+    """Which next-step target row is this step's target row j? (2026-09-03)
+
+    The dynamics head's rows are DYNAMICS_TARGET_ROWS: public 12, my
+    private 6, field 3. Public rows re-sort every step (actives first), so
+    row i now and row i next are different mons after a switch; PUBLIC_ORDER
+    carries each row's stable entity index and the match is a (12, 12)
+    equality over it -- `belief_alignment`'s construction over TIME instead
+    of over sides. The private rows follow the request's own order, which
+    also moves on a switch, so they match on ENTITY_IDX (1 + stable index;
+    0 = never fielded, unmatched and skipped -- its row is static anyway).
+    Field rows are fixed slots. Returns (matched (21,), next_index (21,)),
+    the index valid only where matched.
+    """
+    order_slice = slice(
+        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0,
+        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11 + 1,
+    )
+    order_now = env_now.info[order_slice]
+    order_next = env_next.info[order_slice]
+    order_ok_now = (order_now >= 0) & (order_now < NUM_PUBLIC_SLOTS)
+    order_ok_next = (order_next >= 0) & (order_next < NUM_PUBLIC_SLOTS)
+    public_matched, public_index = _match_rows(
+        order_now, order_next, order_ok_now, order_ok_next
+    )
+
+    idx_column = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+    idx_now = env_now.private_team[:, idx_column]
+    idx_next = env_next.private_team[:, idx_column]
+    private_matched, private_index = _match_rows(
+        idx_now, idx_next, idx_now > 0, idx_next > 0
+    )
+
+    field = DYNAMICS_GROUP_SLICES["field"]
+    num_field = field.stop - field.start
+    field_index = jnp.arange(num_field, dtype=public_index.dtype)
+
+    matched = jnp.concatenate(
+        (public_matched, private_matched, jnp.ones(num_field, dtype=jnp.bool_))
+    )
+    next_index = jnp.concatenate(
+        (
+            public_index,
+            NUM_PUBLIC_SLOTS + private_index,
+            NUM_PUBLIC_SLOTS + NUM_PRIVATE_SLOTS + field_index,
+        )
+    )
+    return matched, next_index
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -127,6 +191,16 @@ class Porygon2PlayerModel(nn.Module):
         # opponent has shown. Its input is an integer: no shared param
         # ever receives its gradient, and its CE enters the loss unscaled
         # because a coefficient could only ever be 1.0.
+        # The dynamics head (2026-09-03): one-step latent self-prediction.
+        # Per target row (DYNAMICS_TARGET_ROWS), from the POST-trunk row and
+        # the taken cell's own readout rows, predict the row's NEXT-step
+        # pre-trunk content under the EMA params (the learner's target
+        # forward). The action enters as the move/target rows themselves,
+        # never a cell index, so "this move against that mon -> their row
+        # next turn" puts the gradient on the operands the readout scores;
+        # the elementwise product term makes that interaction one layer
+        # away. Called only under cfg.train.
+        self.dynamics_head = MLP(**self.cfg.dynamics_head.mlp.to_dict())
         code = self.cfg.encoder.opp_code
         self.species_belief = nn.Embed(
             NUM_SPECIES,
@@ -354,10 +428,29 @@ class Porygon2PlayerModel(nn.Module):
             normalized_modality_entropy=normalized_modality_entropy,
         )
 
+    def _forward_dynamics_head(self, sequence: jax.Array, action_cell: jax.Array):
+        """(NUM_DYNAMICS_ROWS, width): each target row's prediction of its own
+        next-step content. Reads policy-readable rows only, so the partition
+        test can pin it bit-identical under opponent-truth perturbation."""
+        rows = jnp.take(sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0)
+        chosen_src, chosen_tgt = chosen_bank_rows(
+            sequence[PRIVATE_ROWS],
+            sequence[MOVE_ROWS],
+            sequence[TARGET_ROWS],
+            action_cell.reshape(()),
+        )
+        chosen_src = jnp.broadcast_to(chosen_src[None], rows.shape)
+        chosen_tgt = jnp.broadcast_to(chosen_tgt[None], rows.shape)
+        features = jnp.concatenate(
+            (rows, chosen_src, chosen_tgt, rows * chosen_src), axis=-1
+        )
+        return self.dynamics_head(features)
+
     def get_head_outputs(
         self,
         sequence: jax.Array,
         opp_code_one_hot: jax.Array,
+        dynamics_rows: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -400,7 +493,12 @@ class Porygon2PlayerModel(nn.Module):
             # phase-1 support-anchor shape -- so it gets its own reading.
             # Offline twin: rl/offline/trunk_homogeneity.py, per block.
             row_cosine, row_participation = row_homogeneity(sequence)
+            dynamics_pred = self._forward_dynamics_head(
+                sequence, action_head.action_index
+            )
             learner_only = {
+                "dynamics_target": dynamics_rows,
+                "dynamics_pred": dynamics_pred,
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
                 # The belief label, straight from where the secret rows
@@ -437,11 +535,13 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        sequence, opp_code_one_hot, history_stats, history_carry = self.encoder(
-            actor_input.env,
-            actor_input.packed_history,
-            actor_input.history,
-            actor_input.history_carry,
+        sequence, opp_code_one_hot, dynamics_rows, history_stats, history_carry = (
+            self.encoder(
+                actor_input.env,
+                actor_input.packed_history,
+                actor_input.history,
+                actor_input.history_carry,
+            )
         )
 
         return jax.vmap(
@@ -451,7 +551,7 @@ class Porygon2PlayerModel(nn.Module):
                 history_stats=history_stats,
                 history_carry=history_carry,
             )
-        )(sequence, opp_code_one_hot, actor_input.env, actor_output)
+        )(sequence, opp_code_one_hot, dynamics_rows, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

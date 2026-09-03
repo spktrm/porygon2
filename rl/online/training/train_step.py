@@ -17,14 +17,17 @@ from rl.environment.data import (
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
 from rl.environment.protos.features_pb2 import FieldFeature
+from rl.model.constants import DYNAMICS_GROUP_SLICES
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import major_arg_step_mask
+from rl.model.player_model import dynamics_alignment
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
+    cosine_distance,
     factorised_entropies,
     forward_kl_loss,
     mse_value_loss,
@@ -49,6 +52,58 @@ from rl.online.training.telemetry import (
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
+
+
+def dynamics_losses(
+    pred: jax.Array,
+    target: jax.Array,
+    env_output,
+    acted_mask: jax.Array,
+    value_mask: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """The dynamics head's loss and its panels (2026-09-03).
+
+    `pred` (T, B, R, D) is the online head's prediction at step t of each
+    target row's content at t+1; `target` is the EMA forward's pre-trunk
+    content, already stop-gradiented by being computed outside the loss
+    fn. Row j at t is matched to its next-step row through
+    `dynamics_alignment` (public rows re-sort every step). A row counts
+    when it is matched, an action was taken at t (`acted_mask`, which
+    drops the done row) and t+1 is a real state (`value_mask` -- the
+    bootstrap-only final row is a valid TARGET). Forced rows stay in: the
+    transition is real even when the choice was not.
+
+    The copy baseline is the same distance from the ALIGNED target at t --
+    the loss of a predictor that says nothing changes -- and
+    `gain_over_copy` is the head's only honest yardstick, since the
+    opponent's simultaneous action is not in the chunk and the head fits a
+    conditional mean.
+    """
+    matched, next_index = jax.vmap(jax.vmap(dynamics_alignment))(
+        jax.tree.map(lambda leaf: leaf[:-1], env_output),
+        jax.tree.map(lambda leaf: leaf[1:], env_output),
+    )
+    target_next = jnp.take_along_axis(target[1:], next_index[..., None], axis=2)
+    target_now = target[:-1]
+    mask = matched & (acted_mask[:-1] & value_mask[1:])[..., None]
+    distance = cosine_distance(pred[:-1], target_next)
+    copy_distance = cosine_distance(target_now, target_next)
+    loss = average(distance, mask)
+    copy_loss = average(copy_distance, mask)
+    logs = dict(
+        player_loss_dynamics=loss,
+        player_dynamics_copy_loss=copy_loss,
+        player_dynamics_gain_over_copy=copy_loss - loss,
+        player_dynamics_rows_frac=average(
+            mask.astype(jnp.float32).mean(-1), acted_mask[:-1] & value_mask[1:]
+        ),
+    )
+    for group, rows in DYNAMICS_GROUP_SLICES.items():
+        group_loss = average(distance[..., rows], mask[..., rows])
+        group_copy = average(copy_distance[..., rows], mask[..., rows])
+        logs[f"player_dynamics_loss_{group}"] = group_loss
+        logs[f"player_dynamics_copy_{group}"] = group_copy
+    return loss, logs
 
 
 def masked_policy(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
@@ -383,6 +438,18 @@ def train_step(
             prefix="player_species_belief",
         )
 
+        # The dynamics head: one-step latent self-prediction of the target
+        # rows' next pre-trunk content under the EMA params. The label is
+        # `player_target_pred`'s, computed outside this fn, so it carries
+        # no gradient by construction.
+        loss_dynamics, dynamics_logs = dynamics_losses(
+            learner_player_pred.dynamics_pred,
+            player_target_pred.dynamics_target,
+            player_transitions.env_output,
+            acted_mask,
+            value_mask,
+        )
+
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
             learner_action_head.normalized_entropy, policy_mask
@@ -538,6 +605,7 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
             + config.player_belief_coef * loss_belief
+            + config.player_dynamics_coef * loss_dynamics
             # The species control, unscaled: its only param is the table
             # (an integer input has no gradient), and its gradient norm is
             # O(0.05) against a total of ~10, so the global clip is unmoved.
@@ -561,6 +629,7 @@ def train_step(
                 learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
                 value_mask,
             ),
+            **dynamics_logs,
             # Trunk over-smoothing (cosine up / participation down = rows
             # converging); the offline per-block twin is
             # rl/offline/trunk_homogeneity.py.

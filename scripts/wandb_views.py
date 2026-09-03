@@ -545,6 +545,75 @@ def rl_sections():
             ],
         ),
         ws.Section(
+            # The dynamics head (2026-09-03): one-step latent self-
+            # prediction of the public / my-private / field rows' NEXT
+            # pre-trunk content (EMA target) from the post-trunk row and
+            # the taken cell's own readout rows. The raw loss is NOT the
+            # read -- the opponent's simultaneous action is not in the
+            # chunk, so the head fits a conditional mean; judge it on the
+            # gain over the copy baseline (the loss of "nothing changes").
+            name="3b · Dynamics (SSL)",
+            is_open=True,
+            panels=[
+                lp(
+                    # Cosine distance in [0, 2], head vs copy. Gain > 0 and
+                    # rising = the head predicts change; pinned ~0 = it has
+                    # learnt the copy and nothing else.
+                    "Dynamics loss vs copy baseline",
+                    [
+                        "player_loss_dynamics",
+                        "player_dynamics_copy_loss",
+                        "player_dynamics_gain_over_copy",
+                    ],
+                ),
+                lp(
+                    # The public group is where the opponent's row changes
+                    # under my move -- the interaction the head exists for.
+                    "Dynamics: public rows (loss vs copy)",
+                    [
+                        "player_dynamics_loss_public",
+                        "player_dynamics_copy_public",
+                    ],
+                ),
+                lp(
+                    "Dynamics: private rows (loss vs copy)",
+                    [
+                        "player_dynamics_loss_private",
+                        "player_dynamics_copy_private",
+                    ],
+                ),
+                lp(
+                    # Field rows are near-copy by nature; a loss above copy
+                    # here is the head fitting noise.
+                    "Dynamics: field rows (loss vs copy)",
+                    [
+                        "player_dynamics_loss_field",
+                        "player_dynamics_copy_field",
+                    ],
+                ),
+                lp(
+                    # Fraction of target rows aligned across the step
+                    # (public rows re-sort; never-fielded mons unmatched).
+                    "Dynamics row supply",
+                    ["player_dynamics_rows_frac"],
+                ),
+                lp(
+                    # The head's leaves against lecun init (~0.031 in,
+                    # ~0.044 out) and its pre-clip grad norm beside the
+                    # value head's -- drift with the gain pinned at ~0 is
+                    # the abort; a grad norm dwarfing the value head's is
+                    # the aux term stealing the trunk.
+                    "Dynamics head: drift and gradient",
+                    [
+                        "player_dynamics_head_in_rms",
+                        "player_dynamics_head_out_rms",
+                        "player_dynamics_head_gradient_norm",
+                        "player_value_head_gradient_norm",
+                    ],
+                ),
+            ],
+        ),
+        ws.Section(
             # Observer critic quality. The policy no longer reads a Q stack
             # (retired 2026-08-26/30; its link to return is the v-trace
             # advantage), but an action-flat critic still voids the matched

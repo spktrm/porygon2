@@ -152,6 +152,21 @@ def test_train_step_smoke():
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",
+        # The dynamics head (2026-09-03): the loss beside its copy
+        # baseline, the per-group split and the head's drift/gradient.
+        "player_loss_dynamics",
+        "player_dynamics_copy_loss",
+        "player_dynamics_gain_over_copy",
+        "player_dynamics_rows_frac",
+        "player_dynamics_loss_public",
+        "player_dynamics_copy_public",
+        "player_dynamics_loss_private",
+        "player_dynamics_copy_private",
+        "player_dynamics_loss_field",
+        "player_dynamics_copy_field",
+        "player_dynamics_head_in_rms",
+        "player_dynamics_head_out_rms",
+        "player_dynamics_head_gradient_norm",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key

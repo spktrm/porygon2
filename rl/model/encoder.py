@@ -43,6 +43,7 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.model.constants import (
     ALLY_TARGET_ROWS,
+    DYNAMICS_TARGET_ROWS,
     ENEMY_TARGET_ROWS,
     IS_WILDCARD_MOVE_SLOT,
     MY_ACTIVE_PUBLIC_ROWS,
@@ -1389,13 +1390,23 @@ class Encoder(nn.Module):
             )
         )
 
+        # The dynamics head's target (2026-09-03): the entity rows' CONTENT
+        # before the additive group/row identity goes on. Public rows re-sort
+        # every step (actives first), so a mon's row index moves on a switch;
+        # a positional bias in the target would ask the predictor to guess
+        # the sort rather than the state. Sliced by name, zeroed where the
+        # row is invalid, and read by the learner only.
+        dynamics_rows = jnp.take(sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0)
+        dynamics_valid = jnp.take(row_valid, jnp.asarray(DYNAMICS_TARGET_ROWS))
+        dynamics_rows = jnp.where(dynamics_valid[:, None], dynamics_rows, 0)
+
         sequence = (
             sequence
             + self.sequence_group_bias.astype(dtype)[jnp.asarray(SEQUENCE_GROUP_IDS)]
             + self.sequence_row_bias.astype(dtype)
         )
         sequence = jnp.where(row_valid[:, None], sequence, 0)
-        return sequence, row_valid, opp_code_one_hot
+        return sequence, row_valid, opp_code_one_hot, dynamics_rows
 
     def _batched_forward(
         self,
@@ -1413,14 +1424,14 @@ class Encoder(nn.Module):
         has mixed with every other and the reading is behavioural rather than
         structural.
         """
-        sequence, row_valid, opp_code_one_hot = self._assemble_sequence(
+        sequence, row_valid, opp_code_one_hot, dynamics_rows = self._assemble_sequence(
             env_step,
             history_row_states,
             history_row_valid,
             history_field_state,
             history_node_snapshots,
         )
-        return self.trunk(sequence, row_valid), opp_code_one_hot
+        return self.trunk(sequence, row_valid), opp_code_one_hot, dynamics_rows
 
     def _run_history_encoder(
         self,
@@ -1615,7 +1626,7 @@ class Encoder(nn.Module):
         *history_inputs, _ = self._history_inputs(
             env_step, packed_history_step, history_step
         )
-        sequence, row_valid, _ = assemble(self, env_step, *history_inputs)
+        sequence, row_valid, _, _ = assemble(self, env_step, *history_inputs)
         return sequence, row_valid
 
     def __call__(
@@ -1625,23 +1636,28 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
         carry: HistoryCarry = HistoryCarry(),
     ):
-        # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K), history
-        # stats, history carry). The heads slice the rows they own by name
-        # (rl/model/constants.py), so no offset is ever written twice; the
-        # second element is the opponent code one-hot -- the belief head's
-        # label -- riding out beside the sequence because it is computed
-        # where the secret rows are built. The third is the per-trajectory
-        # History-panel scalars (history_step_stats); the actor path drops
-        # them, and XLA drops the computation with them. The fourth is the
-        # post-window history state (history_carry_from), the actor's next
-        # carry; the learner drops that one the same way.
+        # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K), (T,
+        # NUM_DYNAMICS_ROWS, entity_size), history stats, history carry). The
+        # heads slice the rows they own by name (rl/model/constants.py), so
+        # no offset is ever written twice; the second element is the
+        # opponent code one-hot -- the belief head's label -- riding out
+        # beside the sequence because it is computed where the secret rows
+        # are built, and the third is the dynamics head's target rows (the
+        # pre-trunk entity content), out for the same reason. The fourth is
+        # the per-trajectory History-panel scalars (history_step_stats); the
+        # actor path drops them, and XLA drops the computation with them.
+        # The fifth is the post-window history state (history_carry_from),
+        # the actor's next carry; the learner drops that one the same way.
         *history_inputs, history_output = self._history_inputs(
             env_step, packed_history_step, history_step, carry
         )
-        sequence, opp_code_one_hot = _forward_vmap()(self, env_step, *history_inputs)
+        sequence, opp_code_one_hot, dynamics_rows = _forward_vmap()(
+            self, env_step, *history_inputs
+        )
         return (
             sequence,
             opp_code_one_hot,
+            dynamics_rows,
             history_step_stats(history_output),
             history_carry_from(history_output),
         )

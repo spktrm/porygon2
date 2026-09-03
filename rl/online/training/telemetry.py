@@ -324,6 +324,15 @@ _HISTORY_LEAVES = {
         ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
     ),
 }
+# The 2026-09-03 dynamics head: MLP (2D, D) over the (4D)-wide row input
+# [row ; src ; tgt ; row * src], so Dense_0 is lecun at fan-in 1024
+# (~0.0313) and the output Dense_1 at fan-in 512 (~0.0442). Read beside
+# player_dynamics_gain_over_copy: rms drifting with the gain pinned at ~0
+# is the head fitting noise (the pre-registered abort).
+_DYNAMICS_LEAVES = {
+    "player_dynamics_head_in_rms": (("dynamics_head", "Dense_0", "kernel"),),
+    "player_dynamics_head_out_rms": (("dynamics_head", "Dense_1", "kernel"),),
+}
 # player_belief_head_gradient_norm already exists in train_step; not
 # duplicated here.
 _GRAD_SUBTREES = {
@@ -351,6 +360,7 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
         **_TRUNK_LEAVES,
         **_OPP_CODE_LEAVES,
         **_HISTORY_LEAVES,
+        **_DYNAMICS_LEAVES,
     }.items():
         leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
         logs[key] = jnp.mean(

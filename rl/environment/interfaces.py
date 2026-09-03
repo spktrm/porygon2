@@ -122,6 +122,12 @@ class PlayerActorOutput:
     # a table keyed on the matched public row's species token alone.
     species_belief_logits: ArrayLike = ()
     belief_matched: ArrayLike = ()
+    # The dynamics head (2026-09-03): (T, NUM_DYNAMICS_ROWS, D) pre-trunk
+    # content of the target rows (the EMA forward's copy is the label) and
+    # the online head's prediction of each row's NEXT-step content from the
+    # post-trunk row and the taken cell's readout rows. Learner-only.
+    dynamics_target: ArrayLike = ()
+    dynamics_pred: ArrayLike = ()
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows
     # of the trunk's output. The over-smoothing instrument; learner-only.
