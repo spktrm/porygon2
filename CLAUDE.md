@@ -1132,6 +1132,59 @@ the computation); a second CUDA context / MPS (time-slices the same GPU).
 Follow-up ONLY after a full lineage on "cpu": the server and its level-0
 grouping become dead code and go, taking the flag's off with them.
 
+## Removal ledger — 2026-09-03 entity attention pool → masked sum
+
+One structural commit, fresh lineage (param tree moves: 13.75M → 11.64M,
+−2.11M, the pool was 15% of the model). Revert handle: the commit itself.
+
+**The measurement.** Probe E (`rl/offline/type_probe.py`, ef08214) read the
+policy's mass on immune targets at 0.372 against 0.403 under uniform — the
+model barely computes type matchups — while the types ARE on the wire as
+explicit multi-hot columns (species.npy 1342/1344/1346, moves.npy
+711/713/715, one column per type). A supervised ceiling on 27.4k records
+(held out by chunk, majority floor 0.549, the readout's own bilinear form,
+type one-hots as the 0.987 control) located the loss:
+
+| operands of the move x target bilinear | held-out acc |
+|---|---|
+| attention-pooled rows, pre-trunk (today's readout input) | 0.600 (train 0.937) |
+| attention-pooled rows, post-trunk | 0.503 (train 0.992) |
+| type-supervised bottleneck on the same pre-trunk rows | 0.813 |
+| raw attribute multi-hots, rank 64 / 256 | 0.801 / 0.804 |
+| **SUMMED rows** (learned linear per attribute, no attention) | **0.793** |
+| shuffled labels | 0.390 |
+
+Information and form both suffice (0.81 through a 19-d type bottleneck);
+what fails is that a 256-d bilinear over pooled rows prefers the identity
+shortcut (species x species pair memorisation — pairs never recur across
+randbats games) to the type subspace, and the attention pool makes the type
+subspace LESS legible than the linear sum (post ≤ pre on every read). The
+sum recovers 0.60 → 0.79 for free; the residual gap to 0.80 is the same
+shortcut inside the multi-hot itself.
+
+| mechanism | symbols | why |
+|---|---|---|
+| `EntityAttentionPool` (1-layer self-attention over ~10 attribute tokens + a learned-query `TransformerDecoder` read, rematted) | → `EntitySumPool`: `sum(mask · (token + token_bias[type])) / sqrt(num_tokens)` — STATIC divisor as in `simple_sum_embeddings`, so the row is linear in its attribute multi-hots; absent tokens contribute nothing, a fully masked set is zeros; `token_bias` (the field identity) stays. `cfg.encoder.intra_entity_{encoder,pool}`, `transformer_{encoder,decoder}_kwargs`, the `decoder_*` config vars, `encoder_init_residual_scale` (0.05 — the 2026-08-24 gate-init lesson, now moot), `modules.{DecoderBlock,TransformerDecoder}` (last consumer) all deleted; `TransformerEncoder` stays for the builder | the within-entity interactions it was meant to form (species x item x moveset) never showed on any read, and the one interaction a decision measurably turns on — my move's type x their species' types — is a BILINEAR of two entities, which no intra-entity block can form and which the readout already has the form for. Also runs on every packed history-cache row, so the actor forward and the learner's history precompute both shrink |
+
+**Declined, recorded.** (1) An explicit hand-written type-interaction row
+(typechart lookup of my move type x their types): rejected by the user
+because move types change at run time — Tera Blast, Weather Ball, Judgment,
+Ivy Cudgel, Raging Bull, Revelation Dance, the -ate abilities — and
+immunities route through abilities and items (Levitate, Air Balloon), so it
+would be a human-maintained rule table, against the no-human-heuristics
+invariant. (2) `entity_size` → a wider readout `qk_size`: the ceiling was
+flat in rank (64/256) so width is not the lever.
+
+**Pre-registered acceptance** (fresh lineage; probe E at a matched step
+against irqeetfg): post-trunk type-class accuracy of the readout's rows off
+the 0.55 majority floor; the policy's immune-target mass BELOW the uniform
+baseline (0.372 vs 0.403 today — lower is better, it is mass on moves that do
+nothing); wr vs SimpleHeuristic at temp 1.0 at 30k ≥ irqeetfg's at the
+matched `lifetime_step`. **Abort:** none needed on a structural change —
+the fallback if the gate fails is a self-play damage aux head (dense
+per-move label from the engine's own outcome, no rule table), its own
+commit.
+
 ## Investigation ledger — 2026-09-01 flash attention: measured, declined
 
 The old objection ("APIs too immature") is RETIRED — jax 0.10.2's

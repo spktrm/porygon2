@@ -53,7 +53,6 @@ def get_player_model_config(
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = dtype
 
-    encoder_num_layers = 1
     encoder_num_heads = num_heads
     encoder_hidden_size_scale = 4
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
@@ -61,64 +60,6 @@ def get_player_model_config(
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
     encoder_use_bias = True
     encoder_qk_layer_norm = True
-    # 0.05, not 0.0 (2026-08-24): the entity pool's self-attention sat at
-    # mha_a -0.026 / ffn_a -0.003 after 74.6k steps -- a zero-init scalar
-    # times a random block is a product whose gate gradient has no
-    # consistent sign under RL noise and whose block gradient is exactly
-    # 0 until the gate moves. See cfg.encoder.round.init_gate.
-    encoder_init_residual_scale = 0.05
-
-    decoder_num_layers = 1
-    decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 4
-    decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
-    decoder_qkv_scale = 1 / decoder_num_heads
-    decoder_qkv_size = int(decoder_qkv_scale * entity_size)
-    decoder_use_bias = True
-    decoder_qk_layer_norm = True
-    decoder_init_residual_scale = 0.0
-
-    transformer_encoder_kwargs = dict(
-        num_layers=encoder_num_layers,
-        num_heads=encoder_num_heads,
-        qk_size=encoder_qkv_size,
-        v_size=encoder_qkv_size,
-        model_size=entity_size,
-        use_bias=encoder_use_bias,
-        resblocks_hidden_size=encoder_hidden_size,
-        qk_layer_norm=encoder_qk_layer_norm,
-        init_residual_scale=encoder_init_residual_scale,
-    )
-
-    transformer_decoder_kwargs = dict(
-        num_layers=decoder_num_layers,
-        num_heads=decoder_num_heads,
-        qk_size=decoder_qkv_size,
-        v_size=decoder_qkv_size,
-        model_size=entity_size,
-        use_bias=decoder_use_bias,
-        resblocks_hidden_size=decoder_hidden_size,
-        qk_layer_norm=decoder_qk_layer_norm,
-        init_residual_scale=decoder_init_residual_scale,
-    )
-
-    cfg.encoder.intra_entity_encoder = ConfigDict()
-    cfg.encoder.intra_entity_pool = ConfigDict()
-    set_attributes(cfg.encoder.intra_entity_encoder, **transformer_encoder_kwargs)
-    set_attributes(cfg.encoder.intra_entity_pool, **transformer_decoder_kwargs)
-
-    # Intra-entity attention: each pokemon is a short set of attribute tokens
-    # (species / ability / item / moves / state) mixed by a small
-    # self-attention block, then pooled back to one entity vector by a single
-    # learned query. Runs per-entity over ~10 tokens, so its cost is
-    # negligible next to the trunk. The pool's residual gate starts at 1.0 —
-    # unlike the trunk blocks, token content can only reach the entity vector
-    # through this read, so it must not start as a no-op.
-    cfg.encoder.intra_entity_encoder.need_pos = False
-    cfg.encoder.intra_entity_encoder.num_layers = 1
-    cfg.encoder.intra_entity_pool.need_pos = False
-    cfg.encoder.intra_entity_pool.num_layers = 1
-    cfg.encoder.intra_entity_pool.init_residual_scale = 1.0
 
     # Perceiver-style latent input read (2026-08-21): K learned latents
     # cross-attend ONE flat token set -- 12 public x 11 (10 attributes plus

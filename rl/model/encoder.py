@@ -83,8 +83,6 @@ from rl.model.history_encoder import (
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
     SumEmbeddings,
-    TransformerDecoder,
-    TransformerEncoder,
     one_hot_concat_jax,
 )
 from rl.model.trunk import Trunk
@@ -147,44 +145,39 @@ def _lifted_entity_vmap(method):
     )
 
 
-class EntityAttentionPool(nn.Module):
-    """Pool one entity's attribute tokens into a single entity vector.
+class EntitySumPool(nn.Module):
+    """Pool one entity's attribute tokens into a single entity vector by a
+    masked SUM.
 
-    Self-attends the (num_tokens, entity_size) set, then reads it out with a
-    single learned query. Invalid attributes (unrevealed, or the active-only
-    state token on a benched entity) are masked tokens; a fully masked set
-    pools to zeros. The token-type bias gives the permutation-invariant
-    attention a field identity per token.
+    Each token carries its token-type bias (the field identity), invalid
+    attributes (unrevealed, or the active-only state token on a benched
+    entity) contribute nothing, and a fully masked set pools to zeros. The
+    divisor is the STATIC token count, as in `simple_sum_embeddings`, so the
+    entity vector stays LINEAR in its attribute multi-hots: a matchup the
+    readout's bilinear turns on (my move's type x their species' types) is
+    then a fixed subspace of the row, not a function the pool has to route.
+    Measured 2026-09-03 (`rl/offline/type_probe.py` and the supervised
+    ceiling beside it): the same readout form reached held-out 0.60 on the
+    attention-pooled rows and 0.79 on summed ones, against 0.80 from the raw
+    multi-hots — the attention pool was eroding type legibility, not adding
+    within-entity interactions the trunk could use.
     """
-
-    cfg: ConfigDict
 
     @nn.compact
     def __call__(
         self, tokens: jax.Array, token_mask: jax.Array, token_types: jax.Array
     ) -> jax.Array:
-        embedding_init = nn.initializers.variance_scaling(
-            1.0, "fan_in", "normal", out_axis=0
-        )
         token_bias = self.param(
             "token_bias",
             nn.initializers.zeros_init(),
             (NUM_TOKEN_TYPES, tokens.shape[-1]),
         )
-        pool_query = self.param("pool_query", embedding_init, (1, tokens.shape[-1]))
-
         tokens = tokens + token_bias[token_types].astype(tokens.dtype)
-        tokens = TransformerEncoder(
-            name="attention", **self.cfg.intra_entity_encoder.to_dict()
-        )(qkv=tokens, qkv_mask=token_mask)
-        pooled = TransformerDecoder(
-            name="pool", **self.cfg.intra_entity_pool.to_dict()
-        )(
-            q=pool_query.astype(tokens.dtype),
-            kv=tokens,
-            kv_mask=token_mask,
+        weights = token_mask.astype(tokens.dtype)[..., None]
+        num_tokens = tokens.shape[-2]
+        return jnp.sum(tokens * weights, axis=-2) / jnp.sqrt(num_tokens).astype(
+            tokens.dtype
         )
-        return jnp.squeeze(pooled, axis=0)
 
 
 class Encoder(nn.Module):
@@ -345,23 +338,13 @@ class Encoder(nn.Module):
             name="learnset_linear", use_bias=False, **dense_kwargs
         )
 
-        # Intra-entity attention, shared between private and public entities:
-        # each entity is a short set of attribute tokens, a small
-        # self-attention block forms within-entity interactions (species x
-        # item x moveset, boosts x stats, ...) that a linear sum cannot
-        # express, and a single learned query pools the set back to one
-        # entity vector. Token provenance is carried by the token-type bias
-        # table; per-provenance input norms downstream keep the two entity
-        # kinds separable. Rematted with nothing_saveable (not the house
-        # checkpoint_dots, which saves the very matmul outputs that blow up):
-        # the block runs per entity token-set, including the 2 * NUM_HISTORY
-        # rows of the packed history cache, so storing its internals for the
-        # backward pass OOMs the train step, while recomputing a ~10-token
-        # block is cheap.
-        self.entity_attention_pool = nn.checkpoint(
-            EntityAttentionPool,
-            policy=jax.checkpoint_policies.nothing_saveable,
-        )(self.cfg, name="entity_attention_pool")
+        # Entity pool, shared between private and public entities: a masked
+        # sum of the attribute tokens plus the token-type bias (see
+        # `EntitySumPool` for the measurement that retired the intra-entity
+        # attention block it replaces). Token provenance is carried by the
+        # token-type bias table; per-provenance input norms downstream keep
+        # the two entity kinds separable.
+        self.entity_pool = EntitySumPool(name="entity_pool")
         self.public_persistent_linear = nn.Dense(
             name="public_persistent_linear", use_bias=False, **dense_kwargs
         )
@@ -695,7 +678,7 @@ class Encoder(nn.Module):
         meaningful -- those rows are different turns, not a shared board)."""
         tokens, token_mask, mask, bias = self._public_entity_tokens(public, revealed)
         revealed_embedding = (
-            self.entity_attention_pool(tokens, token_mask, PUBLIC_TOKEN_TYPES) + bias
+            self.entity_pool(tokens, token_mask, PUBLIC_TOKEN_TYPES) + bias
         )
         return revealed_embedding, mask
 
@@ -872,9 +855,7 @@ class Encoder(nn.Module):
         MY OWN private team rows (the opponent's sheet, which this once also
         served, was deleted 2026-08-25)."""
         tokens, token_mask, mask = self._private_entity_tokens(private, num_stat_bands)
-        private_embedding = self.entity_attention_pool(
-            tokens, token_mask, PRIVATE_TOKEN_TYPES
-        )
+        private_embedding = self.entity_pool(tokens, token_mask, PRIVATE_TOKEN_TYPES)
         return private_embedding, mask
 
     def _embed_edge(self, edge: jax.Array):

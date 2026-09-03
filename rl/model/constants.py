@@ -44,12 +44,12 @@ NUM_FIELD_ROWS = 3
 
 
 class TokenType(IntEnum):
-    """Rows of the intra-entity token-type bias table.
+    """Rows of the entity token-type bias table.
 
-    These are the ATTRIBUTES of one entity, consumed inside
-    `EntityAttentionPool`, which gives the otherwise permutation-invariant
-    intra-entity attention a field identity per token. They are not rows of
-    the trunk's sequence -- that is `SequenceGroup`.
+    These are the ATTRIBUTES of one entity, consumed inside `EntitySumPool`,
+    which adds each token its field identity before the masked sum -- without
+    it the sum could not tell an item's embedding from an ability's. They are
+    not rows of the trunk's sequence -- that is `SequenceGroup`.
 
     The four moves share one type: movesets are unordered. Public entities
     carry TWO state tokens: a persistent one (hp, status, level, ...; it
