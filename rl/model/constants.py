@@ -237,6 +237,42 @@ assert not SEQUENCE_READ_MASK[:, _is_value_cls][
     ~_is_value_cls
 ].any(), "leak: VALUE_CLS must have out-degree 0"
 
+# The ACTOR's sequence (2026-09-04): the policy-readable rows alone. At act
+# time the learner-only partition is all-zero input that no policy output
+# reads -- the read mask gives the policy-readable rows no in-edge from it
+# at any block -- yet its rows still cost the private embedder, the code
+# softmax and seven rows of every trunk block. Under cfg.train=False the
+# encoder assembles only these rows and the trunk runs on them with the
+# partition's sub-mask (all True by construction), which computes the SAME
+# policy-readable rows the learner computes, up to GEMM shape numerics.
+# Every head reads rows BELOW the first dropped one, so a head's absolute
+# index means the same row in either sequence -- asserted, not assumed.
+LEARNER_ONLY_GROUPS = frozenset(
+    {SequenceGroup.OPP_PRIVATE_ENTITY, SequenceGroup.VALUE_CLS}
+)
+POLICY_READABLE_ROWS = np.flatnonzero(_policy_readable)
+NUM_POLICY_READABLE_ROWS = len(POLICY_READABLE_ROWS)
+assert (
+    POLICY_READABLE_ROWS
+    == np.flatnonzero(
+        ~np.isin(SEQUENCE_GROUP_IDS, [int(group) for group in LEARNER_ONLY_GROUPS])
+    )
+).all(), "the leak partition and the actor's dropped groups disagree"
+assert SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, POLICY_READABLE_ROWS)].all()
+_first_dropped_row = min(OPP_PRIVATE_ROWS.start, VALUE_CLS_ROW)
+assert (
+    POLICY_READABLE_ROWS[:_first_dropped_row] == np.arange(_first_dropped_row)
+).all()
+for _head_row in (
+    CLS_ROW,
+    PUBLIC_ROWS.stop - 1,
+    PRIVATE_ROWS.stop - 1,
+    MOVE_ROWS.stop - 1,
+    TARGET_ROWS.stop - 1,
+    int(DYNAMICS_TARGET_ROWS.max()),
+):
+    assert _head_row < _first_dropped_row, "a head reads past the actor's prefix"
+
 # Public rows 0-5 are mine and 6-11 theirs, actives first, so my active i is
 # public row i and theirs is row NUM_PUBLIC_SLOTS // 2 + i. The four
 # entity-derived target slots (ALLY_i_TARGET, ENEMY_i_TARGET) read those rows,

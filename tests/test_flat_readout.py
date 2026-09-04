@@ -26,12 +26,15 @@ from rl.model.constants import (
     NUM_SEQUENCE_ROWS,
     PRIVATE_ROWS,
     SEQUENCE_GROUP_IDS,
+    SEQUENCE_READ_MASK,
     SEQUENCE_SLICES,
     TARGET_ROWS,
     SequenceGroup,
 )
 from rl.model.heads import FlatActionReadout
 from rl.model.trunk import Trunk
+
+READ_MASK = jnp.asarray(SEQUENCE_READ_MASK)
 
 WIDTH = 32
 
@@ -200,7 +203,7 @@ def test_every_block_has_its_own_weights():
     trunk = Trunk(_trunk_cfg(num_blocks=3))
     sequence = jnp.zeros((NUM_SEQUENCE_ROWS, WIDTH))
     valid = jnp.ones(NUM_SEQUENCE_ROWS, bool)
-    params = trunk.init(jax.random.key(0), sequence, valid)
+    params = trunk.init(jax.random.key(0), sequence, valid, READ_MASK)
     leaves = jax.tree.leaves(params)
     assert leaves, "trunk has no params"
     for leaf in leaves:
@@ -217,16 +220,16 @@ def test_the_cls_row_survives_a_fully_masked_step():
     trunk = Trunk(_trunk_cfg())
     sequence = jax.random.normal(jax.random.key(0), (NUM_SEQUENCE_ROWS, WIDTH))
     valid = jnp.zeros(NUM_SEQUENCE_ROWS, bool).at[CLS_ROW].set(True)
-    params = trunk.init(jax.random.key(1), sequence, valid)
+    params = trunk.init(jax.random.key(1), sequence, valid, READ_MASK)
 
-    out = np.asarray(trunk.apply(params, sequence, valid))
+    out = np.asarray(trunk.apply(params, sequence, valid, READ_MASK))
     assert np.isfinite(out).all()
     assert np.abs(out[CLS_ROW]).max() > 0
 
     # Control: mask the CLS row too and the value head's input is exactly
     # zero -- a constant, carrying nothing about the state.
     empty = jnp.zeros(NUM_SEQUENCE_ROWS, bool)
-    blanked = np.asarray(trunk.apply(params, sequence, empty))
+    blanked = np.asarray(trunk.apply(params, sequence, empty, READ_MASK))
     assert np.isfinite(blanked).all()
     np.testing.assert_array_equal(blanked[CLS_ROW], 0.0)
 
@@ -235,16 +238,16 @@ def test_an_invalid_row_is_inert():
     trunk = Trunk(_trunk_cfg())
     sequence = jax.random.normal(jax.random.key(0), (NUM_SEQUENCE_ROWS, WIDTH))
     valid = jnp.ones(NUM_SEQUENCE_ROWS, bool).at[5].set(False)
-    params = trunk.init(jax.random.key(1), sequence, valid)
+    params = trunk.init(jax.random.key(1), sequence, valid, READ_MASK)
 
     perturbed = sequence.at[5].add(10.0)
-    base = np.asarray(trunk.apply(params, sequence, valid))
-    moved = np.asarray(trunk.apply(params, perturbed, valid))
+    base = np.asarray(trunk.apply(params, sequence, valid, READ_MASK))
+    moved = np.asarray(trunk.apply(params, perturbed, valid, READ_MASK))
     np.testing.assert_allclose(base, moved, atol=0)
 
     # Control: mark it valid and the same perturbation reaches the others.
     live = jnp.ones(NUM_SEQUENCE_ROWS, bool)
     assert not np.allclose(
-        np.asarray(trunk.apply(params, sequence, live)),
-        np.asarray(trunk.apply(params, perturbed, live)),
+        np.asarray(trunk.apply(params, sequence, live, READ_MASK)),
+        np.asarray(trunk.apply(params, perturbed, live, READ_MASK)),
     )

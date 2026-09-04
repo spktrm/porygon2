@@ -52,6 +52,9 @@ def get_player_model_config(
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
     cfg.encoder.dtype = dtype
+    # The actor's encoder assembles the policy-readable rows only
+    # (Encoder.kept_rows); the learner's every row.
+    cfg.encoder.train = train
 
     encoder_num_heads = num_heads
     encoder_hidden_size_scale = 4
@@ -95,7 +98,9 @@ def get_player_model_config(
     cfg.encoder.history_step.qk_size = encoder_qkv_size // 2
 
     # The trunk: `num_blocks` standard pre-RMSNorm blocks over ONE sequence
-    # of NUM_SEQUENCE_ROWS (61) rows -- see rl/model/trunk.py. Replaces the
+    # of NUM_SEQUENCE_ROWS rows (80; the actor assembles the 73
+    # policy-readable ones, encoder.kept_rows) -- see rl/model/trunk.py.
+    # Replaces the
     # four-round, three-stream, five-masked-attention RoundBlock on
     # 2026-08-29: at 61 rows an all-pairs attention is 3.7k cells, so the
     # block masks that encoded the routing were buying nothing but their own

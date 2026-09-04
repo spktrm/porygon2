@@ -24,6 +24,8 @@ from rl.model.constants import (
 )
 from rl.model.trunk import Trunk
 
+READ_MASK = jnp.asarray(SEQUENCE_READ_MASK)
+
 WIDTH = 32
 
 
@@ -64,11 +66,13 @@ def test_secret_rows_are_invisible_to_policy_readable_rows_at_depth():
     trunk = Trunk(_trunk_cfg())
     sequence = jax.random.normal(jax.random.key(0), (NUM_SEQUENCE_ROWS, WIDTH))
     valid = jnp.ones(NUM_SEQUENCE_ROWS, bool)
-    params = trunk.init(jax.random.key(1), sequence, valid)
+    params = trunk.init(jax.random.key(1), sequence, valid, READ_MASK)
 
     perturbed = sequence.at[OPP_PRIVATE_ROWS].add(10.0)
-    base = np.asarray(trunk.apply(params, sequence, valid), dtype=np.float32)
-    moved = np.asarray(trunk.apply(params, perturbed, valid), dtype=np.float32)
+    base = np.asarray(trunk.apply(params, sequence, valid, READ_MASK), dtype=np.float32)
+    moved = np.asarray(
+        trunk.apply(params, perturbed, valid, READ_MASK), dtype=np.float32
+    )
 
     # Every policy-readable row is BIT-identical across three blocks of
     # mixing -- transitivity, not just first-block masking.
@@ -78,7 +82,9 @@ def test_secret_rows_are_invisible_to_policy_readable_rows_at_depth():
     # Control #2: the same-size perturbation on a policy-readable row does
     # reach its peers -- the invariance above is the mask, not a dead trunk.
     control = sequence.at[3].add(10.0)
-    control_out = np.asarray(trunk.apply(params, control, valid), dtype=np.float32)
+    control_out = np.asarray(
+        trunk.apply(params, control, valid, READ_MASK), dtype=np.float32
+    )
     assert not np.allclose(base[_POLICY_READABLE], control_out[_POLICY_READABLE])
 
 
@@ -86,11 +92,13 @@ def test_value_cls_is_read_by_nothing():
     trunk = Trunk(_trunk_cfg())
     sequence = jax.random.normal(jax.random.key(2), (NUM_SEQUENCE_ROWS, WIDTH))
     valid = jnp.ones(NUM_SEQUENCE_ROWS, bool)
-    params = trunk.init(jax.random.key(3), sequence, valid)
+    params = trunk.init(jax.random.key(3), sequence, valid, READ_MASK)
 
     perturbed = sequence.at[VALUE_CLS_ROW].add(10.0)
-    base = np.asarray(trunk.apply(params, sequence, valid), dtype=np.float32)
-    moved = np.asarray(trunk.apply(params, perturbed, valid), dtype=np.float32)
+    base = np.asarray(trunk.apply(params, sequence, valid, READ_MASK), dtype=np.float32)
+    moved = np.asarray(
+        trunk.apply(params, perturbed, valid, READ_MASK), dtype=np.float32
+    )
     others = np.arange(NUM_SEQUENCE_ROWS) != VALUE_CLS_ROW
     np.testing.assert_array_equal(base[others], moved[others])
     # Control: its own output moves (it reads itself).

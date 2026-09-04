@@ -51,9 +51,11 @@ from rl.model.constants import (
     NUM_SEQUENCE_ROWS,
     NUM_TOKEN_TYPES,
     OPP_ACTIVE_PUBLIC_ROWS,
+    POLICY_READABLE_ROWS,
     PRIVATE_TOKEN_TYPES,
     PUBLIC_TOKEN_TYPES,
     SEQUENCE_GROUP_IDS,
+    SEQUENCE_READ_MASK,
 )
 from rl.model.features import (
     binary_scale_encoding,
@@ -1001,14 +1003,29 @@ class Encoder(nn.Module):
 
         # ---- the learner-only partition -----------------------------------
         # The opponent's request truth as discrete-code rows (see
-        # _opp_code_rows) with their OWN side bias. SEQUENCE_READ_MASK keeps
-        # every policy-readable row blind to these and to VALUE_CLS itself.
-        opp_private_rows, opp_private_valid, opp_code_one_hot = self._opp_code_rows(
-            env_step.opp_private_team
-        )
-        opp_private_rows = opp_private_rows + self.opp_private_side_bias.astype(
-            opp_private_rows.dtype
-        )
+        # _opp_code_rows) with their OWN side bias, and the VALUE_CLS row.
+        # SEQUENCE_READ_MASK keeps every policy-readable row blind to both,
+        # so at act time they are all-zero input no policy output reads --
+        # the actor (cfg.train=False) does not assemble them at all and runs
+        # the trunk on POLICY_READABLE_ROWS alone (2026-09-04); its rows come
+        # out the same as the learner's, up to GEMM shape numerics.
+        learner_only_parts = []
+        opp_code_one_hot = ()
+        if self.cfg.train:
+            opp_private_rows, opp_private_valid, opp_code_one_hot = self._opp_code_rows(
+                env_step.opp_private_team
+            )
+            opp_private_rows = opp_private_rows + self.opp_private_side_bias.astype(
+                opp_private_rows.dtype
+            )
+            learner_only_parts = [
+                # Secret rows: valid only where the wire carried a real mon
+                # (all-zero deploy/old-shard buffers embed as invalid).
+                (opp_private_rows.astype(dtype), opp_private_valid),
+                # VALUE_CLS is always valid, like CLS: the privileged head
+                # reads it every step, terminal or not.
+                (self.value_cls_embedding.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
+            ]
 
         # ---- my candidate moves, one row per action slot ------------------
         # Row k IS action slot MOVE_INDICES[k], carrying that slot's pp,
@@ -1098,47 +1115,30 @@ class Encoder(nn.Module):
         move_slot_valid = move_cells.any(axis=-1) & not_done
         target_slot_valid = (move_cells.any(axis=0) | other_cells) & not_done
 
-        sequence = jnp.concatenate(
-            (
-                self.cls_embedding.astype(dtype),
-                public_rows.astype(dtype),
-                private_rows.astype(dtype),
-                move_rows.astype(dtype),
-                target_rows,
-                field_rows.astype(dtype),
-                history_field_rows,
-                prev_action_rows,
-                info_row.astype(dtype),
-                opp_private_rows.astype(dtype),
-                self.value_cls_embedding.astype(dtype),
-                history_entity_rows,
-            ),
-            axis=0,
-        )
-        row_valid = jnp.concatenate(
-            (
-                # The CLS row is ALWAYS valid. The value head reads it, and it
-                # is also what guarantees every query row has a non-empty key
-                # set -- a terminal step, where every action row is masked off,
-                # would otherwise attend over nothing and return NaN.
-                jnp.ones(1, dtype=jnp.bool_),
-                public_valid,
-                private_valid,
-                move_revealed & move_slot_valid,
-                target_slot_valid,
-                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
-                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
-                jnp.full(2, has_prev_action),
-                jnp.ones(1, dtype=jnp.bool_),
-                # Secret rows: valid only where the wire carried a real mon
-                # (all-zero deploy/old-shard buffers embed as invalid).
-                opp_private_valid,
-                # VALUE_CLS is always valid, like CLS: the privileged head
-                # reads it every step, terminal or not.
-                jnp.ones(1, dtype=jnp.bool_),
-                history_row_valid,
-            )
-        )
+        # (rows, validity) per group in SEQUENCE_LAYOUT order; the learner-only
+        # partition is present or absent as ONE list, so the two sequences
+        # cannot drift apart row by row.
+        parts = [
+            # The CLS row is ALWAYS valid. The value head reads it, and it
+            # is also what guarantees every query row has a non-empty key
+            # set -- a terminal step, where every action row is masked off,
+            # would otherwise attend over nothing and return NaN.
+            (self.cls_embedding.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
+            (public_rows.astype(dtype), public_valid),
+            (private_rows.astype(dtype), private_valid),
+            (move_rows.astype(dtype), move_revealed & move_slot_valid),
+            (target_rows, target_slot_valid),
+            (field_rows.astype(dtype), jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_)),
+            (history_field_rows, jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_)),
+            (prev_action_rows, jnp.full(2, has_prev_action)),
+            (info_row.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
+            *learner_only_parts,
+            (history_entity_rows, history_row_valid),
+        ]
+        sequence = jnp.concatenate([rows for rows, _ in parts], axis=0)
+        row_valid = jnp.concatenate([valid for _, valid in parts])
+        kept_rows = self.kept_rows()
+        assert sequence.shape[0] == len(kept_rows), sequence.shape
 
         # The dynamics head's target (2026-09-03): the entity rows' CONTENT
         # before the additive group/row identity goes on. Public rows re-sort
@@ -1146,14 +1146,22 @@ class Encoder(nn.Module):
         # a positional bias in the target would ask the predictor to guess
         # the sort rather than the state. Sliced by name, zeroed where the
         # row is invalid, and read by the learner only.
-        dynamics_rows = jnp.take(sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0)
-        dynamics_valid = jnp.take(row_valid, jnp.asarray(DYNAMICS_TARGET_ROWS))
-        dynamics_rows = jnp.where(dynamics_valid[:, None], dynamics_rows, 0)
+        dynamics_rows = ()
+        if self.cfg.train:
+            dynamics_rows = jnp.take(
+                sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0
+            )
+            dynamics_valid = jnp.take(row_valid, jnp.asarray(DYNAMICS_TARGET_ROWS))
+            dynamics_rows = jnp.where(dynamics_valid[:, None], dynamics_rows, 0)
 
+        # Param shapes are the FULL layout's on both paths (one checkpoint);
+        # the actor indexes the rows it kept.
         sequence = (
             sequence
-            + self.sequence_group_bias.astype(dtype)[jnp.asarray(SEQUENCE_GROUP_IDS)]
-            + self.sequence_row_bias.astype(dtype)
+            + self.sequence_group_bias.astype(dtype)[
+                jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
+            ]
+            + self.sequence_row_bias.astype(dtype)[jnp.asarray(kept_rows)]
         )
         sequence = jnp.where(row_valid[:, None], sequence, 0)
         return sequence, row_valid, opp_code_one_hot, dynamics_rows
@@ -1181,7 +1189,22 @@ class Encoder(nn.Module):
             history_field_state,
             history_node_snapshots,
         )
-        return self.trunk(sequence, row_valid), opp_code_one_hot, dynamics_rows
+        kept_rows = self.kept_rows()
+        read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
+        return (
+            self.trunk(sequence, row_valid, read_mask),
+            opp_code_one_hot,
+            dynamics_rows,
+        )
+
+    def kept_rows(self) -> np.ndarray:
+        """Which rows of SEQUENCE_LAYOUT this forward assembles: all of them
+        for the learner, the policy-readable ones for the actor. Every head
+        index is below the first dropped row (asserted in constants.py), so
+        a head's absolute index names the same row in either sequence."""
+        if self.cfg.train:
+            return np.arange(NUM_SEQUENCE_ROWS)
+        return POLICY_READABLE_ROWS
 
     def _run_history_encoder(
         self,
@@ -1386,14 +1409,16 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
         carry: HistoryCarry = HistoryCarry(),
     ):
-        # ((T, NUM_SEQUENCE_ROWS, entity_size), (T, 6, G, K), (T,
-        # NUM_DYNAMICS_ROWS, entity_size), history stats, history carry). The
-        # heads slice the rows they own by name (rl/model/constants.py), so
-        # no offset is ever written twice; the second element is the
+        # ((T, rows, entity_size), (T, 6, G, K), (T, NUM_DYNAMICS_ROWS,
+        # entity_size), history stats, history carry); rows = NUM_SEQUENCE_ROWS
+        # for the learner, NUM_POLICY_READABLE_ROWS for the actor (kept_rows).
+        # The heads slice the rows they own by name (rl/model/constants.py),
+        # so no offset is ever written twice; the second element is the
         # opponent code one-hot -- the belief head's label -- riding out
         # beside the sequence because it is computed where the secret rows
         # are built, and the third is the dynamics head's target rows (the
-        # pre-trunk entity content), out for the same reason. The fourth is
+        # pre-trunk entity content), out for the same reason; both are `()`
+        # on the actor, which never builds them. The fourth is
         # the per-trajectory History-panel scalars (history_step_stats); the
         # actor path drops them, and XLA drops the computation with them.
         # The fifth is the post-window history state (history_carry_from),

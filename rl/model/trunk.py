@@ -21,7 +21,6 @@ import jax.numpy as jnp
 from flax import linen as nn
 from ml_collections import ConfigDict
 
-from rl.model.constants import SEQUENCE_READ_MASK
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
     FFWMLP,
@@ -42,15 +41,16 @@ class TrunkBlock(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, carry: tuple[jax.Array, jax.Array], _):
+    def __call__(self, carry: tuple[jax.Array, jax.Array], read_mask: jax.Array):
         sequence, row_valid = carry
         # Validity AND the static leak partition (rl/model/constants.py
-        # SEQUENCE_READ_MASK): policy-readable rows have no in-edge from the
+        # SEQUENCE_READ_MASK, or its policy-readable sub-block on the actor's
+        # shorter sequence): policy-readable rows have no in-edge from the
         # learner-only partition at ANY block, so leak-freedom is transitive
-        # across depth by induction -- see the matrix's own comment.
-        mask = create_attention_mask(row_valid, row_valid) & jnp.asarray(
-            SEQUENCE_READ_MASK
-        )
+        # across depth by induction -- see the matrix's own comment. It is a
+        # scan BROADCAST input rather than a module-level import so the trunk
+        # is agnostic to which rows it was handed.
+        mask = create_attention_mask(row_valid, row_valid) & read_mask
         attended = MultiHeadAttention(
             name="attention",
             num_heads=self.cfg.num_heads,
@@ -100,7 +100,9 @@ class Trunk(nn.Module):
     cfg: ConfigDict
 
     @nn.compact
-    def __call__(self, sequence: jax.Array, row_valid: jax.Array) -> jax.Array:
+    def __call__(
+        self, sequence: jax.Array, row_valid: jax.Array, read_mask: jax.Array
+    ) -> jax.Array:
         block = nn.remat(TrunkBlock, policy=jax.checkpoint_policies.nothing_saveable)
         # A sow is a silent no-op unless its collection is lifted through
         # every transform above it, and this scan lifted only params from
@@ -114,8 +116,9 @@ class Trunk(nn.Module):
             block,
             variable_axes=variable_axes,
             split_rngs={"params": True},
+            in_axes=nn.broadcast,
             length=self.cfg.num_blocks,
-        )(self.cfg, name="blocks")((sequence, row_valid), None)
+        )(self.cfg, name="blocks")((sequence, row_valid), jnp.asarray(read_mask))
         return sequence
 
 
