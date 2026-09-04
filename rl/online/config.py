@@ -155,14 +155,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # controller cuts reuse if that ever stops being true.
     main_player_update_steps: int = 50
     add_player_min_frames: int = int(2e5)
-    # Backstop ("overdue") add interval, ~35k learner steps at the current
-    # batch shape. The healthy path — "dominant" adds when main beats every
-    # member >0.7 — is ungated above min_frames, so this clock only paces
-    # snapshots while the agent is NOT visibly improving. At 3e6 (~11.5k
-    # steps) it filled the league with ~0.5-winrate near-copies of main
-    # (mirror play with extra staleness) and made the stagnation clock
-    # hair-trigger.
-    add_player_max_frames: int = int(9e6)
+    # Backstop ("overdue") add interval. The healthy path — "dominant" adds
+    # when main beats every member >0.7 — is ungated above min_frames, so
+    # this clock only paces snapshots while the agent is NOT visibly
+    # improving. At 3e6 (~11.5k steps) it filled the league with
+    # ~0.5-winrate near-copies of main (mirror play with extra staleness)
+    # and made the stagnation clock hair-trigger. 9e6 (~44k steps at the
+    # live batch shape) fired every add of irqeetfg to 640k — the dominant
+    # gate never did — and was doubled 2026-09-04 (~88k steps) together
+    # with the batch cull below.
+    add_player_max_frames: int = int(1.8e7)
     # Learner steps before the first historical snapshot joins the league.
     # Kept low enough that a short (~200k step) run still trains against a
     # populated league rather than pure mirror self-play — mirror-only runs
@@ -171,6 +173,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # stylistically alien opponents.
     minimum_historical_player_steps: int = int(5e4)
     league_size: int = 16
+    # Once an add pushes the roster past league_size, the lowest-retention
+    # snapshots (main's win-rate against them, less a UCB under-sampling
+    # bonus) are culled down to this in one go, so the roster saws between
+    # the two and main's games go to the half it does not already farm.
+    # league_size itself is the old one-eviction-per-add behaviour. Read from
+    # config on resume, not from the checkpoint's serialised copy.
+    league_cull_size: int = 8
     manage_league_interval: int = 10
     # Disk-backed league: max materialised opponents held in RAM at once, and
     # the UCB exploration coefficient governing which stay hot.

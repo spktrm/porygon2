@@ -457,6 +457,7 @@ def _init_league(
         league_size=learner_config.league_size,
         cache_size=learner_config.league_cache_size,
         ucb_c=learner_config.league_ucb_c,
+        cull_size=learner_config.league_cull_size,
     )
 
 
@@ -525,7 +526,13 @@ def load_from_checkpoint(
         )
         league = _init_league(learner_config, player_state, builder_state)
     elif ckpt_league_bytes is not None:
-        league = League.deserialize(ckpt_league_bytes)
+        league = League.deserialize(
+            ckpt_league_bytes,
+            league_size=learner_config.league_size,
+            cache_size=learner_config.league_cache_size,
+            ucb_c=learner_config.league_ucb_c,
+            cull_size=learner_config.league_cull_size,
+        )
     else:
         # Fallback if league is missing in ckpt
         league = _init_league(learner_config, player_state, builder_state)

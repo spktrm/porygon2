@@ -87,11 +87,21 @@ class League:
         tau: float = 1e-3,
         cache_size: int = 16,
         ucb_c: float = 1.0,
+        cull_size: int | None = None,
     ):
         if tau <= 0:
             raise ValueError("Tau must be positive.")
+        # Roster size the cull thins to once league_size is exceeded; the
+        # default (league_size itself) is one eviction per add.
+        if cull_size is None:
+            cull_size = league_size
+        if not 0 < cull_size <= league_size:
+            raise ValueError(
+                f"cull_size must be in (0, league_size]: {cull_size} vs {league_size}"
+            )
 
         self.league_size = league_size
+        self.cull_size = cull_size
         self.decay = tau
         self.cache_size = cache_size
         self.ucb_c = ucb_c
@@ -129,24 +139,47 @@ class League:
                 draws=self.draws,
                 losses=self.losses,
                 games=self.games,
+                # Provenance only -- deserialize takes the sizing knobs
+                # from the resuming config, not from here.
                 max_players=self.league_size,
                 decay=self.decay,
                 cache_size=self.cache_size,
                 ucb_c=self.ucb_c,
+                cull_size=self.cull_size,
             )
         )
 
     @classmethod
-    def deserialize(cls, data: bytes) -> "League":
+    def deserialize(
+        cls,
+        data: bytes,
+        league_size: int | None = None,
+        cache_size: int | None = None,
+        ucb_c: float | None = None,
+        cull_size: int | None = None,
+    ) -> "League":
+        """Roster + payoff stats come from the checkpoint; each sizing
+        knob comes from the caller's config when given, else from the
+        serialised value (a knob the config changes between launches
+        used to be silently overridden by the checkpoint's copy)."""
         state = pickle.loads(data)
         players: dict[int, PlayerRef] = state["players"]
+        if league_size is None:
+            league_size = state["max_players"]
+        if cache_size is None:
+            cache_size = state.get("cache_size", 16)
+        if ucb_c is None:
+            ucb_c = state.get("ucb_c", 1.0)
+        if cull_size is None:
+            cull_size = state.get("cull_size")
         league = cls(
             main_player=None,  # set by the caller via update_main_player
             players=list(players.values()),
-            league_size=state["max_players"],
+            league_size=league_size,
             tau=state["decay"],
-            cache_size=state.get("cache_size", 16),
-            ucb_c=state.get("ucb_c", 1.0),
+            cache_size=cache_size,
+            ucb_c=ucb_c,
+            cull_size=cull_size,
         )
         league.wins = state["wins"]
         league.draws = state["draws"]
@@ -213,7 +246,10 @@ class League:
             del self._cache[victim]
 
     def _evict_players_if_needed(self):
-        """Evict lowest-UCB players until the roster fits league_size.
+        """Once the roster exceeds league_size, cull the lowest-UCB players
+        down to cull_size in one go (a batch cull: the roster saws between
+        cull_size and league_size, so main spends its games on the
+        challenging half rather than on snapshots it already farms).
 
         Caller holds lock. Same retention score as the param cache (challenge
         to main + UCB exploration bonus): drop the opponent main already
@@ -221,9 +257,11 @@ class League:
         ones. Must not call materialize() (re-acquires self.lock).
 
         Scored against MAIN_KEY."""
+        if len(self.players) <= self.league_size:
+            return
         main = self.live.get(MAIN_KEY)
         main_step = main.step_count if main is not None else MAIN_KEY
-        while len(self.players) > self.league_size:
+        while len(self.players) > self.cull_size:
             candidates = [s for s in self.players if s != main_step]
             if not candidates:
                 break
