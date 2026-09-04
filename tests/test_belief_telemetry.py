@@ -89,3 +89,33 @@ def test_code_usage_perplexity_reads_one_at_a_dead_group():
     )
     assert float(logs["player_code_perplexity_mean"]) > 1.0
     assert float(logs["player_code_row_frac"]) == 1.0
+
+
+def test_code_usage_row_mask_narrows_the_population_and_renames():
+    """The hidden-token label's panel (2026-09-05): `row_mask` restricts
+    the marginal to the rows the belief loss scores, and `prefix` names
+    the panel. Rows outside the mask use a second class in every group;
+    inside it every row uses one, so the narrowed read is exactly 1 where
+    the full read is not."""
+    time, batch, mons, groups, classes = 3, 2, 6, 4, 5
+    drawn = np.full((time, batch, mons, groups), 2)
+    drawn[:, :, 3:] = 4
+    code = jnp.asarray(np.eye(classes)[drawn], jnp.float32)
+    team = jnp.ones((time, batch, mons, 40), jnp.int32)
+    value_mask = jnp.ones((time, batch), bool)
+    row_mask = (
+        jnp.asarray(np.arange(mons) < 3)[None, None].repeat(time, 0).repeat(batch, 1)
+    )
+    full = code_usage_logs(code, team, value_mask)
+    assert float(full["player_code_perplexity_min"]) > 1.0
+    narrowed = code_usage_logs(
+        code, team, value_mask, row_mask=row_mask, prefix="player_hidden_code"
+    )
+    assert set(narrowed) == {
+        "player_hidden_code_perplexity_mean",
+        "player_hidden_code_perplexity_min",
+        "player_hidden_code_row_frac",
+    }
+    np.testing.assert_allclose(
+        float(narrowed["player_hidden_code_perplexity_mean"]), 1.0, rtol=1e-5
+    )

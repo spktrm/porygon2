@@ -622,23 +622,33 @@ def _code_marginal(one_hot: jax.Array, row_weights: jax.Array) -> jax.Array:
 
 
 def code_usage_logs(
-    opp_code: jax.Array, opp_private_team: jax.Array, value_mask: jax.Array
+    opp_code: jax.Array,
+    opp_private_team: jax.Array,
+    value_mask: jax.Array,
+    row_mask: jax.Array | None = None,
+    prefix: str = "player_code",
 ) -> dict[str, jax.Array]:
     """Per-group usage perplexity of the opponent code -- the collapse
     instrument: a group whose batch-marginal perplexity pins at 1 has
-    stopped using its classes, i.e. the code is ungrounded there."""
+    stopped using its classes, i.e. the code is ungrounded there.
+
+    Default population: every wired mon on a value step. `row_mask`
+    (T, B, 6) narrows it -- the hidden-token label is read over the rows
+    the belief loss scores, and only there."""
     species = opp_private_team[
         ..., EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
     ]
     row_live = (species != 0) & value_mask[..., None]
+    if row_mask is not None:
+        row_live = row_live & row_mask
     usage_probs = _code_marginal(opp_code, row_live)
     safe_probs = jnp.maximum(usage_probs, 1e-9)
     group_entropy = -(usage_probs * jnp.log(safe_probs)).sum(axis=-1)
     group_perplexity = jnp.exp(group_entropy)
     return {
-        "player_code_perplexity_mean": group_perplexity.mean(),
-        "player_code_perplexity_min": group_perplexity.min(),
-        "player_code_row_frac": average(
+        f"{prefix}_perplexity_mean": group_perplexity.mean(),
+        f"{prefix}_perplexity_min": group_perplexity.min(),
+        f"{prefix}_row_frac": average(
             row_live.any(axis=-1).astype(jnp.float32), value_mask
         ),
     }

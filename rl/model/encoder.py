@@ -1,4 +1,5 @@
 import functools
+from typing import NamedTuple
 
 import flax.linen as nn
 import jax
@@ -33,6 +34,7 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import (
     EntityEdgeFeature,
+    EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
     FieldFeature,
@@ -181,6 +183,56 @@ class EntitySumPool(nn.Module):
         return jnp.sum(tokens * weights, axis=-2) / jnp.sqrt(num_tokens).astype(
             tokens.dtype
         )
+
+
+def belief_alignment(opp_private_team: jax.Array, info: jax.Array):
+    """Which public row is opponent sheet row j? (2026-09-01)
+
+    The sheet's ENTITY_IDX (1 + stable index, 0 = never fielded) against
+    PUBLIC_ORDER, restricted to the OPPONENT half of the public rows --
+    a my-side mon can never legitimately match there, so a bogus index
+    cannot alias across sides. Returns (matched (6,), public_row_index (6,)
+    valid only where matched). A still-disguised or never-fielded mon is
+    simply unmatched: the belief loss skips it.
+    """
+    opp_idx = opp_private_team[
+        :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+    ]
+    public_order = info[
+        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
+        + 1
+    ]
+    opp_half = jnp.arange(NUM_PUBLIC_SLOTS) >= NUM_PUBLIC_SLOTS // 2
+    hits = (
+        (public_order[None, :] == (opp_idx[:, None] - 1))
+        & opp_half[None, :]
+        & (opp_idx[:, None] > 0)
+    )
+    matched = hits.any(axis=-1)
+    public_row_index = jnp.argmax(hits, axis=-1)
+    return matched, public_row_index
+
+
+class OppCodeLabels(NamedTuple):
+    """What the learner knows about the opponent's sheet, per mon (6 rows).
+
+    `code` is the straight-through one-hot the secret rows are built from
+    (the critic's code, gradient live). `hidden_code` is the belief head's
+    LABEL (2026-09-05): the SAME code network applied to the sheet with
+    every token the public row already shows masked out, under
+    stop_gradient -- so it can encode nothing the matched public row
+    carries, and predicting it from that row is inference about the mon's
+    unseen tokens by construction. `hidden_any` is False for a mon whose
+    every token is on the board (its label would be the code of an empty
+    pool -- one constant class); the belief loss skips those rows.
+    `matched`/`public_row_index` are `belief_alignment`, computed once.
+    """
+
+    code: jax.Array
+    hidden_code: jax.Array
+    hidden_any: jax.Array
+    matched: jax.Array
+    public_row_index: jax.Array
 
 
 class Encoder(nn.Module):
@@ -908,6 +960,74 @@ class Encoder(nn.Module):
         ).reshape(opp_latents.shape[0], -1)
         return rows, opp_valid, code_one_hot
 
+    def _hidden_code(
+        self, private: jax.Array, public: jax.Array, matched: jax.Array
+    ) -> tuple[jax.Array, jax.Array]:
+        """The code of ONE sheet row's hidden tokens: (one_hot (G, K), any).
+
+        A token is hidden when the matched public row does not carry it --
+        id-equality against the revealed row, so an unrevealed slot (the
+        wire's `*_ENUM___UNK`) and a still-disguised identity both count as
+        hidden, and a revealed one does not. Moves match by SET (a private
+        slot k against all four public slots; the public row's slots fill
+        in reveal order). The state token is never hidden: hp, status and
+        the field-visible condition are exactly what the revealed row
+        reads. An unmatched mon has shown nothing, so all of it is hidden.
+        Same pool, same `opp_code_logits`, no unimix (a label, not a
+        distribution), hard argmax, everything under stop_gradient.
+        """
+        tokens, token_mask, _ = self._private_entity_tokens(private)
+        # The REVEALED enum's SPECIES/ABILITY/ITEM/MOVEID0-3 on a PRIVATE
+        # row -- legal for the reason `_private_entity_tokens` gives.
+        id_columns = jnp.asarray(
+            [
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES,
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY,
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM,
+            ]
+        )
+        id_shown = private[id_columns] == public[id_columns]
+        move_shown = (
+            private[PUBLIC_MOVE_INDICES][:, None]
+            == public[PUBLIC_MOVE_INDICES][None, :]
+        ).any(axis=-1)
+        hidden = jnp.concatenate(
+            (~id_shown, ~move_shown, jnp.zeros(1, dtype=jnp.bool_))
+        )
+        hidden_mask = token_mask & (hidden | ~matched)
+        latent = self.entity_pool(tokens, hidden_mask, PRIVATE_TOKEN_TYPES)
+        code_logits = self.opp_code_logits(latent).reshape(
+            self.cfg.opp_code.num_groups, self.cfg.opp_code.num_classes
+        )
+        one_hot = jax.nn.one_hot(
+            jnp.argmax(code_logits.astype(jnp.float32), axis=-1),
+            self.cfg.opp_code.num_classes,
+            dtype=jnp.float32,
+        )
+        return jax.lax.stop_gradient(one_hot), hidden_mask.any()
+
+    def _opp_code_labels(
+        self, code_one_hot: jax.Array, env_step: PlayerEnvOutput
+    ) -> OppCodeLabels:
+        """`OppCodeLabels` for the step: the alignment once, then
+        `_hidden_code` per sheet row against its matched public row."""
+        matched, public_row_index = belief_alignment(
+            env_step.opp_private_team, env_step.info
+        )
+        hidden_code, hidden_any = _lifted_entity_vmap(Encoder._hidden_code)(
+            self,
+            env_step.opp_private_team,
+            env_step.revealed_team[public_row_index],
+            matched,
+        )
+        return OppCodeLabels(
+            code=code_one_hot,
+            hidden_code=hidden_code,
+            hidden_any=hidden_any,
+            matched=matched,
+            public_row_index=public_row_index,
+        )
+
     def _embed_action(self, action: jax.Array) -> jax.Array:
         """
         Encode features of a move, including its type, species, and action ID.
@@ -1010,11 +1130,12 @@ class Encoder(nn.Module):
         # the trunk on POLICY_READABLE_ROWS alone (2026-09-04); its rows come
         # out the same as the learner's, up to GEMM shape numerics.
         learner_only_parts = []
-        opp_code_one_hot = ()
+        opp_code_labels = ()
         if self.cfg.train:
             opp_private_rows, opp_private_valid, opp_code_one_hot = self._opp_code_rows(
                 env_step.opp_private_team
             )
+            opp_code_labels = self._opp_code_labels(opp_code_one_hot, env_step)
             opp_private_rows = opp_private_rows + self.opp_private_side_bias.astype(
                 opp_private_rows.dtype
             )
@@ -1164,7 +1285,7 @@ class Encoder(nn.Module):
             + self.sequence_row_bias.astype(dtype)[jnp.asarray(kept_rows)]
         )
         sequence = jnp.where(row_valid[:, None], sequence, 0)
-        return sequence, row_valid, opp_code_one_hot, dynamics_rows
+        return sequence, row_valid, opp_code_labels, dynamics_rows
 
     def _batched_forward(
         self,
@@ -1182,7 +1303,7 @@ class Encoder(nn.Module):
         has mixed with every other and the reading is behavioural rather than
         structural.
         """
-        sequence, row_valid, opp_code_one_hot, dynamics_rows = self._assemble_sequence(
+        sequence, row_valid, opp_code_labels, dynamics_rows = self._assemble_sequence(
             env_step,
             history_row_states,
             history_row_valid,
@@ -1193,7 +1314,7 @@ class Encoder(nn.Module):
         read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
         return (
             self.trunk(sequence, row_valid, read_mask),
-            opp_code_one_hot,
+            opp_code_labels,
             dynamics_rows,
         )
 
@@ -1426,12 +1547,12 @@ class Encoder(nn.Module):
         *history_inputs, history_output = self._history_inputs(
             env_step, packed_history_step, history_step, carry
         )
-        sequence, opp_code_one_hot, dynamics_rows = _forward_vmap()(
+        sequence, opp_code_labels, dynamics_rows = _forward_vmap()(
             self, env_step, *history_inputs
         )
         return (
             sequence,
-            opp_code_one_hot,
+            opp_code_labels,
             dynamics_rows,
             history_step_stats(history_output),
             history_carry_from(history_output),

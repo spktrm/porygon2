@@ -939,6 +939,31 @@ Also in this pass: player Adam eps 1e-8 -> 1e-5 (the reference diff's flagged
 proof that mass + strength coexist under a zero-avoider, and the measurement
 that priced the row form's WHICH-tax.
 
+## Addition ledger — 2026-09-05 hidden-token belief label (B3 fired)
+
+The revealed-row control (2026-09-04) caught the belief label: the code is
+trained only through the privileged value CE, so it encoded whatever the
+sheet carries, public tokens included, and a control reading the matched
+mon's OWN pre-trunk public row converged to the head's accuracy
+(irqeetfg: belief 0.89, revealed 0.87, species 0.59;
+`player_belief_context_margin` 0.20 @634k → 0.017 @1.15M — the launch
+margin was the fresh control lagging, not inference). B3's pre-registered
+verdict: hidden-token code.
+
+| mechanism | what | why |
+|---|---|---|
+| `encoder.OppCodeLabels` + `Encoder._hidden_code` | the SAME trained pool + `opp_code_logits` applied a second time per opp mon with every token the matched public row already shows masked out (id-equality on species/ability/item; moves by SET against MOVEID0-3; the state token never hidden — hp/status are what the revealed row reads; an unmatched mon is all hidden), hard argmax, no unimix, all under stop_gradient; `hidden_any` False = fully-revealed mon, skipped by the loss. `belief_alignment` moved into the encoder (computed once, re-exported from player_model). NO new params — the critic's secret rows and its full code are untouched (user constraint: the critic's INPUT stays normal, only the belief TARGET is hidden-only); checkpoint-mode resume | the label can encode nothing the public row carries, so predicting it from that row is inference about unseen tokens by construction. Panels: `player_belief_hidden_frac` (of matched mons, the share with a hidden token), `player_hidden_code_perplexity_{mean,min}` (the label's own usage over the scored rows; min 1 = dead label). Every `player_belief_*` panel breaks meaning at irqeetfg ~1.15M — kept the names so the positive control reads ACROSS the boundary: `player_revealed_belief_accuracy_above_marginal` must FALL to the species control's, `player_belief_accuracy_above_marginal` must stay above both; read on above-marginal, never raw accuracy (perplexity floors it) |
+
+In randbats a mon's hidden set is nearly independent of context given
+its own revealed tokens, so the achievable margin is small by nature —
+the gate is `above_marginal` > species AND > revealed after a 20k hold,
+else the head is a hidden-token hash lookup and goes. Tests:
+`tests/test_hidden_code_label.py` (label blind to hp WITH the hidden-move
+positive control; full reveal empties `hidden_any`, unmatching refills
+it), `test_belief_telemetry` row_mask narrowing; the control tests score
+the hidden label. Owed at the next stop: `tests/test_train_step.py` (2GB
+VRAM free beside the live learner — not compiled here).
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

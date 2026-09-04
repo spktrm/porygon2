@@ -33,7 +33,7 @@ def _control_and_belief_ce(network, actor_input, actor_output):
 
     def control_ce(params):
         out = network.apply(params, actor_input, actor_output, HeadParams())
-        labels = jax.lax.stop_gradient(out.opp_code.astype(jnp.float32))
+        labels = jax.lax.stop_gradient(out.hidden_code.astype(jnp.float32))
         ce = optax.softmax_cross_entropy(
             logits=out.revealed_belief_logits.astype(jnp.float32), labels=labels
         )
@@ -41,7 +41,7 @@ def _control_and_belief_ce(network, actor_input, actor_output):
 
     def belief_ce(params):
         out = network.apply(params, actor_input, actor_output, HeadParams())
-        labels = jax.lax.stop_gradient(out.opp_code.astype(jnp.float32))
+        labels = jax.lax.stop_gradient(out.hidden_code.astype(jnp.float32))
         ce = optax.softmax_cross_entropy(
             logits=out.belief_logits.astype(jnp.float32), labels=labels
         )

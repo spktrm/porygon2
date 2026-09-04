@@ -109,14 +109,18 @@ class PlayerActorOutput:
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
     # Learner-only (cfg.train), like log_policy: the privileged critic over
-    # the VALUE_CLS row, and the opponent discrete-code one-hot (T, 6, G, K)
-    # that is the belief head's label. Actors ship the () defaults.
+    # the VALUE_CLS row, the opponent discrete-code one-hot (T, 6, G, K)
+    # the secret rows are built from, and the belief head's LABEL: the
+    # same code over each mon's HIDDEN tokens only (2026-09-05,
+    # encoder.OppCodeLabels). Actors ship the () defaults.
     priv_value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
     opp_code: ArrayLike = ()
-    # The belief head: (T, 6, G, K) logits predicting opp_code from the
-    # matched PUBLIC rows, and the per-mon alignment mask.
+    hidden_code: ArrayLike = ()
+    # The belief head: (T, 6, G, K) logits predicting hidden_code from the
+    # matched PUBLIC rows, the per-mon alignment mask, and whether the mon
+    # has any hidden token left to predict.
     belief_logits: ArrayLike = ()
     # The species-only matched control: the same (T, 6, G, K) logits from
     # a table keyed on the matched public row's species token alone.
@@ -125,6 +129,7 @@ class PlayerActorOutput:
     # an MLP over the matched mon's own PRE-trunk public row alone.
     revealed_belief_logits: ArrayLike = ()
     belief_matched: ArrayLike = ()
+    belief_hidden_any: ArrayLike = ()
     # The dynamics head (2026-09-03): (T, NUM_DYNAMICS_ROWS, D) pre-trunk
     # content of the target rows (the EMA forward's copy is the label) and
     # the online head's prediction of each row's NEXT-step content from the

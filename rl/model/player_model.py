@@ -42,7 +42,8 @@ from rl.model.constants import (
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
-from rl.model.encoder import Encoder
+from rl.model.encoder import belief_alignment  # noqa: F401  (tests import it here)
+from rl.model.encoder import Encoder, OppCodeLabels
 from rl.model.heads import (
     CategoricalValueLogitHead,
     FlatActionReadout,
@@ -60,34 +61,6 @@ from rl.model.utils import get_num_params
 def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
     """log pi with illegal cells at the dtype's min, for sample_categorical."""
     return jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min)
-
-
-def belief_alignment(opp_private_team: jax.Array, info: jax.Array):
-    """Which public row is opponent sheet row j? (2026-09-01)
-
-    The sheet's ENTITY_IDX (1 + stable index, 0 = never fielded) against
-    PUBLIC_ORDER, restricted to the OPPONENT half of the public rows --
-    a my-side mon can never legitimately match there, so a bogus index
-    cannot alias across sides. Returns (matched (6,), public_row_index (6,)
-    valid only where matched). A still-disguised or never-fielded mon is
-    simply unmatched: the belief loss skips it.
-    """
-    opp_idx = opp_private_team[
-        :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
-    ]
-    public_order = info[
-        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
-        + 1
-    ]
-    opp_half = jnp.arange(NUM_PUBLIC_SLOTS) >= NUM_PUBLIC_SLOTS // 2
-    hits = (
-        (public_order[None, :] == (opp_idx[:, None] - 1))
-        & opp_half[None, :]
-        & (opp_idx[:, None] > 0)
-    )
-    matched = hits.any(axis=-1)
-    public_row_index = jnp.argmax(hits, axis=-1)
-    return matched, public_row_index
 
 
 def _match_rows(key_now: jax.Array, key_next: jax.Array, valid_now, valid_next):
@@ -471,7 +444,7 @@ class Porygon2PlayerModel(nn.Module):
     def get_head_outputs(
         self,
         sequence: jax.Array,
-        opp_code_one_hot: jax.Array,
+        opp_code_labels: OppCodeLabels,
         dynamics_rows: jax.Array,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
@@ -494,11 +467,10 @@ class Porygon2PlayerModel(nn.Module):
         )
         learner_only = {}
         if self.cfg.train:
-            matched, public_row_index = belief_alignment(
-                env_step.opp_private_team, env_step.info
-            )
+            matched = opp_code_labels.matched
+            public_row_index = opp_code_labels.public_row_index
             matched_rows = sequence[PUBLIC_ROWS][public_row_index]
-            code_shape = opp_code_one_hot.shape
+            code_shape = opp_code_labels.code.shape
             belief_logits = self.belief_head(matched_rows).reshape(code_shape)
             # Keyed on the PUBLIC row's species, never the private one: under
             # Illusion the board shows the disguise, and a control that sees
@@ -529,13 +501,16 @@ class Porygon2PlayerModel(nn.Module):
                 "dynamics_pred": dynamics_pred,
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
-                # The belief label, straight from where the secret rows
-                # were coded.
-                "opp_code": opp_code_one_hot,
+                # The critic's code (the secret rows' content) and the
+                # belief head's label -- the code of the HIDDEN tokens only
+                # (encoder.OppCodeLabels).
+                "opp_code": opp_code_labels.code,
+                "hidden_code": opp_code_labels.hidden_code,
                 "belief_logits": belief_logits,
                 "species_belief_logits": species_belief_logits,
                 "revealed_belief_logits": revealed_belief_logits,
                 "belief_matched": matched,
+                "belief_hidden_any": opp_code_labels.hidden_any,
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
                 # The History panels: the step GAT's read and the
@@ -564,7 +539,7 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        sequence, opp_code_one_hot, dynamics_rows, history_stats, history_carry = (
+        sequence, opp_code_labels, dynamics_rows, history_stats, history_carry = (
             self.encoder(
                 actor_input.env,
                 actor_input.packed_history,
@@ -580,7 +555,7 @@ class Porygon2PlayerModel(nn.Module):
                 history_stats=history_stats,
                 history_carry=history_carry,
             )
-        )(sequence, opp_code_one_hot, dynamics_rows, actor_input.env, actor_output)
+        )(sequence, opp_code_labels, dynamics_rows, actor_input.env, actor_output)
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

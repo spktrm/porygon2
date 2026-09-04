@@ -36,7 +36,7 @@ def test_species_control_gradient_stays_in_its_table(real_model_and_trajectory):
 
     def species_ce(params):
         out = network.apply(params, actor_input, actor_output, HeadParams())
-        labels = jax.lax.stop_gradient(out.opp_code.astype(jnp.float32))
+        labels = jax.lax.stop_gradient(out.hidden_code.astype(jnp.float32))
         ce = optax.softmax_cross_entropy(
             logits=out.species_belief_logits.astype(jnp.float32), labels=labels
         )

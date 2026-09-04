@@ -482,18 +482,23 @@ def rl_sections():
             panels=[
                 lp(
                     # CE from public rows to the sg'd code, mean over
-                    # groups. Falling = beliefs sharpening.
+                    # groups. Falling = beliefs sharpening. Since
+                    # 2026-09-05 (irqeetfg ~1.15M) the label is the code
+                    # of each mon's HIDDEN tokens only, so every belief
+                    # panel breaks there: before, the full-sheet code.
                     "Belief loss",
                     ["player_loss_belief"],
                 ),
                 lp(
-                    # Per-group argmax accuracy (floor 1/16) and the
-                    # fraction of mons with an aligned public row (the
-                    # label supply).
+                    # Per-group argmax accuracy (floor 1/16), the fraction
+                    # of mons with an aligned public row, and of those the
+                    # share still carrying a hidden token (the label
+                    # supply is their product).
                     "Belief accuracy & label supply",
                     [
                         "player_belief_accuracy",
                         "player_belief_matched_frac",
+                        "player_belief_hidden_frac",
                     ],
                 ),
                 lp(
@@ -529,9 +534,13 @@ def rl_sections():
                     # moves, item, ability, state), same labels and rows.
                     # Margin = belief minus its accuracy = inference from
                     # CONTEXT (history, the other rows); up is good. B3
-                    # rule (2026-09-04): >= 0.15 and not falling after a 20k
-                    # hold = the head stays; ~0 or falling = it reads the
-                    # row's own tokens -> hidden-token code, own commit.
+                    # rule (2026-09-04) FIRED: margin 0.20 -> 0.017 by
+                    # 1.15M, the control read the full-sheet label off the
+                    # row's own tokens. Under the hidden-token label
+                    # (2026-09-05) this control is the positive control:
+                    # its above-marginal accuracy must FALL to the
+                    # species control's (the row shows nothing the label
+                    # encodes), and the head's must stay above both.
                     "Belief context margin over revealed-row control",
                     [
                         "player_belief_context_margin",
@@ -551,6 +560,17 @@ def rl_sections():
                     [
                         "player_code_perplexity_mean",
                         "player_code_perplexity_min",
+                    ],
+                ),
+                lp(
+                    # The belief LABEL's usage over the rows the loss
+                    # scores: the same code net over the hidden tokens
+                    # alone. Min pinned at 1 = a dead label; read beside
+                    # above-marginal, which is floored by 1/perplexity.
+                    "Hidden-token label perplexity",
+                    [
+                        "player_hidden_code_perplexity_mean",
+                        "player_hidden_code_perplexity_min",
                     ],
                 ),
                 lp(

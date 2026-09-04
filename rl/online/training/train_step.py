@@ -476,18 +476,27 @@ def train_step(
             value_mask,
         )
         # Belief-state shaping: CE from each matched public row's belief
-        # logits to the STOPPED code label (the code trains through the
-        # privileged value CE, never through its own prediction). Mean over
-        # groups so the scale is K-independent; masked to rows where the
-        # alignment holds AND the step counts for value.
+        # logits to the STOPPED hidden-token code (the code net trains
+        # through the privileged value CE, never through its own
+        # prediction; the label is its reading of the tokens the public
+        # row does NOT show, so the CE cannot be paid by re-reading the
+        # row -- 2026-09-05, after the revealed-row control caught the
+        # full-sheet label: margin 0.20 -> 0.017). Mean over groups so the
+        # scale is K-independent; masked to rows where the alignment
+        # holds, the mon still has a hidden token, AND the step counts
+        # for value.
         belief_labels = jax.lax.stop_gradient(
-            learner_player_pred.opp_code.astype(jnp.float32)
+            learner_player_pred.hidden_code.astype(jnp.float32)
         )
         belief_ce = optax.softmax_cross_entropy(
             logits=learner_player_pred.belief_logits.astype(jnp.float32),
             labels=belief_labels,
         ).mean(axis=-1)
-        belief_mask = learner_player_pred.belief_matched & value_mask[..., None]
+        belief_mask = (
+            learner_player_pred.belief_matched
+            & learner_player_pred.belief_hidden_any
+            & value_mask[..., None]
+        )
         loss_belief = average(belief_ce, belief_mask)
         belief_logs = belief_accuracy_logs(
             learner_player_pred.belief_logits, belief_labels, belief_mask
@@ -724,6 +733,12 @@ def train_step(
                 learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
                 value_mask,
             ),
+            # Of the matched mons, the share still carrying a hidden token
+            # (the belief loss's population); 1 - this is fully-revealed.
+            player_belief_hidden_frac=average(
+                learner_player_pred.belief_hidden_any.astype(jnp.float32),
+                learner_player_pred.belief_matched & value_mask[..., None],
+            ),
             **dynamics_logs,
             # Trunk over-smoothing (cosine up / participation down = rows
             # converging); the offline per-block twin is
@@ -815,6 +830,16 @@ def train_step(
                 learner_player_pred.opp_code,
                 batch.player_transitions.env_output.opp_private_team,
                 value_mask,
+            ),
+            # The label's own usage over the rows the belief loss scores:
+            # a hidden code pinned at perplexity 1 is a dead label, not a
+            # solved belief.
+            **code_usage_logs(
+                learner_player_pred.hidden_code,
+                batch.player_transitions.env_output.opp_private_team,
+                value_mask,
+                row_mask=belief_mask,
+                prefix="player_hidden_code",
             ),
         )
 

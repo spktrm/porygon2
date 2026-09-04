@@ -155,6 +155,10 @@ def test_train_step_smoke():
         "player_revealed_belief_accuracy",
         "player_revealed_belief_accuracy_above_marginal",
         "player_belief_context_margin",
+        # The hidden-token label (2026-09-05).
+        "player_belief_hidden_frac",
+        "player_hidden_code_perplexity_mean",
+        "player_hidden_code_perplexity_min",
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",
