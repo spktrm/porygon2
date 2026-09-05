@@ -22,6 +22,7 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
+    SearchOutput,
 )
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
@@ -53,6 +54,7 @@ from rl.model.heads import (
     sample_categorical,
 )
 from rl.model.modules import MLP
+from rl.model.search import depth_one_expectimax, search_diagnostics
 from rl.model.transition import TransitionModel
 from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params, legal_log_policy
@@ -185,10 +187,16 @@ class Porygon2PlayerModel(nn.Module):
         # The latent transition model (2026-09-05, rl/model/transition.py):
         # g(h_t, a, z) over the post-trunk policy-readable rows. Its params
         # are lazy, so instantiating it here costs the actor nothing; it is
-        # CALLED only under cfg.train (Step 3's search will call `imagine`).
+        # CALLED under cfg.train (the losses) and under cfg.search.enabled
+        # (the search eval arm's `prior` / `imagine`, rl/model/search.py) --
+        # the two are exclusive: search runs on an ACTOR config, so the
+        # learner's forward never pays for it.
         self.transition = TransitionModel(
             self.cfg.transition, dtype=self.cfg.dtype, name="transition"
         )
+        if self.cfg.search.enabled:
+            assert not self.cfg.train, "search is actor-side only"
+            assert self.transition.has_code, "search samples the chance code"
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -246,14 +254,33 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
+        search_bonus: jax.Array | None = None,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
         the block cells (the historical path, unchanged); doubles = two head-level
         stages over per-slot masks with slot 2 conditioned on slot 1's
-        choice — the trunk is forwarded once either way."""
+        choice — the trunk is forwarded once either way. `search_bonus`
+        (the search eval arm's per-cell Q / temp, rl/model/search.py) is
+        singles-only."""
         if self.cfg.num_decision_slots == 2:
+            assert search_bonus is None
             return self._forward_two_slots(sequence_rows, valid_mask, head, train, temp)
-        return self._forward_single_slot(sequence_rows, valid_mask, head, train, temp)
+        return self._forward_single_slot(
+            sequence_rows, valid_mask, head, train, temp, search_bonus
+        )
+
+    def _legal_logits(
+        self,
+        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
+        valid_mask: jax.Array,
+        temp: float,
+    ) -> jax.Array:
+        """The readout's logits with illegal cells at -1e9 (finite, so no
+        `-inf * 0` in a vjp): the one form both the sampler and the search
+        diagnostics read."""
+        private_rows, move_rows, target_rows = sequence_rows
+        logits = self.action_head(private_rows, move_rows, target_rows, temp=temp)
+        return jnp.where(valid_mask, logits, -1e9)
 
     def _score_and_sample(
         self,
@@ -261,6 +288,7 @@ class Porygon2PlayerModel(nn.Module):
         valid_mask: jax.Array,
         given_index: jax.Array | None,
         temp: float,
+        search_bonus: jax.Array | None = None,
     ):
         """Score one decision's cells and pick an action.
 
@@ -270,12 +298,15 @@ class Porygon2PlayerModel(nn.Module):
         actor actually did; None samples.
 
         Behaviour policy mu == pi, with illegal cells at the dtype's min so
-        the sampler can never draw one.
+        the sampler can never draw one. `search_bonus` adds the search
+        arm's Q / temp on legal cells (0 elsewhere) BEFORE the softmax, so
+        pi here IS the searched policy and every metric reads it; None is
+        bit-identical to the trained policy.
         """
-        private_rows, move_rows, target_rows = sequence_rows
-        logits = self.action_head(private_rows, move_rows, target_rows, temp=temp)
         flat_valid = valid_mask
-        pi_logits = jnp.where(flat_valid, logits, -1e9)
+        pi_logits = self._legal_logits(sequence_rows, valid_mask, temp)
+        if search_bonus is not None:
+            pi_logits = pi_logits + search_bonus.astype(pi_logits.dtype)
         # prior=None is uniform over legal cells -- which is exactly what the
         # flat readout's all-zero init produces, so the init policy and the
         # metric anchor are the same distribution.
@@ -296,9 +327,14 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
+        search_bonus: jax.Array | None = None,
     ):
         flat_valid, metrics, action_index, log_prob = self._score_and_sample(
-            sequence_rows, valid_mask, head.action_index if train else None, temp
+            sequence_rows,
+            valid_mask,
+            head.action_index if train else None,
+            temp,
+            search_bonus,
         )
         learner_only = {}
         if self.cfg.train:
@@ -409,9 +445,48 @@ class Porygon2PlayerModel(nn.Module):
             normalized_modality_entropy=normalized_modality_entropy,
         )
 
+    def _search_root(
+        self, sequence: jax.Array, row_valid: jax.Array, legal: jax.Array, temp: float
+    ):
+        """The search eval arm's read of one decision (rl/model/search.py):
+        depth-1 expectimax over the transition model with codes sampled
+        from its PRIOR -- against the empirical opponent the data was
+        played against -- valued by the shared V. Returns the logit bonus
+        and the `SearchOutput` panels."""
+        search_cfg = self.cfg.search
+        root = depth_one_expectimax(
+            sequence,
+            row_valid,
+            legal,
+            self.make_rng("sampling"),
+            prior_fn=self.transition.prior,
+            action_rows_fn=self.transition.action_rows,
+            imagine_fn=self.transition.imagine,
+            value_fn=self.v_head,
+            num_samples=search_cfg.num_samples,
+            max_cells=search_cfg.max_cells,
+            temp=search_cfg.temp,
+        )
+        base_logits = self._legal_logits(
+            (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
+            legal,
+            temp,
+        )
+        diagnostics = search_diagnostics(
+            base_logits, root, legal, self.v_head(sequence[CLS_ROW]).expectation
+        )
+        return root.bonus, SearchOutput(
+            root_kl=diagnostics.root_kl,
+            search_value=diagnostics.search_value,
+            root_value_gap=diagnostics.root_value_gap,
+            num_legal=root.num_legal,
+            legal_truncated=root.legal_truncated,
+        )
+
     def get_head_outputs(
         self,
         sequence: jax.Array,
+        row_valid: jax.Array,
         opp_code_labels: OppCodeLabels,
         dynamics_rows: jax.Array,
         env_step: PlayerEnvOutput,
@@ -426,12 +501,19 @@ class Porygon2PlayerModel(nn.Module):
         history_stats and history_carry are per TRAJECTORY (the history is
         shared across the requests); closed over rather than mapped, so the
         vmap in __call__ broadcasts them to one copy per step."""
+        search_bonus = None
+        search_output = SearchOutput()
+        if self.cfg.search.enabled:
+            search_bonus, search_output = self._search_root(
+                sequence, row_valid, env_step.action_mask, head_params.temp
+            )
         action_head = self._forward_action_head(
             (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
+            search_bonus=search_bonus,
         )
         learner_only = {}
         if self.cfg.train:
@@ -494,6 +576,7 @@ class Porygon2PlayerModel(nn.Module):
             # The CLS row, and only the CLS row.
             value_head=self.v_head(sequence[CLS_ROW]),
             history_carry=history_carry,
+            search=search_output,
             **learner_only,
         )
 
@@ -527,7 +610,14 @@ class Porygon2PlayerModel(nn.Module):
                 history_stats=history_stats,
                 history_carry=history_carry,
             )
-        )(sequence, opp_code_labels, dynamics_rows, actor_input.env, actor_output)
+        )(
+            sequence,
+            row_valid,
+            opp_code_labels,
+            dynamics_rows,
+            actor_input.env,
+            actor_output,
+        )
         if self.cfg.train:
             output = output.replace(
                 **self._forward_transition(

@@ -808,6 +808,69 @@ def rl_sections():
             ],
         ),
         ws.Section(
+            # Search on an eval actor (2026-09-06, stochastic-transition
+            # Step 3): the `-search` slot plays the SAME EMA params as the
+            # `-t1` slot through a search-enabled actor -- depth-1
+            # expectimax over the transition model's prior samples, the
+            # root Q added to the logits as a bonus -- at temp 1.0. The
+            # headline is wr(search) - wr(t1) on the same checkpoint:
+            # the model's worth in play. root-kl is KL(pi_search || pi)
+            # per decision (0 = inert, > 0.5 = search replaced the
+            # policy; the pre-registered band is 0.05-0.5); value-gap is
+            # the search value minus V at the root (positive = search
+            # expects to do better than the policy, must agree in sign
+            # with the wr delta or the model is confidently wrong);
+            # switch-frac is voluntary switches per decision that
+            # offered one, read beside the plain arm's; ms-per-step
+            # prices the search on the CPU actor path.
+            name="3c · Search eval",
+            is_open=True,
+            panels=[
+                lp(
+                    "wr vs SimpleHeuristic at temp 1: search vs plain",
+                    [f"ema-wr-{SH}-t1-2", f"ema-wr-{SH}-search-3"],
+                    x="lifetime_step",
+                    smooth=0.98,
+                ),
+                lp(
+                    "Smoothed wr at temp 1: search vs plain",
+                    [f"smoothed-wr-{SH}-t1-2", f"smoothed-wr-{SH}-search-3"],
+                    x="lifetime_step",
+                    smooth=0,
+                ),
+                lp(
+                    "Search root KL(pi_search || pi) per decision",
+                    [f"search-root-kl-{SH}-search-3"],
+                    x="lifetime_step",
+                    smooth=0.95,
+                ),
+                lp(
+                    "Search value minus V at the root",
+                    [f"search-value-gap-{SH}-search-3"],
+                    x="lifetime_step",
+                    smooth=0.95,
+                ),
+                lp(
+                    "Voluntary switch frac per offered decision",
+                    [f"switch-frac-{SH}-t1-2", f"switch-frac-{SH}-search-3"],
+                    x="lifetime_step",
+                    smooth=0.95,
+                ),
+                lp(
+                    "Eval ms per step (search cost on the CPU actor)",
+                    [f"ms-per-step-{SH}-t1-2", f"ms-per-step-{SH}-search-3"],
+                    x="lifetime_step",
+                    smooth=0.9,
+                ),
+                lp(
+                    "Decisions with more legal cells than max_cells",
+                    [f"search-legal-truncated-{SH}-search-3"],
+                    x="lifetime_step",
+                    smooth=0.95,
+                ),
+            ],
+        ),
+        ws.Section(
             # Observer critic quality. The policy no longer reads a Q stack
             # (retired 2026-08-26/30; its link to return is the v-trace
             # advantage), but an action-flat critic still voids the matched

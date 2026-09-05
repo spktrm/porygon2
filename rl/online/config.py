@@ -23,6 +23,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # steps) while winrate-vs-simple-heuristic — the series runs are judged
     # by — was starved at ~1 game per 80 learner steps.
     eval_baselines: tuple[int, ...] = (2, 2, 2)
+    # Search eval slots (2026-09-06, stochastic-transition Step 3): extra
+    # eval threads against the LAST baseline above, playing the same EMA
+    # params through a search-enabled actor network (cfg.search.enabled,
+    # depth-1 expectimax over the transition model's prior samples) at
+    # temp 1.0 -- the matched arm of the `-t1` slot. wr(search) - wr(t1)
+    # on the same checkpoint is the model's worth in play. 0 = no search
+    # arm (the search network is not even built).
+    eval_search_slots: int = 1
     # Every Nth eval game per thread uses the live (main) params instead of
     # the EMA target as a divergence sanity check. The target lags the live
     # params by only ~1/player_ema_update_rate steps, so alternating every

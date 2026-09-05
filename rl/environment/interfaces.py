@@ -103,6 +103,22 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
 
 
 @dataclass
+class SearchOutput:
+    """Per-step diagnostics of the search eval arm (rl/model/search.py),
+    populated only when `cfg.search.enabled`; every leaf `()` otherwise.
+    `root_kl` is KL(pi_search || pi) over legal cells -- the operator's
+    size; `root_value_gap` the search policy's expected Q minus V at the
+    root; `legal_truncated` whether the root had more legal cells than
+    `cfg.search.max_cells` (dropped cells, counted)."""
+
+    root_kl: ArrayLike = ()
+    search_value: ArrayLike = ()
+    root_value_gap: ArrayLike = ()
+    num_legal: ArrayLike = ()
+    legal_truncated: ArrayLike = ()
+
+
+@dataclass
 class PlayerActorOutput:
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
@@ -180,6 +196,8 @@ class PlayerActorOutput:
     # stored (`without_history_carry`): chunks never carry (12, D) tensors,
     # and the learner's forward drops the computation as unread.
     history_carry: HistoryCarry = field(default_factory=HistoryCarry)
+    # The search eval arm's per-step read (empty on every other path).
+    search: SearchOutput = field(default_factory=SearchOutput)
 
     def without_history_carry(self) -> "PlayerActorOutput":
         return self.replace(history_carry=HistoryCarry())

@@ -1171,6 +1171,54 @@ up (zero gradient, not a small one), FSQ (dead-group rung unfired,
 `post_perplexity_min` 2.16), resuming from 1266k again (the policy side
 is fine, g's blocks are 46k ahead).
 
+## Addition ledger — 2026-09-06 stochastic transition, Step 3 (search on an eval actor)
+
+**Step 2b read at ~1545k (the 20k hold, banked before Step 3 launched):
+the code is informative but low-entropy, and the gate did not pass
+cleanly.** Passing / moving the right way: `prior_grad_norm` flat at
+0.15–0.18 (not falling), `gain_public_prior` 0.29–0.31 against
+`gain_public` 0.47–0.51 (the prior's mode decodes a real branch, within
+0.2 of the posterior's), `kl_long` / `kl_short` 0.21 / 0.14 and
+`kl_reveal` / `kl_no_reveal` 0.21 / 0.16 (both signs right; the margins
+are short of 0.2 nats because the TOTAL KL is 0.18). Failing: `kl`
+0.12 → 0.18 (band 0.5–3.0), `kl_free_frac` 0.46 → 0.37 (gate ≤ 0.2 —
+the 0.0625 floor still binds on a third of transitions),
+`post_perplexity_mean` 2.61 (gate ≥ 3), `prior_post_agree` peaked 0.58
+at 1370k and slid to 0.46. No abort clause fired; the observers held
+(`prob_switch` 0.037–0.043, `value_r2` 0.84–0.92, `mask_acc` 0.995,
+~6.2 steps/s). The plan's verdict for a code that carries SOMETHING is
+to price it by play rather than retune it, so Step 3 launches on this
+model as-is; the KL band is re-judged on the search read.
+
+| mechanism | what | why |
+|---|---|---|
+| `rl/model/search.py::depth_one_expectimax` + `cfg.search` (`enabled` False, `num_samples` 8, `temp` 0.1, `max_cells` 16) | rung 1 of the plan: for every legal root cell (the first `max_cells` by index; `legal_truncated` counts the rest) sample `num_samples` codes from the transition PRIOR, decode each with `imagine`, read the SHARED `v_head` on the imagined CLS row; `Q(a) = E_z[V(g(h, a, z))]`, scattered back onto the 295 cells with a `segment_sum` (padding lands on cell 0 with value 0 — a set-scatter would corrupt a legal cell 0), and `Q / temp` added to the readout's logits as `search_bonus` before the sampler. `_legal_logits` writes the −1e9 masking once for the readout and the search | the model is judged by PLAY, not by MSE: the same params through a network with `search.enabled` (a static config branch — the search slot builds its own network object and shares the params container) at temp 1.0 against the `-t1` slot is the matched pair. `search_bonus=None` is bit-identical to today's forward; the searched arm's sampling stream differs by one extra `make_rng("sampling")` split, by construction |
+| `SearchOutput` on `PlayerActorOutput.search` (`root_kl`, `search_value`, `root_value_gap`, `num_legal`, `legal_truncated`; every leaf `()` off the search arm) | per-decision diagnostics computed in the forward: `root_kl` = KL(π_search ‖ π) over legal cells, `search_value` = E_{π_search}[Q], `root_value_gap` = search value − V at the root | the training path stores no search leaves (`()`), so the buffer, the chunk contract and the shape lattice are untouched; the eval actor reads them off the last chunk |
+| `eval_search_slots` (1) + `EvalActor-simpleheuristic-search-*` | one more eval thread against the LAST baseline, `is_eval=True` (the leak guard is flag-gated), same EMA params; per-game logs from `main.eval_game_logs`: `switch-frac-*` (voluntary switches per decision that offered both a switch and a non-switch cell — read beside the `-t1` slot's, which now logs it too), `ms-per-step-*` (unroll wall time per real step, the search's price on the CPU actor path), `search-root-kl-*`, `search-value-gap-*`, `search-legal-truncated-*`; wandb section "3c · Search eval" | the headline is `wr(search) − wr(t1)` on the same checkpoint — the model's worth in play. 0 = the search network is not even built |
+
+**Pre-registered acceptance (read over ≥ 300 eval games per arm):**
+`wr(search) − wr(t1)` ≥ +0.03 (a third of Jaxcalibur's 100–150 Elo from
+ENGINE search is the bar for a learned one-step model), `root_kl` in
+0.05–0.5 (an operator that moves nothing is inert, one that replaces π is
+reading noise — the smoke read on fresh-opened params was 0.01),
+`root_value_gap` sign-consistent with the wr delta. Rung 2 (pUCT over
+decision nodes, chance nodes sampling z) launches only on a pass and is
+judged on a further +0.02. **Fallback, in the plan's words:** wr delta
+≤ 0 with `root_kl` > 0.05 → the model is confidently wrong, back to the
+calibration reads (`value_r2`, the offline prior-sample gap) before any
+search change; wr delta ~0 with `root_kl` ~0 → search agrees with π and
+rung 2 is the next READ, not a fix. No `temp` / `num_samples` ladder —
+that is the coefficient-retune trap. Tests: `tests/test_search.py` —
+root Q ranks the legal cells by a hand-set imagined value (the positive
+control), illegal cells exactly 0, cell 0 legal under padding equals its
+own value, truncation counted; diagnostics 0 at zero bonus and
+`search_value = Σ π_search·q` under a tilt; `eval_game_logs` on a
+synthetic trajectory (acted rows only, `()` leaves skipped); gpu/slow:
+the real network with `action_head` + `out_proj` OPENED (fresh params
+make every logit 0 and g the copy predictor, so the read would pass
+vacuously) — the searched arm's entropy differs from the plain arm's
+and the plain arm carries no search leaves.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

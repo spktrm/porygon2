@@ -224,6 +224,25 @@ def get_player_model_config(
     cfg.transition.cls_head.mlp = ConfigDict()
     cfg.transition.cls_head.mlp.layer_sizes = (entity_size, NUM_REQUEST_TYPES + 1)
     cfg.transition.action_head = cfg.action_head
+    # Search over the transition model (2026-09-06, rl/model/search.py),
+    # rung 1: depth-1 expectimax. ACTOR-side only and off by default -- an
+    # eval slot in rl/online/main.py builds its own config with `enabled`
+    # True; the learner's forward (cfg.train) never searches. For every
+    # legal root cell, `num_samples` chance codes drawn from the prior are
+    # imagined through g and valued by the shared V; the per-cell mean is
+    # added to the readout's logits as Q(a) / temp (Gumbel-MuZero's
+    # additive form -- Q and Q - V are the same policy under the softmax).
+    # temp 0.1: a 0.1 edge in win probability is one e-fold of policy
+    # mass; judged by `root_kl` (0.05-0.5 is the band), never retuned as a
+    # ladder. `max_cells` bounds the static shape: singles legalises at
+    # most 13 cells (up to 8 move cells with tera wildcards + 5 switches;
+    # team preview 6); any excess is dropped from the search and counted
+    # (`legal_truncated`), never silently.
+    cfg.search = ConfigDict()
+    cfg.search.enabled = False
+    cfg.search.num_samples = 8
+    cfg.search.temp = 0.1
+    cfg.search.max_cells = 16
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step
