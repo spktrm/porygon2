@@ -1092,6 +1092,43 @@ static-token reconstruction error dominates the gradient.** Tests pin the
 all-zero prediction at exactly loss 1 / gain 0 across a resort, the exact
 delta at 0, its negation at 4, and content-constant invariance.
 
+**LAUNCH CHECK 2, 1294k–1310k (2026-09-05): the relaunch fixed the
+gradient's MAGNITUDE and not its DIRECTION — the switch axis collapsed
+under the transition term, and the model is now a learner-side observer.**
+Windowed 4k means, 1250k → 1294k (delta-head relaunch) → 1310k:
+`player_policy_prob_switch` 0.036–0.041 → 0.018–0.029 → 0.013–0.015,
+`player_entropy_macro` 0.52 → 0.29, `player_vol_switch_rows` 12 → 3.5,
+`player_taken_voluntary_switch_frac` 0.107 → 0.035, `player_loss_modality_kl`
+1.0 → 1.33 (the zero-avoider losing), `player_trunk_grad_norm` 3.7–5.3 →
+8–11.5 with `player_gradient_norm` 10.4–13.7 against the clip of 10, while
+`player_transition_grad_norm` sat at 3.2–3.8 — the transition SUBTREE was
+quiet and the trunk was not, because the transition losses reached the
+trunk and the shared heads through paths no transition panel counted.
+Mechanism: with `out_proj_rms` 0.0056 and shrinking, ĥ_t ≈ h_t, so the
+next-policy loss through the LIVE shared readout was KL(π_{t+1} ‖ π_t) on
+the real trunk — an unregularised temporal-smoothing force (entropy, the
+modality KL and the magnet see real rows only) that reads anti-switch on
+every voluntary-switch row, with the consistency loss pulling h_t toward
+h_{t+1} in the same shape. The strength-cost abort ladder's first rung
+(coef 0.5 → 0.25) was SKIPPED under the standing law — a coefficient cut
+that only delays onset is falsified — and its second rung landed directly,
+widened to both ends: g's INPUT rows and the consistency target are both
+under `stop_gradient`, and the shared `action_head` / `v_head` are applied
+to imagined rows through FROZEN copies of their params
+(`clone().apply(stop_gradient(<head>.variables), ...)` — same output, no
+param gradient, live input gradient, no duplicate tree). g learns to
+write rows the real heads already read, which is what search needs; the
+heads and the trunk never learn from imagined rows. `player_transition_value_r2`
+keeps its meaning (a calibration read of the head search will call) —
+what changes is that it no longer trains that head. Rule with teeth: **a
+learned model's losses reach the model and nothing the model reads — the
+representation it predicts and the heads it is scored by are frozen from
+its side.** The reach test is inverted to pin exactly `{transition}` on
+opened params, with the real value CE + log-policy as the control that
+the encoder and the shared heads are reachable. Checkpoint-mode resume
+(no param moved); the Step 2 20k hold restarts from this relaunch, and
+the strength clause is judged from it.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

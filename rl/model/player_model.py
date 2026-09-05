@@ -546,13 +546,19 @@ class Porygon2PlayerModel(nn.Module):
         """The transition model over the trajectory (T, rows, D): every
         step is paired with its POSITIONAL successor (the last step with
         itself; train_step masks it). Only the policy-readable rows enter
-        -- the rollout's information set -- and the posterior's read of
-        the real next rows is under stop_gradient: the model predicts the
-        trunk, it never trains it through the target. The shared value
-        head and action readout are applied to the imagined rows unchanged,
-        so their outputs on imagined states mean what they mean on real
-        ones; the policy is masked by the REAL next legal set."""
-        rows = sequence[:, POLICY_READABLE_ROWS]
+        -- the rollout's information set -- and BOTH ends are under
+        stop_gradient: the model is a learner-side observer of the trunk
+        and never trains it, at either t or t+1. The shared value head and
+        action readout are applied to the imagined rows through FROZEN
+        copies of their params (`clone().apply` on a stop_gradient'd
+        variable tree), so g learns to write rows the real heads already
+        read and the heads never learn from imagined rows -- with g near
+        the copy predictor the next-policy KL through a LIVE readout was
+        KL(pi_{t+1} || pi_t) on the real trunk, an unregularised
+        temporal-smoothing force that read anti-switch on every voluntary
+        switch row (irqeetfg 1294k-1310k: prob_switch 0.04 -> 0.014). The
+        policy is masked by the REAL next legal set."""
+        rows = jax.lax.stop_gradient(sequence[:, POLICY_READABLE_ROWS])
         valid = row_valid[:, POLICY_READABLE_ROWS]
         # The successor written once, as a GATHER rather than slice+concat:
         # XLA's fusion emitter mis-typed the concatenated bool mask inside
@@ -569,9 +575,21 @@ class Porygon2PlayerModel(nn.Module):
             rows, valid, output.action_head.action_index, next_rows, next_valid
         )
         pred = transition.pred
+        # The params collection ALONE: `.variables` also carries whatever
+        # `capture_intermediates` recorded on the real-row call, which are
+        # tracers of the head-output vmap above and leak from this scope.
+        frozen_action_head = jax.lax.stop_gradient(
+            {"params": self.action_head.variables["params"]}
+        )
+        frozen_v_head = jax.lax.stop_gradient(
+            {"params": self.v_head.variables["params"]}
+        )
         logits = jax.vmap(
-            lambda imagined: self.action_head(
-                imagined[PRIVATE_ROWS], imagined[MOVE_ROWS], imagined[TARGET_ROWS]
+            lambda imagined: self.action_head.clone().apply(
+                frozen_action_head,
+                imagined[PRIVATE_ROWS],
+                imagined[MOVE_ROWS],
+                imagined[TARGET_ROWS],
             )
         )(pred)
         error = (pred.astype(jnp.float32) - next_rows.astype(jnp.float32)) ** 2
@@ -583,7 +601,9 @@ class Porygon2PlayerModel(nn.Module):
             "transition_post_logits": transition.post_logits,
             "transition_ground": transition.ground,
             "transition_ground_prior": transition.ground_prior,
-            "transition_value_head": self.v_head(pred[:, CLS_ROW]),
+            "transition_value_head": self.v_head.clone().apply(
+                frozen_v_head, pred[:, CLS_ROW]
+            ),
             "transition_log_policy": legal_log_policy(logits, next_mask),
             "transition_mask_logits": transition.mask_logits,
             "transition_kind_logits": transition.kind_logits,

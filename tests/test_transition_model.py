@@ -10,9 +10,10 @@ is the ONE zero factor and receives a live gradient at init while the
 code / action paths behind it do not until it opens); the loss bracket
 finite on an all-masked batch with the KL halves' gradients landing on
 the right side. Slow half, on the real model: the whole transition term's
-gradient reaches the model, the encoder and the two SHARED heads it
-trains through (readout, deployable critic) and never the privileged
-critic or the belief head.
+gradient reaches the transition subtree and NOTHING it reads -- not the
+encoder (both ends of the transition are under stop_gradient) and not
+the shared readout / deployable critic (frozen params on imagined rows)
+-- with the real losses as the control that those paths are live.
 """
 
 import dataclasses
@@ -20,6 +21,7 @@ import dataclasses
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 from ml_collections import ConfigDict
 
@@ -740,7 +742,7 @@ def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_transition_gradient_reaches_the_model_the_encoder_and_the_shared_heads(
+def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
     real_model_and_trajectory,
 ):
     from rl.environment.data import CAT_VF_SUPPORT
@@ -796,27 +798,38 @@ def test_transition_gradient_reaches_the_model_the_encoder_and_the_shared_heads(
                 reached.add(keys[1])
         return reached
 
-    # Fresh params: g is the copy predictor, so the heads on the imagined
-    # rows read the real current rows -- the critic, the grounding / mask /
-    # cls heads and the code nets all train from step 0, and so does the
-    # encoder through the rows themselves. The readout's `query` is
-    # zero-init, so pi is UNIFORM on every row and the policy-consistency
-    # KL between pi(h_t) and pi(h_{t+1}) is identically 0 with a zero
-    # gradient -- a vacuous miss, not a wiring gap. Open that one zero
-    # factor (out_proj stays closed: g is still the copy predictor) so the
-    # test reads whether the path is wired, per the conftest rule.
+    # The readout's `query` is zero-init, so pi is UNIFORM on every row and
+    # the next-policy KL between pi(h-hat) and pi(h_{t+1}) is identically
+    # 0 with a zero gradient -- opened (out_proj stays closed: g is still
+    # the copy predictor) so a "the readout is not reached" read cannot
+    # pass vacuously, per the conftest rule. With g the copy predictor the
+    # next-policy KL through a LIVE readout is KL(pi_{t+1} || pi_t) on the
+    # real trunk -- the anti-switch smoothing force of 2026-09-05 -- so
+    # the transition term must reach its OWN subtree and nothing it reads:
+    # not the encoder (g's input and the consistency target are both under
+    # stop_gradient) and not the shared heads (frozen params on imagined
+    # rows).
     opened = open_zero_init_paths(params, ["action_head"])
     reached = reached_by(grad_fn(opened))
     assert (
         float(jnp.abs(opened["params"]["transition"]["out_proj"]["kernel"]).max())
         == 0.0
     )
-    for expected in ("transition", "encoder", "action_head", "v_head"):
-        assert expected in reached, expected
-    for never in (
-        "priv_value_head",
-        "belief_head",
-        "revealed_belief",
-        "species_belief",
-    ):
-        assert never not in reached, never
+    assert reached == {"transition"}, reached
+
+    # Positive control for the negative half: the same params, the same
+    # `reached_by`, the REAL value CE and the real log-policy -- the shared
+    # heads and the encoder are reachable, so their absence above is the
+    # stop_gradients and not a dead path.
+    def real_losses(params):
+        out = network.apply(params, actor_input, actor_output, HeadParams())
+        value_ce = optax.softmax_cross_entropy(
+            logits=out.value_head.logits.astype(jnp.float32),
+            labels=win_returns[:, 0],
+        ).mean()
+        return value_ce + out.action_head.log_policy.astype(jnp.float32).mean()
+
+    control = reached_by(jax.jit(jax.grad(real_losses))(opened))
+    for expected in ("encoder", "action_head", "v_head"):
+        assert expected in control, expected
+    assert "transition" not in control
