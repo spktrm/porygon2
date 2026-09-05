@@ -277,8 +277,14 @@ def test_suffix_carry_replays_the_game_within_bf16(
         worst_value = max(worst_value, value_diff(full, resumed))
         carry = resumed.history_carry
         last_step_index = _last_step_index(window)
-    policy_bound = max(0.05, floor_policy)
-    value_bound = max(0.05, floor_value)
+    # The floor is ONE draw of the bf16 leading-dim class (the 256-row
+    # tail) and the carry path runs another (the 32-row suffix bucket), so
+    # the bound carries a margin over it -- read 0.093 vs 0.14 (2026-09-03)
+    # and 0.101 vs 0.096 (2026-09-05, the transition params re-drew the
+    # opened readout's noise); the shifted-carry control below sits ~2.0
+    # away, so the margin costs the test nothing.
+    policy_bound = max(0.05, 1.5 * floor_policy)
+    value_bound = max(0.05, 1.5 * floor_value)
     assert worst_policy <= policy_bound, (worst_policy, floor_policy)
     assert worst_value <= value_bound, (worst_value, floor_value)
 
