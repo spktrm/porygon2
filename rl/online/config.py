@@ -428,11 +428,18 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # DreamerV3's KL balancing: the prior is pulled to the sg'd posterior
     # at dyn_coef, the posterior to the sg'd prior at rep_coef, each half
     # clipped below at free_nats per transition (summed over code groups)
-    # so a code that is already predictable pays nothing. Posterior
-    # collapse (kl < 0.1 for 5k) -> rep 0.05 and free nats 2, once.
+    # so a code that is already predictable pays nothing. The floor is
+    # sized PER GROUP: DreamerV3's 1 nat is over a 32-group code (1/32 nat
+    # each), and at 1.0 over our 2 groups it sat above the KL on 93% of
+    # transitions (irqeetfg 1266k-1312k: kl 0.64, kl_free_frac 0.93) --
+    # zero gradient on both halves, the prior never trained
+    # (prior_grad_norm -> 0, prior_post_agree 0.58 -> 0.30) and the
+    # posterior drifted through the straight-through decode alone
+    # (perplexity 2.35 of 16, falling). 1/32 x 2 = 0.0625. Posterior
+    # collapse (kl < 0.1 for 5k) -> rep 0.05 once; the floor never goes UP.
     player_transition_dyn_coef: float = 0.5
     player_transition_rep_coef: float = 0.1
-    player_transition_free_nats: float = 1.0
+    player_transition_free_nats: float = 0.0625
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio

@@ -1129,6 +1129,28 @@ the encoder and the shared heads are reachable. Checkpoint-mode resume
 (no param moved); the Step 2 20k hold restarts from this relaunch, and
 the strength clause is judged from it.
 
+**LAUNCH CHECK 3, 1266k → 1312k (2026-09-05, the observer relaunch
+resumed from `ckpt_01266269` after the collapse era was archived to
+`ckpts/archive/gen9_transition_collapse_irqeetfg_20260905/`): the
+policy side is fixed and the CHANCE CODE is not learning.** Trunk grad
+norm back to 3.5–5.5, `prob_switch` held ~0.04, every observed head in
+band (`mask_acc` 0.994, `kind_acc` 0.998, `value_r2` 0.89) — but
+`player_transition_kl_free_frac` sat at 0.93–0.94: 93% of transitions
+had a total KL (0.64 nats, summed over the 2 groups) UNDER the 1-nat
+free-bits floor, so both KL halves gave zero gradient on them.
+`prior_grad_norm` 0.12 → 0.08, `prior_post_agree` 0.58 → 0.30,
+`gain_public_prior` 0.19 → −0.01 (a decode from the prior's mode is the
+copy predictor — fatal to search, which samples z from the prior), while
+the posterior trained through the straight-through decode alone
+(`posterior_grad_norm` 0.23 → 0.37, `gain_public` 0.26 → 0.43) with its
+usage collapsing (`post_perplexity_mean` 2.6 → 2.35 of 16). Also
+`kl_long` 0.52 < `kl_short` 0.66 and falling, reveal margin +0.04. Two
+defects, two commits (Step 2b in the plan):
+
+| change | what | why |
+|---|---|---|
+| `player_transition_free_nats` 1.0 → 0.0625 | DreamerV3's 1 nat is over a 32-group code — 1/32 nat per group; ours has 2. The clip stays on both halves (reference form); at KL 0.64 it no longer binds, so the prior trains on every transition and the rep half pulls the posterior toward it | the floor was sized for the reference's code width and trapped ours. The old comment's "F 1 → 2" collapse fallback is RETIRED — that rung would re-trap the prior; the floor never goes up. Stochastic MuZero's form (prior CE to the sg'd code, no floor) is the F = 0 end of the same knob; 0.0625 keeps a floor against over-compression once the KL does fall |
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by
