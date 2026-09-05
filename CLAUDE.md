@@ -964,6 +964,58 @@ it), `test_belief_telemetry` row_mask narrowing; the control tests score
 the hidden label. Owed at the next stop: `tests/test_train_step.py` (2GB
 VRAM free beside the live learner — not compiled here).
 
+## Probe ledger — 2026-09-05 stochastic transition, Step 1 (the mean head priced)
+
+Step 1 of the stochastic-transition plan (local `docs/stochastic-transition-plan.md`):
+instruments only, no behaviour change. The question was whether the
+`dynamics_delta_head` — a conditional MEAN over the transition between two
+of MY requests, which folds the opponent's unobserved choice, the engine's
+dice and the reveals into one average — is a usable one-step model, or
+whether search needs a sampleable latent.
+
+| piece | what |
+|---|---|
+| `rl/offline/transition_probe.py` | plays self-play games on a checkpoint through the second service and reads two things per t→t+1 pair: the residual `delta − pred` on hp-moved public rows projected onto `dynamics_hp_basis` (GMM 1-vs-2 BIC, Ashman's D, with the fainted/survived split as the positive control), and the VALUE GAP — the predicted pre-trunk rows substituted into the REAL t+1 sequence (row biases re-added, the substitution propagated onto the four entity-derived target rows), the frozen target network's `V(sub)` against `V(real t+1)`. Two variants: history rows live, and history rows MASKED from the trunk's read — the entity diaries and field memory at t+1 already encode the real outcome, so with them live even a COPY predictor (rows unchanged from t) reads a small gap; the masked read is the honest one, and the INFO row's request kind still leaks a force-switch either way |
+| `transition_edges` / `transition_reveals` + panels | learner-side: spanned window steps per transition (`FIELD_FEATURE__REQUEST_COUNT == t+1`), `player_transition_edges_{mean,p90}`, `player_transition_reveal_frac` (a matched opponent row whose `REVEALED_ID_COLUMNS` changed), `player_dynamics_gain_public_{short,long,reveal,no_reveal}` (≤2 vs ≥4 edges). Read on the next restart — irqeetfg predates them |
+
+**Numbers (ckpt_01220000, 60 self-play games, 3340 transitions; hp_moved
+0.762 of transitions, faint 0.334, reveal 0.375, edges mean 2.61 / p90 4).**
+Value gap is `|V(sub) − V(real t+1)|` in CAT_VF_SUPPORT units (lower = the
+predicted state is worth what the real one is worth):
+
+| | mean head | copy predictor | \|V(t+1) − V(t)\| |
+|---|---|---|---|
+| all, history live | 0.031 (p90 0.078) | 0.043 | 0.118 |
+| hp_moved, history live | 0.034 (p90 0.082) | 0.049 | 0.125 |
+| faint, history live | 0.034 | 0.052 | 0.152 |
+| all, history masked | 0.045 | 0.062 | — |
+| hp_moved, history masked | **0.051** (p90 0.111) | 0.074 | — |
+| faint, history masked | 0.051 | 0.083 | — |
+| short / long, masked | 0.045 / 0.038 | 0.057 / 0.069 | — |
+| reveal / no_reveal, masked | 0.053 / 0.040 | 0.072 / 0.056 | — |
+
+Signed bias `V(sub) − V(real)` +0.007. Residual on hp-moved rows (n=3862,
+0.295 fainted): hp-subspace gain 0.611; far_frac (|residual| ≥ half the
+true delta) 0.694 — 0.372 on fainted rows, 0.829 on survived; GMM BIC
+1-comp 9360 vs 2-comp 8825 (two favoured), component means −0.157 / +0.498
+at weights 0.76 / 0.24, Ashman D 0.68 (overlapping, not separated);
+faint control fainted +0.754 vs survived −0.316, D 1.55.
+
+**Verdict: neither pre-registered branch fired cleanly.** The ≥0.10
+value-gap bar FAILED (0.034 live / 0.051 masked on hp-moved rows) — the mean
+head's state is worth within ~0.05 of the real one, roughly a third of the
+step-to-step value movement; the residual IS two-component by BIC but the
+components overlap (D 0.68 against the ≥2 that "bimodal" means), and a
+faint is largely predictable (far_frac 0.37 on fainted rows — the mean is
+NOT sitting between the branches on most faints). The re-plan branch
+(unimodal AND gap < 0.03) did not fire either: masked gap 0.051, BIC says
+two. What the read does establish: the mean closes only ~30% of the copy
+predictor's gap (0.074 → 0.051 masked), `long` transitions cost the mean
+nothing over `short` (0.038 vs 0.045 — the semi-Markov diagnosis is NOT
+supported on this instrument), and reveals cost ~0.013. The go/shrink
+decision is the user's; the learner-side `gain_long < gain_short` clause
+can only be read after the next restart.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

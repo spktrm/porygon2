@@ -670,6 +670,35 @@ def rl_sections():
                     ["player_dynamics_rows_frac"],
                 ),
                 lp(
+                    # Stochastic-transition plan step 1 (2026-09-05): what a
+                    # transition t -> t+1 SPANS. edges = history-window
+                    # steps stamped with the t+1 request count (the
+                    # opponent's decisions, the rolls, the reveals -- the
+                    # branches a mean sits between); reveal_frac = share of
+                    # transitions on which a matched opponent row's id
+                    # tokens changed.
+                    "Transition: spanned edges and reveals",
+                    [
+                        "player_transition_edges_mean",
+                        "player_transition_edges_p90",
+                        "player_transition_reveal_frac",
+                    ],
+                ),
+                lp(
+                    # The public gain split by what the transition spans:
+                    # short (<= 2 edges) vs long (>= 4), reveal vs none.
+                    # long < short by >= 0.1 and reveal < no_reveal is the
+                    # semi-Markov diagnosis; flat = the clock is not the
+                    # problem. Retire at the step-2 restart (meaning moves).
+                    "Dynamics gain by transition span",
+                    [
+                        "player_dynamics_gain_public_short",
+                        "player_dynamics_gain_public_long",
+                        "player_dynamics_gain_public_reveal",
+                        "player_dynamics_gain_public_no_reveal",
+                    ],
+                ),
+                lp(
                     # The head's leaves against init (in ~0.031 lecun, out
                     # exactly 0 -- one zero factor over live inputs, so it
                     # must leave 0 within ~200 steps) and its pre-clip grad

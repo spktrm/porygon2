@@ -54,6 +54,22 @@ PUBLIC_MOVE_INDICES = np.array(
         EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID3,
     ]
 )
+# Every identity token a public row can reveal: the three ids plus the
+# four move slots. What a reveal CHANGES on the wire (an unrevealed slot
+# holds `*_ENUM___UNK`; an Illusion `|replace|` rewrites species) -- the
+# transition-split panels read a matched row's change in these columns.
+REVEALED_ID_COLUMNS = np.concatenate(
+    (
+        np.array(
+            [
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES,
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY,
+                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM,
+            ]
+        ),
+        PUBLIC_MOVE_INDICES,
+    )
+)
 STATE_KERNELS = (
     "public_persistent_linear",
     "public_transient_linear",

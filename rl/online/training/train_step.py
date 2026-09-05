@@ -16,12 +16,16 @@ from rl.environment.data import (
     PackedSetFeature,
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
-from rl.environment.protos.features_pb2 import EntityPublicNodeFeature, FieldFeature
+from rl.environment.protos.features_pb2 import (
+    EntityPublicNodeFeature,
+    FieldFeature,
+    InfoFeature,
+)
 from rl.model.constants import DYNAMICS_GROUP_SLICES
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import major_arg_step_mask
 from rl.model.player_model import dynamics_alignment
-from rl.model.state_features import hp_input_rows
+from rl.model.state_features import REVEALED_ID_COLUMNS, hp_input_rows
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
@@ -82,6 +86,56 @@ def dynamics_hp_basis(params: Params) -> jax.Array:
     return jax.lax.stop_gradient(basis)
 
 
+# The transition-split instruments (2026-09-05, stochastic-transition plan
+# step 1). A learner row is a REQUEST, and the edges the sim runs between
+# request t and t+1 -- the opponent's decisions, the rolls, the reveals --
+# are the unobserved branches the delta head's mean sits between. The
+# service stamps every edge with the count of the request it PRECEDES
+# (`_preprocessEdge` reads `player.requestCount` after the choose-time
+# increment, `runner.ts`), so the steps a transition spans are exactly the
+# window steps whose REQUEST_COUNT equals the info count at t+1.
+TRANSITION_SHORT_EDGES = 2
+TRANSITION_LONG_EDGES = 4
+
+
+def transition_edges(env_output, history_field: jax.Array) -> jax.Array:
+    """(T-1, B) int32: how many valid history-window steps transition
+    t -> t+1 spans. 0 where the window no longer holds them."""
+    request_counts = env_output.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+    field_valid = history_field[..., FieldFeature.FIELD_FEATURE__VALID] > 0
+    field_requests = history_field[..., FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
+    spanned = field_valid[None] & (field_requests[None] == request_counts[1:, None])
+    return spanned.sum(axis=1).astype(jnp.int32)
+
+
+def transition_reveals(
+    env_output, matched: jax.Array, next_index: jax.Array
+) -> jax.Array:
+    """(T-1, B) bool: some OPPONENT public row, matched across the step,
+    changed an identity token -- a reveal (or an Illusion rewrite), the
+    hidden-information branch of the transition."""
+    public = DYNAMICS_GROUP_SLICES["public"]
+    ids = env_output.revealed_team[..., REVEALED_ID_COLUMNS]
+    ids_next = jnp.take_along_axis(ids[1:], next_index[..., public, None], axis=2)
+    changed = (ids[:-1] != ids_next).any(-1)
+    theirs = (
+        env_output.public_team[
+            :-1, ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ]
+        == 0
+    )
+    return (changed & matched[..., public] & theirs).any(-1)
+
+
+def masked_percentile(values: jax.Array, mask: jax.Array, fraction: float) -> jax.Array:
+    """The `fraction` quantile of `values` where `mask` (nearest rank), by one sort (no
+    data-derived shapes); -1 when nothing is masked in."""
+    flat = jnp.sort(jnp.where(mask, values, -1).ravel())
+    count = mask.sum()
+    index = flat.shape[0] - count + jnp.round(fraction * (count - 1)).astype(jnp.int32)
+    return flat[jnp.clip(index, 0, flat.shape[0] - 1)]
+
+
 def dynamics_losses(
     pred: jax.Array,
     target: jax.Array,
@@ -89,6 +143,7 @@ def dynamics_losses(
     acted_mask: jax.Array,
     value_mask: jax.Array,
     hp_basis: jax.Array | None = None,
+    history_field: jax.Array | None = None,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """The delta dynamics head's loss and its panels (2026-09-04).
 
@@ -123,6 +178,13 @@ def dynamics_losses(
     wire HP_RATIO changed across the step, scaled on that subset: the
     counters (turn, toxic, sleep) inflate R^2 on every row, and this
     subset is where the interaction the head exists for lives.
+
+    With `history_field` the public gain is also split by what the
+    transition spans (`transition_edges`: short <= 2, long >= 4 window
+    steps) and by whether an opponent row revealed a token
+    (`transition_reveals`) -- the step-1 reads of the stochastic-transition
+    plan: a mean predictor's gain should FALL with the branches a
+    transition carries.
     """
     matched, next_index = jax.vmap(jax.vmap(dynamics_alignment))(
         jax.tree.map(lambda leaf: leaf[:-1], env_output),
@@ -173,6 +235,27 @@ def dynamics_losses(
         logs["player_dynamics_hp_share"] = average(hp_energy, public_mask) / (
             jnp.maximum(average(sq_delta, public_mask), DYNAMICS_SCALE_FLOOR)
         )
+    if history_field is not None:
+        edges = transition_edges(env_output, history_field)
+        logs["player_transition_edges_mean"] = average(
+            edges.astype(jnp.float32), valid_step
+        )
+        logs["player_transition_edges_p90"] = masked_percentile(
+            edges, valid_step, 0.9
+        ).astype(jnp.float32)
+        reveal = transition_reveals(env_output, matched, next_index)
+        logs["player_transition_reveal_frac"] = average(
+            reveal.astype(jnp.float32), valid_step
+        )
+        splits = dict(
+            short=edges <= TRANSITION_SHORT_EDGES,
+            long=edges >= TRANSITION_LONG_EDGES,
+            reveal=reveal,
+            no_reveal=~reveal,
+        )
+        for name, rows in splits.items():
+            split_loss, _ = normalised(public_mask & rows[..., None])
+            logs[f"player_dynamics_gain_public_{name}"] = 1.0 - split_loss
     return loss, logs
 
 
@@ -545,6 +628,7 @@ def train_step(
             acted_mask,
             value_mask,
             hp_basis=dynamics_hp_basis(player_state.target_params),
+            history_field=history_field,
         )
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
