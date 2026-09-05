@@ -215,7 +215,11 @@ def test_search_moves_the_real_policy_and_the_plain_arm_carries_no_leaves(
     from rl.model.player_model import get_player_model
 
     _, params, actor_input, actor_output = real_model_and_trajectory
-    actor_input = jax.tree.map(lambda leaf: leaf[:4], actor_input)
+    # Per-STEP leaves only: `history` / `packed_history` are per trajectory
+    # and a step's gathers name their rows by absolute index.
+    actor_input = actor_input.replace(
+        env=jax.tree.map(lambda leaf: leaf[:4], actor_input.env)
+    )
     actor_output = jax.tree.map(lambda leaf: leaf[:4], actor_output)
     # Fresh params emit all-zero logits and an out_proj-zero transition
     # (the copy predictor): open both so the operator has something to
