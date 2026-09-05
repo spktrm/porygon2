@@ -1314,6 +1314,7 @@ class Encoder(nn.Module):
         read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
         return (
             self.trunk(sequence, row_valid, read_mask),
+            row_valid,
             opp_code_labels,
             dynamics_rows,
         )
@@ -1530,28 +1531,32 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
         carry: HistoryCarry = HistoryCarry(),
     ):
-        # ((T, rows, entity_size), (T, 6, G, K), (T, NUM_DYNAMICS_ROWS,
-        # entity_size), history stats, history carry); rows = NUM_SEQUENCE_ROWS
-        # for the learner, NUM_POLICY_READABLE_ROWS for the actor (kept_rows).
-        # The heads slice the rows they own by name (rl/model/constants.py),
-        # so no offset is ever written twice; the second element is the
-        # opponent code one-hot -- the belief head's label -- riding out
-        # beside the sequence because it is computed where the secret rows
-        # are built, and the third is the dynamics head's target rows (the
-        # pre-trunk entity content), out for the same reason; both are `()`
-        # on the actor, which never builds them. The fourth is
-        # the per-trajectory History-panel scalars (history_step_stats); the
-        # actor path drops them, and XLA drops the computation with them.
-        # The fifth is the post-window history state (history_carry_from),
-        # the actor's next carry; the learner drops that one the same way.
+        # ((T, rows, entity_size), (T, rows) bool, (T, 6, G, K), (T,
+        # NUM_DYNAMICS_ROWS, entity_size), history stats, history carry);
+        # rows = NUM_SEQUENCE_ROWS for the learner, NUM_POLICY_READABLE_ROWS
+        # for the actor (kept_rows). The heads slice the rows they own by
+        # name (rl/model/constants.py), so no offset is ever written twice.
+        # The second is the trunk's row validity, out so the transition
+        # model can run its own blocks over the same rows under the same
+        # mask; the third is the opponent code one-hot -- the belief head's
+        # label -- riding out beside the sequence because it is computed
+        # where the secret rows are built, and the fourth is the grounding
+        # target rows (the pre-trunk entity content), out for the same
+        # reason; both are `()` on the actor, which never builds them. The
+        # fifth is the per-trajectory History-panel scalars
+        # (history_step_stats); the actor path drops them, and XLA drops the
+        # computation with them. The sixth is the post-window history state
+        # (history_carry_from), the actor's next carry; the learner drops
+        # that one the same way.
         *history_inputs, history_output = self._history_inputs(
             env_step, packed_history_step, history_step, carry
         )
-        sequence, opp_code_labels, dynamics_rows = _forward_vmap()(
+        sequence, row_valid, opp_code_labels, dynamics_rows = _forward_vmap()(
             self, env_step, *history_inputs
         )
         return (
             sequence,
+            row_valid,
             opp_code_labels,
             dynamics_rows,
             history_step_stats(history_output),

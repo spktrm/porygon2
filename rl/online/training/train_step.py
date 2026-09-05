@@ -21,11 +21,18 @@ from rl.environment.protos.features_pb2 import (
     FieldFeature,
     InfoFeature,
 )
-from rl.model.constants import DYNAMICS_GROUP_SLICES
+from rl.model.constants import (
+    DYNAMICS_GROUP_SLICES,
+    LEARNER_ONLY_GROUPS,
+    POLICY_READABLE_ROWS,
+    SEQUENCE_GROUP_IDS,
+    SequenceGroup,
+)
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import major_arg_step_mask
 from rl.model.player_model import dynamics_alignment
 from rl.model.state_features import REVEALED_ID_COLUMNS, hp_input_rows
+from rl.model.transition import unimix_probs
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
@@ -138,73 +145,86 @@ def masked_percentile(values: jax.Array, mask: jax.Array, fraction: float) -> ja
 
 def dynamics_losses(
     pred: jax.Array,
+    pred_prior: jax.Array,
     target: jax.Array,
     env_output,
     acted_mask: jax.Array,
     value_mask: jax.Array,
     hp_basis: jax.Array | None = None,
     history_field: jax.Array | None = None,
-) -> tuple[jax.Array, dict[str, jax.Array]]:
-    """The delta dynamics head's loss and its panels (2026-09-04).
+) -> tuple[jax.Array, dict[str, jax.Array], dict[str, jax.Array]]:
+    """The transition model's GROUNDING loss and the transition-split
+    instruments (2026-09-04 delta head; 2026-09-05 relabelled).
 
-    `pred` (T, B, R, D) is the online head's prediction at step t of each
-    target row's CHANGE from t to t+1; `target` is the EMA forward's
-    pre-trunk content, already stop-gradiented by being computed outside
-    the loss fn. Row j at t is matched to its next-step row through
-    `dynamics_alignment` (public rows re-sort every step) and the label is
-    `delta = target_next - target_now`, which cancels every static token
-    of the sum pool exactly. A row counts when it is matched, an action was
-    taken at t (`acted_mask`, which drops the done row) and t+1 is a real
-    state (`value_mask` -- the bootstrap-only final row is a valid TARGET).
-    Forced rows stay in: the transition is real even when the choice was
-    not.
+    `pred` (T, B, R, D) is the grounding head's read of the imagined next
+    sequence at step t -- row j of it is the NEXT step's target row j,
+    the imagined rows keep the next step's layout -- and `target` is the
+    pre-trunk content of the target rows (`dynamics_target`, computed
+    outside the loss fn so it carries no gradient). Row j at t is matched
+    to its next-step row through `dynamics_alignment` (public rows re-sort
+    every step; private rows follow the request order) and the prediction
+    is gathered to it, so the label is `target_next` and the error is
+    normalised by the COPY predictor's, `|target_next - target_now|^2`:
+    the same static-token cancellation the delta form had, on the same
+    scale, with the copy scoring exactly 1 per group. A row counts when it
+    is matched, an action was taken at t (`acted_mask`, which drops the
+    done row) and t+1 is a real state (`value_mask` -- the bootstrap-only
+    final row is a valid TARGET). Forced rows stay in: the transition is
+    real even when the choice was not.
 
     Per group g of DYNAMICS_GROUP_SLICES, f32:
 
-        num_g   = average(|pred - delta|^2, mask_g)
-        scale_g = sg(average(|delta|^2, mask_g))
+        num_g   = average(|pred_next - target_next|^2, mask_g)
+        scale_g = sg(average(|target_next - target_now|^2, mask_g))
         loss_g  = num_g / max(scale_g, floor)
 
-    and the loss is the mean over groups, so the field rows' small deltas
-    neither vanish under the public scale nor dominate it. The zero
-    predictor -- "nothing changes" -- scores exactly 1 per group, and the
-    zero-init head starts there; `gain_g = 1 - loss_g` is the R^2 of the
-    change (0 = copy, negative = worse than copy). An all-masked group
-    averages to 0 on both sides and contributes 0; a group whose rows did
-    not move on the batch is normalised at DYNAMICS_SCALE_FLOOR instead of
-    dividing by ~0.
+    mean over groups, so the field rows' small movements neither vanish
+    under the public scale nor dominate it; `gain_g = 1 - loss_g` is the
+    R^2 of the change (0 = copy, negative = worse than copy). An
+    all-masked group averages to 0 on both sides and contributes 0; a
+    group whose rows did not move on the batch is normalised at
+    DYNAMICS_SCALE_FLOOR instead of dividing by ~0.
 
-    `player_dynamics_gain_hp_moved` is the public gain on the rows whose
-    wire HP_RATIO changed across the step, scaled on that subset: the
-    counters (turn, toxic, sleep) inflate R^2 on every row, and this
-    subset is where the interaction the head exists for lives.
+    `pred_prior` is the same read of a no-gradient decode from the prior
+    MODE -- the rollout-side number. It is EXPECTED BELOW the posterior
+    gain (a sample from a two-branch law is further from the truth in MSE
+    than the mean the old head fitted); the panel exists so nobody reads
+    it as a regression.
 
-    With `history_field` the public gain is also split by what the
-    transition spans (`transition_edges`: short <= 2, long >= 4 window
-    steps) and by whether an opponent row revealed a token
-    (`transition_reveals`) -- the step-1 reads of the stochastic-transition
-    plan: a mean predictor's gain should FALL with the branches a
-    transition carries.
+    `..._gain_hp_moved` is the public gain on the rows whose wire HP_RATIO
+    changed across the step, scaled on that subset: the counters (turn,
+    toxic, sleep) inflate R^2 on every row, and this subset is where the
+    branching lives. With `history_field` the public gain is also split by
+    what the transition spans (`transition_edges`: short <= 2, long >= 4
+    window steps) and by whether an opponent row revealed a token
+    (`transition_reveals`); the splits are returned for the KL panels.
     """
     matched, next_index = jax.vmap(jax.vmap(dynamics_alignment))(
         jax.tree.map(lambda leaf: leaf[:-1], env_output),
         jax.tree.map(lambda leaf: leaf[1:], env_output),
     )
     target = target.astype(jnp.float32)
-    target_next = jnp.take_along_axis(target[1:], next_index[..., None], axis=2)
+
+    def gather_next(rows):
+        return jnp.take_along_axis(
+            rows.astype(jnp.float32), next_index[..., None], axis=2
+        )
+
+    target_next = gather_next(target[1:])
     delta = target_next - target[:-1]
     valid_step = acted_mask[:-1] & value_mask[1:]
     mask = matched & valid_step[..., None]
-    sq_err = jnp.square(pred[:-1].astype(jnp.float32) - delta).sum(-1)
+    sq_err = jnp.square(gather_next(pred[:-1]) - target_next).sum(-1)
+    sq_err_prior = jnp.square(gather_next(pred_prior[:-1]) - target_next).sum(-1)
     sq_delta = jnp.square(delta).sum(-1)
 
-    def normalised(rows_mask):
-        num = average(sq_err, rows_mask)
+    def normalised(rows_mask, err=sq_err):
+        num = average(err, rows_mask)
         scale = jax.lax.stop_gradient(average(sq_delta, rows_mask))
         return num / jnp.maximum(scale, DYNAMICS_SCALE_FLOOR), scale
 
     logs = dict(
-        player_dynamics_rows_frac=average(
+        player_transition_ground_rows_frac=average(
             mask.astype(jnp.float32).mean(-1), valid_step
         ),
     )
@@ -213,28 +233,33 @@ def dynamics_losses(
         group_mask = jnp.zeros_like(mask).at[..., rows].set(mask[..., rows])
         group_loss, group_scale = normalised(group_mask)
         group_losses.append(group_loss)
-        logs[f"player_dynamics_gain_{group}"] = 1.0 - group_loss
-        logs[f"player_dynamics_scale_{group}"] = group_scale
+        logs[f"player_transition_gain_{group}"] = 1.0 - group_loss
+        logs[f"player_transition_ground_scale_{group}"] = group_scale
     loss = jnp.mean(jnp.stack(group_losses))
-    logs["player_loss_dynamics"] = loss
+    logs["player_loss_transition_ground"] = loss
 
     public = DYNAMICS_GROUP_SLICES["public"]
     public_mask = jnp.zeros_like(mask).at[..., public].set(mask[..., public])
+    prior_loss, _ = normalised(public_mask, sq_err_prior)
+    logs["player_transition_gain_public_prior"] = 1.0 - prior_loss
     hp_ratio = env_output.public_team[
         ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
     ]
     hp_next = jnp.take_along_axis(hp_ratio[1:], next_index[..., public], axis=2)
     hp_moved = jnp.zeros_like(mask).at[..., public].set(hp_ratio[:-1] != hp_next)
     moved_loss, _ = normalised(public_mask & hp_moved)
-    logs["player_dynamics_gain_hp_moved"] = 1.0 - moved_loss
-    logs["player_dynamics_hp_moved_frac"] = average(
+    logs["player_transition_gain_hp_moved"] = 1.0 - moved_loss
+    moved_prior_loss, _ = normalised(public_mask & hp_moved, sq_err_prior)
+    logs["player_transition_gain_hp_moved_prior"] = 1.0 - moved_prior_loss
+    logs["player_transition_hp_moved_frac"] = average(
         hp_moved[..., public].astype(jnp.float32).mean(-1), valid_step
     )
     if hp_basis is not None:
         hp_energy = jnp.square(delta @ hp_basis).sum(-1)
-        logs["player_dynamics_hp_share"] = average(hp_energy, public_mask) / (
+        logs["player_transition_hp_share"] = average(hp_energy, public_mask) / (
             jnp.maximum(average(sq_delta, public_mask), DYNAMICS_SCALE_FLOOR)
         )
+    splits = {}
     if history_field is not None:
         edges = transition_edges(env_output, history_field)
         logs["player_transition_edges_mean"] = average(
@@ -255,7 +280,204 @@ def dynamics_losses(
         )
         for name, rows in splits.items():
             split_loss, _ = normalised(public_mask & rows[..., None])
-            logs[f"player_dynamics_gain_public_{name}"] = 1.0 - split_loss
+            logs[f"player_transition_gain_public_{name}"] = 1.0 - split_loss
+    return loss, logs, splits
+
+
+def _code_perplexity(probs: jax.Array, mask: jax.Array, prefix: str) -> dict:
+    """Usage perplexity of a (T-1, B, G, K) code over the masked
+    transitions: exp(H) of each group's batch marginal, mean and min over
+    groups (min -> 1 is a dead group)."""
+    weights = mask.astype(jnp.float32)[..., None, None]
+    marginal = (probs * weights).sum(axis=(0, 1)) / jnp.maximum(weights.sum(), 1.0)
+    marginal = marginal / jnp.maximum(marginal.sum(-1, keepdims=True), 1e-8)
+    entropy = -(marginal * jnp.log(jnp.maximum(marginal, 1e-8))).sum(-1)
+    perplexity = jnp.exp(entropy)
+    return {
+        f"{prefix}_perplexity_mean": perplexity.mean(),
+        f"{prefix}_perplexity_min": perplexity.min(),
+    }
+
+
+def transition_losses(
+    pred,
+    env_output,
+    acted_mask: jax.Array,
+    value_mask: jax.Array,
+    policy_mask: jax.Array,
+    flat_action_mask: jax.Array,
+    win_returns: jax.Array,
+    v_target: jax.Array,
+    target_log_policy: jax.Array,
+    cat_vf_support: jax.Array,
+    splits: dict[str, jax.Array],
+    config: Porygon2LearnerConfig,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """Every transition-model loss except grounding (2026-09-05,
+    rl/model/transition.py), each on an OBSERVED label at t+1, over the
+    transitions with an action taken at t and a real state at t+1:
+
+    - consistency: per sequence group, the imagined rows' squared error
+      against the real next post-trunk rows normalised by the copy
+      predictor's (`|h_{t+1} - h_t|^2`, per-group scale, the grounding
+      form) -- the copy scores 1, and the zero-init `out_proj` starts
+      there;
+    - the KL halves (DreamerV3): prior <- sg(posterior) at dyn_coef,
+      posterior <- sg(prior) at rep_coef, each clipped below at free_nats
+      per transition (summed over groups);
+    - value: the shared critic on the imagined CLS row, CE to the t+1
+      win_returns; `value_r2` beside `player_value_head_r2` and
+      `value_gap` (|V(imagined) - V_target(real t+1)|, support units --
+      the step-1 probe's number, 0.031 for the mean head);
+    - policy: the shared readout on the imagined rows, forward KL from
+      the sg'd target policy at t+1 over the real next legal set;
+    - the next action mask (per-cell BCE) with its request kind (CE) and
+      done (BCE).
+
+    `player_transition_kl` is the unclipped prior<-posterior KL per
+    transition, THE chance-node number, split by spanned edges and by
+    reveals: a code that carries the unobserved branches reads higher
+    where more happened.
+    """
+    valid_step = acted_mask[:-1] & value_mask[1:]
+    logs = {}
+
+    err = pred.transition_cons_err[:-1].astype(jnp.float32)
+    scale = pred.transition_cons_scale[:-1].astype(jnp.float32)
+    group_ids = SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS]
+    group_losses = []
+    for group in SequenceGroup:
+        if group in LEARNER_ONLY_GROUPS:
+            continue
+        group_mask = valid_step[..., None] & jnp.asarray(group_ids == group)
+        num = average(err, group_mask)
+        group_scale = jax.lax.stop_gradient(average(scale, group_mask))
+        group_loss = num / jnp.maximum(group_scale, DYNAMICS_SCALE_FLOOR)
+        group_losses.append(group_loss)
+        logs[f"player_transition_cons_gain_{group.name.lower()}"] = 1.0 - group_loss
+    loss_cons = jnp.mean(jnp.stack(group_losses))
+
+    prior_logits = pred.transition_prior_logits[:-1]
+    post_logits = pred.transition_post_logits[:-1]
+    if prior_logits.shape[-2] > 0:
+        prior = unimix_probs(prior_logits)
+        post = unimix_probs(post_logits)
+
+        def kl(from_probs, to_probs):
+            return (from_probs * (jnp.log(from_probs) - jnp.log(to_probs))).sum(
+                axis=(-2, -1)
+            )
+
+        kl_dyn = kl(jax.lax.stop_gradient(post), prior)
+        kl_rep = kl(post, jax.lax.stop_gradient(prior))
+        free = config.player_transition_free_nats
+        loss_kl = config.player_transition_dyn_coef * average(
+            jnp.maximum(kl_dyn, free), valid_step
+        ) + config.player_transition_rep_coef * average(
+            jnp.maximum(kl_rep, free), valid_step
+        )
+        kl_value = jax.lax.stop_gradient(kl_dyn)
+        logs["player_transition_kl"] = average(kl_value, valid_step)
+        logs["player_transition_kl_free_frac"] = average(
+            (kl_value < free).astype(jnp.float32), valid_step
+        )
+        for name, rows in splits.items():
+            logs[f"player_transition_kl_{name}"] = average(kl_value, valid_step & rows)
+        logs.update(_code_perplexity(post, valid_step, "player_transition_post"))
+        logs.update(_code_perplexity(prior, valid_step, "player_transition_prior"))
+        logs["player_transition_prior_post_agree"] = average(
+            (prior.argmax(-1) == post.argmax(-1)).all(-1).astype(jnp.float32),
+            valid_step,
+        )
+    else:
+        loss_kl = jnp.zeros((), jnp.float32)
+
+    value_head = pred.transition_value_head
+    next_returns = win_returns[1:].astype(jnp.float32)
+    loss_value = average(
+        optax.softmax_cross_entropy(
+            logits=value_head.logits[:-1].astype(jnp.float32), labels=next_returns
+        ),
+        valid_step,
+    )
+    expectation = value_head.expectation[:-1].astype(jnp.float32)
+    logs["player_transition_value_r2"] = calculate_r2(
+        value_prediction=expectation,
+        value_target=next_returns @ cat_vf_support.astype(jnp.float32),
+        mask=valid_step,
+    )
+    logs["player_transition_value_gap"] = average(
+        jnp.abs(expectation - v_target[1:].astype(jnp.float32)), valid_step
+    )
+
+    next_mask = flat_action_mask[1:]
+    target_policy = masked_policy(target_log_policy[1:], next_mask)
+    target_log = jnp.where(next_mask, target_log_policy[1:].astype(jnp.float32), 0.0)
+    imagined_log = pred.transition_log_policy[:-1].astype(jnp.float32)
+    policy_rows = acted_mask[:-1] & policy_mask[1:]
+    loss_policy = average(
+        (target_policy * (target_log - imagined_log)).sum(-1), policy_rows
+    )
+
+    mask_logits = pred.transition_mask_logits[:-1].astype(jnp.float32)
+    mask_labels = next_mask.astype(jnp.float32)
+    loss_mask = average(
+        optax.sigmoid_binary_cross_entropy(mask_logits, mask_labels).mean(-1),
+        valid_step,
+    )
+    mask_hit = (mask_logits > 0) == next_mask
+    logs["player_transition_mask_acc"] = average(mask_hit.mean(-1), valid_step)
+    logs["player_transition_mask_exact_frac"] = average(
+        mask_hit.all(-1).astype(jnp.float32), valid_step
+    )
+    # Of the legal cells, the share predicted legal: the number "all off"
+    # cannot score on (legal cells are ~3% of the block space).
+    logs["player_transition_mask_recall"] = average(
+        (mask_hit & next_mask).sum(-1) / jnp.maximum(next_mask.sum(-1), 1),
+        valid_step,
+    )
+
+    kind_labels = env_output.info[1:, ..., InfoFeature.INFO_FEATURE__REQUEST_TYPE]
+    kind_logits = pred.transition_kind_logits[:-1].astype(jnp.float32)
+    loss_kind = average(
+        optax.softmax_cross_entropy_with_integer_labels(kind_logits, kind_labels),
+        valid_step,
+    )
+    logs["player_transition_kind_acc"] = average(
+        (kind_logits.argmax(-1) == kind_labels).astype(jnp.float32), valid_step
+    )
+
+    done_labels = env_output.done[1:].astype(jnp.float32)
+    done_logit = pred.transition_done_logit[:-1].astype(jnp.float32)
+    loss_done = average(
+        optax.sigmoid_binary_cross_entropy(done_logit, done_labels), valid_step
+    )
+    logs["player_transition_done_acc"] = average(
+        ((done_logit > 0) == (done_labels > 0)).astype(jnp.float32), valid_step
+    )
+    logs["player_transition_done_frac"] = average(done_labels, valid_step)
+
+    loss = (
+        loss_cons
+        + loss_kl
+        + loss_value
+        + loss_policy
+        + loss_mask
+        + loss_kind
+        + loss_done
+    )
+    logs.update(
+        player_loss_transition_cons=loss_cons,
+        player_loss_transition_kl=loss_kl,
+        player_loss_transition_value=loss_value,
+        player_loss_transition_policy=loss_policy,
+        player_loss_transition_mask=loss_mask,
+        player_loss_transition_kind=loss_kind,
+        player_loss_transition_done=loss_done,
+        player_transition_rows_frac=average(
+            valid_step.astype(jnp.float32), jnp.ones_like(valid_step)
+        ),
+    )
     return loss, logs
 
 
@@ -617,12 +839,15 @@ def train_step(
             prefix="player_revealed_belief",
         )
 
-        # The delta dynamics head: one-step latent self-prediction of the
-        # target rows' CHANGE in pre-trunk content under the EMA params.
-        # The label is `player_target_pred`'s, computed outside this fn, so
-        # it carries no gradient by construction.
-        loss_dynamics, dynamics_logs = dynamics_losses(
-            learner_player_pred.dynamics_pred,
+        # The latent transition model (rl/model/transition.py): grounding
+        # against the pre-trunk label -- `player_target_pred`'s copy,
+        # computed outside this fn, so it carries no gradient -- and every
+        # other head against its observed t+1 label. The target and reg
+        # forwards' own transition leaves are never read, so XLA drops
+        # those two passes.
+        loss_ground, ground_logs, transition_splits = dynamics_losses(
+            learner_player_pred.transition_ground,
+            learner_player_pred.transition_ground_prior,
             player_target_pred.dynamics_target,
             player_transitions.env_output,
             acted_mask,
@@ -630,6 +855,22 @@ def train_step(
             hp_basis=dynamics_hp_basis(player_state.target_params),
             history_field=history_field,
         )
+        loss_transition_rest, transition_logs = transition_losses(
+            learner_player_pred,
+            player_transitions.env_output,
+            acted_mask,
+            value_mask,
+            policy_mask,
+            flat_action_mask,
+            player_targets.win_returns,
+            v_target,
+            player_target_pred.action_head.log_policy,
+            cat_vf_support,
+            transition_splits,
+            config,
+        )
+        loss_transition = loss_ground + loss_transition_rest
+        transition_logs["player_loss_transition"] = loss_transition
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
@@ -786,7 +1027,7 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
             + config.player_belief_coef * loss_belief
-            + config.player_dynamics_coef * loss_dynamics
+            + config.player_dynamics_coef * loss_transition
             # The species control, unscaled: its only param is the table
             # (an integer input has no gradient), and its gradient norm is
             # O(0.05) against a total of ~10, so the global clip is unmoved.
@@ -823,7 +1064,8 @@ def train_step(
                 learner_player_pred.belief_hidden_any.astype(jnp.float32),
                 learner_player_pred.belief_matched & value_mask[..., None],
             ),
-            **dynamics_logs,
+            **ground_logs,
+            **transition_logs,
             # Trunk over-smoothing (cosine up / participation down = rows
             # converging); the offline per-block twin is
             # rl/offline/trunk_homogeneity.py.

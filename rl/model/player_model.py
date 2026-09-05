@@ -33,10 +33,10 @@ from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
     DYNAMICS_GROUP_SLICES,
-    DYNAMICS_TARGET_ROWS,
     MOVE_ROWS,
     NUM_PRIVATE_SLOTS,
     NUM_PUBLIC_SLOTS,
+    POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
     PUBLIC_ROWS,
     TARGET_ROWS,
@@ -49,13 +49,13 @@ from rl.model.heads import (
     FlatActionReadout,
     HeadParams,
     SlotConditioning,
-    chosen_bank_rows,
     compute_policy_metrics,
     sample_categorical,
 )
 from rl.model.modules import MLP
+from rl.model.transition import TransitionModel
 from rl.model.trunk import row_homogeneity
-from rl.model.utils import get_num_params
+from rl.model.utils import get_num_params, legal_log_policy
 
 
 def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
@@ -182,26 +182,12 @@ class Porygon2PlayerModel(nn.Module):
         # the opponent has and has not done. Input under stop_gradient: no
         # shared param receives its gradient; its CE enters unscaled.
         self.revealed_belief = MLP(**self.cfg.revealed_belief.mlp.to_dict())
-        # The delta dynamics head (2026-09-03, delta form 2026-09-04): one-
-        # step latent self-prediction. Per target row (DYNAMICS_TARGET_ROWS),
-        # from the POST-trunk row and the taken cell's own readout rows,
-        # predict the CHANGE of the row's pre-trunk content to the next
-        # step under the EMA params (the learner's target forward). The sum
-        # pool is linear in the wire tokens with a static divisor, so the
-        # delta cancels every static token exactly (species, ability,
-        # item, learnset, already-revealed moves) and what is left is the
-        # state change, the newly revealed tokens and the active/benched
-        # bias jump. The action enters as the move/target rows themselves,
-        # never a cell index, so "this move against that mon -> their row
-        # next turn" puts the gradient on the operands the readout scores;
-        # the elementwise product term makes that interaction one layer
-        # away. The output kernel is ZERO-init: the head starts AT the copy
-        # baseline (loss exactly 1 under the normalised MSE), one zero
-        # factor over live inputs, not a two-factor stall. Called only
-        # under cfg.train.
-        self.dynamics_delta_head = MLP(
-            **self.cfg.dynamics_head.mlp.to_dict(),
-            final_kernel_init=nn.initializers.zeros,
+        # The latent transition model (2026-09-05, rl/model/transition.py):
+        # g(h_t, a, z) over the post-trunk policy-readable rows. Its params
+        # are lazy, so instantiating it here costs the actor nothing; it is
+        # CALLED only under cfg.train (Step 3's search will call `imagine`).
+        self.transition = TransitionModel(
+            self.cfg.transition, dtype=self.cfg.dtype, name="transition"
         )
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
@@ -423,24 +409,6 @@ class Porygon2PlayerModel(nn.Module):
             normalized_modality_entropy=normalized_modality_entropy,
         )
 
-    def _forward_dynamics_head(self, sequence: jax.Array, action_cell: jax.Array):
-        """(NUM_DYNAMICS_ROWS, width): each target row's prediction of its own
-        next-step CHANGE. Reads policy-readable rows only, so the partition
-        test can pin it bit-identical under opponent-truth perturbation."""
-        rows = jnp.take(sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0)
-        chosen_src, chosen_tgt = chosen_bank_rows(
-            sequence[PRIVATE_ROWS],
-            sequence[MOVE_ROWS],
-            sequence[TARGET_ROWS],
-            action_cell.reshape(()),
-        )
-        chosen_src = jnp.broadcast_to(chosen_src[None], rows.shape)
-        chosen_tgt = jnp.broadcast_to(chosen_tgt[None], rows.shape)
-        features = jnp.concatenate(
-            (rows, chosen_src, chosen_tgt, rows * chosen_src), axis=-1
-        )
-        return self.dynamics_delta_head(features)
-
     def get_head_outputs(
         self,
         sequence: jax.Array,
@@ -493,12 +461,11 @@ class Porygon2PlayerModel(nn.Module):
             # phase-1 support-anchor shape -- so it gets its own reading.
             # Offline twin: rl/offline/trunk_homogeneity.py, per block.
             row_cosine, row_participation = row_homogeneity(sequence)
-            dynamics_pred = self._forward_dynamics_head(
-                sequence, action_head.action_index
-            )
             learner_only = {
+                # The grounding label: the target rows' pre-trunk content.
+                # The transition model's grounding head is scored against
+                # the NEXT step's copy of this (train_step.dynamics_losses).
                 "dynamics_target": dynamics_rows,
-                "dynamics_pred": dynamics_pred,
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
                 # The critic's code (the secret rows' content) and the
@@ -539,16 +506,21 @@ class Porygon2PlayerModel(nn.Module):
         """
         Shared forward pass for encoder and policy head.
         """
-        sequence, opp_code_labels, dynamics_rows, history_stats, history_carry = (
-            self.encoder(
-                actor_input.env,
-                actor_input.packed_history,
-                actor_input.history,
-                actor_input.history_carry,
-            )
+        (
+            sequence,
+            row_valid,
+            opp_code_labels,
+            dynamics_rows,
+            history_stats,
+            history_carry,
+        ) = self.encoder(
+            actor_input.env,
+            actor_input.packed_history,
+            actor_input.history,
+            actor_input.history_carry,
         )
 
-        return jax.vmap(
+        output = jax.vmap(
             functools.partial(
                 self.get_head_outputs,
                 head_params=head_params,
@@ -556,6 +528,61 @@ class Porygon2PlayerModel(nn.Module):
                 history_carry=history_carry,
             )
         )(sequence, opp_code_labels, dynamics_rows, actor_input.env, actor_output)
+        if self.cfg.train:
+            output = output.replace(
+                **self._forward_transition(
+                    sequence, row_valid, output, actor_input.env.action_mask
+                )
+            )
+        return output
+
+    def _forward_transition(
+        self,
+        sequence: jax.Array,
+        row_valid: jax.Array,
+        output: PlayerActorOutput,
+        action_mask: jax.Array,
+    ) -> dict[str, jax.Array]:
+        """The transition model over the trajectory (T, rows, D): every
+        step is paired with its POSITIONAL successor (the last step with
+        itself; train_step masks it). Only the policy-readable rows enter
+        -- the rollout's information set -- and the posterior's read of
+        the real next rows is under stop_gradient: the model predicts the
+        trunk, it never trains it through the target. The shared value
+        head and action readout are applied to the imagined rows unchanged,
+        so their outputs on imagined states mean what they mean on real
+        ones; the policy is masked by the REAL next legal set."""
+        rows = sequence[:, POLICY_READABLE_ROWS]
+        valid = row_valid[:, POLICY_READABLE_ROWS]
+        next_rows = jax.lax.stop_gradient(
+            jnp.concatenate((rows[1:], rows[-1:]), axis=0)
+        )
+        next_valid = jnp.concatenate((valid[1:], valid[-1:]), axis=0)
+        next_mask = jnp.concatenate((action_mask[1:], action_mask[-1:]), axis=0)
+        transition = self.transition(
+            rows, valid, output.action_head.action_index, next_rows, next_valid
+        )
+        pred = transition.pred
+        logits = jax.vmap(
+            lambda imagined: self.action_head(
+                imagined[PRIVATE_ROWS], imagined[MOVE_ROWS], imagined[TARGET_ROWS]
+            )
+        )(pred)
+        error = (pred.astype(jnp.float32) - next_rows.astype(jnp.float32)) ** 2
+        movement = (next_rows.astype(jnp.float32) - rows.astype(jnp.float32)) ** 2
+        return {
+            "transition_cons_err": error.sum(axis=-1),
+            "transition_cons_scale": jax.lax.stop_gradient(movement.sum(axis=-1)),
+            "transition_prior_logits": transition.prior_logits,
+            "transition_post_logits": transition.post_logits,
+            "transition_ground": transition.ground,
+            "transition_ground_prior": transition.ground_prior,
+            "transition_value_head": self.v_head(pred[:, CLS_ROW]),
+            "transition_log_policy": legal_log_policy(logits, next_mask),
+            "transition_mask_logits": transition.mask_logits,
+            "transition_kind_logits": transition.kind_logits,
+            "transition_done_logit": transition.done_logit,
+        }
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:

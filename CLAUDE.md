@@ -67,6 +67,11 @@ TypeScript game service speaking protobuf over websockets.
   for the standalone actions; `query` zero-init and `key` not, so the zero
   factor's gradient is a rank-1 outer product of live rows rather than the
   two-factor stall. The critic reads the CLS row and nothing else.
+  `transition.py`: `TransitionModel` — g(h_t, a, z) over the 73 post-trunk
+  policy-readable rows (2 `TrunkBlock`s + one zero-init `out_proj`), a
+  2x16 chance code with prior/posterior MLPs, and the grounding / next-mask
+  / kind+done heads on the imagined rows; the shared `v_head` and
+  `action_head` are applied to them in `player_model._forward_transition`.
   `modules.py`: generic primitives only — architecture lives next to its wiring.
 - `rl/online/training/` — the learner, split by what each piece needs to
   run. `train_step.py`: the jitted update (losses, EMA target, non-finite
@@ -1015,6 +1020,50 @@ nothing over `short` (0.038 vs 0.045 — the semi-Markov diagnosis is NOT
 supported on this instrument), and reveals cost ~0.013. The go/shrink
 decision is the user's; the learner-side `gain_long < gain_short` clause
 can only be read after the next restart.
+
+## Removal + addition ledger — 2026-09-05 stochastic transition, Step 2 (the latent model)
+
+Step 2 of the plan (local `docs/stochastic-transition-plan.md`; maths in
+`docs/stochastic-transition-notes.md`). The user's call after Step 1's
+mixed read: proceed in full with the chance code — in this metagame chance
+is less prevalent, in other formats a sampleable transition is necessary.
+Checkpoint-mode by-path resume of irqeetfg (the policy's inputs and the
+value/readout params are unchanged; the delta head's leaves drop, the
+transition leaves init fresh).
+
+| mechanism | what | why |
+|---|---|---|
+| `dynamics_delta_head` (REMOVED) + `player_dynamics_gain_*` / `player_loss_dynamics` / `player_dynamics_head_*` panels | the conditional-MEAN predictor of the 21 pre-trunk target rows, live 362.8k–1.22M. Last readings banked in the Step-1 ledger (gain public 0.528 / hp_moved 0.588 / loss 0.453 @1.168M; value gap 0.034 live / 0.051 masked on hp-moved rows) | a mean over discrete unobserved branches cannot be rolled out; Step 1 priced it. Its LABEL survives as the grounding head |
+| `rl/model/transition.py::TransitionModel` | g(h_t, a, z) → ĥ_{t+1} over the 73 post-trunk policy-readable rows: 2 `TrunkBlock`s of the trunk's own shape under the policy-readable sub-block of `SEQUENCE_READ_MASK`, conditioned by ONE vector added to every row (`action_proj` of the taken cell's src/tgt readout rows + `code_proj` of the code-table embedding); ĥ = rows + `out_proj`(blocks). Chance code z: `transition.code_groups` 2 × `code_classes` 16, prior MLP over [masked-mean(h_t); src; tgt], posterior the same features + masked-mean(sg(rows at t+1)), f32 logits, 1% unimix, straight-through argmax; the training decode uses the posterior sample, a no-gradient decode from the prior MODE feeds the `_prior` panels. `code_groups = 0` is the static mean latent model (drops exactly `{code_table, code_proj, prior_net, posterior_net}`) | **`out_proj` is THE single zero factor**: g is exactly the copy predictor at init (consistency gain 0, the old head's own contract), its gradient is the live block output ⊗ residual, so it moves at step 1 and `code_proj` / `action_proj` / the blocks / `code_table` unfreeze at step 2 — the readout's query/key rule, pinned by `test_out_proj_is_the_single_zero_factor` (fresh: only out_proj live; opened via `open_zero_init_paths(..., ["out_proj"])`: the rest live). Only policy-readable rows exist here, so a rollout carries nothing privileged (`test_privileged_partition` pins every transition leaf bit-identical under `opp_private_team` perturbation, the posterior included — it reads leak-free rows) |
+| heads on ĥ (`player_model._forward_transition`) | consistency: per-row normalised MSE vs sg(next rows), per-`SequenceGroup` scale with the 1e-2 floor, learner-only groups skipped; grounding: `ground_head` MLP per imagined target row → the 21 DYNAMICS_TARGET_ROWS' pre-trunk content at t+1, in the NEXT step's layout; value: the SHARED `v_head` on ĥ's CLS row, CE to the t+1 `win_returns`; policy: the SHARED `action_head` on ĥ, forward KL to sg π(t+1) over the real next mask; `mask_head` (a second `FlatActionReadout`): 295-cell BCE on the next `action_mask`; `cls_head` on ĥ's CLS: next `ActionRequestKind` CE + done BCE | every label is OBSERVED (the opponent's choice is never one). `v_head` and `action_head` TRAIN through imagined rows — MuZero's value/policy targets on the shared heads, which is what makes `player_transition_value_r2` a calibration read of the same head search will call |
+| positional t→t+1 pairing | `next_rows = sg(concat(rows[1:], rows[-1:]))`; the last chunk row self-pairs and is masked by `valid_step = acted_mask[:-1] & value_mask[1:]`; grounding gathers the prediction into the next step's row order through `dynamics_alignment`'s `next_index` and normalises by `\|target_{t+1} − target_t\|²`, so an ALIGNED copy predictor scores exactly gain 0 across a resort and a scatter-negated one 4 (test-pinned); `player_transition_rows_frac` = valid transitions / (T−1) | the old head predicted the delta in the CURRENT layout and the target rows re-sort between requests (actives first) |
+| loss | `player_dynamics_coef` 0.5 × [cons + ground + value + policy + mask + kind + done + `player_transition_dyn_coef` 0.5 · max(F, KL(sg q‖p)) + `player_transition_rep_coef` 0.1 · max(F, KL(q‖sg p))], `player_transition_free_nats` F = 1.0 per transition summed over groups; every KL f32 | DreamerV3's balancing and free bits verbatim; test pins that doubling dyn_coef doubles the PRIOR's gradient only and that identical prior/posterior under F=1 gives zero code gradients with `player_transition_kl_free_frac` 1 |
+| panels `player_transition_*` | `kl` (+`_short/_long`, `_reveal/_no_reveal`), `kl_free_frac`, `{prior,post}_perplexity_{mean,min}`, `prior_post_agree`, `gain_{public,private,field}` (posterior decode), `gain_public_prior` / `gain_hp_moved_prior` (**expected BELOW the mean head's 0.528 / 0.588** — a sample from a two-branch law is further from the truth in MSE than the mean), `cons_gain_<group>`, `value_r2` beside `player_value_head_r2`, `value_gap`, `mask_acc` / `mask_recall` / `mask_exact_frac`, `kind_acc`, `done_acc`, `hp_share`, `edges_{mean,p90}`, `reveal_frac`, `{out_proj,action_proj,code_proj,code_table}_rms`, `{transition,blocks,prior,posterior}_grad_norm`; wandb section "3b · Transition model" | the coma→neurd precedent: the loss changed meaning, so the `player_dynamics_*` names retire and the new ones start fresh at the restart step |
+
+**Recorded divergences from the plan text.** (1) The consistency target
+and the posterior read sg'd rows from the SAME online forward, not the EMA
+`player_target_pred` forward — the EMA rows would have cost a second
+73-row trunk pass per learner step for a target whose only virtue is
+smoothness, and the trunk already sees these rows under stop-gradient.
+(2) `done_auc` shipped as done BCE + `done_acc` (an AUC is not computable
+inside the jitted step without a sort; accuracy against `done_frac` reads
+the same thing). (3) `transition.unroll` was written and deleted unread —
+the K-step variant is Step 5's rung and gets its knob with its consumer.
+(4) `rl/offline/transition_probe.py` now decodes from the prior MODE
+(`ground_prior`); the sampled-decode calibration read
+(`|E_z V(g) − V(real)|`) is scoped with Step 3's search module, which is
+where the batched prior sampling lives.
+
+**Pre-registered acceptance (20k hold after the resume)** — in the plan and
+unchanged: `kl` 0.5–3.0 nats, `post_perplexity_min` ≥ 1.5, `prior_perplexity_min`
+≥ 1.3, `gain_public` ≥ 0.68, `gain_hp_moved` ≥ 0.75, `value_r2` ≥ 0.85,
+`mask_acc` ≥ 0.98 with `kind_acc` ≥ 0.95, `kl_long > kl_short` and
+`kl_reveal > kl_no_reveal` by ≥ 0.2, `player_value_head_r2` /
+`player_learner_actor_forward_kl` / temp-1 eval wr inside their pre-change
+band, `learner_steps_per_sec` ≥ 6.5 (from 7.19). Abort ladder in the plan
+(posterior collapse → rep 0.05 + F 2 once; copying → K 8; dead groups → FSQ;
+strength cost → coef 0.25 then sg on g's input; `value_r2` < 0.7 → search
+does not launch).
 
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 

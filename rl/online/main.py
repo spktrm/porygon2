@@ -27,8 +27,8 @@ from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
-from rl.model.player_model import get_num_params, get_player_model
-from rl.model.utils import ParamsContainer
+from rl.model.player_model import get_player_model
+from rl.model.utils import ParamsContainer, get_num_params
 from rl.online.agent import Agent, resolve_actor_device
 from rl.online.artifact import (
     ckpt_root,

@@ -3,7 +3,7 @@ import pprint
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import CAT_VF_SUPPORT
+from rl.environment.data import CAT_VF_SUPPORT, NUM_REQUEST_TYPES
 
 
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
@@ -184,12 +184,40 @@ def get_player_model_config(
     cfg.revealed_belief = ConfigDict()
     cfg.revealed_belief.mlp = ConfigDict()
     cfg.revealed_belief.mlp.layer_sizes = cfg.belief_head.mlp.layer_sizes
-    # The dynamics head (2026-09-03): per target row, [post-trunk row ; the
-    # taken cell's source row ; its target row ; row * source row] -> the
-    # row's NEXT-step pre-trunk content (rl/model/constants.DYNAMICS_TARGET_ROWS).
-    cfg.dynamics_head = ConfigDict()
-    cfg.dynamics_head.mlp = ConfigDict()
-    cfg.dynamics_head.mlp.layer_sizes = (2 * entity_size, entity_size)
+    # The latent transition model (2026-09-05, rl/model/transition.py):
+    # g(h_t, a, z) -> h_{t+1} over the 73 policy-readable post-trunk rows,
+    # `block.num_blocks` TrunkBlocks of the trunk's own shape, conditioned
+    # on the taken cell's readout rows and a chance code z of
+    # `code_groups` categoricals over `code_classes` (prior from h_t and
+    # a; posterior also reads the real t+1 rows, learner-only). Heads on
+    # the imagined rows: grounding (per row -> the t+1 pre-trunk content of
+    # the DYNAMICS_TARGET_ROWS), the next action mask (the action readout's
+    # own form, instantiated a second time), and one cls head for the next
+    # request kind + done. `code_groups = 0` is the mean latent model
+    # (no code path at all). The shared v_head / action_head are applied
+    # to the imagined rows in the parent model.
+    cfg.transition = ConfigDict()
+    cfg.transition.block = ConfigDict(cfg.encoder.trunk.to_dict())
+    cfg.transition.block.num_blocks = 2
+    cfg.transition.code_groups = 2
+    cfg.transition.code_classes = 16
+    cfg.transition.prior = ConfigDict()
+    cfg.transition.prior.mlp = ConfigDict()
+    cfg.transition.prior.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.transition.code_groups * cfg.transition.code_classes,
+    )
+    cfg.transition.posterior = ConfigDict()
+    cfg.transition.posterior.mlp = ConfigDict()
+    cfg.transition.posterior.mlp.layer_sizes = cfg.transition.prior.mlp.layer_sizes
+    cfg.transition.ground = ConfigDict()
+    cfg.transition.ground.mlp = ConfigDict()
+    cfg.transition.ground.mlp.layer_sizes = (2 * entity_size, entity_size)
+    cfg.transition.cls_head = ConfigDict()
+    cfg.transition.cls_head.mlp = ConfigDict()
+    cfg.transition.cls_head.mlp.layer_sizes = (entity_size, NUM_REQUEST_TYPES + 1)
+    cfg.transition.action_head = cfg.action_head
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step

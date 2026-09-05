@@ -162,28 +162,59 @@ def test_train_step_smoke():
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",
-        # The delta dynamics head (2026-09-04): normalised MSE with the
-        # copy baseline at exactly 1, the per-group gains and scales, the
-        # hp-moved subset, the two normaliser-gaming instruments and the
-        # head's drift/gradient.
-        "player_loss_dynamics",
-        "player_dynamics_rows_frac",
-        "player_dynamics_gain_public",
-        "player_dynamics_gain_private",
-        "player_dynamics_gain_field",
-        "player_dynamics_scale_public",
-        "player_dynamics_scale_private",
-        "player_dynamics_scale_field",
-        "player_dynamics_gain_hp_moved",
-        "player_dynamics_hp_moved_frac",
-        "player_dynamics_hp_share",
+        # The latent transition model (2026-09-05): the grounding term
+        # (normalised MSE in the NEXT step's layout, copy predictor at
+        # exactly 1) with its per-group gains/scales, the hp-moved subset
+        # and the prior-decode panels, the consistency / KL / value /
+        # policy / mask / kind / done terms, the code usage, the shared-
+        # head calibration reads and the model's drift/gradient.
+        "player_loss_transition",
+        "player_loss_transition_ground",
+        "player_loss_transition_cons",
+        "player_loss_transition_kl",
+        "player_loss_transition_value",
+        "player_loss_transition_policy",
+        "player_loss_transition_mask",
+        "player_loss_transition_kind",
+        "player_loss_transition_done",
+        "player_transition_rows_frac",
+        "player_transition_ground_rows_frac",
+        "player_transition_gain_public",
+        "player_transition_gain_private",
+        "player_transition_gain_field",
+        "player_transition_ground_scale_public",
+        "player_transition_ground_scale_private",
+        "player_transition_ground_scale_field",
+        "player_transition_gain_public_prior",
+        "player_transition_gain_hp_moved",
+        "player_transition_gain_hp_moved_prior",
+        "player_transition_hp_moved_frac",
+        "player_transition_hp_share",
+        "player_transition_kl",
+        "player_transition_kl_free_frac",
+        "player_transition_post_perplexity_mean",
+        "player_transition_post_perplexity_min",
+        "player_transition_prior_perplexity_mean",
+        "player_transition_prior_perplexity_min",
+        "player_transition_prior_post_agree",
+        "player_transition_value_r2",
+        "player_transition_value_gap",
+        "player_transition_mask_acc",
+        "player_transition_mask_recall",
+        "player_transition_kind_acc",
+        "player_transition_done_acc",
+        "player_transition_out_proj_rms",
+        "player_transition_action_proj_rms",
+        "player_transition_code_proj_rms",
+        "player_transition_code_table_rms",
+        "player_transition_grad_norm",
+        "player_transition_blocks_grad_norm",
+        "player_transition_prior_grad_norm",
+        "player_transition_posterior_grad_norm",
         "player_state_kernel_rms_hp",
         "player_state_kernel_rms_status",
         "player_state_kernel_rms_boosts",
         "player_state_kernel_rms_other",
-        "player_dynamics_head_in_rms",
-        "player_dynamics_head_out_rms",
-        "player_dynamics_delta_head_gradient_norm",
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key

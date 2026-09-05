@@ -582,59 +582,174 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # The delta dynamics head (2026-09-03; delta form 2026-09-04):
-            # one-step latent self-prediction of the CHANGE in the public /
-            # my-private / field rows' pre-trunk content (EMA target) from
-            # the post-trunk row and the taken cell's own readout rows.
-            # Under the linear sum pool the static tokens (species, item,
-            # learnset, revealed moves) cancel in the delta exactly, so the
-            # target is the state change alone. Loss = per-group normalised
-            # MSE: the zero predictor ("nothing changes") scores exactly 1,
-            # a perfect one 0; gain = 1 - loss = R^2 of the change. The
-            # opponent's simultaneous action is not in the chunk, so the
-            # head fits a conditional mean; the gain is the read.
-            name="3b · Dynamics (SSL)",
+            # The latent transition model (2026-09-05): g = 2 trunk blocks
+            # over the 73 policy-readable post-trunk rows conditioned on
+            # the taken cell's readout rows and a chance code z (2 groups
+            # x 16 classes; prior from h_t and the cell, posterior also
+            # from sg(h_{t+1}), straight-through). Heads on the imagined
+            # rows: consistency to the real next rows, grounding to the 21
+            # pre-trunk target rows (the old dynamics head's label, in the
+            # NEXT step's layout), the SHARED value head and readout, the
+            # next legal set + request kind, done. KL balanced 0.5 / 0.1
+            # with 1 free nat. Every panel says which decode it reads:
+            # posterior sample (what the model can fit given the outcome)
+            # or prior mode (what a rollout could imagine).
+            name="3b · Transition model",
             is_open=True,
             panels=[
                 lp(
-                    # Mean over the three groups; 1 = the copy baseline the
-                    # zero-init head starts AT, down is good.
-                    "Dynamics loss (1 = copy baseline)",
-                    ["player_loss_dynamics"],
-                ),
-                lp(
-                    # R^2 of the change per group, up is good: 0 = copy,
-                    # negative = worse than copy (fitting noise). Public is
-                    # where the opponent's row changes under my move -- the
-                    # interaction the head exists for; field rows are
-                    # near-copy by nature.
-                    "Dynamics gain per group (R^2 of the change)",
+                    # The bracket and its terms; every one is 0-best. The
+                    # grounding term's copy predictor scores exactly 1.
+                    "Transition loss terms",
                     [
-                        "player_dynamics_gain_public",
-                        "player_dynamics_gain_private",
-                        "player_dynamics_gain_field",
+                        "player_loss_transition",
+                        "player_loss_transition_ground",
+                        "player_loss_transition_cons",
+                        "player_loss_transition_kl",
+                        "player_loss_transition_value",
+                        "player_loss_transition_policy",
+                        "player_loss_transition_mask",
+                        "player_loss_transition_kind",
+                        "player_loss_transition_done",
                     ],
                 ),
                 lp(
-                    # gain_public restricted to rows whose wire HP_RATIO
-                    # moved across the step (scaled on that subset) -- the
-                    # rows where the interaction lives, free of the
-                    # counters (turn, toxic, sleep, lag) that inflate R^2
-                    # on every row. Beside it the subset's share of rows.
-                    "Dynamics gain on hp-moved rows",
+                    # Nats per transition between posterior and prior --
+                    # THE chance-node number: how much of the transition
+                    # the code carries that h_t and my action do not.
+                    # Gate 0.5-3.0: -> 0 is posterior collapse (a mean
+                    # model with a dead code), at the 5.5-nat capacity is
+                    # the posterior copying t+1. free_frac = share of
+                    # transitions under the 1-nat floor (no gradient).
+                    "Transition KL (nats)",
+                    ["player_transition_kl", "player_transition_kl_free_frac"],
+                ),
+                lp(
+                    # KL split by the transition's shape: spanned edges
+                    # (short <= 2 vs long >= 4) and whether a matched
+                    # opponent row changed an id token. The plan's
+                    # prediction is long > short and reveal > no_reveal by
+                    # >= 0.2 nats -- the code should carry MORE where more
+                    # unobserved things happened.
+                    "Transition KL by span / reveal",
                     [
-                        "player_dynamics_gain_hp_moved",
-                        "player_dynamics_hp_moved_frac",
+                        "player_transition_kl_short",
+                        "player_transition_kl_long",
+                        "player_transition_kl_reveal",
+                        "player_transition_kl_no_reveal",
                     ],
                 ),
                 lp(
-                    # Mean squared delta per group -- how far the rows move
-                    # per step in row units, the normaliser of each gain.
-                    "Dynamics delta scale per group",
+                    # Code usage from the batch marginals, per group (mean
+                    # and the worst group). 1 = a dead group; 16 = uniform.
+                    # Gate: post min >= 1.5, prior min >= 1.3. agree = the
+                    # prior's argmax matches the posterior's.
+                    "Transition code perplexity",
                     [
-                        "player_dynamics_scale_public",
-                        "player_dynamics_scale_private",
-                        "player_dynamics_scale_field",
+                        "player_transition_post_perplexity_mean",
+                        "player_transition_post_perplexity_min",
+                        "player_transition_prior_perplexity_mean",
+                        "player_transition_prior_perplexity_min",
+                        "player_transition_prior_post_agree",
+                    ],
+                ),
+                lp(
+                    # Grounding R^2 of the aligned change per row group,
+                    # posterior-sample decode: 1 = perfect, 0 = the copy
+                    # predictor, negative = worse than copying. The mean
+                    # head banked 0.528 / 0.487 / 0.626; gate public >= 0.68.
+                    "Transition grounding gain (posterior)",
+                    [
+                        "player_transition_gain_public",
+                        "player_transition_gain_private",
+                        "player_transition_gain_field",
+                    ],
+                ),
+                lp(
+                    # The same public read from the PRIOR-MODE decode, and
+                    # the hp-moved subset both ways. The prior read is
+                    # EXPECTED BELOW the mean head's 0.528: one branch of a
+                    # bimodal law is further from the truth in MSE than the
+                    # mean. Not a regression; the KL panel is where the
+                    # branching went.
+                    "Transition grounding gain: prior vs posterior",
+                    [
+                        "player_transition_gain_public",
+                        "player_transition_gain_public_prior",
+                        "player_transition_gain_hp_moved",
+                        "player_transition_gain_hp_moved_prior",
+                        "player_transition_hp_moved_frac",
+                    ],
+                ),
+                lp(
+                    # Grounding gain on the public rows split by the
+                    # transition's shape (posterior decode).
+                    "Transition grounding gain by span / reveal",
+                    [
+                        "player_transition_gain_public_short",
+                        "player_transition_gain_public_long",
+                        "player_transition_gain_public_reveal",
+                        "player_transition_gain_public_no_reveal",
+                    ],
+                ),
+                lp(
+                    # Consistency R^2 of the imagined post-trunk rows per
+                    # row kind against the real next rows (copy = 0).
+                    "Transition consistency gain by row kind",
+                    [
+                        "player_transition_cons_gain_cls",
+                        "player_transition_cons_gain_public_entity",
+                        "player_transition_cons_gain_private_entity",
+                        "player_transition_cons_gain_move_slot",
+                        "player_transition_cons_gain_target_slot",
+                        "player_transition_cons_gain_field",
+                        "player_transition_cons_gain_history_field",
+                        "player_transition_cons_gain_prev_action",
+                        "player_transition_cons_gain_info",
+                        "player_transition_cons_gain_history_entity",
+                    ],
+                ),
+                lp(
+                    # The calibration read search depends on: R^2 of the
+                    # SHARED value head on the imagined CLS row against the
+                    # t+1 win_returns, beside the same head on real rows.
+                    # Gate >= 0.85 (real 0.967). value_gap = |V(imagined)
+                    # - v_target(t+1)| in support units, lower is better.
+                    "Transition value calibration",
+                    [
+                        "player_transition_value_r2",
+                        "player_value_head_r2",
+                        "player_transition_value_gap",
+                    ],
+                ),
+                lp(
+                    # The next decision's legal set: per-cell accuracy over
+                    # 295 cells (gate >= 0.98 -- legal cells are ~3% so
+                    # read recall beside it), the share of transitions
+                    # whose whole mask is exact, the next request kind
+                    # (gate >= 0.95) and done.
+                    "Transition mask / kind / done accuracy",
+                    [
+                        "player_transition_mask_acc",
+                        "player_transition_mask_recall",
+                        "player_transition_mask_exact_frac",
+                        "player_transition_kind_acc",
+                        "player_transition_done_acc",
+                    ],
+                ),
+                lp(
+                    # Spanned engine steps per transition (mean / p90) and
+                    # the share with an opponent reveal -- the data
+                    # geometry the split panels condition on. Also the row
+                    # supply: transitions with a valid t+1 and matched
+                    # grounding rows.
+                    "Transition geometry and supply",
+                    [
+                        "player_transition_edges_mean",
+                        "player_transition_edges_p90",
+                        "player_transition_reveal_frac",
+                        "player_transition_rows_frac",
+                        "player_transition_ground_rows_frac",
                     ],
                 ),
                 lp(
@@ -646,8 +761,8 @@ def rl_sections():
                     # subspace of public_persistent_linear; falling while
                     # gain_public rises = hp made small, not predicted (the
                     # abort -> whiten the delta).
-                    "Dynamics: hp share of the public delta",
-                    ["player_dynamics_hp_share"],
+                    "Transition: hp share of the public delta",
+                    ["player_transition_hp_share"],
                 ),
                 lp(
                     # Column-block rms of the three state kernels (public
@@ -664,53 +779,29 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Fraction of target rows aligned across the step
-                    # (public rows re-sort; never-fielded mons unmatched).
-                    "Dynamics row supply",
-                    ["player_dynamics_rows_frac"],
-                ),
-                lp(
-                    # Stochastic-transition plan step 1 (2026-09-05): what a
-                    # transition t -> t+1 SPANS. edges = history-window
-                    # steps stamped with the t+1 request count (the
-                    # opponent's decisions, the rolls, the reveals -- the
-                    # branches a mean sits between); reveal_frac = share of
-                    # transitions on which a matched opponent row's id
-                    # tokens changed.
-                    "Transition: spanned edges and reveals",
+                    # Drift against init: out_proj is the ONE zero factor
+                    # (exactly 0 at init; must leave it within ~200 steps
+                    # or the blocks and code paths behind it never train),
+                    # action_proj ~0.044 / code_proj ~0.0625 lecun,
+                    # code_table 0.088.
+                    "Transition model: drift",
                     [
-                        "player_transition_edges_mean",
-                        "player_transition_edges_p90",
-                        "player_transition_reveal_frac",
+                        "player_transition_out_proj_rms",
+                        "player_transition_action_proj_rms",
+                        "player_transition_code_proj_rms",
+                        "player_transition_code_table_rms",
                     ],
                 ),
                 lp(
-                    # The public gain split by what the transition spans:
-                    # short (<= 2 edges) vs long (>= 4), reveal vs none.
-                    # long < short by >= 0.1 and reveal < no_reveal is the
-                    # semi-Markov diagnosis; flat = the clock is not the
-                    # problem. Retire at the step-2 restart (meaning moves).
-                    "Dynamics gain by transition span",
+                    # Pre-clip grad norms of the model, its blocks and the
+                    # two code nets beside the value head's: the aux term
+                    # dwarfing the value head's is it stealing the trunk.
+                    "Transition model: gradient",
                     [
-                        "player_dynamics_gain_public_short",
-                        "player_dynamics_gain_public_long",
-                        "player_dynamics_gain_public_reveal",
-                        "player_dynamics_gain_public_no_reveal",
-                    ],
-                ),
-                lp(
-                    # The head's leaves against init (in ~0.031 lecun, out
-                    # exactly 0 -- one zero factor over live inputs, so it
-                    # must leave 0 within ~200 steps) and its pre-clip grad
-                    # norm beside the value head's: out_rms leaving 0 with
-                    # gain pinned at 0 is fitting noise (coef 0.25); a grad
-                    # norm dwarfing the value head's is the aux term
-                    # stealing the trunk.
-                    "Dynamics head: drift and gradient",
-                    [
-                        "player_dynamics_head_in_rms",
-                        "player_dynamics_head_out_rms",
-                        "player_dynamics_delta_head_gradient_norm",
+                        "player_transition_grad_norm",
+                        "player_transition_blocks_grad_norm",
+                        "player_transition_prior_grad_norm",
+                        "player_transition_posterior_grad_norm",
                         "player_value_head_gradient_norm",
                     ],
                 ),

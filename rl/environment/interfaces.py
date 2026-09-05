@@ -130,12 +130,37 @@ class PlayerActorOutput:
     revealed_belief_logits: ArrayLike = ()
     belief_matched: ArrayLike = ()
     belief_hidden_any: ArrayLike = ()
-    # The dynamics head (2026-09-03): (T, NUM_DYNAMICS_ROWS, D) pre-trunk
-    # content of the target rows (the EMA forward's copy is the label) and
-    # the online head's prediction of each row's NEXT-step content from the
-    # post-trunk row and the taken cell's readout rows. Learner-only.
+    # The transition model's grounding label (2026-09-03, dynamics head;
+    # 2026-09-05 relabelled): (T, NUM_DYNAMICS_ROWS, D) pre-trunk content
+    # of the target rows. Step t's grounding head is scored against step
+    # t+1's copy, aligned by dynamics_alignment. Learner-only.
     dynamics_target: ArrayLike = ()
-    dynamics_pred: ArrayLike = ()
+    # The latent transition model (2026-09-05, rl/model/transition.py),
+    # every leaf leading (T, ...) and paired with the POSITIONAL next step
+    # (the last step self-paired; train_step masks it). Learner-only:
+    # cons_err / cons_scale (T, 73) f32 -- squared distance of the
+    # imagined row from the real next row, and of the real next row from
+    # the current one (the copy predictor's error, the normaliser);
+    # prior / post logits (T, G, K) f32; ground (T, NUM_DYNAMICS_ROWS, D)
+    # the grounding head on the posterior-decoded rows and ground_prior
+    # the same read of a no-gradient prior-mode decode; value_head the
+    # shared critic on the imagined CLS row; log_policy (T, 295) the
+    # shared readout on the imagined rows under the REAL next mask;
+    # mask_logits (T, 295) the next-mask head; kind_logits (T, 4) and
+    # done_logit (T,) the imagined CLS row's request kind and done.
+    transition_cons_err: ArrayLike = ()
+    transition_cons_scale: ArrayLike = ()
+    transition_prior_logits: ArrayLike = ()
+    transition_post_logits: ArrayLike = ()
+    transition_ground: ArrayLike = ()
+    transition_ground_prior: ArrayLike = ()
+    transition_value_head: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
+    )
+    transition_log_policy: ArrayLike = ()
+    transition_mask_logits: ArrayLike = ()
+    transition_kind_logits: ArrayLike = ()
+    transition_done_logit: ArrayLike = ()
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows
     # of the trunk's output. The over-smoothing instrument; learner-only.

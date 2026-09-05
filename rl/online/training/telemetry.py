@@ -242,6 +242,17 @@ def _get(tree, path):
     return tree
 
 
+def _has(tree, path) -> bool:
+    """Whether `path` names a leaf or subtree of the variable dict -- a
+    static python question, so a config-gated module (the transition code
+    under code_groups = 0) simply logs nothing."""
+    for key in path:
+        if not isinstance(tree, dict) or key not in tree:
+            return False
+        tree = tree[key]
+    return True
+
+
 # The action readout's leaves, and what each must DO.
 #
 # These panels are not decoration. The dx65cpwp micro runaway lived entirely
@@ -330,15 +341,18 @@ _HISTORY_LEAVES = {
         ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
     ),
 }
-# The delta dynamics head (2026-09-04): MLP (2D, D) over the (4D)-wide
-# row input [row ; src ; tgt ; row * src], so Dense_0 is lecun at fan-in
-# 1024 (~0.0313) and the output Dense_1 is ZERO-init -- the head starts at
-# the copy baseline. Read beside player_dynamics_gain_public: the output
-# rms leaving 0 with the gain pinned at 0 is the head fitting noise (the
-# pre-registered abort, coef 0.25).
-_DYNAMICS_LEAVES = {
-    "player_dynamics_head_in_rms": (("dynamics_delta_head", "Dense_0", "kernel"),),
-    "player_dynamics_head_out_rms": (("dynamics_delta_head", "Dense_1", "kernel"),),
+# The latent transition model (2026-09-05, rl/model/transition.py).
+# out_proj is THE zero factor: the imagined rows are `rows + out_proj(...)`
+# so the model starts as the copy predictor, and its rms still 0.0 past
+# ~200 steps is the stall. code_proj / action_proj are lecun over D
+# (~0.0625 at fan-in 256) and 2D (~0.0442); code_table is
+# variance_scaling(1, fan_in) over D/G per class (0.0884 at G=2). The code
+# leaves exist only with code_groups > 0 -- a missing path is skipped.
+_TRANSITION_LEAVES = {
+    "player_transition_out_proj_rms": (("transition", "out_proj", "kernel"),),
+    "player_transition_action_proj_rms": (("transition", "action_proj", "kernel"),),
+    "player_transition_code_proj_rms": (("transition", "code_proj", "kernel"),),
+    "player_transition_code_table_rms": (("transition", "code_table"),),
 }
 # player_belief_head_gradient_norm already exists in train_step; not
 # duplicated here.
@@ -352,6 +366,10 @@ _GRAD_SUBTREES = {
         "history_encoder",
         "step_attention",
     ),
+    "player_transition_grad_norm": ("transition",),
+    "player_transition_blocks_grad_norm": ("transition", "blocks"),
+    "player_transition_prior_grad_norm": ("transition", "prior_net"),
+    "player_transition_posterior_grad_norm": ("transition", "posterior_net"),
 }
 
 
@@ -367,13 +385,17 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
         **_TRUNK_LEAVES,
         **_OPP_CODE_LEAVES,
         **_HISTORY_LEAVES,
-        **_DYNAMICS_LEAVES,
+        **_TRANSITION_LEAVES,
     }.items():
+        if not all(_has(p, path) for path in paths):
+            continue
         leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
         logs[key] = jnp.mean(
             jnp.stack([jnp.sqrt(jnp.mean(jnp.square(x))) for x in leaves])
         )
     for key, path in _GRAD_SUBTREES.items():
+        if not _has(g, path):
+            continue
         logs[key] = optax.global_norm(_get(g, path))
     logs.update(state_kernel_telemetry(p))
     return logs

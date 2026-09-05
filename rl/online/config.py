@@ -411,19 +411,28 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # pi-free, touches representations not logits; 0.0 is an inert-loss off
     # (predictor params stay in the tree).
     player_belief_coef: float = 0.25
-    # The delta dynamics head (2026-09-03; delta form 2026-09-04): per
-    # target row, normalised MSE from the predicted CHANGE of the row's
-    # pre-trunk content (from the post-trunk row + the taken cell's
-    # readout rows) to the EMA forward's aligned delta, one normaliser per
-    # row group, mean over groups. The copy baseline scores exactly 1 and
-    # the zero-init head starts there, so the term contributes coef x 1.0
-    # at step 0 -- the value CE's order -- and falls as the head learns;
-    # the cosine form it replaces read ~0.07 at the copy. pi-free, shapes
-    # the trunk and the readout's operands rather than the logits; judged
-    # on player_dynamics_gain_{public,private,field} > 0. 0.25 is the
-    # retune if the grad-share abort fires; 0.0 is an inert-loss off
-    # (head params stay in the tree).
+    # The latent transition model (2026-09-05, rl/model/transition.py;
+    # supersedes the delta dynamics head of 2026-09-03/04): g(h_t, a, z)
+    # over the post-trunk policy-readable rows with a chance code z. This
+    # coefficient brackets the whole term -- consistency (normalised MSE
+    # of the imagined rows against the real next rows, per sequence group,
+    # copy predictor = 1), grounding (the old head's pre-trunk label at
+    # t+1, normalised the same way), value (the shared critic on the
+    # imagined CLS row, CE to the t+1 win_returns), policy (the shared
+    # readout on the imagined rows, forward KL to the sg'd target policy
+    # at t+1 over the real next mask), the next-mask BCE + request kind
+    # CE, done BCE, and the two KL halves below. pi-free; shapes the trunk
+    # and the readout's operands. 0.25 is the retune if the temp-1 eval wr
+    # falls -0.03 over the hold; 0.0 is an inert-loss off (params stay).
     player_dynamics_coef: float = 0.5
+    # DreamerV3's KL balancing: the prior is pulled to the sg'd posterior
+    # at dyn_coef, the posterior to the sg'd prior at rep_coef, each half
+    # clipped below at free_nats per transition (summed over code groups)
+    # so a code that is already predictable pays nothing. Posterior
+    # collapse (kl < 0.1 for 5k) -> rep 0.05 and free nats 2, once.
+    player_transition_dyn_coef: float = 0.5
+    player_transition_rep_coef: float = 0.1
+    player_transition_free_nats: float = 1.0
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio

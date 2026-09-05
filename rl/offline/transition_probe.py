@@ -1,6 +1,8 @@
 """Is the mean dynamics head sitting between branches? (2026-09-05)
 
-Step 1 of the stochastic-transition plan. `dynamics_delta_head` predicts
+Step 1 of the stochastic-transition plan, written against the mean
+`dynamics_delta_head` (since replaced by the latent transition model; the
+probe now reads its prior-mode grounding decode). That head predicted
 the conditional MEAN of each target row's next-step change, and between
 two of my requests the transition branches over things I never observe
 as choices: the opponent's decision, the rolls, the reveals. A mean over
@@ -58,6 +60,7 @@ from rl.model.constants import (  # noqa: E402
     HISTORY_ENTITY_ROWS,
     MY_ACTIVE_PUBLIC_ROWS,
     OPP_ACTIVE_PUBLIC_ROWS,
+    POLICY_READABLE_ROWS,
     PUBLIC_ROWS,
     SEQUENCE_GROUP_IDS,
     SEQUENCE_READ_MASK,
@@ -138,9 +141,21 @@ def _probe_forward(module, actor_input, actor_output):
 
     trunk_out, value = value_of(sequence, row_valid)
     value_blind = blind_value_of(sequence, row_valid)
-    pred = jax.vmap(module._forward_dynamics_head)(
-        trunk_out, actor_output.action_head.action_index
+    # The grounding read of the transition model's PRIOR-MODE decode
+    # (2026-09-05; the mean head this probe was written against is gone):
+    # g run on the prior's argmax code, the rows the actor could imagine
+    # without seeing t+1. A sampled decode is the plan's calibration read
+    # and is scoped separately.
+    policy_rows = trunk_out[:, POLICY_READABLE_ROWS]
+    policy_valid = row_valid[:, POLICY_READABLE_ROWS]
+    transition = module.transition(
+        policy_rows,
+        policy_valid,
+        actor_output.action_head.action_index,
+        jnp.concatenate((policy_rows[1:], policy_rows[-1:]), axis=0),
+        jnp.concatenate((policy_valid[1:], policy_valid[-1:]), axis=0),
     )
+    pred = transition.ground_prior
     matched, next_index = jax.vmap(dynamics_alignment)(
         jax.tree.map(lambda leaf: leaf[:-1], env),
         jax.tree.map(lambda leaf: leaf[1:], env),

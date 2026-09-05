@@ -177,12 +177,28 @@ def test_opp_private_team_cannot_reach_the_policy(
         np.asarray(base.value_head.log_probs, dtype=np.float32),
         np.asarray(moved.value_head.log_probs, dtype=np.float32),
     )
-    # The dynamics head (2026-09-03) reads policy-readable rows only, and
-    # its target rows are pre-trunk content of the same rows: both pinned.
-    np.testing.assert_array_equal(
-        np.asarray(base.dynamics_pred, dtype=np.float32),
-        np.asarray(moved.dynamics_pred, dtype=np.float32),
-    )
+    # The transition model (2026-09-05) runs from the policy's information
+    # set: the prior, g and every head on the imagined rows read the
+    # policy-readable rows at t, and the posterior reads the policy-
+    # readable rows at t+1 -- leak-free by the trunk's read mask -- so
+    # every transition leaf is pinned, the posterior included. The
+    # grounding label is pre-trunk content of the same rows.
+    for leaf in (
+        "transition_prior_logits",
+        "transition_post_logits",
+        "transition_ground",
+        "transition_ground_prior",
+        "transition_mask_logits",
+        "transition_log_policy",
+        "transition_kind_logits",
+        "transition_done_logit",
+        "transition_cons_err",
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(base, leaf), dtype=np.float32),
+            np.asarray(getattr(moved, leaf), dtype=np.float32),
+            err_msg=leaf,
+        )
     np.testing.assert_array_equal(
         np.asarray(base.dynamics_target, dtype=np.float32),
         np.asarray(moved.dynamics_target, dtype=np.float32),

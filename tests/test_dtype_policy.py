@@ -38,6 +38,11 @@ F32_ALLOWED = {
         "entries this replaced were the macro/micro RMS gauges, which retired "
         "with the hierarchical head on 2026-08-29."
     ),
+    "transition/mask_head/__call__": (
+        "the same readout form instantiated a second time on the imagined "
+        "rows (2026-09-05): its 295 cell logits are the next-action-mask BCE's "
+        "input, cast f32 at the readout's output for the same reason."
+    ),
 }
 
 
