@@ -201,6 +201,12 @@ def get_player_model_config(
     cfg.transition.block.num_blocks = 2
     cfg.transition.code_groups = 2
     cfg.transition.code_classes = 16
+    # The prior and posterior read the rows through ONE shared
+    # Dense(D -> row_read_width) per row, flattened in row order (73 x
+    # width), so which row changed is legible by position; the mean pool
+    # it replaced cancelled row identity (2026-09-05, kl_long < kl_short).
+    # Width 16: ~0.86M prior / ~1.46M posterior first-layer params.
+    cfg.transition.row_read_width = 16
     cfg.transition.prior = ConfigDict()
     cfg.transition.prior.mlp = ConfigDict()
     cfg.transition.prior.mlp.layer_sizes = (

@@ -368,8 +368,8 @@ _GRAD_SUBTREES = {
     ),
     "player_transition_grad_norm": ("transition",),
     "player_transition_blocks_grad_norm": ("transition", "blocks"),
-    "player_transition_prior_grad_norm": ("transition", "prior_net"),
-    "player_transition_posterior_grad_norm": ("transition", "posterior_net"),
+    "player_transition_prior_grad_norm": ("transition", "prior_read_net"),
+    "player_transition_posterior_grad_norm": ("transition", "posterior_read_net"),
 }
 
 

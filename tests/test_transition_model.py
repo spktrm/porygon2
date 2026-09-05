@@ -503,6 +503,39 @@ def test_posterior_reads_the_next_rows_and_the_prior_does_not(module_and_params)
     assert not np.array_equal(
         np.asarray(base.prior_logits), np.asarray(moved.prior_logits)
     )
+    # WHICH row changed is legible: the same delta placed on row 2 and on
+    # row 9 gives different posterior logits. A mean pool over the rows
+    # is invariant to this by construction, which is why the read is
+    # per row and flattened in row order.
+    delta = jnp.asarray(np.random.default_rng(11).normal(size=(3, 256)), jnp.float32)
+    on_row_2 = apply(params, rows, valid, cells, rows.at[:, 2].add(delta), valid)
+    on_row_9 = apply(params, rows, valid, cells, rows.at[:, 9].add(delta), valid)
+    assert not np.array_equal(
+        np.asarray(on_row_2.post_logits), np.asarray(on_row_9.post_logits)
+    )
+
+
+def test_row_read_masks_invalid_rows_and_reads_valid_ones():
+    from rl.model.transition import RowRead
+
+    read = RowRead(width=4, dtype=jnp.float32)
+    rows = jnp.asarray(np.random.default_rng(0).normal(size=(6, 8)), jnp.float32)
+    valid = jnp.asarray([True, True, False, True, False, True])
+    params = read.init(jax.random.PRNGKey(0), rows, valid)
+    base = read.apply(params, rows, valid).reshape(6, 4)
+    # An invalid row contributes exactly zero, whatever its content.
+    np.testing.assert_array_equal(np.asarray(base[2]), 0.0)
+    garbage = rows.at[2].set(1e3)
+    np.testing.assert_array_equal(
+        np.asarray(read.apply(params, garbage, valid)), np.asarray(base.reshape(-1))
+    )
+    # Live-row control: the same edit on a valid row moves ITS slot only.
+    moved = read.apply(params, rows.at[3].set(1e3), valid).reshape(6, 4)
+    assert not np.array_equal(np.asarray(moved[3]), np.asarray(base[3]))
+    np.testing.assert_array_equal(
+        np.asarray(jnp.delete(moved, 3, axis=0)),
+        np.asarray(jnp.delete(base, 3, axis=0)),
+    )
 
 
 def test_out_proj_is_the_single_zero_factor(module_and_params):
@@ -557,8 +590,9 @@ def test_code_groups_zero_drops_the_code_path_only():
     assert set(params_with["params"]) - set(params["params"]) == {
         "code_table",
         "code_proj",
-        "prior_net",
-        "posterior_net",
+        "row_read",
+        "prior_read_net",
+        "posterior_read_net",
     }
     out = jax.jit(module.apply)(params, rows, valid, cells, next_rows, next_valid)
     assert out.prior_logits.shape == (2, 0, cfg.code_classes)
@@ -732,7 +766,8 @@ def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
     assert float(logs["player_transition_kl"]) == pytest.approx(0.0, abs=1e-6)
     assert float(logs["player_transition_kl_free_frac"]) == 1.0
     assert float(logs["player_loss_transition_kl"]) == pytest.approx(
-        config.player_transition_dyn_coef + config.player_transition_rep_coef
+        (config.player_transition_dyn_coef + config.player_transition_rep_coef)
+        * config.player_transition_free_nats
     )
     assert float(logs["player_transition_prior_post_agree"]) == 1.0
 

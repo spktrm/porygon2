@@ -1150,6 +1150,26 @@ defects, two commits (Step 2b in the plan):
 | change | what | why |
 |---|---|---|
 | `player_transition_free_nats` 1.0 → 0.0625 | DreamerV3's 1 nat is over a 32-group code — 1/32 nat per group; ours has 2. The clip stays on both halves (reference form); at KL 0.64 it no longer binds, so the prior trains on every transition and the rep half pulls the posterior toward it | the floor was sized for the reference's code width and trapped ours. The old comment's "F 1 → 2" collapse fallback is RETIRED — that rung would re-trap the prior; the floor never goes up. Stochastic MuZero's form (prior CE to the sg'd code, no floor) is the F = 0 end of the same knob; 0.0625 keeps a floor against over-compression once the KL does fall |
+| `transition.RowRead` (`cfg.transition.row_read_width` 16) + `prior_net` / `posterior_net` → `prior_read_net` / `posterior_read_net` | ONE shared Dense(D → 16) per row, masked by validity, flattened in row order (73 × 16): prior reads `[RowRead(h_t); src; tgt]`, posterior `[prior features; RowRead(h_{t+1} − h_t)]` under `row_valid & next_valid`; the 73-row mean pool is deleted. RENAMED so the by-path merge inits the whole nets and their Adam moments fresh (the grounding-head rule: only the first kernel's shape moves, the later layers would resume weights trained on features that no longer exist); `code_table` / `code_proj` / the blocks / `out_proj` carry over | the mean pool cancelled row identity — a row's additive bias is present at t and t+1 alike, so "my active lost 40%" and "theirs did" pooled to the same vector and a one-row change was diluted 73×; the posterior could not see the branch it was meant to code (`kl_long` 0.52 < `kl_short` 0.66, reveal margin +0.04). Every reference posterior reads the FULL next embedding. Tests: the same delta on row 2 vs row 9 moves the posterior logits (a mean pool is invariant to it by construction); invalid rows contribute exactly zero WITH the live-row control |
+
+**Pre-registered acceptance (20k hold from this relaunch), the Step 2
+gate plus the mechanism reads:** `kl_free_frac` ≤ 0.2; `prior_grad_norm`
+not falling toward 0; `prior_post_agree` ≥ 0.5 and rising (from 0.30);
+`gain_public_prior` > 0.2 and within 0.2 of `gain_public`;
+`post_perplexity_mean` ≥ 3 (from 2.35); `kl_long > kl_short` and
+`kl_reveal > kl_no_reveal` by ≥ 0.2; `kl` in 0.5–3.0; `mask_acc` /
+`kind_acc` / `value_r2` / `player_value_head_r2` / prob_switch / trunk
+grad norm inside their bands (the observer form guarantees the last
+three — a move there is a leak). **Abort ladder:** posterior collapse
+(`kl` < 0.1 for 5k at the copy predictor's gains) → `rep_coef` 0.1 → 0.05
+once, never F upward; prior not tracking (`agree` flat < 0.4 with
+`kl_free_frac` ≤ 0.2) → the prior's READ is the deficit, a learned-query
+attention read, own commit; `kl_long` still ≤ `kl_short` with the row
+read live → the code is chance-dominated on this clock, drop the clause.
+Declined: K 16 → 8 (usage is low because nothing trained it up), β_dyn
+up (zero gradient, not a small one), FSQ (dead-group rung unfired,
+`post_perplexity_min` 2.16), resuming from 1266k again (the policy side
+is fine, g's blocks are 46k ahead).
 
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
