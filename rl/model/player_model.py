@@ -554,11 +554,17 @@ class Porygon2PlayerModel(nn.Module):
         ones; the policy is masked by the REAL next legal set."""
         rows = sequence[:, POLICY_READABLE_ROWS]
         valid = row_valid[:, POLICY_READABLE_ROWS]
-        next_rows = jax.lax.stop_gradient(
-            jnp.concatenate((rows[1:], rows[-1:]), axis=0)
-        )
-        next_valid = jnp.concatenate((valid[1:], valid[-1:]), axis=0)
-        next_mask = jnp.concatenate((action_mask[1:], action_mask[-1:]), axis=0)
+        # The successor written once, as a GATHER rather than slice+concat:
+        # XLA's fusion emitter mis-typed the concatenated bool mask inside
+        # the policy-consistency KL fusion at the live lattice shapes
+        # ('scf.if' 1x1x1xi1 vs 1x4x512xi1 at (64, 192) x B=4, 2026-09-05;
+        # the ex.bin shape compiled), and the gather does not fuse into
+        # that pattern. Same values: t -> t+1, the last step to itself.
+        num_steps = rows.shape[0]
+        successor = jnp.minimum(jnp.arange(num_steps) + 1, num_steps - 1)
+        next_rows = jax.lax.stop_gradient(jnp.take(rows, successor, axis=0))
+        next_valid = jnp.take(valid, successor, axis=0)
+        next_mask = jnp.take(action_mask, successor, axis=0)
         transition = self.transition(
             rows, valid, output.action_head.action_index, next_rows, next_valid
         )
