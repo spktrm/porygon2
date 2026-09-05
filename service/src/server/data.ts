@@ -40,7 +40,11 @@ import {
     EntityRevealedNodeFeature,
     PackedSetFeature,
 } from "../../protos/features_pb";
-import { ActionEnum } from "../../protos/service_pb";
+import {
+    ActionEnum,
+    ActionRequestKind,
+    ActionRequestKindMap,
+} from "../../protos/service_pb";
 
 export type EnumMappings =
     | SpeciesEnumMap
@@ -136,6 +140,178 @@ export const NUM_HISTORY: number = constantsData.NUM_HISTORY;
 export const MAX_RATIO_TOKEN: number = constantsData.MAX_RATIO_TOKEN;
 
 export const WILDCARDS = ["dynamax", "mega", "zmove", "terastallize", "ultra"];
+
+// The three ActionEnum slot lists that ActionMask's bit positions index. These
+// MUST agree, element for element, with MOVE_INDICES / RESERVE_ENTITY_INDICES /
+// TARGET_SLOT_INDICES in rl/environment/data.py -- that agreement IS the wire
+// contract, and both test suites assert it. Written here once so the four
+// hand-copied versions this replaced (state.ts's moveIndices/wildCardIndices/
+// reserveIndices, runner.ts's reserveSwitchIndices, state.ts's reserveSources,
+// and the Python copy) cannot drift again.
+
+// Move srcs: ally-major, then the wildcard shadow of the same four slots --
+// sorted ascending because the Python side sorts, and a bit index is only
+// meaningful if both sides order identically.
+export const MOVE_SLOT_INDICES: number[] = [
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
+    ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
+    ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+].sort((left, right) => left - right);
+
+export const RESERVE_SLOT_INDICES: number[] = [
+    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
+    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
+    ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
+    ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
+    ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
+    ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
+];
+
+export const ALLY_SWITCH_SRC_INDICES: number[] = [
+    ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
+    ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
+];
+
+// Everything that is neither a move src nor a switch slot: the ally/enemy
+// targets, the nine TARGET_* pseudo-targets, both passes, DEFAULT and
+// _UNSPECIFIED. Derived by residue so it cannot fall out of step with the
+// other two, exactly as TARGET_SLOT_INDICES is in Python.
+const NON_TARGET_SLOTS = new Set<number>([
+    ...MOVE_SLOT_INDICES,
+    ...RESERVE_SLOT_INDICES,
+    ...ALLY_SWITCH_SRC_INDICES,
+]);
+export const TARGET_SLOT_INDICES: number[] = Array.from(
+    { length: numActionFeatures },
+    (_, index) => index,
+).filter((index) => !NON_TARGET_SLOTS.has(index));
+
+// The block action space (2026-08-31): ActionMask's fields flattened in
+// field order -- see proto/service.proto `Action`. These derive from the
+// three slot-list lengths above; rl/environment/data.py derives the same
+// numbers and both suites assert the 295 total.
+export const NUM_SWITCH_CELLS = RESERVE_SLOT_INDICES.length;
+export const NUM_MOVE_SLOTS = MOVE_SLOT_INDICES.length;
+export const NUM_TARGET_SLOTS = TARGET_SLOT_INDICES.length;
+export const MOVE_CELL_OFFSET = NUM_SWITCH_CELLS;
+export const OTHER_CELL_OFFSET =
+    MOVE_CELL_OFFSET + NUM_MOVE_SLOTS * NUM_TARGET_SLOTS;
+export const NUM_ACTION_CELLS = OTHER_CELL_OFFSET + NUM_TARGET_SLOTS;
+if (NUM_ACTION_CELLS !== 295) {
+    throw new Error(
+        `Block layout drifted from the proto contract: ${NUM_ACTION_CELLS}`,
+    );
+}
+
+// A block cell named in ActionEnum terms, for the PREV_ACTION_SRC/TGT info
+// features (whose vocabulary predates the block space and is shared with the
+// replay shards). A switch cell needs the request kind and ally half to name
+// itself -- a lead names the mon as the src, a battle switch as the tgt.
+export function cellToEnumPair(
+    cell: number,
+    kind: ActionRequestKindMap[keyof ActionRequestKindMap],
+    activeSlot: number,
+): [number, number] {
+    if (cell < MOVE_CELL_OFFSET) {
+        if (kind === ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW) {
+            return [RESERVE_SLOT_INDICES[cell], TEAM_PREVIEW_TGT];
+        }
+        return [
+            ALLY_SWITCH_SRC_INDICES[activeSlot],
+            RESERVE_SLOT_INDICES[cell],
+        ];
+    }
+    if (cell < OTHER_CELL_OFFSET) {
+        const rel = cell - MOVE_CELL_OFFSET;
+        return [
+            MOVE_SLOT_INDICES[Math.floor(rel / NUM_TARGET_SLOTS)],
+            TARGET_SLOT_INDICES[rel % NUM_TARGET_SLOTS],
+        ];
+    }
+    const targetSlot = TARGET_SLOT_INDICES[cell - OTHER_CELL_OFFSET];
+    return [targetSlot, targetSlot];
+}
+
+// Team preview asks "which mon", full stop -- the position being filled is
+// always the next one, so it carries no choice. It is written at this single
+// canonical column so the cell is unambiguous; before 2026-08-29 the mask lit
+// one cell per remaining position (up to 7) and the decoder ignored the target
+// entirely, so the model spread its probability over up to 7 exact duplicates.
+export const TEAM_PREVIEW_TGT = ActionEnum.ACTION_ENUM__TARGET_AUTO;
+
+// The move targets Showdown lets you NAME. Anything else resolves itself, so
+// the choice string carries no target suffix. Moved here from runner.ts on
+// 2026-08-29: the mask is where the suffix is now decided, and the decoder is
+// a lookup.
+export const CHOOSABLE_TARGETS = new Set([
+    "normal",
+    "any",
+    "adjacentAlly",
+    "adjacentAllyOrSelf",
+    "adjacentFoe",
+]);
+
+const TARGET_SUFFIX: Record<number, string> = {
+    [ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "-1",
+    [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
+    [ActionEnum.ACTION_ENUM__ENEMY_1_TARGET]: "+1",
+    [ActionEnum.ACTION_ENUM__ENEMY_2_TARGET]: "+2",
+};
+
+/** The " -1" / " +2" half of a `move N` choice, "" when the move self-resolves. */
+export function showdownTargetSuffix(move: object, tgtIndex: number): string {
+    // `object`, not a shape: a request's move entries are a union whose
+    // Recharge variant carries no `target` at all, and a structurally optional
+    // parameter type rejects it outright.
+    if (!("target" in move)) {
+        return "";
+    }
+    const moveTarget = (move as { target: string }).target;
+    if (!CHOOSABLE_TARGETS.has(moveTarget)) {
+        return "";
+    }
+    return TARGET_SUFFIX[tgtIndex] ?? "";
+}
+
+/**
+ * WHICH wildcard this move slot would use, or undefined if none is available.
+ * Terastallisation first because gen9 is the only format trained here; the rest
+ * are near-mutually-exclusive by generation, so the order only ever decides a
+ * case that cannot arise in one game.
+ */
+export function chooseWildcardKeyword(available: {
+    canMegaEvo?: boolean;
+    canUltraBurst?: boolean;
+    canZMove?: boolean;
+    canTerastallize?: boolean;
+}): string | undefined {
+    if (available.canTerastallize) {
+        return "terastallize";
+    }
+    if (available.canMegaEvo) {
+        return "mega";
+    }
+    if (available.canUltraBurst) {
+        return "ultra";
+    }
+    if (available.canZMove) {
+        return "zmove";
+    }
+    return undefined;
+}
 
 // Define the path to the JSON file
 const filePath = "../data/data/data.json";

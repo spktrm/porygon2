@@ -20,15 +20,16 @@ from tqdm import tqdm
 
 import wandb
 from rl import checkpoint
+from rl.environment.actor_stats import ActorStats
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import BattleError, SinglePlayerSyncEnvironment
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
-from rl.model.player_model import get_num_params, get_player_model
-from rl.model.utils import ParamsContainer
-from rl.online.agent import Agent
+from rl.model.player_model import get_player_model
+from rl.model.utils import ParamsContainer, get_num_params
+from rl.online.agent import Agent, resolve_actor_device
 from rl.online.artifact import (
     ckpt_root,
     create_train_state,
@@ -138,6 +139,19 @@ def run_training_actor_pair(
                 raise ActorStopped("training stopped")
             battle_errors = [e for e in errors if isinstance(e, BattleError)]
             if battle_errors:
+                # The abort is usually the SYMPTOM: the other side died
+                # first (2026-09-03: league snapshots from a superseded
+                # param tree raised on their first forward, p0 then sat
+                # 600 s on the service watchdog), and raising the abort
+                # alone hid that for an hour. Log every other exception
+                # before it goes.
+                for error in errors:
+                    if error is not None and not isinstance(error, BattleError):
+                        logger.error(
+                            "%s: actor failed before the service abort",
+                            worker_id,
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
                 raise battle_errors[0]
             trajectory = future1.result()
             future2.result()
@@ -179,11 +193,8 @@ def run_eval_heuristic(
     learner_config: Porygon2LearnerConfig,
 ):
     """Runs an actor to produce num_trajectories trajectories."""
-    learner = actor._learner
-    main_run_state = learner.run_state
-
-    with learner.gpu_lock:
-        step_count = np.array(main_run_state.player_state.step_count).item()
+    main_run_state = actor._learner.run_state
+    step_count = main_run_state.eval_snapshot.step_count
 
     # Metric identity comes from the eval thread's name (set at spawn:
     # EvalActor-simpleheuristic-0, ...), not the env username, so renaming
@@ -203,48 +214,27 @@ def run_eval_heuristic(
         if not main_run_state.run_gate.wait(timeout=1.0):
             continue
         try:
-            with learner.gpu_lock:
-                new_step_count = np.array(main_run_state.player_state.step_count).item()
-            if new_step_count > step_count:
-                step_count = new_step_count
+            # Host snapshots published by the learner thread
+            # (league_ops.publish_live_params) — this thread never reads
+            # device state, so nothing here can observe a buffer the train
+            # step donated. EMA target params by default — the
+            # deployment/league params — with an occasional main-params
+            # game as a divergence check (the two lag by only ~1/ema_rate
+            # steps).
+            snapshot = main_run_state.eval_snapshot
+            if snapshot.step_count > step_count:
+                step_count = snapshot.step_count
                 games += 1
-
-                # Snapshot params to host under the lock: the learner's train
-                # step donates its state buffers, so holding live device
-                # references across an unroll would read deleted arrays.
-                # EMA target params by default — the deployment/league
-                # params — with an occasional main-params game as a
-                # divergence check (the two lag by only ~1/ema_rate steps).
                 use_main = (
                     learner_config.eval_main_params_every > 0
                     and games % learner_config.eval_main_params_every == 0
                 )
                 if use_main:
                     prefix = "main"
-                    with learner.gpu_lock:
-                        player_params = jax.device_get(
-                            main_run_state.player_state.params
-                        )
-                        builder_params = jax.device_get(
-                            main_run_state.builder_state.params
-                        )
+                    player = snapshot.main
                 else:
                     prefix = "ema"
-                    with learner.gpu_lock:
-                        player_params = jax.device_get(
-                            main_run_state.player_state.target_params
-                        )
-                        builder_params = jax.device_get(
-                            main_run_state.builder_state.target_params
-                        )
-
-                player = ParamsContainer(
-                    step_count=step_count,
-                    player_frame_count=0,
-                    builder_frame_count=0,
-                    player_params=player_params,
-                    builder_params=builder_params,
-                )
+                    player = snapshot.ema
 
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
@@ -305,15 +295,9 @@ def run_builder_actor(actor: BuilderActor, stop_signal: list[bool]):
         try:
             param_container = actor.pull_own_player()
             new_key = actor.split_rng()
-            # pull_own_player() returns host numpy (league.get_live() ->
-            # jax.device_get()'d params) — device_put it ONCE here, same as
-            # PlayerActor.unroll_and_push does for player_params. Without
-            # this, jax.jit implicitly re-transfers the same host array to
-            # device on every one of unroll()'s ~102 steps instead of once,
-            # across every concurrent builder actor thread, continuously
-            # for the process lifetime — a real memory/throughput cost.
-            builder_params = jax.device_put(param_container.builder_params)
-            actor.unroll(new_key, builder_params)
+            # Host container: the Agent's DeviceParamsCache puts it on the
+            # device ONCE per version, shared by every builder actor.
+            actor.unroll(new_key, param_container)
         except Exception as e:
             logger.error("Error running builder actor", exc_info=True)
             raise e
@@ -375,11 +359,16 @@ def resolve_run_setup(
     A --br-target run derives everything itself: its own checkpoint
     subtree under br/<tag>, checkpoint-mode resume when that subtree
     already holds a checkpoint, otherwise params-mode init from the
-    target (fresh optimiser, zeroed counters, fresh league)."""
+    target (fresh optimiser, zeroed counters, fresh league) shaped by
+    --br-init (scratch-mode when that says so)."""
     if args.num_steps is not None:
         learner_config = learner_config.replace(num_steps=args.num_steps)
 
     if args.br_target is None:
+        if args.br_init != "target" or args.br_perturb_frac is not None:
+            raise SystemExit(
+                "--br-init/--br-perturb-frac only apply to a --br-target run"
+            )
         mode = args.load_mode or os.environ.get("LOAD_STATE_MODE", "checkpoint")
         return learner_config, mode, args.init_ckpt, "main"
 
@@ -406,15 +395,36 @@ def resolve_run_setup(
         stop_winrate = 0.7
     else:
         stop_winrate = 0.0
+    if args.br_perturb_frac is not None and args.br_init != "shrink-perturb":
+        raise SystemExit("--br-perturb-frac only applies to --br-init shrink-perturb")
+    if args.br_perturb_frac is not None:
+        perturb_frac = args.br_perturb_frac
+    else:
+        perturb_frac = 0.5
     learner_config = learner_config.replace(
         br_target_ckpt=target,
         ckpt_subdir=os.path.join("br", run_tag),
         br_stop_winrate=stop_winrate,
+        br_init=args.br_init,
+        br_perturb_frac=perturb_frac,
     )
     root = ckpt_root(learner_config)
     os.makedirs(root, exist_ok=True)
     if checkpoint.most_recent_ckpt_dir(root) is not None:
+        if args.br_init != "target":
+            # Resuming re-runs the SAME command (start_br.sh's contract),
+            # so the init flag rides along on resumes — it applied at
+            # first launch and does nothing now. Say so rather than let a
+            # DIFFERENT intended init silently resume the old lineage.
+            logger.warning(
+                "BR subtree %s already holds a checkpoint — resuming it; "
+                "--br-init only shapes a FIRST launch (use a fresh "
+                "--run-tag for a new init)",
+                root,
+            )
         return learner_config, "checkpoint", None, f"br-{run_tag}"
+    if args.br_init == "scratch":
+        return learner_config, "scratch", None, f"br-{run_tag}"
     return learner_config, "params", target, f"br-{run_tag}"
 
 
@@ -438,16 +448,22 @@ def main(args: argparse.Namespace):
     learner_builder_model_config = get_builder_model_config(
         learner_config.generation, train=True
     )
+    actor_device, actor_dtype = resolve_actor_device(learner_config.player_actor_device)
     actor_player_model_config = get_player_model_config(
-        learner_config.generation, train=False
+        learner_config.generation, train=False, dtype=actor_dtype
     )
     actor_builder_model_config = get_builder_model_config(
-        learner_config.generation, train=False
+        learner_config.generation, train=False, dtype=actor_dtype
     )
     learner_player_network = get_player_model(learner_player_model_config)
     learner_builder_network = get_builder_model(learner_builder_model_config)
     actor_player_network = get_player_model(actor_player_model_config)
     actor_builder_network = get_builder_model(actor_builder_model_config)
+    # Every PlayerActor (training and eval) carries history across a game's
+    # requests when the flag is on; None is the full-window path.
+    history_carry_width = None
+    if learner_config.player_actor_history_carry:
+        history_carry_width = actor_player_model_config.entity_size
 
     player_state, builder_state = create_train_state(
         learner_player_network,
@@ -457,41 +473,67 @@ def main(args: argparse.Namespace):
     )
 
     # Shared by the learner and the actors — same architecture, so one
-    # Agent/gpu_lock serves everyone. Constructing a separate Agent per
+    # Agent serves everyone. Constructing a separate Agent per
     # extra network would trigger redundant jax.jit traces of the identical
     # apply_fn for no reason (rl/online/agent.py's Agent is already fully
     # stateless w.r.t. "which model": params are a per-call argument).
-    gpu_lock = threading.Lock()
     learning_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
-        gpu_lock=gpu_lock,
+        device=actor_device,
     )
     eval_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
-        gpu_lock=gpu_lock,
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
+        device=actor_device,
     )
-    # One batched-inference server for ALL training PlayerActors
-    # (rl/online/inference.py). Same apply_fn and
-    # default HeadParams as learning_agent — eval actors stay on
-    # eval_agent's direct path (different sampling temperature, and 3
-    # low-volume threads don't warrant a second server). Builder actors
-    # also stay direct: builder inference is one team-build per game vs.
-    # ~35 player steps, negligible traffic.
-    # Always on: b219d84 deleted the inference_* config fields (the
-    # batch-1 fallback path had no remaining user) but left these reads
-    # behind, which raised AttributeError at the first launch after it.
-    # The server's constructor defaults are the values the fields held.
-    inference_server = InferenceServer(actor_player_network.apply, gpu_lock=gpu_lock)
-    inference_server.start()
+    # The CROSS-LINEAGE eval arm (2026-08-29). temp=0.5 is not comparable
+    # across the flat-readout rewrite: the hierarchical head divided BOTH
+    # levels by temp, so eval sharpened the modality marginal as well as the
+    # within-modality choice, and the flat head's single division does not.
+    # The two differ by a per-modality reweighting that relatively
+    # down-weights the concentrated switch modality -- so the same policy
+    # reads as switching more under the new head, which would look like a
+    # free improvement and is pure parameterisation. temp=1.0 is identical
+    # under both, so it is the arm to compare across the boundary; temp=0.5
+    # stays as the within-lineage trend.
+    eval_agent_untempered = Agent(
+        actor_player_network.apply,
+        actor_builder_network.apply,
+        player_head_params=HeadParams(temp=1.0),
+        builder_head_params=HeadParams(temp=1.0),
+        device=actor_device,
+    )
+    # One timing sink shared by every training actor, its env and the
+    # server; the learner drains it (actor_stats_log_steps).
+    actor_stats = ActorStats()
+    # Under "gpu": one batched-inference server for ALL training
+    # PlayerActors (rl/online/inference.py), same apply_fn and default
+    # HeadParams as learning_agent — eval actors stay on eval_agent's
+    # direct path (different sampling temperature, and 3 low-volume
+    # threads don't warrant a second server), and builder actors too
+    # (one team-build per game vs ~35 player steps). The server's
+    # constructor defaults are the values the deleted inference_* config
+    # fields held (b219d84). Under "cpu" there is no server: every actor
+    # is its own batch-1 host forward through learning_agent.
+    inference_server = None
+    if learner_config.player_actor_device == "gpu":
+        inference_server = InferenceServer(
+            actor_player_network.apply, stats=actor_stats
+        )
+        inference_server.start()
 
     logger.info("Loading train state...")
     mode = load_mode
     player_state, builder_state, league, controller_bytes = load_train_state(
-        learner_config, player_state, builder_state, mode=mode, ckpt_path=init_ckpt
+        learner_config,
+        player_state,
+        builder_state,
+        mode=mode,
+        ckpt_path=init_ckpt,
+        reset_league=args.reset_league,
     )
     player_state = jax.device_put(player_state)
     builder_state = jax.device_put(builder_state)
@@ -647,7 +689,9 @@ def main(args: argparse.Namespace):
                         learner=learner,
                         rng_seed=len(new_threads) + salt + slot,
                         inference_client=inference_server,
+                        history_carry_width=history_carry_width,
                         pinned_opponent=pinned_opponent,
+                        stats=actor_stats,
                     )
                 )
             new_threads.append(
@@ -666,8 +710,18 @@ def main(args: argparse.Namespace):
         )
         for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
             baseline_name = EVAL_BASELINE_NAMES[baseline_index]
+            # The last slot runs untempered, and says so in its thread name --
+            # metric identity comes from that name, so the two arms land on
+            # separate wandb series.
+            untempered = eval_id == len(learner_config.eval_baselines) - 1
+            if untempered:
+                slot_agent = eval_agent_untempered
+                slot_suffix = "-t1"
+            else:
+                slot_agent = eval_agent
+                slot_suffix = ""
             actor = PlayerActor(
-                agent=eval_agent,
+                agent=slot_agent,
                 # The username MUST start with "eval-heuristic" (the
                 # service routes such clients into games against a
                 # baseline bot by that prefix,
@@ -682,6 +736,7 @@ def main(args: argparse.Namespace):
                 learner=learner,
                 rng_seed=len(new_threads) + salt,
                 is_eval=True,
+                history_carry_width=history_carry_width,
             )
             new_threads.append(
                 threading.Thread(
@@ -693,7 +748,7 @@ def main(args: argparse.Namespace):
                         wandb_run,
                         learner_config,
                     ),
-                    name=f"EvalActor-{baseline_name}-{eval_id}",
+                    name=f"EvalActor-{baseline_name}{slot_suffix}-{eval_id}",
                     daemon=True,
                 )
             )
@@ -708,10 +763,10 @@ def main(args: argparse.Namespace):
         player_state=player_state,
         builder_state=builder_state,
         main_wandb_run=wandb_run,
-        gpu_lock=gpu_lock,
         debug=debug,
         controller_bytes=controller_bytes,
         spawn_actor_pool=spawn_actor_pool,
+        actor_stats=actor_stats,
     )
     spawn_actor_pool()
 
@@ -746,7 +801,8 @@ def main(args: argparse.Namespace):
             "ignored — this takes a few seconds)..."
         )
         executor.shutdown(wait=False, cancel_futures=True)
-        inference_server.stop()
+        if inference_server is not None:
+            inference_server.stop()
         _finish_wandb_bounded(wandb_run, exit_code=1 if crashed else 0)
 
     if crashed:
@@ -844,6 +900,14 @@ if __name__ == "__main__":
         "path fails loudly instead of falling back to scratch.",
     )
     parser.add_argument(
+        "--reset-league",
+        action="store_true",
+        default=False,
+        help="Checkpoint mode only: drop the serialised league roster and "
+        "resume main-only (the one-shot for snapshots left on a superseded "
+        "param tree). The next restart picks up the new roster as usual.",
+    )
+    parser.add_argument(
         "--num-steps",
         type=int,
         default=None,
@@ -865,6 +929,24 @@ if __name__ == "__main__":
         default=None,
         help="Name for the BR child dir and wandb run "
         "(default: the target checkpoint's basename).",
+    )
+    parser.add_argument(
+        "--br-init",
+        choices=["target", "head-reset", "shrink-perturb", "scratch"],
+        default="target",
+        help="BR param init on FIRST launch (a resume keeps its subtree): "
+        "'target' inherits the frozen target verbatim; 'head-reset' "
+        "grafts a fresh action readout onto the inherited trunk (uniform "
+        "policy over legal cells at step 0); 'shrink-perturb' "
+        "interpolates every player param toward fresh init by "
+        "--br-perturb-frac; 'scratch' ignores the target's params.",
+    )
+    parser.add_argument(
+        "--br-perturb-frac",
+        type=float,
+        default=None,
+        help="shrink-perturb interpolation toward fresh init: 0.0 = pure "
+        "inherit, 1.0 = pure fresh init (default 0.5).",
     )
     parser.add_argument(
         "--br-winrate",

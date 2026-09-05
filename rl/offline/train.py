@@ -10,11 +10,6 @@ rl/offline/dataset.py):
 - unseen-move hazard: discounted time until a not-yet-revealed move is
   used (latent-threat anticipation);
 - revealed-set: the mon's eventually-revealed move set.
-Each turn's ANNOUNCED state (both players' revealed choices, chance
-unresolved — outcome features masked, see rl/model/history_encoder.py) is
-an extra supervision point for the same margin label through the same
-readout, so Φ_ann = E[outcome | history, announced actions] trains as a
-by-product with zero new parameters (announced_loss_weight).
 Artifacts are saved in the RL checkpoint layout so the RL learner can
 consume them directly (see rl/offline/artifact.py); the aux heads are
 unread at consumption time.
@@ -261,41 +256,6 @@ def _aux_metrics(batch: OfflineBatch, aux, mask: jax.Array) -> dict[str, jax.Arr
     return metrics
 
 
-def _announced_metrics(
-    announced_head,
-    value_head,
-    labels: jax.Array,
-    mask: jax.Array,
-    label_smoothing: float = 0.0,
-) -> dict[str, jax.Array]:
-    """Margin metrics for the Φ_ann supervision points, announced_-prefixed.
-    Same labels, same mask, same readout as the realised states — announced
-    states are just extra evaluation points of the one margin head.
-
-    Also computes the distillation KL(stopgrad P_Φ(t) ‖ P_Φ_ann(t)):
-    forward KL's minimiser over the announced distribution is
-    E[P_Φ(t) | announcement] — the conditional mixture over dice — so
-    driving it down is exactly "compute the announced turn's consequences".
-    The realised target is stop-gradient: Φ is never pulled toward Φ_ann.
-    Logged unconditionally (the announced-movement gap is worth measuring
-    even when announced_distill_weight is 0); it only enters the total
-    loss behind the weight."""
-    ann = _metrics_from_logits(
-        announced_head.logits, labels, mask, label_smoothing=label_smoothing
-    )
-    metrics = {
-        f"announced_{key}": ann[key]
-        for key in ("loss", "accuracy", "accuracy_last_step", "margin_std")
-    }
-    target_log_probs = jax.lax.stop_gradient(value_head.log_probs.astype(jnp.float32))
-    ann_log_probs = jax.nn.log_softmax(
-        announced_head.logits.astype(jnp.float32), axis=-1
-    )
-    kl = (jnp.exp(target_log_probs) * (target_log_probs - ann_log_probs)).sum(-1)
-    metrics["announced_distill_kl"] = (kl * mask).sum() / mask.sum().clip(min=1.0)
-    return metrics
-
-
 def _total_loss(
     config: Porygon2OfflineConfig, metrics: dict[str, jax.Array]
 ) -> jax.Array:
@@ -306,32 +266,7 @@ def _total_loss(
         + config.action_loss_weight * metrics["action_loss"]
         + config.set_loss_weight * metrics["set_loss"]
     )
-    if "announced_loss" in metrics:
-        loss = loss + config.announced_loss_weight * metrics["announced_loss"]
-    if config.announced_distill_weight > 0 and "announced_distill_kl" in metrics:
-        loss = loss + config.announced_distill_weight * metrics["announced_distill_kl"]
     return loss
-
-
-def _announced_enabled(config: Porygon2OfflineConfig) -> bool:
-    return config.announced_loss_weight > 0 or config.announced_distill_weight > 0
-
-
-def _train_method(config: Porygon2OfflineConfig):
-    """with_aux_and_announced when any announced supervision (margin label
-    or distillation) is on; plain with_aux otherwise (bit-for-bit the
-    pre-announced training path)."""
-    if _announced_enabled(config):
-        return Porygon2OfflineCritic.with_aux_and_announced
-    return Porygon2OfflineCritic.with_aux
-
-
-def _unpack_outputs(config: Porygon2OfflineConfig, outputs):
-    """(value_head, aux, announced_head-or-None) from either method."""
-    if _announced_enabled(config):
-        return outputs
-    value_head, aux = outputs
-    return value_head, aux, None
 
 
 def _overlay_params(fresh, restored):
@@ -355,9 +290,7 @@ def make_train_step(config: Porygon2OfflineConfig):
     @jax.jit
     def train_step(state: train_state.TrainState, batch: OfflineBatch):
         def loss_fn(params):
-            value_head, aux, announced_head = _unpack_outputs(
-                config, state.apply_fn(params, batch.actor_input)
-            )
+            value_head, aux = state.apply_fn(params, batch.actor_input)
             mask = _value_mask(batch.actor_input.env.done)
             metrics = _metrics_from_logits(
                 value_head.logits,
@@ -366,16 +299,6 @@ def make_train_step(config: Porygon2OfflineConfig):
                 label_smoothing=config.label_smoothing,
             )
             metrics.update(_aux_metrics(batch, aux, mask))
-            if announced_head is not None:
-                metrics.update(
-                    _announced_metrics(
-                        announced_head,
-                        value_head,
-                        batch.labels,
-                        mask,
-                        label_smoothing=config.label_smoothing,
-                    )
-                )
             return _total_loss(config, metrics), metrics
 
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
@@ -388,16 +311,10 @@ def make_train_step(config: Porygon2OfflineConfig):
 def make_eval_step(config: Porygon2OfflineConfig):
     @jax.jit
     def eval_step(state: train_state.TrainState, batch: OfflineBatch):
-        value_head, aux, announced_head = _unpack_outputs(
-            config, state.apply_fn(state.params, batch.actor_input)
-        )
+        value_head, aux = state.apply_fn(state.params, batch.actor_input)
         mask = _value_mask(batch.actor_input.env.done)
         metrics = _metrics_from_logits(value_head.logits, batch.labels, mask)
         metrics.update(_aux_metrics(batch, aux, mask))
-        if announced_head is not None:
-            metrics.update(
-                _announced_metrics(announced_head, value_head, batch.labels, mask)
-            )
         return metrics
 
     return eval_step
@@ -427,13 +344,6 @@ def evaluate(
         "set_loss",
         "set_pos_prob",
     )
-    if "announced_loss" in all_metrics[0]:
-        keys += (
-            "announced_loss",
-            "announced_accuracy",
-            "announced_accuracy_last_step",
-            "announced_distill_kl",
-        )
     return {
         f"eval_{key}": float(np.average([m[key] for m in all_metrics], weights=weights))
         for key in keys
@@ -484,16 +394,6 @@ def save_artifact(
                 interaction_readout=True,
                 rating_conditioned=True,
                 rating_dropout=config.rating_dropout,
-                # Φ_ann adds no parameters, so consumers can't detect the
-                # capability from the param tree — the manifest is the
-                # marker that announced states were actually TRAINED
-                # (untrained Φ_ann is off-distribution and untrusted).
-                announced_states=(
-                    config.announced_loss_weight > 0
-                    or config.announced_distill_weight > 0
-                ),
-                announced_loss_weight=config.announced_loss_weight,
-                announced_distill_weight=config.announced_distill_weight,
             ),
             f,
             indent=2,
@@ -523,8 +423,6 @@ _CLI_FIELDS: dict[str, type] = dict(
     unseen_loss_weight=float,
     action_loss_weight=float,
     set_loss_weight=float,
-    announced_loss_weight=float,
-    announced_distill_weight=float,
     rating_dropout=float,
     clip_gradient=float,
     log_interval_steps=int,
@@ -629,8 +527,6 @@ def evaluate_ensemble(
         "set_loss",
         "set_pos_prob",
     )
-    if "announced_loss" in member_rows[0]:
-        keys += ("announced_loss", "announced_accuracy", "announced_distill_kl")
     for key in keys:
         values = np.average(
             np.stack([m[key] for m in member_rows]), axis=0, weights=weights
@@ -665,12 +561,10 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
     model = Porygon2OfflineCritic(model_config)
     # Same axis convention as the RL learner: leaves (T, B, ...), batch
     # mapped on axis 1. The member axis is vmapped outside of this.
-    # Training applies with_aux[_and_announced] — init must trace the same
-    # method, so every training-time param exists; consumers still call
-    # __call__ (Φ_ann itself adds no params).
-    train_method = _train_method(config)
+    # Training applies with_aux — init must trace the same method, so every
+    # training-time param exists; consumers still call __call__.
     apply_fn = jax.vmap(
-        functools.partial(model.apply, method=train_method),
+        functools.partial(model.apply, method=Porygon2OfflineCritic.with_aux),
         in_axes=(None, 1),
         out_axes=1,
     )
@@ -678,9 +572,11 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
     print(f"Initializing {num_members} members (traces the full encoder)...")
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
     member_keys = jax.random.split(jax.random.key(seed), num_members)
-    params = jax.vmap(lambda key: model.init(key, ex_actor_input, method=train_method))(
-        member_keys
-    )
+    params = jax.vmap(
+        lambda key: model.init(
+            key, ex_actor_input, method=Porygon2OfflineCritic.with_aux
+        )
+    )(member_keys)
 
     if config.resume_from is not None:
         # Per-member resume via the '{k}' template: each member overlays
@@ -715,9 +611,7 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
 
     def member_train_step(params, opt_state, batch: OfflineBatch):
         def loss_fn(p):
-            value_head, aux, announced_head = _unpack_outputs(
-                config, apply_fn(p, batch.actor_input)
-            )
+            value_head, aux = apply_fn(p, batch.actor_input)
             mask = _value_mask(batch.actor_input.env.done)
             metrics = _metrics_from_logits(
                 value_head.logits,
@@ -726,16 +620,6 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
                 label_smoothing=config.label_smoothing,
             )
             metrics.update(_aux_metrics(batch, aux, mask))
-            if announced_head is not None:
-                metrics.update(
-                    _announced_metrics(
-                        announced_head,
-                        value_head,
-                        batch.labels,
-                        mask,
-                        label_smoothing=config.label_smoothing,
-                    )
-                )
             return _total_loss(config, metrics), metrics
 
         (_, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -750,31 +634,17 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
         # Holdout batches carry no member axis: every member scores the
         # same states, so member metrics are directly comparable and the
         # gate can be measured live.
-        value_heads, aux, announced_heads = _unpack_outputs(
-            config, jax.vmap(lambda p: apply_fn(p, batch.actor_input))(params)
-        )
+        value_heads, aux = jax.vmap(lambda p: apply_fn(p, batch.actor_input))(params)
         logits = value_heads.logits  # (K, T, B, bins)
         mask = _value_mask(batch.actor_input.env.done)
 
-        def member_metrics(member_head, member_aux, member_announced):
-            metrics = dict(
+        def member_metrics(member_head, member_aux):
+            return dict(
                 **_metrics_from_logits(member_head.logits, batch.labels, mask),
                 **_aux_metrics(batch, member_aux, mask),
             )
-            if member_announced is not None:
-                metrics.update(
-                    _announced_metrics(
-                        member_announced, member_head, batch.labels, mask
-                    )
-                )
-            return metrics
 
-        if announced_heads is None:
-            per_member = jax.vmap(lambda h, a: member_metrics(h, a, None))(
-                value_heads, aux
-            )
-        else:
-            per_member = jax.vmap(member_metrics)(value_heads, aux, announced_heads)
+        per_member = jax.vmap(member_metrics)(value_heads, aux)
         support = jnp.asarray(MARGIN_SUPPORT, dtype=jnp.float32)
         phi = jax.nn.softmax(logits.astype(jnp.float32), axis=-1) @ support
         std = phi.std(axis=0)
@@ -912,8 +782,9 @@ def main():
 
     print("Initializing model (traces the full encoder — takes a minute)...")
     ex_actor_input = jax.tree.map(jnp.asarray, get_ex_trajectory())
-    train_method = _train_method(config)
-    params = model.init(jax.random.key(seed), ex_actor_input, method=train_method)
+    params = model.init(
+        jax.random.key(seed), ex_actor_input, method=Porygon2OfflineCritic.with_aux
+    )
     if config.resume_from is not None:
         restored = checkpoint_lib.load_component(config.resume_from, "player", "params")
         # Overlay, don't replace: pre-aux artifacts lack the survival head,
@@ -937,11 +808,11 @@ def main():
     )
     state = train_state.TrainState.create(
         # Same axis convention as the RL learner: leaves are (T, B, ...),
-        # batch mapped on axis 1. Training applies with_aux[_and_announced];
-        # the saved artifact is still consumed through __call__ (or
-        # .announced for the decomposition), which never reads the aux head.
+        # batch mapped on axis 1. Training applies with_aux; the saved
+        # artifact is still consumed through __call__, which never reads
+        # the aux head.
         apply_fn=jax.vmap(
-            functools.partial(model.apply, method=train_method),
+            functools.partial(model.apply, method=Porygon2OfflineCritic.with_aux),
             in_axes=(None, 1),
             out_axes=1,
         ),
@@ -1015,14 +886,8 @@ def main():
             logs = {k: float(v) for k, v in jax.device_get(metrics).items()}
             logs["step"] = step
             wandb_run.log(logs, step=step)
-            announced_note = (
-                f"ann {logs['announced_loss']:.4f} | "
-                f"ann-kl {logs['announced_distill_kl']:.4f} | "
-                if "announced_loss" in logs
-                else ""
-            )
             print(
-                f"step {step} | loss {logs['loss']:.4f} | {announced_note}"
+                f"step {step} | loss {logs['loss']:.4f} | "
                 f"surv-imm {logs['survival_loss_imminent']:.4f} | "
                 f"unseen-imm {logs['unseen_loss_imminent']:.4f} | "
                 f"act-acc {logs['action_accuracy']:.3f} | "

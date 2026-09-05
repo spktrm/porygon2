@@ -50,15 +50,28 @@ TypeScript game service speaking protobuf over websockets.
 - `rl/environment/` — `interfaces.py` (all pytree dataclasses),
   `utils.py` (`process_state` proto→numpy decode, geometric buckets for the
   inference path, `clip_history_windows_tail` joint tail-windowing).
-- `rl/model/` — `encoder.py`: `Encoder` + `RoundBlock` (residual streams:
-  state, action, value; attention block masks ARE the information routing).
-  `history_encoder.py`: per-slot GRU scan over history, aligned to requests
-  by REQUEST_COUNT VALUE (trailing windows are therefore safe).
-  `player_model.py`: four modules — `policy_head` and `advantage_head` are
-  both `ActionScoreHead` over the same action grid (differing only in
-  `reduce`), `v_head` is the one critic, plus the encoder. `heads.py`:
-  `compose_q` owns the `Q = sg(V) + A - E_sg(pi)[A]` identity; micro params
-  are keyed by slot group and macro params by modality, none shared.
+- `rl/model/` — ONE sequence of 61 rows, one row per THING (2026-08-29).
+  `constants.py`: the layout — `SEQUENCE_LAYOUT` is the single source, every
+  offset and named slice derives from it, and a head never carries a literal.
+  `encoder.py`: the feature embedders, the entity-local pools (the same ones
+  the packed history cache uses), and `_assemble_sequence`, split out from
+  `_batched_forward` so a test can read the rows as they go IN — every
+  identity a row carries is additive and applied there. `trunk.py`: N
+  unshared pre-RMSNorm blocks over that sequence, no gates and no block
+  masks; `RMSNorm`'s zeros-init scale makes it identity at step 0, so it is
+  live at init by construction. `history_encoder.py`: per-slot GRU scan over
+  history, aligned to requests by REQUEST_COUNT VALUE (trailing windows are
+  therefore safe). `player_model.py`: three modules — encoder, action
+  readout, critic. `heads.py`: `FlatActionReadout` — a scalar per sheet row
+  for switching, ONE bilinear for moves x targets, a scalar per target row
+  for the standalone actions; `query` zero-init and `key` not, so the zero
+  factor's gradient is a rank-1 outer product of live rows rather than the
+  two-factor stall. The critic reads the CLS row and nothing else.
+  `transition.py`: `TransitionModel` — g(h_t, a, z) over the 73 post-trunk
+  policy-readable rows (2 `TrunkBlock`s + one zero-init `out_proj`), a
+  2x16 chance code with prior/posterior MLPs, and the grounding / next-mask
+  / kind+done heads on the imagined rows; the shared `v_head` and
+  `action_head` are applied to them in `player_model._forward_transition`.
   `modules.py`: generic primitives only — architecture lives next to its wiring.
 - `rl/online/training/` — the learner, split by what each piece needs to
   run. `train_step.py`: the jitted update (losses, EMA target, non-finite
@@ -95,13 +108,22 @@ TypeScript game service speaking protobuf over websockets.
 - Chunk contract: chunks overlap by one row; a chunk's final row is
   bootstrap-only unless it is the game's done row; outcome-derived stats and
   builder losses gate on terminal chunks (`win_reward[-1]` is only real there).
-- NO privileged info (2026-08-25, inverting the old value-ladder rule):
-  every stream sees exactly what the agent sees at deploy time. There is one
-  V and one advantage head, both on that set. Do not reintroduce an
-  opponent-sheet input or a privileged critic rung — measured worth on the
-  85k-step run was 0.005 value units with the privileged rung scoring
-  *worse* in R² than the deployable one (`docs/qva-redesign-step0-reference.md`),
-  and its advantage conditions on information the policy cannot act on.
+- NO privileged info FOR THE POLICY (2026-08-25, AMENDED 2026-09-01): the
+  policy's information set is exactly deploy time's, and that is enforced
+  by MASK, not convention — `SEQUENCE_READ_MASK` gives every policy-readable
+  row zero in-edges from the learner-only partition (the opponent-truth
+  rows + VALUE_CLS) at every trunk block, transitively leak-free by
+  induction and pinned by `tests/test_privileged_partition.py`. Privileged
+  opponent state MAY enter that partition, feeding a privileged critic
+  nothing at deploy consumes; v-trace targets and pg_advantages read it
+  under `player_privileged_targets` (False = the exact deployable-head
+  estimator). The 2026-08-25 falsification (team sheet worth 0.005 value
+  units, privileged rung scoring *worse* in R² than the deployable one,
+  `docs/qva-redesign-step0-reference.md`) is superseded ONLY under its
+  pre-registered gate: `player_priv_value_head_r2 >=
+  player_value_head_r2` from 20k on, else the premise fails on its own
+  instrument and the flag flips back. The deployable V stays trained on
+  the same labels as the matched control.
 - History windows: field steps name packed-cache rows by ABSOLUTE index —
   never slice the field and packed axes independently; use
   `clip_history_windows_tail` (mirrors the service's `getHistory`).
@@ -619,6 +641,807 @@ instrument — a BR probe against the ~77k ckpt reading ≤ the 0.57–0.58 the
 (the floor is a pure tax); entropy AT target while `type_scale_switch` →
 0 (mass without discrimination — the phase-1 shape, watched on the
 mechanism actually feared, per the twice-paid abort-instrument lesson).
+
+## Removal + addition ledger — 2026-08-29 flat trunk, flat readout, Q retired
+
+Everything below existed at tag **`pre-flat-trunk-2026-08-29`** (on `main`).
+Same restore recipe as the other passes. **28.72M -> 13.47M parameters (-53%),
+`encoder.py` 1998 -> ~1230 lines, 189 input tokens -> a 61-row sequence.**
+
+The through-line: almost none of the structure was load-bearing for the
+INFORMATION the model needs. The block masks, the residual-stream gates, the
+Perceiver bottleneck and the macro/micro composition each solved a routing
+problem that plain self-attention over one short sequence solves by
+construction — and at 61 rows an all-pairs attention is 3.7k cells against the
+~24k the masked routing plus its two feeding cross-attention reads paid. The
+masks were buying their own complexity.
+
+| mechanism | paths / symbols deleted | why it went |
+|---|---|---|
+| Round trunk + three residual streams | `encoder.RoundBlock`, `GroupNorm`, `action_input_norm`/`action_out_norm`, `attend`, every `*_gate` param, `LatentInputRead` + `cfg.encoder.num_latents`/`latent_read`, `ActionSlotRead` + `_action_slot_queries` + `slot_position`, `InputTokenSet`, `tag_with_species`, `_current_entity_tokens`, `value_embeddings_table`, `cfg.encoder.num_rounds`/`round.*`, `rl/offline/gate_contribution.py` | 14.76M params (51% of the model) for five block-masked gated attentions per round over 3 streams, fed by a 48-latent bottleneck. Replaced by `rl/model/trunk.py`: 6 ungated pre-RMSNorm blocks over ONE sequence, 6.32M. The 2026-08-24 gate-contribution finding (all six FFWs contributing <= 5e-4 of their stream) is retired STRUCTURALLY — there are no gates — rather than tuned around |
+| Attribute-token input layout | 189 raw tokens (10-11 per entity) -> 61 rows, one per THING | see the caveat below: this re-adopts entity-local pooling, deliberately |
+| Hierarchical action head | `heads.{calculate_hierarchical_prior, MicroHead, ActionAdapter, MacroHead, MacroMicroHead, ActionScores, ActionScoreHead, compose_action_grid}`, `cfg.{policy_head, advantage_head}` | 2.65M params over two instantiations became 0.13M over three small readouts (`FlatActionReadout`): a scalar per sheet row for switching, ONE bilinear for moves x targets, a scalar per target row for pass/default |
+| Q/advantage observer | `advantage_head`, `heads.compose_q`, `PlayerActorOutput.{advantage,q}`, `loss_q`, `player_q_coef`, the Retrace baseline in `targets.compute_player_targets` (`adv_taken`), `telemetry.{q_fit_telemetry, modality_means}` + the Q/policy head-leaf tables, `rl/offline/overfit_probe.py`, `tests/test_{q_identity,train_step_q}.py`, and every `player_{loss_q, q_r2*, q_mse, q_action_var*, adv_rms*, adv_type_scale*, q_pivotal_*, q_switch_move_gap, q_saturation_frac, q_calibration_r2_*, q_label_var_*, retrace_baseline_*, policy_absadv_*, q_loss_share_*, mv_*_gap_critic, policy_micro_local_*, policy_adapter_rms, policy_type_scale_*, q_grad_norm_*}` panel | the policy stopped reading it at the NashPG switch (2026-08-26), which left it a matched control for an architecture that no longer exists. **Last readings, banked before deletion** (qb8b82oi @ lifetime_step 289235): `q_r2` 0.8817, `q_r2_switch_voluntary` 0.9162, `adv_rms_move` 0.0339, `adv_rms_switch` 0.1016, `adv_rms_target` 0 (never trained — singles has no target modality), `policy_absadv_ratio` 4.509, `q_action_var_uniform_p90` 0.00705, `retrace_baseline_abs` 0.0197, `q_switch_move_gap` -0.1386, `q_support_vol_switch_rows` 9. So the critic fit well and *preferred* switch cells 3.0x on |A| against a 0.032 switch mass — the same signature that has stood since the 157k 2026-08-20 lineage — and the value targets it shifted moved by 0.0197. The v-trace baseline reverts to V, which `targets.py`'s own note already promised was the exact revert |
+| Packed 1681-bit action mask | `EnvironmentState.bytes action_mask` on the write path (the field survives, renamed `packed_action_mask`, ONLY so the 8.8GB of `replays/shards` still parse), `state.ts`'s four hand-copied enum tables, `runner.ts::getShowdownTargetFormat` + `CHOOSABLE_TARGETS` + the whole parallel decoder, `isStruggling`, `getActionMask`'s unused `format` arg | 211 bytes carried a ~10-element choice set over a grid of which ~84% is unreachable in ANY format. See the addition row |
+
+**Two §13 lessons were deliberately set aside. They are decisions, not
+oversights, and both are recorded so a future reader sees the choice:**
+
+1. *"Deep, modality-separated action decoders are empirically necessary"* (the
+   Nov-2025 hierarchical head beat the flat gram head). **Judged confounded.**
+   The flat readout goes in and the pre-registered gate below judges it.
+2. *"Cross-entity pooling exists because matchup reasoning is a species-token x
+   move-token comparison across two mons, and with entity-local pooling there
+   is no layer where those two tokens coexist"* — and the 2026-08-28 audit,
+   which moved AWAY from pooled entity vectors toward raw token reads.
+   One-token-per-entity re-adopts the pooling. **Partial mitigation, by
+   construction:** my 16 candidate moves stay their own rows and the four
+   entity-derived target rows carry the opposing actives, so *my move x their
+   mon* — the direction a decision actually turns on — keeps both operands as
+   separate rows. What is given up is THEIR individual revealed moves. If
+   matchup reasoning proves to be the deficit, the fix is explicit matchup rows
+   (each of my mons x each of theirs, the 24 tokens the reference design uses),
+   NOT re-unpacking attributes.
+
+**Additions.**
+
+| mechanism | what it is | why |
+|---|---|---|
+| `rl/model/trunk.py` (`Trunk`, `TrunkBlock`) | 6 unshared pre-RMSNorm blocks, self-attention + one SHARED SwiGLU MLP, plain residual, `nothing_saveable` remat, over the 61-row sequence | no gates and no masks: `RMSNorm` is `normed * (1 + scale)` with `scale` zeros-init, i.e. exactly identity at init, and the residual adds are ungated, so the trunk is live at step 0 by construction and an "is it wired" test needs no gate opening |
+| `heads.FlatActionReadout` | three readouts over named rows; the bilinear survives ONLY for moves x targets | **init contract: every logit is exactly 0, so the policy starts UNIFORM over legal cells** and `compute_policy_metrics(prior=None)` is the anchor. Reaching that without re-creating the two-factor stall is the subtlety: `query` is zero-init and `key` is not, so the zero factor's gradient is a rank-1 outer product of LIVE rows (it moves at step 1, key unfreezes at step 2) — one zero factor over a live input, not a scalar times a random grid. **No qk layer-norm on this head**: its input is identically zero at init and its Jacobian goes as 1/sqrt(eps) straight into the zero-init kernel |
+| `loss.uniform_kl_rows` + `player_uniform_kl_coef` 0.05 | forward KL from UNIFORM over legal cells, inside the pg bracket | per-logit gradient is exactly **pi_b - 1/k**: bounded by 1 for any pi, zero-sum, **no pi prefactor** — the three properties every mass-restoring mechanism this project tried has lacked. Note the DIRECTION: reverse KL(pi ‖ u) is, up to a constant, the entropy bonus already in the objective. And unlike the four support-anchor phases the reference is a CONSTANT, so it cannot collapse, cannot be ratcheted flat by re-snapping from an already-collapsing policy, and cannot invert on the modality-level sign of Q^pi. 0.0 is a bit-identical off |
+| `proto.ActionMask` + `ActionRequestKind` | a structured mask shaped like the DECISION: 6 switch bits, 16 move slots x 17 target bits, a standalone-action mask, the request kind and the ally half | the 41x41 grid was a model-side artefact that leaked onto the wire. The service now builds the mask and the Showdown choice string TOGETHER, as one `cell -> choice` map, and `choiceFromAction` is a lookup in it |
+| `player_pointer_*` / `player_trunk_*` panels | rms of each readout leaf against its known init, plus per-subtree grad norms | required, not decoration: the dx65cpwp runaway lived entirely in head params and was invisible on wandb. The flat readout's failure mode is the SAME shape (a two-factor product with one zero-init factor), so `query` must leave 0 within ~200 steps and `key` must leave lecun 0.0625 shortly after. src/tgt stay split — the 7.5x asymmetry was itself the diagnostic |
+
+**THREE MASK BUGS the one-table refactor made unrepresentable**, all live for
+months and all invisible because nothing asserted the mask and the decoder
+agreed and the sim's rejections were logged rather than counted:
+
+1. **The wildcard suffix was hardcoded to `" terastallize"`** while the mask
+   legalised a wildcard for mega evolution, Ultra Burst and Z-moves too, so
+   those cells decoded to a choice Showdown rejects.
+2. **Move targets were resolved through a different move list than the mask
+   indexed**: the mask read `active.maxMoves.maxMoves` under Dynamax, the
+   decoder `request.active[i].moves[j]`.
+3. **Team preview lit one cell per REMAINING POSITION — up to 7 — while the
+   decoder ignored the target entirely.** Up to 42 grid cells stood for 6 real
+   choices, so the policy spread its mass over exact duplicates and the
+   micro-entropy cell count was inflated to match. One cell per candidate now.
+
+Also fixed: `switch_slots` alone cannot say WHICH active a switch replaces, so
+the message carries `active_slot`; without it a singles battle legalises
+`ALLY_2_SWITCH` and the model can pick a cell the service cannot decode. Caught
+by the new invariant, not by reasoning.
+
+**Instruments.** `service/src/tests/harness.ts` now asserts that the wire mask
+and the decoder name exactly the same cells (with an independent second
+implementation of the derivation, because the thing under test is that the two
+LANGUAGES agree), that a request carrying a choice never legalises nothing, and
+that the sim rejected no choice at all — `invalidChoiceCount`, counted rather
+than logged. **3810 soak battles, zero violations.** Python side:
+`tests/test_action_mask.py` round-trips the message through
+`_grid_from_structured_mask`, with the positive control that `kind` genuinely
+selects which HALF of the grid names the incoming mon.
+
+**Pre-registered acceptance** (fresh lineage from step 0; baselines banked from
+qb8b82oi before deletion, since the gate as written is one the CURRENT lineage
+FAILS — it dips before the dual controller recovers it):
+
+| lifetime_step | H_macro | alpha_macro | prob_switch |
+|---|---|---|---|
+| 12952 | 0.4888 | 0.0050 (at the MIN) | 0.0368 |
+| 32865 | 0.3123 | 0.0431 | 0.0196 |
+| 76998 | 0.4229 | 0.0755 | 0.0249 |
+
+So the honest bar is **beat 0.3123 / 0.0196 at 33k**, with 0.45 / 0.02 as the
+aspiration rather than a pass/fail line. Plus: eval wr vs SimpleHeuristic **at
+temp = 1.0** (the new arm — see below) at 30k; a BR probe against the ~77k
+checkpoint reading <= the 0.57-0.58 the 77638 probe read; `separation_probe
+--probe c` at a matched step, `RESERVE_j`/alive/hp moving off ~0.00 toward the
+0.35-0.44 controls (READ THE Y-STD COLUMN FIRST); and steps/sec above the
+current lineage, which is the point of the change.
+
+**Abort:** `player_pointer_query_rms` or `..._key_rms` still at init by 2k (the
+two-factor stall, live); alphas pinned at max with eval wr falling; entropy at
+target while `prob_switch` -> 0 (mass without discrimination — the phase-1
+shape, watched on the mechanism actually feared).
+
+**EVAL TEMPERATURE IS NOT COMPARABLE ACROSS THIS BOUNDARY.** `ActionScoreHead`
+divided BOTH levels by `temp`, so eval at 0.5 sharpened the modality marginal
+as well as the within-modality choice; the flat head's single division does
+not. The two differ by a per-modality reweighting that relatively down-weights
+the concentrated switch modality, so the SAME policy reads as switching more
+under the new head — which would look like a free improvement and is pure
+parameterisation. `rl/online/main.py` now runs the last eval slot at temp = 1.0
+(identical under both), named `EvalActor-simpleheuristic-t1-*`, and that is the
+cross-lineage number. temp = 0.5 stays as the within-lineage trend.
+
+**Scoped out deliberately, recorded as the follow-up:** collapsing the action
+space itself to the three blocks end to end. Modality would become block
+membership and `FLAT_MODALITY_MASK` would go, but it moves the stored
+trajectory shapes and the chunk contract, so it wants its own commit. Also
+still open: `EntityPrivateNodeFeature` has no hp/status/fainted/boosts, so the
+switch readout depends on the trunk routing a candidate's condition from its
+PUBLIC row — a two-hop path over 61 rows now rather than a maze, which is the
+reason to EXPECT probe C to move, but it is an expectation and probe C is the
+instrument either way.
+
+## Removal ledger — 2026-08-30 NashPG-verbatim bracket
+
+One commit (the revert handle). The player policy bracket is the reference
+actor loss verbatim (ntu-agents/nashpg `update_agent.py`, mag_divergence
+"kl"): `surrogate + ent_coef*(-H_joint) + mag_coef*KL(pi || pi_reg)`, with
+`player_pg_objective` defaulting to "spo" (the smooth quadratic; "ppo" stays
+the A/B) and `player_ent_coef` 0.01 STATIC on the plain JOINT entropy — which
+is, up to a constant, the reverse KL to uniform, i.e. NashPG's own form.
+
+| mechanism | symbols | why |
+|---|---|---|
+| Entropy-floor dual controllers + per-level entropy loss | `log_ent_alpha_{macro,micro}` TrainState leaves + their ckpt scalar plumbing (old ckpts still load; `apply_player_scalars` ignores their alpha keys), `loss.entropy_floor_step`, the per-axis loss terms, `player_ent_target_{macro,micro}` / `player_ent_alpha_{lr,min,max}`, `tests/test_entropy_floor.py` | on wy8m50ic BOTH alphas sat at the 0.005 MINIMUM for the whole 185k-step run while H_macro held 0.45–0.70 — the flat trunk holds its entropy for free, so the controller was pure machinery (the §10 rule firing again). `factorised_entropies` and the `player_entropy_{macro,micro_taken}` panels survive as OBSERVERS — macro dying while joint H holds is the collapse shape the global panel cannot see, and nothing defends the floor any more |
+| Uniform-KL zero-avoider | `loss.uniform_kl_rows`, `player_uniform_kl_coef`, its gradient test | reference alignment (NashPG carries no mass-independent restorer). Given up KNOWINGLY — this was the only pi-prefactor-free force in the bracket; `prob_switch` / `player_vol_switch_rows` are the watch, and the term is one commit away if the collapse returns. **RESTORED 2026-08-31 — the watch fired, one day later** (see the addition ledger below) |
+| Last Q machinery | `targets.compute_q_onestep_targets`, `q_mask` (→ `acted_mask`), the one-step-label panels (`player_q_target_*`, `player_v_onestep_r2`, `player_q_target_edge_frac`), dead `pi_target` compute and two bare no-op statements | the labels had no consumer since the Q head retired 2026-08-29. Supply counters KEPT, renamed off the q prefix: `player_{vol,forced}_switch_rows`, `player_chunk_vol_switch_frac`, `player_taken_{,voluntary_}switch_frac` — fresh wandb continuity by design (the coma→neurd precedent) |
+
+Also in: `masked_policy` (exp→mask→renormalise written once in train_step),
+wandb views tidied and re-saved. Fresh lineage from step 0 (the loss moved);
+wy8m50ic archived at ~185k. Same acceptance table as the flat-trunk gate,
+plus the entropy observers now watched UNDEFENDED — a macro-entropy cliff
+under the static 0.01 is the abort, answered by re-instating the floor or
+the uniform-KL as their own commits, never by a silent coef bump.
+
+## Addition ledger — 2026-08-31 zero-avoider restored, and WHY no coefficient works
+
+**The abort fired within a day and the watch was the right one.** wy8m50ic's
+alpha panels stop at ~187k (the dual controllers' removal); everything after
+that is the undefended static-0.01 era, and it is the only era in the run's
+history below 0.35 macro entropy:
+
+| lifetime_step | 114k | 180k | 217k | 230k | 246k | 266k |
+|---|---|---|---|---|---|---|
+| `player_entropy_macro` | 0.41 | 0.46 | 0.43 | 0.36 | 0.31 | **0.19** |
+
+with `player_policy_prob_switch` 0.026 -> 0.012 and `player_vol_switch_rows`
+15 -> 2 across the same window. Confounded with depth (114k also dipped to
+0.41 with the floor live), so the reading is directional, not causal.
+
+**The argument that retires "just raise `player_ent_coef`" permanently.** The
+two terms have the SAME minimiser — entropy IS reverse KL to uniform, up to a
+constant — so as objectives they are the same thing pointed opposite ways.
+What differs is what happens against an opposing force, and the decisive fact
+is that the surrogate's expected force on a cell is ALSO pi-prefactored (the
+cell is taken on ~pi_b of rows, so ~pi_b * A_b). Against the entropy bonus the
+pi_b cancels on BOTH sides, leaving a pure temperature; against forward KL it
+cancels on one:
+
+```
+entropy   d/dy_b = -pi_b (log pi_b + H)   equilibrium  pi_b ~ exp(-|A|/alpha)   EXPONENTIAL decay
+unif-KL   d/dy_b =  pi_b - 1/k            equilibrium  pi_b ~ coef/(k |A|)      LINEAR decay
+```
+
+Measured at k=10 (pg_advantages are unit-std, so |A| is in sigma):
+
+| headwind | ent 0.01 | ent 0.05 | ent 0.2 | unif-KL 0.05 |
+|---|---|---|---|---|
+| 0.1 sigma | 4.5e-05 | 1.4e-01 | 6.1e-01 | 3.3e-02 |
+| 0.2 sigma | 2.1e-09 | 1.8e-02 | 3.7e-01 | 2.0e-02 |
+| 0.5 sigma | 1.9e-22 | 4.5e-05 | 8.2e-02 | 9.1e-03 |
+| 1.0 sigma | 3.7e-44 | 2.1e-09 | 6.7e-03 | 4.8e-03 |
+
+Read across the entropy columns: there is no alpha that holds a floor without
+setting the temperature of every OTHER cell to the same value — mass without
+discrimination, the phase-1 support-anchor shape. That is what the four
+retunes (0.01/0.05/0.1/0.2) each measured one at a time. Two further
+properties fall out of the same algebra and are worth stating once: forward
+KL contains `-(1/k) log pi_b`, a log BARRIER that diverges as the cell dies,
+where reverse KL contains `-pi_b log pi_b`, which vanishes there — entropy
+scores a dead cell as costing nothing; and `H` appears inside entropy's own
+per-cell force, so entropy earned on a wide move row is directly SUBTRACTED
+from the pressure on a starved switch row. That is "one fungible budget,
+payable wherever it is cheapest" written in the gradient, and it is why the
+live split (`entropy_micro_taken` 0.61 against `entropy_macro` 0.25) is a
+stable state rather than a transient.
+
+| mechanism | what | why |
+|---|---|---|
+| `loss.uniform_kl_rows` + `player_uniform_kl_coef` 0.05 | forward KL from the CONSTANT uniform over each row's legal cells, inside the pg bracket | restored verbatim from `daa4228^`. Sized on the equilibrium above, never on loss balance: 0.05 holds ~0.02 mass against a 0.2 sigma headwind and ~0.009 against 0.5 sigma, and the ask RELAXES as evidence arrives. The one deliberate divergence from the reference actor loss, which carries no mass-independent restorer in either `mag_divergence` mode |
+
+**Judged on a matched BR pair, not on the main lineage.** `sp75c-ckpt_00254992`
+launched 2026-08-31 against target `ckpt_00254992` with the same
+`--br-init shrink-perturb --br-perturb-frac 0.75` as `sp75b` (vm9b7p07,
+stopped at 65k and published into the parent's `players/`), so the control is
+identical in init, target and budget and differs by this one term. Read
+`prob_switch` / `entropy_macro` against vm9b7p07 at matched steps;
+`player_loss_uniform_kl` should FALL as mass returns (the term relaxing, not a
+standing tax); the exploitability read is
+`league_main_v_254992_winrate` against the 0.57-0.58 the 77638 probe set.
+**Abort:** the phase-1 shape again — mass rising while the readout stops
+discriminating (`player_pointer_*` drift flat, entropy at ceiling), or
+`loss_uniform_kl` pinned with switch mass unmoved, which would say the term is
+paying and buying nothing.
+
+**PHASE 1 RESULT (coef 0.05, read at 69k on the matched pair). The abort
+fired on its first clause, and the mechanism is not the scale.** Everything
+the term promised on its own axis arrived, and the BR was half as strong for
+it:
+
+| @ lifetime_step 69k | sp75b control | sp75c uniKL 0.05 |
+|---|---|---|
+| `entropy_macro` | 0.264 | **0.727** |
+| `player_policy_prob_switch` | 0.0151 | **0.0650** |
+| `player_policy_prob_ratio` | 0.060 | **0.330** |
+| `player_vol_switch_rows` | 3 | **23** |
+| `league_main_v_254992_winrate` | **0.343** | 0.186 |
+
+The control collapsed exactly on the recorded schedule (macro 0.94 -> 0.26,
+switch 0.115 -> 0.015, supply 35 -> 3) and sp75c held all of it — so this is
+not "the term failed to fire", it is the term firing hard and costing
+strength. No slower-but-higher story either: control slope 50k->69k
+~0.005/1k, sp75c 50k->82k ~0.0022/1k, and sp75c @82k (0.215) is still under
+the control @50k (0.248). `mag_coef` 0.2 was nowhere near binding in either
+arm (`ref_kl` 0.01-0.03 both), and `ent_coef` 0.01 was identical in both, so
+neither is implicated. One seed, one control — the 2x gap sustained over 50k
+steps is well outside seed noise at this magnitude, but it is a single pair.
+
+**The design error, stated plainly: the term is a ROW flattener, not a
+MODALITY one, and the ledger row above claimed otherwise.** `KL(u || pi)` runs
+over every legal cell of the row, so its `pi_b - 1/k` pull separates moves
+from each other with exactly the force it uses to restore switch mass — it
+buys WHETHER-to-switch and pays in WHICH-move-to-pick. `entropy_micro_taken`
+sat at 0.93 normalised (near-uniform over the taken modality's cells) and was
+NOT trending down, against the control's 0.84 and falling. That is the phase-1
+support-anchor shape, mass without discrimination, which this form was
+asserted to avoid: the constant reference does fix the RATCHET (it cannot be
+walked flat by a re-snapping reference) but says nothing about the
+FLATTENING, and those were conflated when the term was written.
+
+**Next reads, in order.** (1) Cheap: coef 0.025, same form, `sp75d` — mass is
+linear in coef at fixed |A|, so equilibrium ~0.035 against control 0.015 and
+sp75c 0.055. Exploit recovering to near-control at ~2x the control's mass
+means the trade-off curve has a usable middle; exploit still depressed
+falsifies the FORM and not the scale. (2) The structural fix if (1) fails:
+move the uniform reference to the MODALITY MARGINAL — forward KL from uniform
+over modalities, gradient `pi_m - 1/M` with M = 2-3, silent within a modality
+— restoring mass on the axis that dies and leaving every within-modality
+choice to the critic. That is the phase-4 law reached from the other
+direction: the regulariser says WHETHER, never WHICH.
+
+## Addition ledger — 2026-09-01 centralised value, discrete belief code
+
+The user-decided amendment of the no-privileged-info invariant (see the
+Invariants section for the amended rule and its gate). One fresh lineage
+carries this pass plus the TGN history restructure; plan and baselines in
+`docs/central-value-baselines.md` (d7zdz8hw @33k/50k banked there).
+
+| mechanism | what | why |
+|---|---|---|
+| `opp_private_team = 17` + `REQUEST_LAG = 22` | the opponent's live request serialised through the SAME EntityPrivateNodeFeature rows by ONE parameterised `getPrivateTeam(sourcePlayer)`; staleness = clip(observer turn − source turn, 0, 8), identically 0 on the own channel (rqid deltas drift on force-switch turns — not comparable across players); every degrade (deploy, un-ingested request, spectator) is the all-zero buffer. Field 16 was RE-USED by the action mask after the old deletion — 17, never reuse | the deleted 2026-08-25 sheet was STATIC team truth; the request is live HP/status/PP — the state a decision actually turns on. Harness truth invariant extended to the channel, race-free via `lastSerialisedOppRequest` (the exact object build() serialised; the live request moves between build and check). 5014-battle soak, zero violations |
+| leak partition: `OPP_PRIVATE_ENTITY` (6) + `VALUE_CLS` (1), 61 → 68 rows, `SEQUENCE_READ_MASK` | policy-readable rows keep the complete 61×61 attention among themselves and gain ZERO in-edges from the partition; secret rows may read anything but VALUE_CLS; VALUE_CLS reads all, read by nothing (out-degree 0) — leak-freedom transitive across the 6 blocks by induction, ANDed into the trunk mask every block | asymmetric actor-critic (Lambrechts et al. 2025: removes the value-aliasing penalty) with the leak objection answered structurally rather than by convention; V is learner-only so deployment is untouched. `tests/test_privileged_partition.py` pins bit-identity of every policy output under opp-team perturbation WITH both positive controls |
+| privileged V + `player_privileged_targets` | second `CategoricalValueLogitHead` on VALUE_CLS, train-gated; CE on the SAME win_returns; True routes v-trace bootstraps → pg_advantages through it, False is bit-for-bit the old estimator (the live fallback) | the deployable head stays trained unchanged — the matched control the 2026-08-25 diagnosis never had. Panels: `player_loss_v_win_priv`, `player_priv_value_head_r2` (THE discriminator, beside the deployable R²), `player_priv_value_gap` (the 0.005 number re-measured) |
+| opponent discrete code (`_opp_code_rows`) | per mon: same private embedder → (16 groups × 16 classes) multi-softmax, 1% unimix floor, straight-through argmax → concat of code-table vectors IS the secret-row content; `entity_index_tag` + `opp_private_side_bias` give it the shared additive identity | Dreamer's discrete-latent reading of "the opponent's private state is a KNOWN discrete state" with none of the machinery (no learned posterior, no KL balancing — the privileged value loss grounds the code through the straight-through estimator). Collapse instrument: `player_code_perplexity_{mean,min}` (pinned at 1 = dead group). The belief head (next commit) predicts the code from public rows |
+
+| TGN history: directed messages + HISTORY_ENTITY rows | messages gain the step's SOURCE half — masked-mean node+edge latents of the rows carrying a real major arg, plus `is_src`, so mover and target coexist in ONE vector (the relation the per-slot scatter destroyed); `_embed_edge` reads the never-read `FROM_TYPE_TOKEN*`; the additive history-into-public-row merge (the 2026-08-28 "11th attribute token") is DELETED and history becomes its own 12-row policy-readable HISTORY_ENTITY group (68 → 80 rows) carrying GRU state + the latest-node snapshot the RL path used to discard, joined to its board row by the shared entity_index_tag | the current encoder was a degenerate Temporal Graph Network (Rossi et al. 2020): destination-only messages, memory-only readout. Reference diff recorded: TGN's source MEMORY in messages is carry-dependent (serial, against the ~26us/step bound) so the source's raw cache embedding stands in; sum aggregation kept (Souza et al. 2022); the latest-node-beside-memory readout is TGN's staleness fix, independently rediscovered by the ledger. ZERO added serial work — everything lands in the batched precompute. Panel: `player_history_src_frac` (expect >> 0.5) |
+
+Also in this pass, on the CURRENT lineage: history reads all EIGHT
+`RELEVANT_ENTITY_IDX` columns (was 0..3 against the service's 8 — spread
+rows silently dropped; params-compatible), and `ex.bin` regenerated with
+the opponent channel live (57/58 steps populated; step 0 is the documented
+un-ingested-request race).
+
+## Removal + addition ledger — 2026-08-31 grid retired, modality-marginal KL
+
+One fresh lineage (new param tree accepted). Revert handle: the two commits on
+`flat-trunk` following `4c3948d`.
+
+| mechanism | what | why |
+|---|---|---|
+| 41x41 action grid, everywhere | `Action{src,tgt}` -> `Action{cell}` (an index into the 295-cell BLOCK SPACE: ActionMask's own fields flattened — 6 switch, 16x17 move x target, 17 standalone; layout documented beside the proto message, offsets derived from the slot-list lengths on BOTH sides); `FlatActionReadout` emits the three blocks it always computed and the scatter dies; the service builds `structuredMask` + `legalChoiceByCell` directly from block cells and its internal `OneDBoolean` grid dies; `FLAT_MODALITY_MASK` -> `CELL_MODALITY_MASK` (length 295, IDENTICAL per-cell values, so `entropy_macro` and every modality consumer keeps its meaning); `ally_switch_bias` (2,1) folds to one `switch_bias` scalar (row 1 never trained in singles; at preview a uniform shift over an all-switch set is softmax-invariant); `src_index`/`tgt_index` leave the stored pytrees; `kind`/`active_slot` become purely decoder-side (test-pinned: the mask cells are kind-invariant, harness.ts asserts the decode half) | ~82% of the grid was unreachable in any format; the readout, the wire mask and the service's choice map were all already block-shaped, and every grid artefact was adapter code between them. Stored mask leaf shrinks 5.7x. Shards survive via the packed-grid fold shim (`_cells_from_packed_grid`); prev-action info features keep their ActionEnum vocabulary via decode-time conversion (`cellToEnumPair`). 2049-battle soak, zero mask/decoder violations; probe C's row addressing ported off the dead 41-slot action stream onto named sequence rows in the same pass (it silently indexed sequence rows by ActionEnum VALUE — reads were garbage on the flat trunk) |
+| `loss.uniform_kl_rows` -> `loss.uniform_kl_modalities` | forward KL from uniform over LIVE MODALITIES; modality-level gradient exactly pi_m − 1/M; the loss reads the marginals ALONE, so within-modality redistribution is identically invariant and the per-cell force follows the policy's own conditional. Metric renamed `player_loss_modality_kl` (the loss changed meaning — the coma->neurd precedent). Coef stays `player_uniform_kl_coef` = 0.025: with M = 2–3 against the row form's k ~ 10 the same coef buys ~5x the modality mass — equilibrium switch mass ~0.06 at 0.2 sigma headwind, ~0.025 at 0.5 sigma | the pre-registered structural fix from the sp75c falsification: the row form's pi_b − 1/k separated moves from each other with the same force it restored switch mass with — every mass metric bought (macro-H 2.8x, prob_switch 4.3x) and the exploit HALVED (0.186 vs 0.343 @69k), `entropy_micro_taken` pinned 0.93. The phase-4 law — the regulariser says WHETHER, never WHICH — is now an algebraic identity of the term rather than an aspiration. Tests: pi_m − 1/M gradient, full pull at a starved marginal, within-modality swap invariance WITH the cross-modality positive control, forced rows silent by construction |
+| private TRUTH CHANNEL + alignment key | `EntityPrivateNodeFeature` += HP_RATIO/STATUS/HAS_STATUS/TOXIC_TURNS/SLEEP_TURNS/FAINTED (encodings identical to the public fields) + ENTITY_IDX (1 + stable entity index, 0 = never fielded); hp/status/fainted parsed from the REQUEST's own condition string; the encoder widens `private_state_linear` with the condition block and applies a shared `entity_index_tag` table to public rows (via PUBLIC_ORDER) and private rows (via ENTITY_IDX) so a sheet row and its public row carry the SAME additive identity | the switch-action slots were condition-blind: probe C measured the trunk's public-row workaround at the floor (r ~ 0.00 vs 0.35-0.44 controls) and the private rows carried only static set descriptors. A JOIN cannot fix it: under a my-side Illusion the public row BLENDS two mons' histories until `|replace|`, so only the request has the truth — and the harness truth invariant caught a second sourcing trap ON ITS FIRST RUN: the privateBattle member's hp is log-event-driven and reads 0/0 before the log's first reading (request said 252/342), which is why the CONDITION STRING and not the client object is the source. The two condition blocks are not duplicates — they coincide only when no deception is active and diverge into truth-vs-opponent-belief exactly when it is. Decode right-pads short `private_team` buffers (shards store all-zero blocks; appending safe, renumbering never). Known ~0.1% class: a disguised my-side mon's index attaches to no public row until reveal — the wire is CORRECT there (no public identity yet), vitest retry absorbs it |
+
+
+Also in this pass: player Adam eps 1e-8 -> 1e-5 (the reference diff's flagged
+"one to test"; builder unchanged). sp75c stopped at ~283k (winrate vs target
+0.48 and climbing, prob_switch ~0.026 held; published `p_100254992`) — the
+proof that mass + strength coexist under a zero-avoider, and the measurement
+that priced the row form's WHICH-tax.
+
+## Addition ledger — 2026-09-05 hidden-token belief label (B3 fired)
+
+The revealed-row control (2026-09-04) caught the belief label: the code is
+trained only through the privileged value CE, so it encoded whatever the
+sheet carries, public tokens included, and a control reading the matched
+mon's OWN pre-trunk public row converged to the head's accuracy
+(irqeetfg: belief 0.89, revealed 0.87, species 0.59;
+`player_belief_context_margin` 0.20 @634k → 0.017 @1.15M — the launch
+margin was the fresh control lagging, not inference). B3's pre-registered
+verdict: hidden-token code.
+
+| mechanism | what | why |
+|---|---|---|
+| `encoder.OppCodeLabels` + `Encoder._hidden_code` | the SAME trained pool + `opp_code_logits` applied a second time per opp mon with every token the matched public row already shows masked out (id-equality on species/ability/item; moves by SET against MOVEID0-3; the state token never hidden — hp/status are what the revealed row reads; an unmatched mon is all hidden), hard argmax, no unimix, all under stop_gradient; `hidden_any` False = fully-revealed mon, skipped by the loss. `belief_alignment` moved into the encoder (computed once, re-exported from player_model). NO new params — the critic's secret rows and its full code are untouched (user constraint: the critic's INPUT stays normal, only the belief TARGET is hidden-only); checkpoint-mode resume | the label can encode nothing the public row carries, so predicting it from that row is inference about unseen tokens by construction. Panels: `player_belief_hidden_frac` (of matched mons, the share with a hidden token), `player_hidden_code_perplexity_{mean,min}` (the label's own usage over the scored rows; min 1 = dead label). Every `player_belief_*` panel breaks meaning at irqeetfg ~1.15M — kept the names so the positive control reads ACROSS the boundary: `player_revealed_belief_accuracy_above_marginal` must FALL to the species control's, `player_belief_accuracy_above_marginal` must stay above both; read on above-marginal, never raw accuracy (perplexity floors it) |
+
+In randbats a mon's hidden set is nearly independent of context given
+its own revealed tokens, so the achievable margin is small by nature —
+the gate is `above_marginal` > species AND > revealed after a 20k hold,
+else the head is a hidden-token hash lookup and goes. Tests:
+`tests/test_hidden_code_label.py` (label blind to hp WITH the hidden-move
+positive control; full reveal empties `hidden_any`, unmatching refills
+it), `test_belief_telemetry` row_mask narrowing; the control tests score
+the hidden label. Owed at the next stop: `tests/test_train_step.py` (2GB
+VRAM free beside the live learner — not compiled here).
+
+## Probe ledger — 2026-09-05 stochastic transition, Step 1 (the mean head priced)
+
+Step 1 of the stochastic-transition plan (local `docs/stochastic-transition-plan.md`):
+instruments only, no behaviour change. The question was whether the
+`dynamics_delta_head` — a conditional MEAN over the transition between two
+of MY requests, which folds the opponent's unobserved choice, the engine's
+dice and the reveals into one average — is a usable one-step model, or
+whether search needs a sampleable latent.
+
+| piece | what |
+|---|---|
+| `rl/offline/transition_probe.py` | plays self-play games on a checkpoint through the second service and reads two things per t→t+1 pair: the residual `delta − pred` on hp-moved public rows projected onto `dynamics_hp_basis` (GMM 1-vs-2 BIC, Ashman's D, with the fainted/survived split as the positive control), and the VALUE GAP — the predicted pre-trunk rows substituted into the REAL t+1 sequence (row biases re-added, the substitution propagated onto the four entity-derived target rows), the frozen target network's `V(sub)` against `V(real t+1)`. Two variants: history rows live, and history rows MASKED from the trunk's read — the entity diaries and field memory at t+1 already encode the real outcome, so with them live even a COPY predictor (rows unchanged from t) reads a small gap; the masked read is the honest one, and the INFO row's request kind still leaks a force-switch either way |
+| `transition_edges` / `transition_reveals` + panels | learner-side: spanned window steps per transition (`FIELD_FEATURE__REQUEST_COUNT == t+1`), `player_transition_edges_{mean,p90}`, `player_transition_reveal_frac` (a matched opponent row whose `REVEALED_ID_COLUMNS` changed), `player_dynamics_gain_public_{short,long,reveal,no_reveal}` (≤2 vs ≥4 edges). Read on the next restart — irqeetfg predates them |
+
+**Numbers (ckpt_01220000, 60 self-play games, 3340 transitions; hp_moved
+0.762 of transitions, faint 0.334, reveal 0.375, edges mean 2.61 / p90 4).**
+Value gap is `|V(sub) − V(real t+1)|` in CAT_VF_SUPPORT units (lower = the
+predicted state is worth what the real one is worth):
+
+| | mean head | copy predictor | \|V(t+1) − V(t)\| |
+|---|---|---|---|
+| all, history live | 0.031 (p90 0.078) | 0.043 | 0.118 |
+| hp_moved, history live | 0.034 (p90 0.082) | 0.049 | 0.125 |
+| faint, history live | 0.034 | 0.052 | 0.152 |
+| all, history masked | 0.045 | 0.062 | — |
+| hp_moved, history masked | **0.051** (p90 0.111) | 0.074 | — |
+| faint, history masked | 0.051 | 0.083 | — |
+| short / long, masked | 0.045 / 0.038 | 0.057 / 0.069 | — |
+| reveal / no_reveal, masked | 0.053 / 0.040 | 0.072 / 0.056 | — |
+
+Signed bias `V(sub) − V(real)` +0.007. Residual on hp-moved rows (n=3862,
+0.295 fainted): hp-subspace gain 0.611; far_frac (|residual| ≥ half the
+true delta) 0.694 — 0.372 on fainted rows, 0.829 on survived; GMM BIC
+1-comp 9360 vs 2-comp 8825 (two favoured), component means −0.157 / +0.498
+at weights 0.76 / 0.24, Ashman D 0.68 (overlapping, not separated);
+faint control fainted +0.754 vs survived −0.316, D 1.55.
+
+**Verdict: neither pre-registered branch fired cleanly.** The ≥0.10
+value-gap bar FAILED (0.034 live / 0.051 masked on hp-moved rows) — the mean
+head's state is worth within ~0.05 of the real one, roughly a third of the
+step-to-step value movement; the residual IS two-component by BIC but the
+components overlap (D 0.68 against the ≥2 that "bimodal" means), and a
+faint is largely predictable (far_frac 0.37 on fainted rows — the mean is
+NOT sitting between the branches on most faints). The re-plan branch
+(unimodal AND gap < 0.03) did not fire either: masked gap 0.051, BIC says
+two. What the read does establish: the mean closes only ~30% of the copy
+predictor's gap (0.074 → 0.051 masked), `long` transitions cost the mean
+nothing over `short` (0.038 vs 0.045 — the semi-Markov diagnosis is NOT
+supported on this instrument), and reveals cost ~0.013. The go/shrink
+decision is the user's; the learner-side `gain_long < gain_short` clause
+can only be read after the next restart.
+
+## Removal + addition ledger — 2026-09-05 stochastic transition, Step 2 (the latent model)
+
+Step 2 of the plan (local `docs/stochastic-transition-plan.md`; maths in
+`docs/stochastic-transition-notes.md`). The user's call after Step 1's
+mixed read: proceed in full with the chance code — in this metagame chance
+is less prevalent, in other formats a sampleable transition is necessary.
+Checkpoint-mode by-path resume of irqeetfg (the policy's inputs and the
+value/readout params are unchanged; the delta head's leaves drop, the
+transition leaves init fresh).
+
+| mechanism | what | why |
+|---|---|---|
+| `dynamics_delta_head` (REMOVED) + `player_dynamics_gain_*` / `player_loss_dynamics` / `player_dynamics_head_*` panels | the conditional-MEAN predictor of the 21 pre-trunk target rows, live 362.8k–1.22M. Last readings banked in the Step-1 ledger (gain public 0.528 / hp_moved 0.588 / loss 0.453 @1.168M; value gap 0.034 live / 0.051 masked on hp-moved rows) | a mean over discrete unobserved branches cannot be rolled out; Step 1 priced it. Its LABEL survives as the grounding head |
+| `rl/model/transition.py::TransitionModel` | g(h_t, a, z) → ĥ_{t+1} over the 73 post-trunk policy-readable rows: 2 `TrunkBlock`s of the trunk's own shape under the policy-readable sub-block of `SEQUENCE_READ_MASK`, conditioned by ONE vector added to every row (`action_proj` of the taken cell's src/tgt readout rows + `code_proj` of the code-table embedding); ĥ = rows + `out_proj`(blocks). Chance code z: `transition.code_groups` 2 × `code_classes` 16, prior MLP over [masked-mean(h_t); src; tgt], posterior the same features + masked-mean(sg(rows at t+1)), f32 logits, 1% unimix, straight-through argmax; the training decode uses the posterior sample, a no-gradient decode from the prior MODE feeds the `_prior` panels. `code_groups = 0` is the static mean latent model (drops exactly `{code_table, code_proj, prior_net, posterior_net}`) | **`out_proj` is THE single zero factor**: g is exactly the copy predictor at init (consistency gain 0, the old head's own contract), its gradient is the live block output ⊗ residual, so it moves at step 1 and `code_proj` / `action_proj` / the blocks / `code_table` unfreeze at step 2 — the readout's query/key rule, pinned by `test_out_proj_is_the_single_zero_factor` (fresh: only out_proj live; opened via `open_zero_init_paths(..., ["out_proj"])`: the rest live). Only policy-readable rows exist here, so a rollout carries nothing privileged (`test_privileged_partition` pins every transition leaf bit-identical under `opp_private_team` perturbation, the posterior included — it reads leak-free rows) |
+| heads on ĥ (`player_model._forward_transition`) | consistency: per-row normalised MSE vs sg(next rows), per-`SequenceGroup` scale with the 1e-2 floor, learner-only groups skipped; grounding: `ground_head` MLP per imagined target row → the 21 DYNAMICS_TARGET_ROWS' pre-trunk content at t+1, in the NEXT step's layout; value: the SHARED `v_head` on ĥ's CLS row, CE to the t+1 `win_returns`; policy: the SHARED `action_head` on ĥ, forward KL to sg π(t+1) over the real next mask; `mask_head` (a second `FlatActionReadout`): 295-cell BCE on the next `action_mask`; `cls_head` on ĥ's CLS: next `ActionRequestKind` CE + done BCE | every label is OBSERVED (the opponent's choice is never one). `v_head` and `action_head` TRAIN through imagined rows — MuZero's value/policy targets on the shared heads, which is what makes `player_transition_value_r2` a calibration read of the same head search will call |
+| positional t→t+1 pairing | `next_rows = sg(concat(rows[1:], rows[-1:]))`; the last chunk row self-pairs and is masked by `valid_step = acted_mask[:-1] & value_mask[1:]`; grounding gathers the prediction into the next step's row order through `dynamics_alignment`'s `next_index` and normalises by `\|target_{t+1} − target_t\|²`, so an ALIGNED copy predictor scores exactly gain 0 across a resort and a scatter-negated one 4 (test-pinned); `player_transition_rows_frac` = valid transitions / (T−1) | the old head predicted the delta in the CURRENT layout and the target rows re-sort between requests (actives first) |
+| loss | `player_dynamics_coef` 0.5 × [cons + ground + value + policy + mask + kind + done + `player_transition_dyn_coef` 0.5 · max(F, KL(sg q‖p)) + `player_transition_rep_coef` 0.1 · max(F, KL(q‖sg p))], `player_transition_free_nats` F = 1.0 per transition summed over groups; every KL f32 | DreamerV3's balancing and free bits verbatim; test pins that doubling dyn_coef doubles the PRIOR's gradient only and that identical prior/posterior under F=1 gives zero code gradients with `player_transition_kl_free_frac` 1 |
+| panels `player_transition_*` | `kl` (+`_short/_long`, `_reveal/_no_reveal`), `kl_free_frac`, `{prior,post}_perplexity_{mean,min}`, `prior_post_agree`, `gain_{public,private,field}` (posterior decode), `gain_public_prior` / `gain_hp_moved_prior` (**expected BELOW the mean head's 0.528 / 0.588** — a sample from a two-branch law is further from the truth in MSE than the mean), `cons_gain_<group>`, `value_r2` beside `player_value_head_r2`, `value_gap`, `mask_acc` / `mask_recall` / `mask_exact_frac`, `kind_acc`, `done_acc`, `hp_share`, `edges_{mean,p90}`, `reveal_frac`, `{out_proj,action_proj,code_proj,code_table}_rms`, `{transition,blocks,prior,posterior}_grad_norm`; wandb section "3b · Transition model" | the coma→neurd precedent: the loss changed meaning, so the `player_dynamics_*` names retire and the new ones start fresh at the restart step |
+
+**Recorded divergences from the plan text.** (1) The consistency target
+and the posterior read sg'd rows from the SAME online forward, not the EMA
+`player_target_pred` forward — the EMA rows would have cost a second
+73-row trunk pass per learner step for a target whose only virtue is
+smoothness, and the trunk already sees these rows under stop-gradient.
+(2) `done_auc` shipped as done BCE + `done_acc` (an AUC is not computable
+inside the jitted step without a sort; accuracy against `done_frac` reads
+the same thing). (3) `transition.unroll` was written and deleted unread —
+the K-step variant is Step 5's rung and gets its knob with its consumer.
+(4) `rl/offline/transition_probe.py` now decodes from the prior MODE
+(`ground_prior`); the sampled-decode calibration read
+(`|E_z V(g) − V(real)|`) is scoped with Step 3's search module, which is
+where the batched prior sampling lives.
+
+**Pre-registered acceptance (20k hold after the resume)** — in the plan and
+unchanged: `kl` 0.5–3.0 nats, `post_perplexity_min` ≥ 1.5, `prior_perplexity_min`
+≥ 1.3, `gain_public` ≥ 0.68, `gain_hp_moved` ≥ 0.75, `value_r2` ≥ 0.85,
+`mask_acc` ≥ 0.98 with `kind_acc` ≥ 0.95, `kl_long > kl_short` and
+`kl_reveal > kl_no_reveal` by ≥ 0.2, `player_value_head_r2` /
+`player_learner_actor_forward_kl` / temp-1 eval wr inside their pre-change
+band, `learner_steps_per_sec` ≥ 6.5 (from 7.19). Abort ladder in the plan
+(posterior collapse → rep 0.05 + F 2 once; copying → K 8; dead groups → FSQ;
+strength cost → coef 0.25 then sg on g's input; `value_r2` < 0.7 → search
+does not launch).
+
+**LAUNCH CHECK, 1266k–1292k (2026-09-05): the grounding head shipped
+predicting CONTENT and was rewritten to the DELTA form, own commit.** Every
+other panel opened inside its band (`kl` 0.65–0.76, `post_perplexity_min`
+~4.2, `prior_perplexity_min` ~3.6, `mask_acc` 0.995, `kind_acc` 0.99,
+`value_r2` tracking `player_value_head_r2` batch for batch, `out_proj_rms`
+0.0073, forward KL ~0.003) — but `player_loss_transition_ground` started at
+17.8 (→ 4.8 by 1292k), `gain_public` −12 → −5.4, `gain_private` −36 → −5.9,
+and `player_transition_grad_norm` sat at 22 → 18.3 against the global clip
+of 10 (`blocks_grad_norm` 1.3 → 3.2). The head predicted the 21 target
+rows' full pre-trunk content at t+1 through a lecun-init output, and the
+loss normalised that by the DELTA's mean squared size — so the static
+tokens' reconstruction error (species, item, moveset: unchanged across a
+transition, large in norm) was scored against a normaliser sized for what
+changes, and one head's gradient alone was 2x the clip, spending every
+other loss's step (the eed695e shape again). Fix: `ground_delta_head`
+predicts the t → t+1 CHANGE of each target row in the next step's layout
+(the old delta head's label) through a ZERO-init output, so the head starts
+exactly at the copy predictor (gain 0, loss 1) and every number it emits is
+on the delta's own scale. RENAMED, not edited in place: the by-path merge
+loads any same-name same-shape leaf, so a content-trained kernel would have
+resumed under the delta loss at ~18 again — a changed-meaning module with
+unchanged shapes must change its NAME to init fresh (Adam moments included).
+Rule with teeth: **a grounding head predicts the delta, zero-init, or its
+static-token reconstruction error dominates the gradient.** Tests pin the
+all-zero prediction at exactly loss 1 / gain 0 across a resort, the exact
+delta at 0, its negation at 4, and content-constant invariance.
+
+## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
+
+The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by
+the wire's ENTITY_IDX and to its public row (and history row, and opp
+secret row) by PUBLIC_ORDER, so the two rows describing one mon carried
+the same additive tag for attention to match on. Three reads on
+ckpt_00182000, all one way (`docs/lineage-instrumentation-plan.md` §6a):
+
+| read | number |
+|---|---|
+| tag rms, init → 182k | 0.0634 → 0.0661 (4%; `sequence_row_bias` moved 40% in the same window) — never trained |
+| tag / other addends, history rows | 0.028 (alarm < 0.05) — drowned from step 0 |
+| public-ONLY content (boosts, active) read from the sheet row, post- vs pre-trunk | 0.129/0.067/0.682 vs 0.143/0.092/0.771 (ceiling on the public row 0.310/0.247/0.843) — post ≤ pre on every label |
+
+The third read is key-agnostic: it asks whether ANY public-only content
+crossed onto the sheet row, and it did not — not via the tag, and not via
+the far stronger shared content (one species/ability/item/move embedder
+feeds both rows; species is unique per side in randbats). So the join was
+dead, not the key drowned, and the tag was neither helping nor hindering
+(3% of a row's norm, unchanged from init). The explicit gather fix (hits
+matrix @ public rows through a zero-init projection, §9 of the plan) was
+scoped and DECLINED by the user in favour of removal; the design is on
+record there if the switch axis ever demands it.
+
+| mechanism | symbols | note |
+|---|---|---|
+| `entity_index_tag` | the param, its four add sites in `_assemble_sequence`, `player_entity_index_tag_{rms,grad_norm}`, `rl/offline/history_addends.py`, `test_entity_index_tag_links_private_to_public` (→ `test_entity_idx_is_not_row_content`, the inverse pin) | the wire column `ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX` STAYS — `belief_alignment` matches sheet row to public row through it, structurally, not through any learned tag. History rows keep their positional pairing (row bias i ↔ public row i). Resumed in checkpoint mode via the new by-path merge (233f707): leaf dropped from all four trees, league and Adam intact |
+
+## Removal ledger — 2026-09-02 history encoder restructure
+
+One deletion per commit; the through-line and the design are in the
+2026-09-02 plan (parallel-scan backbone, gestalt out, step GAT in; fresh
+lineage). Each row's commit is its revert handle.
+
+| mechanism | symbols | why |
+|---|---|---|
+| Announced-state path (Φ_ann) | `history_encoder.{mask_outcome_features, _ANNOUNCEMENT_EDGE_COLUMNS, _OUTCOME_MAJOR_ARGS, SplitGRUCell.__call__, PerSlotHistoryEncoder._advance, announced_states_at_requests}`, `encoder.encode_history_with_announced`, offline `Porygon2OfflineCritic.{_history_tokens_with_announced, announced, with_aux_and_announced}`, `train.{_announced_metrics, _announced_enabled, _train_method, _unpack_outputs}` + the `announced_*` eval keys and manifest flag, `artifact.has_announced_states` + the `announced=` potential arg, `announced_loss_weight`/`announced_distill_weight`, the offline "Announced head" wandb section | broken since the 2026-09-01 GRU hoist (`announced_states_at_requests` called the pre-hoist `project_inputs` signature) and ON BY DEFAULT in the offline trainer (`announced_loss_weight` 1.0) — the one-step masked advance was the only caller of the per-step `_advance`, i.e. the serial GRU cell the parallel-scan backbone deletes. The skill/luck decomposition (decision = Φ_ann(t+1) − Φ(t), dice = Φ(t+1) − Φ_ann(t+1)) and dice-excised PBRS it existed for never shipped a validated critic (announced-movement ratio ~0.15, 2026-07-30 — SGD never built the circuit unpaid). Structure-only: the RL forward is untouched |
+| Slot gestalt (`ctx = h_slots.mean(-2)` on the slot input) | `_scan_step`'s ctx concat; `slot_cell` input 6D → 5D (`[messages ; field_vec ; flat_field]`) | redundant twice over — `flat_field` is fed the SUM of every message, and the trunk attends over the HISTORY_ENTITY rows at read time — diluted by every untouched slot sitting at `initial_slot_state`, and on the serial carry tail. Fresh params (kernel shape moved). `tests/test_history_encoder.py` pins it at the scan-step level: slot k's update never reads slot j's state, with the field carry (moves every slot) and the slot's own carry as the two positive controls |
+| Masked SOURCE MEAN in the history message (the 2026-09-01 TGN source half) | `src_node`/`src_edge`/`src_weights` in `__call__`; `message_projection` input 5D+3 → 2D+3 (`[node ; edge ; side ; is_src ; field]`); the `is_src` predicate and the relevant-edge gather written once (`source_rows`, `relevant_edges`) for the encoder and the wire-side `player_history_src_frac` | replaced by `StepAttention` — ONE GAT layer over the live rows of a step, self included, `q`/`k`/`v` lecun over `[node ; edge ; side ; is_src]`, −1e9 floor AND re-masked probs on padded keys (a 1-row step is exactly its own value), `attn_out` zeros-init (one zero factor over live inputs — messages are `message_projection` alone at step 0, the projection moves at step 1). The mean was invertible in singles (2-source steps are 2-row steps: other = 2·mean − self) and lossy in doubles (a spread move: 2 movers, 3 targets, one average for all); mover/affected are row FEATURES, never a key partition (self-targeting moves are one row on both ends). `cfg.encoder.history_step` (2 heads × qk 32); probs/masks ride `PerSlotHistoryOutput` for the Step-5 panels. Tests: silent-at-init WITH the live-kernel control, non-zero `attn_out` grad at init, padded row places and receives no mass WITH the live-row control, 1-row step probs exactly one-hot |
+| GRU backbone (`SplitGRUCell` + `nn.scan`) | `SplitGRUCell`, `_GateParams`, `_scan_step`, the `nn.scan` call, `SCAN_UNROLL`, the hoisted `project_inputs` calls; per cell the three orthogonal D×D recurrent Denses (`hr/hz/hn`) → `GatedLinearCell` (minGRU, Feng et al. 2024: `z = σ(W_z x)`, `h̃ = W_h x`, `h = (1−z)h_prev + z h̃`; the candidate no longer reads the carry) + `gated_linear_scan` (f32 `jax.lax.associative_scan` over the affine coefficients `(1 − write·z, write·z·h̃)`; write = 0 is the identity, so untouched slots hold `initial_slot_state` bit-exactly); two parallel scans — field first, its shifted states become an `xs` column of the slot gates — ZERO serial work | **the bench gate CLEARED** (real module, full GPU, B=16 broadcast of the ex.bin trajectory, median of 50; actor forward GRU → linear): H=256 B=1 7.72 → 2.15 ms (−72%), B=4 8.11 → 4.16 (−49%), B=8 11.36 → 7.08 (−38%), B=12 14.43 → 9.85 (−32%), B=16 17.44 → 12.76 (−27%); H=512 B=1 13.82 → 2.88 (−79%), B=4 14.32 → 6.70 (−53%), B=8 20.87 → 12.34 (−41%), B=12 25.56 → 17.05 (−33%), B=16 31.95 → 22.92 (−28%). The GRU is LATENCY-bound (near-flat in B — the ~26µs/step floor the 2026-09-01 hoist could not move) and the scan is throughput-bound, so the win shrinks with batch; the inference server has 12 actors, so B=16 is never realised and the ≥30% bar clears at every live batch. Recorded honestly: it is an actor-cost read of THIS lineage only — after the stored-state pass (§3b) a per-request scan is ~5 steps and the parallel form's payoff moves to the learner. `test_chunking` window invariance on the new backbone: value log-prob max diff 0.0337 against the 0.05 tolerance (the bf16 GEMM shape-dependence survives an f32 recursion; not tightened, not loosened). The recursion lives in a free function, so no dtype-allowlist entry. Tests: slot isolation WITH the moved-slot control, field-into-every-slot, field-never-reads-slots, scan == serial `lax.scan` to 1e-5, unwritten units hold init exactly |
+
+## Addition ledger — 2026-09-02 actor-side history carry (incremental inference)
+
+Follows the parallel-scan restructure directly. Every actor request used
+to re-run the whole history pathway over the full window — packed-cache
+embedding (≤1024 rows), message projection + step GAT (≤512 steps), both
+scans, the cummax — bucketed to ≥64 steps, when a request adds ~3 steps
+/ ~5 packed rows (ex.bin: 168 steps, 268 rows over 58 requests). The
+minGRU scan is `h_t = A_t⊙h_0 + B_t` with `h_0` already an argument, so
+resuming from a carried post-window state over the new suffix is the SAME
+function, exact up to the bf16 GEMM leading-dim class (0.05 on log-probs,
+`tests/test_chunking.py`). Three user decisions shaped it: **actor-side
+only** (learner path, chunk contract, buffer, shape lattice untouched —
+`player_chunk_history_underrun` 0.0000 over 3000 samples says the 256-row
+window always holds whole games, so an actor carrying from h0 over the
+game computes what the learner computes; that panel is the watch that
+would say otherwise), **the carry is optional** (`valid=False` or `()`
+leaves is today's function bit for bit; the inference server is
+stateless), and **the wire is unchanged plus one int**
+(`history_rewrite_count`; the actor slices the suffix itself).
+
+| piece | what | why |
+|---|---|---|
+| `ActorStats` + `actor_time_*` / `actor_infer_*` panels (§9b) | lock-guarded mean sink drained by the learner every `actor_stats_log_steps`; per-step timers (service wait, decode, clip, inference) and the server's phases (queue wait, stack, lock wait, forward, device_get, batch size, history level) | the actors logged nothing; this is the baseline the pass is judged against. `service_wait` includes the OPPONENT actor's whole step in self-play — "waiting on the game server", not service CPU |
+| `EnvironmentState.history_rewrite_count = 18` | incremented INSIDE `EdgeBuffer.remapEntitySlot` — the one place past rows are rewritten (an Illusion `\|replace\|`) — so a second caller can never forget it; harness asserts monotone, vitest positive control on the Illusion team class | the carry's only invalidation the window itself cannot show. Field 17 is the opponent request; never reuse |
+| `HistoryCarry` (slot f32 (12,D), field f32 (3,D), node snapshots (12,D), `valid`) on `PlayerActorInput`/`PlayerActorOutput`, `resolve_initial`, `history_carry_from`, `invalid_history_carry` | every leaf defaults to `()`; `isinstance(valid, tuple)` is the STATIC no-carry branch (no `where` in the learner trace — bit-identical by construction, verified on 100 leaves), else `jnp.where(valid, carried, h0)` per leaf. The returned carry is the post-window f32 state taken BEFORE the cfg.dtype cast; request-count stamping makes the gather select the last valid step, so no alignment leaf is needed. The actor strips it before the row is stored (`without_history_carry`) | the f32 leaves are the scan's own recursion state — the value-recursion rule, not a dtype-policy breach |
+| `_cut_history_windows` + `clip_history_suffix` + `ACTOR_HISTORY_MIN_LENGTH` | the joint cut and IDX rebase written ONCE (the tail clip calls it); the suffix = steps with `FIELD_FEATURE__INDEX` after the carried step and exactly the packed rows they reference, each axis on its own bucket; `None` when the window no longer continues from the carried step; zero new steps is a valid all-zero window (the encoder returns the carry itself). The "must match" constant between actor and server is one symbol | token-for-token reconstruction and rebase pinned in `tests/test_history_suffix.py` |
+| `PlayerActor(history_carry_width)` ← `player_actor_history_carry` (default True) | per game: carry, last consumed index, rewrite count; recompute with an INVALID carry (leaves present so a server batch always stacks, `valid` False) at game start / rewrite / gap, each counted (`actor_history_recompute_{frac,game_start,rewrite,gap}`, `actor_history_suffix_{steps,rows}`); `Agent._step_player` forwards the carry, `_run_group` stacks carry leaves on axis 0 and fills a no-carry request in a mixed group with an invalid one | False = today's full-window request on every step — the control arm and the abort switch |
+| `ACTOR_HISTORY_MIN_LENGTH` 64 → 32 | levels 32/64/128/256/512: one extra forward-only compile per batch bucket on the ACTOR family only | the suffix runs at the smallest bucket; the scan is O(log H) so 16 buys little over 32 |
+
+**The plan's params-version guard is OMITTED as vacuous**: `ParamsContainer`
+is an immutable NamedTuple and `unroll` runs a whole game on ONE
+container, so a mid-game version change is structurally impossible; a
+future refactor that hands actors a mutable container must add the guard
+(recompute on `_version_key` change), not inherit its absence.
+
+**Tests** (`tests/test_history_carry.py`, gpu/slow; `tests/test_actor_carry_loop.py`
+plain python): (a) the 58 ex.bin requests served from the previous carry
+over the suffix alone match the full-window forward within 0.05 on
+log_policy and value log-probs, carried f32 states within 0.05 of the
+full scan's at the end, shifted-carry control; (b) garbage leaves under
+`valid=False` == the from-scratch forward bit for bit, same garbage under
+`valid=True` differs; (c) a zero-step window returns the carry itself /
+h0; (d) suffix reconstruction; (e) reason dispatch + stats; (f) a mixed
+server group vs single forwards. The carry tests open the zero-init
+readout (`open_zero_init_paths(..., ["action_head"])`) — on fresh params
+every logit is exactly 0, so a "the carry moves the policy" control would
+pass or fail vacuously. **(a)/(b)/(c)/(f) are OWED a run**: landed
+against a live learner, fast suite green, slow suite at the next stop.
+
+**Pre-registered acceptance (hold 2k learner steps):** `actor_steps_per_sec`
+up and `actor_time_inference` down against the Step-0 baseline below;
+`actor_infer_forward` down by the history share at the live batch
+(34-56% at levels 128-512); system steps/sec above irqeetfg's 4.17-4.41 at
+matched lifetime_step; `actor_history_recompute_frac` ≤ 0.05 (> 0.1 = a
+continuity bug); `player_learner_actor_forward_kl{,_switch,_move}` and
+`player_replay_realised_ratio` inside their pre-change band. **Abort** →
+`player_actor_history_carry=False` (no revert). **Declined, recorded:**
+delta wire (gated on the service_wait / process_state share), server-side
+carry table (identity + eviction for no numeric gain), stored-state chunks
+(underrun 0 — nothing to fix), gating the returned carry on `cfg.train`
+(two paths for a leaf XLA drops anyway). The parallel scan's payoff after
+this pass is the recompute fallback and the learner's chunk-length scans.
+
+**Reference numbers.** irqeetfg (launched on f478015, BEFORE the Step-0
+telemetry commit — so it carries NO `actor_*` panels; the plan's "lands
+first" was not honoured by a restart) system rate 4.17 / 4.25 / 4.41
+steps/sec at 1k-4k / 4k-8k / 8k-13.8k, vs d7zdz8hw 3.66 and yt3qp960
+3.53 (steady 4.12); learner alone 12.3. The per-phase baseline therefore
+comes from the relaunch itself: a bounded `player_actor_history_carry=
+False` window on the SAME code (the timers live, the carry off), then
+the carry on — the matched pair the speed comparison is read from.
+**Matched pair, read 2026-09-02** (same code, same box, irqeetfg resumed
+from ckpt_00042422; OFF = lifetime_step 43.0k-47.66k, ON = 47.9k-49.4k;
+window means over the 10-step drains, ms):
+
+| | carry OFF | carry ON | |
+|---|---|---|---|
+| `learner_steps_per_sec` (system rate) | 5.18 | 5.60 | **+8%** |
+| `actor_steps_per_sec` (pool) | 77.7 | 86.7 | **+11%** |
+| `actor_time_step_total` | 199 | 176 | -11% |
+| `actor_time_inference` | 170 | 147 | -13% |
+| `actor_infer_queue_wait` | 118 | 76 | **-36%** |
+| `actor_infer_forward` | 33.1 | 47.9 | +45% (see below) |
+| `actor_infer_batch_size` | 2.94 | 4.74 | |
+| `actor_infer_forward` PER REQUEST | 11.2 | 10.1 | -10% |
+| `actor_infer_lock_wait` | 12.1 | 17.4 | |
+| `actor_infer_history_level` | 1.42 | 0.004 | as designed |
+| `actor_time_history_clip` | 0.27 | 1.17 | the suffix cut's python |
+| `actor_history_recompute_frac` | - | 0.035 (all game starts) | gate <= 0.05 PASS |
+| `actor_history_suffix_{steps,rows}` | - | 2.6 / 4.1 | ex.bin predicted ~3 / ~5 |
+| `player_learner_actor_forward_kl` | 0.008 | 0.007 | in band |
+| `player_replay_realised_ratio` | 8.00 | 8.00 | in band |
+| `player_policy_prob_switch` | 0.033 | 0.034 | unchanged |
+
+**Verdict: a real but modest win, and the "forward down by the history
+share" clause of the acceptance FAILED on its own instrument, for a
+reason the panel makes legible.** Every request now lands at level 0
+(32 rows), so the grouping key no longer scatters the queue across
+levels 1-2 and the server takes bigger groups (2.9 -> 4.7); the forward
+grew in absolute terms with the batch and shrank only 10% per request.
+The 34-56% history share was measured on an UNCONTENDED GPU; under a
+live learner the server's forward is dominated by stream contention
+(lock wait and forward both inflate with the train step), so removing
+the history compute moved the per-request forward by a tenth, not a
+third. The win that did arrive is in the QUEUE: -36% wait, which is
+what the actors actually spend a step on (queue 76 of 147 ms inference,
+of 176 ms step). Both windows also sit above irqeetfg's pre-stop
+4.17-4.41 (5.2 / 5.6) — the extra level-0 bucket and the restart are
+confounded there; only the OFF-vs-ON pair is the clean read. Next lever
+by measurement, not this pass: the server's serial loop under GPU
+contention (queue + lock + forward = 141 of 147 ms), i.e. the learner's
+train step and the actor forward sharing one device stream.
+
+## Removal + addition ledger — 2026-09-03 gpu_lock retired, actors on the CPU
+
+Follows the history-carry pass, which left the actor step at 147 ms of
+inference — queue 76 + lock 17 + forward 48 — none of it compute: the
+server's forward queued behind train-step kernels on ONE device stream,
+while the host sat at load 1.1 on 20 cores. Two commits, one number moved.
+
+| mechanism | what | why |
+|---|---|---|
+| `gpu_lock` (REMOVED, `19d804b`, structure-only) | the learner held it for `device_put(batch)` + the ASYNC dispatch of `train_step` — released before the GPU finished, so it never serialised execution nor bounded VRAM; the server and `Agent.step_player` forwarded on their own device copies (no donation hazard). Its ONE real job — `main.py`'s eval thread reading the learner's LIVE device buffers that the next step donates — became learner-thread publication: `publish_live_params` → `EvalSnapshot(step_count, main, ema)` on `RunState.eval_snapshot`, read lock-free (`create_params_container(run_state, target=...)` gains the EMA side). `actor_infer_lock_wait` panel gone | no lock is simpler than a smaller one: with the reads moved to the thread that owns the buffers, nothing remained to lock |
+| `player_actor_device = "cpu" \| "gpu"` (ADDED) | "cpu": every PlayerActor and BuilderActor runs its own batch-1 forward on the host through `Agent.step_player` — no server, no queue — on an f32 actor network (`get_player_model_config(..., dtype=)`; XLA:CPU only emulates bf16; params stored f32 either way). "gpu": today's batched bf16 InferenceServer, the control arm and the abort switch. Bench 2026-09-03 beside the live learner, ex.bin at the live shapes: suffix 32/32 B=1 17.8 ms; 12 concurrent B=1 threads 60.5 ms/call, 196 fwd/s aggregate (a CPU *server* at B=8 serial: 128/s — declined) | the actors leave the learner's stream entirely; expected ~2x actor throughput and the learner alone at its 12.3 steps/s ceiling |
+| `DeviceParamsCache(device, field)` | the server's `_get_device_params` LRU lifted into ONE object: host `ParamsContainer` → that field committed to `device`, keyed by container IDENTITY (the league hands out one object per version; the eval thread's main and EMA containers share `(step_count, frame_count)` and would alias under `_version_key`, kept for GROUPING only). `Agent` owns two (player, builder) and takes the host container on both paths — the per-game `device_put` in `unroll_and_push` and the builder loop die | 12 actors share one device copy per version instead of 12 x 54 MB per game (the host-RAM lesson) |
+| `joint_history_level` + `pad_history_to_level` | the server's joint bucket pad written once in `rl/environment/utils.py` and applied on the direct path too | bucket combinations multiply: the CPU path compiles one variant per level (5), not per (history level x packed level) pair. `tests/test_actor_device.py` pins the two call sites to one shape |
+| rng keys committed to `agent.device` | `PlayerActor`/`BuilderActor` seed keys `device_put` once; every split stays there | under "cpu" no GPU kernel runs for an actor at all — verified: 2 offline games on ckpt_00216496 through the second service, process GPU footprint 292 MiB before and after (the CUDA context alone) |
+
+`Agent.step_player` records `actor_infer_forward` + `actor_infer_history_level`
+into the shared `ActorStats` (nested inside `actor_time_inference`, NOT a
+`STEP_PARTS` entry); the server-only timers are simply absent under "cpu".
+Three Agent instances each trace `_step_player` (`self` static): 3 x 5
+levels of CPU compiles, once.
+
+**Pre-registered acceptance** (checkpoint-mode resume from the 2026-09-03
+stop; 2k warm-up, then a 2k hold; against the carry-ON window above):
+`actor_time_inference` <= 70 ms (from 147); `actor_steps_per_sec` >= 130
+(from 86.7); `learner_steps_per_sec` >= 8 (from 5.6; solo ceiling 12.3);
+`player_learner_actor_forward_kl` <= 0.012 (from 0.007 — f32-vs-bf16 on
+log-probs is ~3e-3, so inside 2x, else the dtype gap is real);
+`player_replay_realised_ratio` 8.00 (the PI may CUT reuse under fresher
+data, never raise it); `actor_history_recompute_frac` <= 0.05 unchanged.
+**Abort** → `player_actor_device="gpu"` (no revert): forward KL out of
+band; `learner_steps_per_sec` FALLING while actors climb (the CPU pool
+starving the learner's host thread — cap XLA:CPU intra-op threads or drop
+to 8 actors); `service_wait` rising (host load pinning the node service).
+**Declined:** a batched CPU server (above); a narrower lock (nothing left
+to lock); `jit(device=)` (deprecated in jax 0.10.2 — committed inputs carry
+the computation); a second CUDA context / MPS (time-slices the same GPU).
+Follow-up ONLY after a full lineage on "cpu": the server and its level-0
+grouping become dead code and go, taking the flag's off with them.
+
+## Removal ledger — 2026-09-03 entity attention pool → masked sum
+
+One structural commit, fresh lineage (param tree moves: 13.75M → 11.64M,
+−2.11M, the pool was 15% of the model). Revert handle: the commit itself.
+
+**The measurement.** Probe E (`rl/offline/type_probe.py`, ef08214) read the
+policy's mass on immune targets at 0.372 against 0.403 under uniform — the
+model barely computes type matchups — while the types ARE on the wire as
+explicit multi-hot columns (species.npy 1342/1344/1346, moves.npy
+711/713/715, one column per type). A supervised ceiling on 27.4k records
+(held out by chunk, majority floor 0.549, the readout's own bilinear form,
+type one-hots as the 0.987 control) located the loss:
+
+| operands of the move x target bilinear | held-out acc |
+|---|---|
+| attention-pooled rows, pre-trunk (the assembled input) | 0.600 (train 0.937) |
+| attention-pooled rows, post-trunk (TODAY'S READOUT INPUT — `player_model.py` scores the trunk's output rows) | 0.503 (train 0.992) |
+| type-supervised bottleneck on the same pre-trunk rows | 0.813 |
+| raw attribute multi-hots, rank 64 / 256 | 0.801 / 0.804 |
+| **SUMMED rows** (learned linear per attribute, no attention) | **0.793** |
+| shuffled labels | 0.390 |
+
+Information and form both suffice (0.81 through a 19-d type bottleneck);
+what fails is that a 256-d bilinear over pooled rows prefers the identity
+shortcut (species x species pair memorisation — pairs never recur across
+randbats games) to the type subspace, and the attention pool makes the type
+subspace LESS legible than the linear sum (post ≤ pre on every read). The
+sum recovers 0.60 → 0.79 for free; the residual gap to 0.80 is the same
+shortcut inside the multi-hot itself.
+
+| mechanism | symbols | why |
+|---|---|---|
+| `EntityAttentionPool` (1-layer self-attention over ~10 attribute tokens + a learned-query `TransformerDecoder` read, rematted) | → `EntitySumPool`: `sum(mask · (token + token_bias[type])) / sqrt(num_tokens)` — STATIC divisor as in `simple_sum_embeddings`, so the row is linear in its attribute multi-hots; absent tokens contribute nothing, a fully masked set is zeros; `token_bias` (the field identity) stays. `cfg.encoder.intra_entity_{encoder,pool}`, `transformer_{encoder,decoder}_kwargs`, the `decoder_*` config vars, `encoder_init_residual_scale` (0.05 — the 2026-08-24 gate-init lesson, now moot), `modules.{DecoderBlock,TransformerDecoder}` (last consumer) all deleted; `TransformerEncoder` stays for the builder | the within-entity interactions it was meant to form (species x item x moveset) never showed on any read, and the one interaction a decision measurably turns on — my move's type x their species' types — is a BILINEAR of two entities, which no intra-entity block can form and which the readout already has the form for. Also runs on every packed history-cache row, so the actor forward and the learner's history precompute both shrink |
+
+**Kind-confounding probe (`rl/offline/kind_probe.py`, 2026-09-03, run on
+ckpt_00260000 of the attention-pool lineage BEFORE any launch, with a
+fresh-init trunk as the control).** The follow-up question was whether the
+trunk — one attention and ONE shared MLP over ~10 row kinds told apart only
+by additive biases, with `player_trunk_row_participation` falling 7.1 → 4.5
+over the run — was mixing the kinds into one subspace. Three reads per
+block, all held out by chunk:
+
+| read (higher = better) | input | block 6 trained | block 6 FRESH |
+|---|---|---|---|
+| kind identity (ridge, kind-balanced acc) | 0.96 | 0.94 | 0.90 |
+| cross-kind subspace overlap, public↔target (rank 16) | 0.54 | 0.22 | 0.41 |
+| own legibility: public row → species types (argmax hit) | 0.998 | 0.880 | 0.858 |
+| own legibility: move row → move type | 0.995 | **0.534** | 0.458 |
+| own legibility: move row → base power (r) | 0.994 | 0.856 | 0.831 |
+| own legibility: private row → species types | 0.739 | 0.630 | 0.652 |
+| own legibility: history row → species types | 0.401 | 0.353 | 0.826 |
+
+**Verdict: kinds are NOT confounded** — identity holds at every block and
+training pulls the kinds' subspaces APART (every cross-kind overlap falls
+from input to output, and ends well below the random trunk's). What the
+trunk does do is DILUTE: a move row's own type is half as linearly legible
+on the row the readout scores as on the row that entered, and the fresh
+control loses the same amount — this is what six ungated residual
+additions do to a linear direction, not something training built, and
+training preserved slightly more of it than random. It is the mechanism
+behind the ceiling's post ≤ pre. So a per-kind MLP / input projection is
+NOT indicated by this data; the cheap structural answer if the sum-pool
+lineage still reads its move rows dimly is a readout that ALSO sees the
+assembled input row (a skip past the trunk), its own commit and gate.
+Side reads: the private (sheet) row carries species type at 0.74 even at
+the input, against the public row's 0.998, fresh and trained alike (the
+pool, not learning — re-read under the sum pool); trained history rows
+carry hp 0.95 / active 0.82 but types 0.40 (fresh 0.94: the GRU state
+displaces the node snapshot); the trunk writes almost nothing into history
+rows (flat through the blocks). Read the `n` column: the target-row types
+read (0.64) is n-limited — the opp-active public row at the SAME steps
+reads 0.644 against 0.998 at 9x the rows.
+
+**Declined, recorded.** (1) An explicit hand-written type-interaction row
+(typechart lookup of my move type x their types): rejected by the user
+because move types change at run time — Tera Blast, Weather Ball, Judgment,
+Ivy Cudgel, Raging Bull, Revelation Dance, the -ate abilities — and
+immunities route through abilities and items (Levitate, Air Balloon), so it
+would be a human-maintained rule table, against the no-human-heuristics
+invariant. (2) `entity_size` → a wider readout `qk_size`: the ceiling was
+flat in rank (64/256) so width is not the lever.
+
+**Pre-registered acceptance** (fresh lineage; probe E at a matched step
+against irqeetfg): post-trunk type-class accuracy of the readout's rows off
+the 0.55 majority floor; the policy's immune-target mass BELOW the uniform
+baseline (0.372 vs 0.403 today — lower is better, it is mass on moves that do
+nothing); wr vs SimpleHeuristic at temp 1.0 at 30k ≥ irqeetfg's at the
+matched `lifetime_step`. **Abort:** none needed on a structural change —
+the fallback if the gate fails is a self-play damage aux head (dense
+per-move label from the engine's own outcome, no rule table), its own
+commit.
+
+## Investigation ledger — 2026-09-01 flash attention: measured, declined
+
+The old objection ("APIs too immature") is RETIRED — jax 0.10.2's
+`jax.nn.dot_product_attention(implementation="cudnn")` is first-class (bool
+masks, GQA, per-batch seq lengths, logsumexp residual; bf16 and head-dim 64
+both fine on the 3080 Ti). What replaces it is a measured no-win at this
+model's shapes. Full table in the comment beside the einsum in
+`rl/model/modules.py`; the bench scripts were scratchpad-only.
+
+| finding | number |
+|---|---|
+| trunk shape (61-64 rows): einsum vs best flash | einsum 2-4x FASTER (0.12ms vs 0.32-0.54ms at seq 64) — kernel overhead dominates tiny attentions |
+| crossover where cudnn wins | ~256 rows with `seq_lengths`; decisive only at 2048 (3.09 vs 4.11ms, and plain xla OOMs there — the memory win is real at long seqs) |
+| the mask tax | a DENSE bool mask is folded into an additive bias whose materialisation eats the flash win at every length (cudnn+mask never beats einsum past noise); `seq_lengths` avoids it but is PREFIX-only, and the trunk's validity mask is scattered — structurally inexpressible |
+| the odd-length blocker | cuDNN training backward raises verbatim "Unsupported sequence length Q 61, KV 61" whenever a mask/bias is present — the trunk would need 64-padding |
+| masked-query rows | dpa returns garbage (~0.4) where the einsum's double-mask returns exact 0; the trunk's block-end hard-zero would absorb it, but it is a semantic difference to re-check on any future swap |
+| softcap | max pre-cap logit 7.6 on the trained ckpt_00140000 against the 50 cap — qk layer norm bounds it; INERT INSURANCE, deletable if a future swap needs it gone |
+
+Verdict against the pre-registered bar (adopt at >=5% win at the live shape):
+declined at -2x to -4x. Revisit only when a design grows the sequence past
+~512 with prefix-shaped masking (matchup rows, token-level history, the
+parked world model) — the crossover number above is the deliverable. Also:
+even a winning kernel moves nothing end-to-end today; the 4.2 steps/sec
+system rate is actor-bound (the learner alone does 12.3). The dead
+commented-out dpa call from the original attempt is deleted.
+
+## Investigation ledger — 2026-09-01 GRU scan: hoisted, unroll retuned, the big claim measured DOWN
+
+The follow-up to the flash-attention close-out: the history GRU scan IS the
+mis-shaped compute (measured 34-56% of the actor forward at buckets 128-512,
+~52us/step under learner contention), and the actor side is what binds the
+4.2 steps/sec system rate. The classic cuDNN-RNN restructure — hoist the
+input-side gate GEMMs out of the scan as one batched GEMM, keep only the
+carry-dependent tail serial — was implemented in pure JAX with an IDENTICAL
+param tree (`SplitGRUCell`: children ir/iz/in/hr/hz/hn mirror flax GRUCell's
+Dense layout exactly, so the live lineage's checkpoint loads unchanged).
+
+**The pre-registered >=30% bar FAILED, and the standalone bench that promised
+-38% was a strawman**: the real scan at full GPU already ran 28us/step (the
+bench replica of it: 55us) — XLA had less headroom than the mock suggested.
+Measured on the real module, full GPU, H=512: scan 14.46 -> 13.82ms (hoist)
+-> 13.22ms (+ SCAN_UNROLL 8 -> 32) = **-8.6%**; H=256: -7.4%. Landed anyway
+as a small verified win with three structural improvements riding along:
+the latest-node stream left the scan carry entirely (a last-touched-value
+recurrence is a parallel cummax + gather — BIT-EXACT vs the old carry), the
+per-step segment_sums moved to batched vmapped precompute, and the stacked
+scan outputs shrank 27 -> 15 rows/step. Equivalence gate on real params +
+ex.bin at H=256: nodes exact, recurrent states max|diff| 0.035 / corr
+0.999998 — the compounding bf16-reassociation class the precision ledger
+predicts, from GEMM splitting; landed at a restart boundary of the live
+lineage (checkpoint-mode resume, param tree unchanged).
+
+**The diagnosis with teeth: the slim scan is DEPENDENCY-LATENCY-bound at
+~26us/step** — kernel count per step barely matters (unroll 32 bought 4%).
+The remaining fix classes are (a) a Pallas whole-scan fused kernel (one
+launch for all H steps; ceiling = ~13ms of the ~20ms H=512 actor forward;
+backward pass is the hard part) or (b) an associative-recurrence
+architecture change — both recorded, neither cheap. ALSO measured while
+here: the system-level actor decomposition (GPU forward vs TS service vs
+python plumbing) is still unmeasured, and the inference server has no
+instrumentation — that measurement outranks any further kernel work.
+Ridealong fix: `rl/model/capacity.py`'s probe still unpacked the
+pre-flat-trunk encoder's two return values — latently broken since
+2026-08-29, exposed by the first current-arch checkpoint, ported to the
+61-row sequence (action = private|move|target block, value = CLS row).
 
 ## Audit + input-read redesign — 2026-08-28 (tag `pre-read-redesign-2026-08-28`)
 
@@ -1235,7 +2058,9 @@ value cannot work.
 
 ## 13. Architecture notes worth keeping *(live)*
 
-- **Deep, modality-separated action decoders are empirically necessary.** Make
+- **SET ASIDE 2026-08-29 as confounded** (the flat readout went in on that
+  reading; the ledger above carries the gate that judges it). *Deep,
+  modality-separated action decoders are empirically necessary.* Make
   that depth cheaper; do not remove it. RESTORED 2026-08-25 after a
   three-week regression: every micro parameter is now keyed by slot group
   (`SRC_GROUP_MASK`) and every macro parameter by modality, with no sharing.
@@ -1262,7 +2087,13 @@ value cannot work.
   lecun noise posing as action preferences for CE to unlearn or for the
   policy loss to misread. Exception: the cross-entity pool read gate starts at 1.0, because
   token content can only reach the entity vector through that read.
-- **Cross-entity pooling exists because matchup reasoning is a species-token ×
+- **SET ASIDE 2026-08-29, partially and knowingly** — one token per entity
+  re-adopts entity-local pooling. My 16 candidate moves and the four
+  entity-derived target rows keep BOTH operands of *my move x their mon*,
+  which is the direction a decision turns on; what is given up is their
+  individual revealed moves. The fix if it bites is explicit matchup rows,
+  not re-unpacking attributes. *Cross-entity pooling exists because matchup
+  reasoning is a species-token ×
   move-token comparison across two mons**, and with entity-local pooling there
   is no layer where those two tokens coexist. Cost is only the attention
   probability matrix (168² versus 12·10² + 6·8² per timestep).
@@ -1282,7 +2113,8 @@ value cannot work.
   the per-group/per-modality restoration above; judge it on
   `player_adv_rms_{move,switch,target}` all moving separately and on the
   three `type_scale` entries leaving zero.
-- **One readout, two compositions.** The policy and the advantage score the
+- **RETIRED 2026-08-29** with the advantage head — there is one readout and
+  no second composition. *One readout, two compositions.* The policy and the advantage score the
   SAME src x tgt grid and differ only in `reduce` — `ActionScoreHead`. Before
   2026-08-25 the sequence (adapter -> src_valid -> macro/micro -> compose)
   was open-coded three times (singles policy, doubles stage, Q head) and had

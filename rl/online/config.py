@@ -155,14 +155,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # controller cuts reuse if that ever stops being true.
     main_player_update_steps: int = 50
     add_player_min_frames: int = int(2e5)
-    # Backstop ("overdue") add interval, ~35k learner steps at the current
-    # batch shape. The healthy path — "dominant" adds when main beats every
-    # member >0.7 — is ungated above min_frames, so this clock only paces
-    # snapshots while the agent is NOT visibly improving. At 3e6 (~11.5k
-    # steps) it filled the league with ~0.5-winrate near-copies of main
-    # (mirror play with extra staleness) and made the stagnation clock
-    # hair-trigger.
-    add_player_max_frames: int = int(9e6)
+    # Backstop ("overdue") add interval. The healthy path — "dominant" adds
+    # when main beats every member >0.7 — is ungated above min_frames, so
+    # this clock only paces snapshots while the agent is NOT visibly
+    # improving. At 3e6 (~11.5k steps) it filled the league with
+    # ~0.5-winrate near-copies of main (mirror play with extra staleness)
+    # and made the stagnation clock hair-trigger. 9e6 (~44k steps at the
+    # live batch shape) fired every add of irqeetfg to 640k — the dominant
+    # gate never did — and was doubled 2026-09-04 (~88k steps) together
+    # with the batch cull below.
+    add_player_max_frames: int = int(1.8e7)
     # Learner steps before the first historical snapshot joins the league.
     # Kept low enough that a short (~200k step) run still trains against a
     # populated league rather than pure mirror self-play — mirror-only runs
@@ -171,6 +173,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # stylistically alien opponents.
     minimum_historical_player_steps: int = int(5e4)
     league_size: int = 16
+    # Once an add pushes the roster past league_size, the lowest-retention
+    # snapshots (main's win-rate against them, less a UCB under-sampling
+    # bonus) are culled down to this in one go, so the roster saws between
+    # the two and main's games go to the half it does not already farm.
+    # league_size itself is the old one-eviction-per-add behaviour. Read from
+    # config on resume, not from the checkpoint's serialised copy.
+    league_cull_size: int = 8
     manage_league_interval: int = 10
     # Disk-backed league: max materialised opponents held in RAM at once, and
     # the UCB exploration coefficient governing which stay hot.
@@ -202,6 +211,31 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # a BR launched WITHOUT --num-steps to 0.7 so "train until the target
     # is beaten" is the no-flags behaviour.
     br_stop_winrate: float = 0.0
+    # BR init policy — first launch of a BR child only; a resume keeps
+    # whatever the subtree holds. "target" inherits the frozen target's
+    # params verbatim (the pre-2026-08-30 behaviour — the probe searches
+    # only the target's own basin, and its blind spot is the collapsed
+    # switch axis it inits from). "head-reset" grafts a fresh-init
+    # action_head onto the inherited trunk: uniform over legal cells at
+    # step 0 (the flat readout's init contract), so the exploit axis has
+    # full supply while the world model carries. "shrink-perturb"
+    # interpolates every PLAYER param toward fresh init by
+    # br_perturb_frac (Ash & Adams, arXiv:1910.08475 — the ~179k
+    # perturbation is the one event observed to revive collapsed switch
+    # mass). "scratch" ignores the target's params entirely — recorded
+    # as expected-nonviable (no curriculum against the strongest frozen
+    # policy), kept as the control arm. The builder inherits under every
+    # mode except "scratch".
+    br_init: str = "target"
+    # shrink-perturb only: 0.0 = pure inherit, 1.0 = pure fresh init.
+    # The fresh component is drawn under a key folded off the lineage
+    # seed (apply_br_init) — a same-seed draw is the target's own
+    # ancestor and rotates nothing. Measured calibration (2026-08-30,
+    # vs ckpt_00254992): full-tree fresh/trained norm ratio 0.925, so
+    # frac maps near-linearly onto direction — 0.75 lands at cos 0.40
+    # to the target (0.34 predicted orthogonal; the excess is
+    # structural, e.g. LayerNorm scales ~1.0 in both nets).
+    br_perturb_frac: float = 0.5
 
     # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
     # through main's periodic wandb logs: process RSS + OS-vs-python thread
@@ -211,6 +245,40 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # is one /proc read + a walk over stored trajectories' array headers —
     # negligible at this interval.
     memory_diag_interval: int = 5_000
+
+    # Actor step-timing drain cadence (rl/environment/actor_stats.py):
+    # every N learner steps the shared ActorStats sink is drained into
+    # the logs as per-timer means. 10 steps is ~2.5s, ~100+ actor steps
+    # across the pool — enough samples per point without a per-step
+    # dict merge. The actor-step decomposition it feeds (service wait /
+    # decode / history clip / inference, and the inference server's own
+    # phases) is the baseline the history-carry pass is judged against.
+    actor_stats_log_steps: int = 10
+    # Actor-side history carry (rl/online/player_actor.py, PlayerActor.unroll):
+    # each request runs the history scan over only the steps SINCE the last
+    # request, resumed from the carried post-window state, instead of the
+    # whole window from h0 — the same function (the minGRU scan takes h0 as
+    # an argument), exact up to the bf16 GEMM leading-dim class. Recompute
+    # from scratch at game start, after the service rewrites past rows
+    # (`history_rewrite_count`, an Illusion |replace|) or when the window no
+    # longer contains the carried step. False = today's full-window request
+    # on every step, bit-for-bit (the learner never carries either way) —
+    # the control arm and the abort switch.
+    player_actor_history_carry: bool = True
+    # Where the ACTORS' forward runs (rl/online/main.py). "cpu" = every
+    # PlayerActor (training and eval) and BuilderActor runs its own batch-1
+    # f32 forward on the host through Agent.step_player — no inference
+    # server, no queue, and the GPU stream belongs to the train step
+    # alone. Measured 2026-09-03 beside a live learner: per-actor CPU
+    # inference 23-60 ms against 147 ms through the GPU server (76 of it
+    # queue wait, none of it compute: the server's forward shared one
+    # device stream with the train step). f32 because XLA:CPU only
+    # emulates bf16; params are stored f32 either way, so the actors'
+    # mu differs from the learner's bf16 recompute by bf16 rounding —
+    # player_learner_actor_forward_kl is the watch. "gpu" = the batched
+    # bf16 InferenceServer (rl/online/inference.py), today's path — the
+    # control arm and the abort switch.
+    player_actor_device: str = "cpu"
 
     # OOM guard (learner.py: Learner._check_oom_guard). A self-monitoring
     # safety valve, not a leak fix — added after 1361 crashed, though that
@@ -243,7 +311,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # The player now runs the same trust-regioned PPO surrogate as the
     # builder, the exact case the pro-momentum argument was always
     # about; NashPG's own optimiser is AdamW with default moments.
-    player_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
+    # Player eps 1e-5 (2026-08-31): the NashPG reference explicitly
+    # overrides optax's 1e-8 (`optax.adamw(lr, eps=1e-5)`) and the
+    # reference-diff ledger flagged it as "the one to test" — Adam is
+    # scale-invariant, so a param whose gradient has gone tiny (a starved
+    # switch cell's) still steps at ~full lr along a noise-dominated
+    # direction, and eps is the ONLY damper; 1e-5 engages 1000x sooner.
+    # Builder keeps 1e-8: the divergence concerned the player bracket.
+    player_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-05, weight_decay=0)
     builder_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
     # 3e-5. A 1e-4 trial (Aug 2026, zany-leaf-1305) collapsed: pre-clip grad
     # norms 10-100x the clip, action-emb srank at 0.27 by 13k steps (vs
@@ -322,25 +397,43 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     ## Player
     player_kl_loss_coef: float = 0.05
     player_value_head_loss_coef: float = 1.0
+    # The privileged critic (2026-09-01): trained beside the deployable head
+    # on the SAME win_returns; its CE carries this coefficient.
+    player_priv_value_head_loss_coef: float = 1.0
+    # True routes the v-trace value bootstraps -- and therefore
+    # pg_advantages -- through the privileged head. False is the exact
+    # pre-2026-09-01 estimator (deployable head), the live fallback: the
+    # run continues on the deployable estimator without a lineage break and
+    # the privileged head stays an observer.
+    player_privileged_targets: bool = True
+    # Belief-state shaping (2026-09-01): CE from the matched public rows'
+    # belief logits to the sg'd opponent code. Bounded (<= log K per group),
+    # pi-free, touches representations not logits; 0.0 is an inert-loss off
+    # (predictor params stay in the tree).
+    player_belief_coef: float = 0.25
+    # The latent transition model (2026-09-05, rl/model/transition.py;
+    # supersedes the delta dynamics head of 2026-09-03/04): g(h_t, a, z)
+    # over the post-trunk policy-readable rows with a chance code z. This
+    # coefficient brackets the whole term -- consistency (normalised MSE
+    # of the imagined rows against the real next rows, per sequence group,
+    # copy predictor = 1), grounding (the old head's pre-trunk label at
+    # t+1, normalised the same way), value (the shared critic on the
+    # imagined CLS row, CE to the t+1 win_returns), policy (the shared
+    # readout on the imagined rows, forward KL to the sg'd target policy
+    # at t+1 over the real next mask), the next-mask BCE + request kind
+    # CE, done BCE, and the two KL halves below. pi-free; shapes the trunk
+    # and the readout's operands. 0.25 is the retune if the temp-1 eval wr
+    # falls -0.03 over the hold; 0.0 is an inert-loss off (params stay).
+    player_dynamics_coef: float = 0.5
+    # DreamerV3's KL balancing: the prior is pulled to the sg'd posterior
+    # at dyn_coef, the posterior to the sg'd prior at rep_coef, each half
+    # clipped below at free_nats per transition (summed over code groups)
+    # so a code that is already predictable pays nothing. Posterior
+    # collapse (kl < 0.1 for 5k) -> rep 0.05 and free nats 2, once.
+    player_transition_dyn_coef: float = 0.5
+    player_transition_rep_coef: float = 0.1
+    player_transition_free_nats: float = 1.0
 
-    # All-action Q critic (docs/q-critic-plan.md) — STRUCTURAL since
-    # 2026-08-20 (no enable flag): the hierarchical advantage head is
-    # part of the model, its loss always trains, and every consumer
-    # assumes it exists. Singles only (asserted in
-    # get_player_model_config).
-    # Huber weight — deliberately modest, per the grad-norm
-    # lesson from the integrated-critic era: a heavy auxiliary gradient globally clips
-    # everything (CLAUDE.md 5).
-    player_q_coef: float = 0.5
-    # No trace parameter since 2026-08-23 (Step 3): the residual critic
-    # regresses on the TD(0) label r + gamma*V_win_target(s'). Retrace at
-    # q_lambda 1.0 / pi lambda 0.8 (the outcome chain within the chunk)
-    # is in git history; the Step-6 probe showed the categorical head
-    # fitting those labels through a state-only route, which the residual
-    # form closes. Since 2026-08-26 the policy no longer reads this stack
-    # — it is the matched-control observer (same modules as the policy
-    # head under a different loss) and the Retrace value baseline.
-    #
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
     # pi/mu with a batch-normalised v-trace advantage from V, plus a
@@ -361,10 +454,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # previous logit-force loss needed a force clip, centred logits and
     # b1=0 to contain.
     player_ppo_clip: float = 0.2
-    # Which surrogate policy_gradient_loss runs for the player: "ppo"
-    # (NashPG's own rule) or "spo" (the builder's smooth quadratic) for
-    # an A/B. Static config: switching costs one recompile at launch.
-    player_pg_objective: str = "ppo"
+    # Which surrogate policy_gradient_loss runs for the player: "spo"
+    # (the smooth quadratic the builder also runs, 2026-08-30) or "ppo"
+    # (NashPG's own rule) for an A/B. Static config: switching costs one
+    # recompile at launch.
+    player_pg_objective: str = "spo"
     # Differentiated REVERSE KL(pi || pi_reg) magnet, NashPG's mag_coef —
     # their Algorithm 4 line 8 / eq. 12 verbatim, D_KL(pi_theta(.|o) ||
     # rho(.|o)) under E_{o~pi}, i.e. the OPTIMISED policy is the first
@@ -383,56 +477,49 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # never starts. switch_ratio through the 13k wire is the acceptance
     # gate; the analytic-shift form is in git history if it fails.
     player_mag_coef: float = 0.2
-    # Entropy bonus, differentiated — FACTORISED 2026-08-27 (the Oct–Nov
-    # 2025 form rebuilt on the composed head): the coefficient now scales
-    # H(macro) + H(micro | taken modality), each masked-AVERAGED over its
-    # own row set (macro: >= 2 live modalities; micro: taken modality has
-    # >= 2 legal cells). The joint H it replaces decomposes as H(macro) +
-    # sum_m pi_m * H(micro|m) — its within-switch pressure died in
-    # proportion to switch mass, defunding the which-axis exactly as the
-    # modality shrank, and offered one budget payable wherever entropy was
-    # cheapest (the measured blindness: global 0.755 while modality 0.22).
-    # Unit weights are per-axis budgets; the masked average makes a rare
-    # taken-modality's term inverse-frequency amplified; and it is a
-    # temperature — per axis the equilibrium is pi ∝ exp(A/coef), so live
-    # evidence beats it wherever it exists (the injection post-mortem's
-    # temperature-vs-target law).
+    # Entropy bonus, differentiated — NashPG's ent_coef verbatim
+    # (2026-08-30): the plain JOINT entropy over legal cells, one static
+    # coefficient. Up to a constant this is the reverse KL to uniform.
+    # The per-axis split (H(macro) + H(micro|taken), 2026-08-27) and the
+    # SAC-style dual temperatures holding each at a normalised target
+    # (2026-08-28) are removed with the forward-KL-to-uniform term — the
+    # per-level entropies survive as OBSERVER panels only
+    # (loss.factorised_entropies). Revert handles in the CLAUDE.md
+    # ledgers.
+    player_ent_coef: float = 0.01
+    # The ZERO-AVOIDING term (loss.uniform_kl_modalities): forward KL from
+    # the CONSTANT uniform over each row's LIVE MODALITIES, modality-level
+    # gradient exactly pi_m - 1/M. It is the only force in the bracket that
+    # is not pi-prefactored, and that is not a matter of degree: the
+    # surrogate's expected force on a cell carries the same pi_b the entropy
+    # bonus does, so their ratio is mass-independent and the entropy
+    # equilibrium is exp(-|A|/alpha) -- no coefficient holds a floor, which
+    # is what four retunes (0.01/0.05/0.1/0.2) measured. Here the prefactor
+    # cancels on one side only: equilibrium modality mass ~ coef/(M*|A|), so
+    # the ask DIVERGES as the modality starves and RELAXES as evidence
+    # arrives.
     #
-    # ENTROPY FLOOR (2026-08-28): the two per-axis coefficients are now
-    # ADAPTIVE dual variables (SAC-style: alpha rises while its axis's
-    # normalised entropy sits below target, relaxes above it), stored as
-    # log-space leaves on the player TrainState — traced, so the
-    # controller varies them with NO recompile (the run-1326 rule) — and
-    # updated by loss.entropy_floor_step after each grad step, frozen on
-    # batches with no rows for an axis (average() reads 0.0 there, which
-    # would spuriously inflate alpha). player_ent_coef is the INIT of
-    # both alphas. This is the CLAUDE.md-4 prescription firing: four
-    # static-coef retunes each collapsed (0.01/0.05/0.1/0.2), so the coef
-    # gets a controller with a target-entropy set-point. The controller
-    # still only picks the TEMPERATURE — which cells hold the mass stays
-    # decided by evidence, so it cannot erase within-modality
-    # discrimination the way the mass-injection family did. Targets are
-    # NORMALISED (fraction of each level's own log k): the Nov-2025
-    # stable lineage's raw action entropy (0.5-1.4 nats lifetime,
-    # generous-sky-444) is the same band today's GLOBAL H occupies — what
-    # distinguished it is that entropy stayed distributed across BOTH
-    # axes (the modality axis never died), which only the per-axis
-    # normalised floors can see. 0.5 sits between healthy launch
-    # (normalised modality entropy 0.836) and collapse (0.23). Target
-    # 0.0 = that axis's controller OFF (alpha frozen at init — exactly
-    # the static-coef behaviour). Alpha pinned at max = the ask is
-    # infeasible against the PG at this bound — the abort instrument,
-    # never a reason to widen the bound silently.
-    player_ent_coef: float = 0.05
-    player_ent_target_macro: float = 0.5
-    player_ent_target_micro: float = 0.5
-    # Dual step size on log alpha per train step: at a persistent error
-    # of 0.5 an e-fold takes ~2k steps, so 0.05 -> 0.5 (ln 10 = 2.3
-    # e-folds) in ~4.6k steps — fast against the 13k collapse wire, slow
-    # against batch noise.
-    player_ent_alpha_lr: float = 1e-3
-    player_ent_alpha_min: float = 0.005
-    player_ent_alpha_max: float = 0.5
+    # WHY THE MARGINAL (2026-08-31, the sp75b/sp75c matched BR pair): the
+    # row form (pi_b - 1/k over every legal cell) bought every mass metric
+    # (entropy_macro 2.8x the control, prob_switch 4.3x, vol_switch_rows
+    # 7.7x) and HALVED the exploit (0.186 vs 0.343 @69k) -- it separated
+    # moves from each other with the same force it restored switch mass
+    # with, entropy_micro_taken pinned at 0.93. The marginal form's loss
+    # depends on the modality masses alone: within-modality redistribution
+    # is IDENTICALLY invariant, and the per-cell force is proportional to
+    # the policy's own conditional -- the regulariser says WHETHER, never
+    # WHICH, as an algebraic identity rather than a hope.
+    #
+    # Sized on the equilibrium, never on loss balance, with M = 2-3 against
+    # the row form's k ~ 10 -- the SAME coefficient buys ~5x the modality
+    # mass, so 0.025 here is not the sp75d halving arm resized: it holds
+    # switch mass ~0.06 against a 0.2 sigma headwind and ~0.025 against
+    # 0.5 sigma, floors comfortably above the 0.015 collapse level that
+    # still yield to real evidence. Set 0.0 for a control arm -- that is
+    # bit-identical to no term at all. Watch: player_loss_modality_kl
+    # falling as switch mass returns is the term relaxing (healthy); pinned
+    # with mass unmoved is paying-and-buying-nothing (the abort).
+    player_uniform_kl_coef: float = 0.025
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,
     # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every

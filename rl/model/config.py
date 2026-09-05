@@ -3,7 +3,7 @@ import pprint
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import CAT_VF_SUPPORT
+from rl.environment.data import CAT_VF_SUPPORT, NUM_REQUEST_TYPES
 
 
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
@@ -22,7 +22,12 @@ def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
 DEFAULT_DTYPE = jnp.bfloat16
 
 
-def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
+def get_player_model_config(
+    generation: int = 3, train: bool = False, dtype: jnp.dtype = DEFAULT_DTYPE
+) -> ConfigDict:
+    """``dtype`` is the forward's COMPUTE dtype (params are stored f32
+    regardless). bf16 on the GPU; the CPU actor path passes f32, since XLA:CPU
+    only emulates bf16."""
     cfg = ConfigDict()
 
     base_size = 64
@@ -33,7 +38,7 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
 
     cfg.generation = generation
     cfg.entity_size = entity_size
-    cfg.dtype = DEFAULT_DTYPE
+    cfg.dtype = dtype
     cfg.train = train
     # 1 = singles (one flat categorical per request — the historical path,
     # bit-identical). 2 = doubles: two head-level decision stages per turn,
@@ -46,9 +51,11 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.encoder = ConfigDict()
     cfg.encoder.generation = generation
     cfg.encoder.entity_size = entity_size
-    cfg.encoder.dtype = DEFAULT_DTYPE
+    cfg.encoder.dtype = dtype
+    # The actor's encoder assembles the policy-readable rows only
+    # (Encoder.kept_rows); the learner's every row.
+    cfg.encoder.train = train
 
-    encoder_num_layers = 1
     encoder_num_heads = num_heads
     encoder_hidden_size_scale = 4
     encoder_hidden_size = int(encoder_hidden_size_scale * entity_size)
@@ -56,64 +63,6 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     encoder_qkv_size = int(encoder_qkv_scale * entity_size)
     encoder_use_bias = True
     encoder_qk_layer_norm = True
-    # 0.05, not 0.0 (2026-08-24): the entity pool's self-attention sat at
-    # mha_a -0.026 / ffn_a -0.003 after 74.6k steps -- a zero-init scalar
-    # times a random block is a product whose gate gradient has no
-    # consistent sign under RL noise and whose block gradient is exactly
-    # 0 until the gate moves. See cfg.encoder.round.init_gate.
-    encoder_init_residual_scale = 0.05
-
-    decoder_num_layers = 1
-    decoder_num_heads = num_heads
-    decoder_hidden_size_scale = 4
-    decoder_hidden_size = int(decoder_hidden_size_scale * entity_size)
-    decoder_qkv_scale = 1 / decoder_num_heads
-    decoder_qkv_size = int(decoder_qkv_scale * entity_size)
-    decoder_use_bias = True
-    decoder_qk_layer_norm = True
-    decoder_init_residual_scale = 0.0
-
-    transformer_encoder_kwargs = dict(
-        num_layers=encoder_num_layers,
-        num_heads=encoder_num_heads,
-        qk_size=encoder_qkv_size,
-        v_size=encoder_qkv_size,
-        model_size=entity_size,
-        use_bias=encoder_use_bias,
-        resblocks_hidden_size=encoder_hidden_size,
-        qk_layer_norm=encoder_qk_layer_norm,
-        init_residual_scale=encoder_init_residual_scale,
-    )
-
-    transformer_decoder_kwargs = dict(
-        num_layers=decoder_num_layers,
-        num_heads=decoder_num_heads,
-        qk_size=decoder_qkv_size,
-        v_size=decoder_qkv_size,
-        model_size=entity_size,
-        use_bias=decoder_use_bias,
-        resblocks_hidden_size=decoder_hidden_size,
-        qk_layer_norm=decoder_qk_layer_norm,
-        init_residual_scale=decoder_init_residual_scale,
-    )
-
-    cfg.encoder.intra_entity_encoder = ConfigDict()
-    cfg.encoder.intra_entity_pool = ConfigDict()
-    set_attributes(cfg.encoder.intra_entity_encoder, **transformer_encoder_kwargs)
-    set_attributes(cfg.encoder.intra_entity_pool, **transformer_decoder_kwargs)
-
-    # Intra-entity attention: each pokemon is a short set of attribute tokens
-    # (species / ability / item / moves / state) mixed by a small
-    # self-attention block, then pooled back to one entity vector by a single
-    # learned query. Runs per-entity over ~10 tokens, so its cost is
-    # negligible next to the trunk. The pool's residual gate starts at 1.0 —
-    # unlike the trunk blocks, token content can only reach the entity vector
-    # through this read, so it must not start as a no-op.
-    cfg.encoder.intra_entity_encoder.need_pos = False
-    cfg.encoder.intra_entity_encoder.num_layers = 1
-    cfg.encoder.intra_entity_pool.need_pos = False
-    cfg.encoder.intra_entity_pool.num_layers = 1
-    cfg.encoder.intra_entity_pool.init_residual_scale = 1.0
 
     # Perceiver-style latent input read (2026-08-21): K learned latents
     # cross-attend ONE flat token set -- 12 public x 11 (10 attributes plus
@@ -130,61 +79,43 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # land BELOW the pre-pool entity-local baseline (182.5MB at T=64);
     # measure before merge. The read's residual starts at 1.0: token
     # content reaches the latents only through it.
-    cfg.encoder.num_latents = 48
-    cfg.encoder.latent_read = ConfigDict()
-    set_attributes(cfg.encoder.latent_read, **transformer_decoder_kwargs)
-    cfg.encoder.latent_read.need_pos = False
-    cfg.encoder.latent_read.num_layers = 1
-    cfg.encoder.latent_read.init_residual_scale = 1.0
-
-    # Round trunk over the unified [state | action | value] sequence: each
-    # round is masked self-attention over the state latents, the action
-    # self-attention plus the state<->action exchange, the value rows'
-    # read of the state stream, then group-level FFWs (attention sublayers
-    # are attention-only, canonical decoder-layer shape). History reaches
-    # the trunk only through the latent input read, not through a
-    # per-round cross-read. nn.scan-ned
-    # num_rounds times with stacked params, so every round has its own
-    # weights and rounds can specialize instead of iterating one shared
-    # refinement operator. All residual gates are zero-init, so extra
-    # rounds are stable to add; each round adds parameters as well as
-    # compute. 4 rounds matches the Nov 2025 everything-transformer depth.
-    # Attention pooling of the recurrent history states into a fixed bank of
-    # learned latents. Shared between the RL trunk (extra history-context
-    # tokens) and the offline outcome critic (flattened latents -> linear
-    # probe), so outcome-readout capacity lands in warm-startable params.
     cfg.encoder.history_pool = ConfigDict()
     cfg.encoder.history_pool.num_latents = 4
     cfg.encoder.history_pool.num_heads = num_heads
     cfg.encoder.history_pool.qk_size = encoder_qkv_size
     cfg.encoder.history_pool.use_bias = encoder_use_bias
 
-    cfg.encoder.num_rounds = 4
-    cfg.encoder.round = ConfigDict()
-    cfg.encoder.round.num_heads = num_heads
-    cfg.encoder.round.qk_size = encoder_qkv_size
-    cfg.encoder.round.v_size = encoder_qkv_size
-    cfg.encoder.round.model_size = entity_size
-    cfg.encoder.round.hidden_size = encoder_hidden_size
-    cfg.encoder.round.use_bias = encoder_use_bias
-    cfg.encoder.round.qk_layer_norm = encoder_qk_layer_norm
-    # Init of every RoundBlock residual gate (2026-08-24; was a hard-coded
-    # zeros_init). Offline gate-contribution read on ckpt_00074597
-    # (rl/offline/gate_contribution.py): all six FFWs (48% of the params)
-    # and the state self-attention contributed <= 5e-4 of their stream in
-    # every round -- gates at |g| ~ 1e-3, a random walk -- while every
-    # ones-init scale and every cross-stream READ gate trained. ReZero's
-    # alpha = 0 needs <f_random(x), delta> to carry a consistent sign; it
-    # does not here (RL noise, and the reads open first and make the FFW's
-    # random features redundant), and the block's own gradient is exactly
-    # 0 until alpha moves. Any non-zero constant hands the block a
-    # direction-consistent gradient from step 0 under Adam; 0.05 keeps the
-    # init contribution at ~1% of the state/action streams (~5% of the
-    # tiny value streams). The head's flat-at-init contract is untouched
-    # (type_scale, the zero-init micro_local_src/tgt routes and the
-    # zero-init macro out layers all live in the head).
-    # Acceptance: FFW contribution >= 0.01 at the 20k read.
-    cfg.encoder.round.init_gate = 0.05
+    # The step GAT (2026-09-02): one attention layer over the rows of a
+    # single history step (up to 8 mons touched by one major log line, self
+    # included), replacing the masked mean over the step's source rows
+    # that every message used to carry. Each row's message now reads WHO
+    # else was in the step and what happened to them, weighted by content
+    # rather than averaged -- a tidy-up in singles (2-source steps are
+    # 2-row steps, so the mean was invertible), load-bearing for doubles
+    # spread moves. Zero-init output projection: identity at step 0.
+    cfg.encoder.history_step = ConfigDict()
+    cfg.encoder.history_step.num_heads = 2
+    cfg.encoder.history_step.qk_size = encoder_qkv_size // 2
+
+    # The trunk: `num_blocks` standard pre-RMSNorm blocks over ONE sequence
+    # of NUM_SEQUENCE_ROWS rows (80; the actor assembles the 73
+    # policy-readable ones, encoder.kept_rows) -- see rl/model/trunk.py.
+    # Replaces the
+    # four-round, three-stream, five-masked-attention RoundBlock on
+    # 2026-08-29: at 61 rows an all-pairs attention is 3.7k cells, so the
+    # block masks that encoded the routing were buying nothing but their own
+    # complexity, and the 48 latents they fed were a bottleneck between rows
+    # the trunk can now simply carry. Depth is the knob: a block costs ~1.05M
+    # params and almost no attention at this sequence length.
+    cfg.encoder.trunk = ConfigDict()
+    cfg.encoder.trunk.num_blocks = 6
+    cfg.encoder.trunk.num_heads = num_heads
+    cfg.encoder.trunk.qk_size = encoder_qkv_size
+    cfg.encoder.trunk.v_size = encoder_qkv_size
+    cfg.encoder.trunk.model_size = entity_size
+    cfg.encoder.trunk.hidden_size = encoder_hidden_size
+    cfg.encoder.trunk.use_bias = encoder_use_bias
+    cfg.encoder.trunk.qk_layer_norm = encoder_qk_layer_norm
 
     # Within-modality (micro) readout: NO config block — the head is a
     # parameter-less dot grid over the typed trunk streams (2026-08-17)
@@ -193,55 +124,20 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     # (move/switch/target residual streams with per-type gates), not in
     # per-modality head stacks.
 
-    # The two action-axis readouts (2026-08-25). Both are ActionScoreHead
-    # over the same src x tgt grid — adapter -> macro/micro -> composition —
-    # and differ only in `reduce`, set at the call site in player_model:
-    # the policy multiplies softmaxes in log space, the advantage adds macro
-    # onto the legality-centred micro. Same shape of config for both, so the
-    # asymmetries between them are visible as config diffs rather than buried
-    # in two hand-written forward passes.
+    # The action readout (2026-08-29). Three small heads over named trunk
+    # rows -- a scalar per sheet row for switching, ONE bilinear for
+    # moves x targets, a scalar per target row for pass/default -- replacing
+    # the hierarchical macro/micro stack that was instantiated twice, for a
+    # policy and for an advantage head the policy did not read. 2.65M
+    # parameters became 0.13M.
     #
-    # Each owns a zero-init residual ADAPTER onto the trunk's action
-    # embeddings: exact identity at init and at a params-mode fresh reload,
-    # so adding one is policy-preserving, and the advantage head's loss
-    # cannot reshape the policy's micro geometry directly.
-    #
-    # num_logits 1 on both: a SCALAR per cell. For the advantage that is
-    # A(s, a), with Q = sg(V) + A centred under pi (heads.compose_q) — the
-    # categorical per-cell readout it replaced (2026-08-23, Step 3 of
-    # docs/critic-weakness-analysis.md) let the head fit taken-cell labels
-    # through a state-only route (Step 6 probe: label floor reached with
-    # within-state action variance collapsing 5x).
-    def _action_score_head() -> ConfigDict:
-        head = ConfigDict()
-        head.adapter = ConfigDict()
-        head.adapter.mlp = ConfigDict()
-        head.adapter.mlp.layer_sizes = entity_size
-        head.macro_micro = ConfigDict()
-        head.macro_micro.num_logits = 1
-        # Per-slot-group micro projections (2026-08-25): qk_size is the
-        # width EACH group gets, so the Dense is entity_size x (3 * qk_size)
-        # and the three groups own disjoint coordinates. Set explicitly —
-        # the num_heads default would have silently split entity_size three
-        # ways and shrunk every group to 85.
-        head.macro_micro.micro_qk = ConfigDict()
-        head.macro_micro.micro_qk.qk_size = entity_size
-        head.macro_micro.micro_qk.use_bias = True
-        head.macro_micro.micro_qk.qk_layer_norm = True
-        # Modality-level head: per-modality attention pooling over src-slot
-        # embeddings, MLP, zero-init output layer (keeps the init policy
-        # anchored to calculate_hierarchical_prior).
-        head.macro_micro.macro = ConfigDict()
-        head.macro_micro.macro.qk_logits = ConfigDict()
-        head.macro_micro.macro.qk_logits.num_heads = 1
-        head.macro_micro.macro.qk_logits.use_bias = True
-        head.macro_micro.macro.qk_logits.qk_layer_norm = True
-        head.macro_micro.macro.mlp = ConfigDict()
-        head.macro_micro.macro.mlp.layer_sizes = entity_size
-        return head
-
-    cfg.policy_head = _action_score_head()
-    cfg.advantage_head = _action_score_head()
+    # qk_size is the bilinear's projection width. It is the ONLY dimension
+    # here: there is no adapter (the head reads the trunk's rows directly),
+    # no per-group projection (a move row and a target row are already
+    # different kinds of thing), and no per-modality block (modality is a
+    # function of the src half, so `local_src` carries it).
+    cfg.action_head = ConfigDict()
+    cfg.action_head.qk_size = entity_size
 
     # Deep value readout (Aug 2026): the previous single linear layer made
     # the value head the thinnest module in the model while the action
@@ -254,6 +150,74 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
     cfg.v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The privileged critic (2026-09-01): same shape as v_head, reading the
+    # VALUE_CLS row of the leak-masked partition. Only instantiated under
+    # cfg.train (see Porygon2PlayerModel.setup).
+    cfg.priv_v_head = ConfigDict()
+    cfg.priv_v_head.mlp = ConfigDict()
+    cfg.priv_v_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        len(CAT_VF_SUPPORT),
+    )
+    cfg.priv_v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The opponent discrete code: per mon, num_groups categoricals of
+    # num_classes -- 16x16 = a 64-bit-ish joint space over a randbats build
+    # pool, with entity_size divisible by num_groups so the code embedding
+    # concatenates to one row.
+    cfg.encoder.opp_code = ConfigDict()
+    cfg.encoder.opp_code.num_groups = 16
+    cfg.encoder.opp_code.num_classes = 16
+    # The belief head: matched public row -> the mon's (G, K) code logits.
+    cfg.belief_head = ConfigDict()
+    cfg.belief_head.mlp = ConfigDict()
+    cfg.belief_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.encoder.opp_code.num_groups * cfg.encoder.opp_code.num_classes,
+    )
+    # The revealed-row control (2026-09-04): the belief head's (G, K)
+    # logits again, from NOTHING but the matched mon's own PRE-trunk
+    # public row (stop-gradient) -- no history, no other rows. Same
+    # widths as the belief head, so the two differ only in what they may
+    # read; their accuracy gap is inference from CONTEXT.
+    cfg.revealed_belief = ConfigDict()
+    cfg.revealed_belief.mlp = ConfigDict()
+    cfg.revealed_belief.mlp.layer_sizes = cfg.belief_head.mlp.layer_sizes
+    # The latent transition model (2026-09-05, rl/model/transition.py):
+    # g(h_t, a, z) -> h_{t+1} over the 73 policy-readable post-trunk rows,
+    # `block.num_blocks` TrunkBlocks of the trunk's own shape, conditioned
+    # on the taken cell's readout rows and a chance code z of
+    # `code_groups` categoricals over `code_classes` (prior from h_t and
+    # a; posterior also reads the real t+1 rows, learner-only). Heads on
+    # the imagined rows: grounding (per row -> the t -> t+1 CHANGE in the
+    # DYNAMICS_TARGET_ROWS' pre-trunk content), the next action mask (the action readout's
+    # own form, instantiated a second time), and one cls head for the next
+    # request kind + done. `code_groups = 0` is the mean latent model
+    # (no code path at all). The shared v_head / action_head are applied
+    # to the imagined rows in the parent model.
+    cfg.transition = ConfigDict()
+    cfg.transition.block = ConfigDict(cfg.encoder.trunk.to_dict())
+    cfg.transition.block.num_blocks = 2
+    cfg.transition.code_groups = 2
+    cfg.transition.code_classes = 16
+    cfg.transition.prior = ConfigDict()
+    cfg.transition.prior.mlp = ConfigDict()
+    cfg.transition.prior.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.transition.code_groups * cfg.transition.code_classes,
+    )
+    cfg.transition.posterior = ConfigDict()
+    cfg.transition.posterior.mlp = ConfigDict()
+    cfg.transition.posterior.mlp.layer_sizes = cfg.transition.prior.mlp.layer_sizes
+    cfg.transition.ground = ConfigDict()
+    cfg.transition.ground.mlp = ConfigDict()
+    cfg.transition.ground.mlp.layer_sizes = (2 * entity_size, entity_size)
+    cfg.transition.cls_head = ConfigDict()
+    cfg.transition.cls_head.mlp = ConfigDict()
+    cfg.transition.cls_head.mlp.layer_sizes = (entity_size, NUM_REQUEST_TYPES + 1)
+    cfg.transition.action_head = cfg.action_head
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step
@@ -264,7 +228,9 @@ def get_player_model_config(generation: int = 3, train: bool = False) -> ConfigD
     return cfg
 
 
-def get_builder_model_config(generation: int = 3, train: bool = False) -> ConfigDict:
+def get_builder_model_config(
+    generation: int = 3, train: bool = False, dtype: jnp.dtype = DEFAULT_DTYPE
+) -> ConfigDict:
     cfg = ConfigDict()
 
     base_size = 64
@@ -275,7 +241,7 @@ def get_builder_model_config(generation: int = 3, train: bool = False) -> Config
 
     cfg.entity_size = entity_size
     cfg.generation = generation
-    cfg.dtype = DEFAULT_DTYPE
+    cfg.dtype = dtype
 
     num_layers = 4
     num_heads = num_heads

@@ -1,24 +1,32 @@
-# RL Transformer Agent
+# The player model
 
-A JAX/Flax implementation of a transformer-based reinforcement-learning agent designed for a structured environment with rich entity and action graphs (e.g. Pokémon-style turn-based battles).
+A JAX/Flax transformer over one sequence of 61 rows, one row per THING on the
+board: a CLS row, 12 public entities, my 6 sheet rows, my 16 candidate move
+slots, the 17 target slots, the current field triple, the recurrent field
+triple, the previous action and the request info. 13.47M parameters.
 
 ## Folder layout
 
-| File         | Purpose                                                                                                                                         |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.py`  | Builds a hierarchical `ConfigDict` describing the full model architecture and hyper-parameters.                                                 |
-| `encoder.py` | Encodes raw environment observations (entities, edges, history) into dense latent embeddings using multiple Transformer encoder/decoder blocks. |
-| `heads.py`   | Policy and value heads that map latent embeddings to action logits and scalar value estimates.                                                  |
-| `model.py`   | Combines encoder and heads into a full RL network with train and inference passes plus utilities for parameter counting.                        |
-| `modules.py` | Core neural-network building blocks (attention, feed-forward, SwiGLU, etc.) shared across the codebase.                                         |
-| `profile.py` | Utility script that compiles the model and prints FLOPs to help with performance profiling.                                                     |
-| `viz.py`     | Visualises XLA cost analysis for quick model inspection.                                                                                        |
+| File | Purpose |
+| ---- | ------- |
+| `constants.py` | The sequence layout — the row groups, the derived offsets, and the named slices each head reads. Every `NUM_*` is a `len()`, never a literal. |
+| `config.py` | The `ConfigDict` describing the architecture. |
+| `encoder.py` | Feature embedders, the entity-local pools, the recurrent history encoder, and `_assemble_sequence` — everything that turns a proto observation into the 61 rows. |
+| `trunk.py` | The trunk: N unshared pre-RMSNorm blocks (self-attention + one shared SwiGLU MLP), no gates, no block masks. |
+| `heads.py` | `FlatActionReadout` (a scalar per sheet row for switching, one bilinear for moves x targets, a scalar per target row for pass/default) and the categorical value head, which reads the CLS row and nothing else. |
+| `player_model.py` | Trunk + readouts, sampling, and the doubles two-stage dispatch. Run it for parameter counts. |
+| `history_encoder.py` | The per-slot GRU scan over the packed history cache. |
+| `modules.py` | Generic primitives only — attention, SwiGLU, RMSNorm, pointer logits. Architecture lives next to its wiring. |
+| `builder_model.py` | The team builder, a separate network. |
+| `features.py`, `utils.py` | Feature encodings and small shared helpers. |
+| `profile.py` | Compiles the model and prints a FLOP estimate. |
+| `capacity.py` | Parameter-count breakdown helpers. |
 
-## Profiling & FLOP counting
+## Parameter counts and profiling
 
 ```bash
-python profile.py   # Prints FLOP estimate
-python viz.py       # Dumps XLA cost analysis
+env/bin/python -m rl.model.player_model   # per-module parameter counts
+env/bin/python -m rl.model.profile        # FLOP estimate
 ```
 
-Both scripts compile the network once and can be adapted for TensorBoard tracing.
+Attention maps over a checkpoint live in `scripts/attn_probe.py`.

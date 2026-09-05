@@ -127,6 +127,5 @@ class InferenceModel:
 
         return StepResponse(
             **floats,
-            src=agent_output.actor_output.action_head.src_index.item(),
-            tgt=agent_output.actor_output.action_head.tgt_index.item(),
+            cell=agent_output.actor_output.action_head.action_index.item(),
         )

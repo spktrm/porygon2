@@ -109,7 +109,6 @@ class MultiHeadAttention(nn.Module):
     need_pos: bool = False
     use_bias: bool = True
     dtype: jnp.dtype = jnp.float32
-    implementation: str | None = None  # "cudnn"
     collect_intermediates: bool = False
 
     @nn.compact
@@ -178,18 +177,24 @@ class MultiHeadAttention(nn.Module):
                 *key_heads.shape
             )
 
-        # target_shape = list(mask.shape)
-        # target_shape[-3] = self.num_heads
-        # mask = jnp.broadcast_to(mask, target_shape)
-
-        # attn = jax.nn.dot_product_attention(
-        #     query_heads,
-        #     key_heads,
-        #     value_heads,
-        #     mask=mask,
-        #     implementation=self.implementation,
-        # )
-
+        # DELIBERATELY the plain einsum, not jax.nn.dot_product_attention /
+        # cuDNN flash. Measured 2026-09-01 (fwd+bwd ms, bf16, 4 heads x 64,
+        # B*T = 8192 tokens; einsum / dpa-xla / cudnn+dense-mask /
+        # cudnn+seq_lengths): seq 64: 0.12/0.27/0.54/0.32; 128:
+        # 0.16/0.42/0.46/0.53; 256: 0.68/0.70/0.73/0.58; 512:
+        # 1.02/0.72/1.30/0.75; 1024: 1.42/1.53/2.33/1.71; 2048:
+        # 4.11/OOM/4.23/3.09. At the trunk's 61-64 rows the einsum is 2-4x
+        # FASTER than every flash variant (kernel overhead dominates), and
+        # the only variant that ever clearly wins (cudnn+seq_lengths, from
+        # ~256 and decisively at 2048 where plain xla OOMs) cannot express
+        # this module's SCATTERED validity mask -- seq_lengths is
+        # prefix-only, and a dense mask is folded into an additive bias
+        # whose materialisation eats the flash win (and trips cuDNN's
+        # odd-length training limitation at 61). Revisit only when a design
+        # grows the sequence past ~512 WITH prefix-shaped masking; the
+        # softcap below is not a blocker then -- max |pre-cap logit| on the
+        # trained model measured 7.6 against the 50 cap (qk layer norm
+        # bounds it), so it is deletable insurance.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = softcap(attn_logits / np.sqrt(qk_size).astype(q.dtype))
 
@@ -377,148 +382,6 @@ class TransformerEncoder(nn.Module):
         return qkv
 
 
-class DecoderBlock(nn.Module):
-    num_heads: int
-    qk_size: int
-    v_size: int
-    model_size: int
-    use_bias: bool = False
-    need_pos: bool = False
-    qk_layer_norm: bool = True
-    resblocks_hidden_size: int | None = None
-    init_residual_scale: float = 1.0
-    collect_intermediates: bool = False
-
-    @nn.compact
-    def __call__(
-        self,
-        q: jax.Array,
-        kv: jax.Array,
-        attn_mask: jax.Array,
-        positionwise_mask: jax.Array,
-        q_positions: jax.Array | None = None,
-        kv_positions: jax.Array | None = None,
-    ):
-        q_ln = layer_norm(q)
-        kv_ln = layer_norm(kv)
-        mha = MultiHeadAttention(
-            num_heads=self.num_heads,
-            qk_size=self.qk_size,
-            v_size=self.v_size,
-            model_size=self.model_size,
-            use_bias=self.use_bias,
-            qk_layer_norm=self.qk_layer_norm,
-            need_pos=self.need_pos,
-            dtype=q.dtype,
-            collect_intermediates=self.collect_intermediates,
-        )(
-            q=q_ln,
-            kv=kv_ln,
-            mask=attn_mask,
-            q_positions=q_positions,
-            kv_positions=kv_positions,
-        )
-        mha_a = self.param(
-            "mha_a", nn.initializers.constant(self.init_residual_scale), (1,)
-        )
-        q = q + mha_a.astype(q.dtype) * mha
-        qkv_ln = layer_norm(q)
-        ffn = FFWMLP(
-            hidden_size=self.resblocks_hidden_size,
-            use_bias=self.use_bias,
-        )(qkv_ln)
-        ffn_a = self.param(
-            "ffn_a", nn.initializers.constant(self.init_residual_scale), (1,)
-        )
-        q = q + ffn_a.astype(q.dtype) * ffn
-        return jnp.where(positionwise_mask, q, 0), None
-
-
-class TransformerDecoder(nn.Module):
-    qk_size: int
-    v_size: int
-    model_size: int
-    num_layers: int
-    num_heads: int
-    use_bias: bool = False
-    need_pos: bool = False
-    qk_layer_norm: bool = True
-    resblocks_hidden_size: int | None = None
-    init_residual_scale: float = 1.0
-    do_checkpoint: bool = DO_CHECKPOINT
-    collect_intermediates: bool = COLLECT_INTERMEDIATES
-    norm_output: bool = False
-
-    @nn.compact
-    def __call__(
-        self,
-        q: jax.Array,
-        kv: jax.Array,
-        q_mask: jax.Array | None = None,
-        kv_mask: jax.Array | None = None,
-        attn_mask: jax.Array | None = None,
-        q_positions: jax.Array | None = None,
-        kv_positions: jax.Array | None = None,
-    ) -> jax.Array:
-        if q_mask is None:
-            q_mask = jnp.ones_like(q[..., 0], dtype=jnp.bool)
-
-        if kv_mask is None:
-            kv_mask = jnp.ones_like(kv[..., 0], dtype=jnp.bool)
-
-        if attn_mask is None:
-            attn_mask = create_attention_mask(q_mask, kv_mask)
-        else:
-            attn_mask = attn_mask & create_attention_mask(q_mask, kv_mask)
-
-        positionwise_mask = attn_mask.any(axis=-1, keepdims=True).squeeze(-3)
-
-        if self.need_pos:
-            if q_positions is None:
-                q_positions = jnp.arange(q.shape[0], dtype=jnp.int32)
-            if kv_positions is None:
-                kv_positions = jnp.arange(kv.shape[0], dtype=jnp.int32)
-
-        if self.do_checkpoint or self.num_layers > 1:
-            block = nn.checkpoint(
-                DecoderBlock,
-                policy=jax.checkpoint_policies.checkpoint_dots,
-            )
-        else:
-            block = DecoderBlock
-
-        variable_axes = {"params": 0}
-        if self.collect_intermediates:
-            variable_axes["intermediates"] = 0
-
-        ScannedDecoderBlock = nn.scan(
-            block,
-            variable_axes=variable_axes,
-            variable_broadcast=False,
-            split_rngs={"params": True},
-            in_axes=nn.broadcast,
-            length=self.num_layers,
-        )
-
-        q, _ = ScannedDecoderBlock(
-            num_heads=self.num_heads,
-            qk_size=self.qk_size,
-            v_size=self.v_size,
-            model_size=self.model_size,
-            use_bias=self.use_bias,
-            need_pos=self.need_pos,
-            qk_layer_norm=self.qk_layer_norm,
-            resblocks_hidden_size=self.resblocks_hidden_size,
-            init_residual_scale=self.init_residual_scale,
-            collect_intermediates=self.collect_intermediates,
-        )(q, kv, attn_mask, positionwise_mask, q_positions, kv_positions)
-
-        if self.norm_output:
-            q = MLP()(q)
-
-        return q
-
-
 class MLP(nn.Module):
     """Apply unit-wise linear layers to the units."""
 
@@ -526,6 +389,10 @@ class MLP(nn.Module):
     use_layer_norm: bool = True
     use_bias: bool = True
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    # The LAST layer's kernel init when it should differ -- zeros for a
+    # head whose output must start at a known point (the delta dynamics
+    # head starts AT the copy baseline). None = `kernel_init` throughout.
+    final_kernel_init: nn.initializers.Initializer | None = None
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -545,13 +412,16 @@ class MLP(nn.Module):
         if isinstance(layer_sizes, int):
             layer_sizes = (layer_sizes,)
 
-        for _, size in enumerate(layer_sizes):
+        for index, size in enumerate(layer_sizes):
+            kernel_init = self.kernel_init
+            if self.final_kernel_init is not None and index == len(layer_sizes) - 1:
+                kernel_init = self.final_kernel_init
             if self.use_layer_norm:
                 x = layer_norm(x)
             x = activation_fn(x)
             x = nn.Dense(
                 size,
-                kernel_init=self.kernel_init,
+                kernel_init=kernel_init,
                 dtype=x.dtype,
                 use_bias=self.use_bias,
             )(x)

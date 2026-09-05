@@ -4,7 +4,7 @@ import numpy as np
 from rl.environment.env import TeamBuilderEnvironment
 from rl.environment.interfaces import BuilderTransition
 from rl.environment.utils import split_rng
-from rl.model.utils import Params, ParamsContainer
+from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent
 from rl.online.league import MAIN_KEY
 from rl.online.training import Learner
@@ -28,7 +28,7 @@ class BuilderActor:
             smogon_format=learner.config.smogon_format,
         )
         self._learner = learner
-        self._rng_key = jax.random.key(rng_seed)
+        self._rng_key = jax.device_put(jax.random.key(rng_seed), agent.device)
 
     def split_rng(self) -> jax.Array:
         self._rng_key, subkey = split_rng(self._rng_key)
@@ -37,7 +37,7 @@ class BuilderActor:
     def pull_own_player(self) -> ParamsContainer:
         return self._learner.league.get_live(MAIN_KEY)
 
-    def unroll(self, rng_key: jax.Array, builder_params: Params) -> None:
+    def unroll(self, rng_key: jax.Array, builder_params: ParamsContainer) -> None:
         """Run unroll_length agent/environment steps, returning the trajectory."""
 
         builder_unroll_length = self._env.length

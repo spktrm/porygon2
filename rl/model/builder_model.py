@@ -44,7 +44,7 @@ from rl.model.heads import (
     RegressionValueLogitHead,
 )
 from rl.model.modules import MLP, RMSNorm, TransformerEncoder
-from rl.model.utils import get_num_params
+from rl.model.utils import ParamsContainer, get_num_params
 from rl.online.agent import Agent
 from rl.online.config import get_learner_config
 
@@ -686,6 +686,13 @@ def main(generation: int = 9):
         builder_apply_fn=actor_network.apply,
         builder_head_params=HeadParams(temp=1),
     )
+    container = ParamsContainer(
+        step_count=0,
+        player_frame_count=0,
+        builder_frame_count=0,
+        player_params=None,
+        builder_params=builder_params,
+    )
 
     builder_env = TeamBuilderEnvironment(generation=generation, smogon_format="ou")
 
@@ -702,7 +709,7 @@ def main(generation: int = 9):
         for builder_step_index in range(1, builder_subkeys.shape[0] + 1):
             builder_agent_output = agent.step_builder(
                 builder_subkeys[builder_step_index],
-                builder_params,
+                container,
                 builder_actor_input,
             )
             builder_transition = BuilderTransition(

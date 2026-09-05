@@ -34,7 +34,6 @@ import {
     NUM_HISTORY,
     WILDCARDS,
     jsonDatum,
-    numActionFeatures,
     numEntityEdgeFeatures,
     numFieldFeatures,
     numInfoFeatures,
@@ -44,12 +43,21 @@ import {
     numPublicEntityNodeFeatures,
     numRevealedEntityNodeFeatures,
     sampleTeams,
+    MOVE_SLOT_INDICES,
+    RESERVE_SLOT_INDICES,
+    TARGET_SLOT_INDICES,
+    MOVE_CELL_OFFSET,
+    OTHER_CELL_OFFSET,
+    NUM_TARGET_SLOTS,
+    NUM_ACTION_CELLS,
+    showdownTargetSuffix,
+    chooseWildcardKeyword,
 } from "./data";
 import { Battle, NA, Pokemon, Side } from "@pkmn/client";
 import { Ability, Item, BoostID } from "@pkmn/dex-types";
 import { ID, MoveTarget, SideID } from "@pkmn/types";
 import { Condition, Effect } from "@pkmn/data";
-import { OneDBoolean, TypedArray } from "./utils";
+import { TypedArray } from "./utils";
 import {
     ActionType,
     EntityEdgeFeature,
@@ -67,7 +75,13 @@ import {
     RequestType,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
-import { EnvironmentState, ActionEnum } from "../../protos/service_pb";
+import {
+    EnvironmentState,
+    ActionEnum,
+    ActionMask,
+    ActionRequestKind,
+    ActionRequestKindMap,
+} from "../../protos/service_pb";
 import { Move } from "@pkmn/dex";
 
 type RemovePipes<T extends string> = T extends `|${infer U}|` ? U : T;
@@ -274,6 +288,40 @@ const entityPrivateArrayToObject = (array: Int16Array) => {
                     EntityPrivateNodeFeature
                         .ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE
                 ]
+            ],
+        hpRatio:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO
+            ],
+        status: array[
+            EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__STATUS
+        ],
+        hasStatus:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS
+            ] === 1,
+        toxicTurns:
+            array[
+                EntityPrivateNodeFeature
+                    .ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS
+            ],
+        sleepTurns:
+            array[
+                EntityPrivateNodeFeature
+                    .ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS
+            ],
+        fainted:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED
+            ] === 1,
+        entityIdxPlusOne:
+            array[
+                EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+            ],
+        requestLag:
+            array[
+                EntityPrivateNodeFeature
+                    .ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG
             ],
     };
 };
@@ -755,6 +803,8 @@ function getArrayFromPrivatePokemon(
     // pokemonSet: PokemonSet,
     pokemonSet: Protocol.Request.Pokemon,
     firstPokemonSet: Protocol.Request.Pokemon,
+    entityIdxPlusOne: number,
+    requestLagTurns: number,
 ) {
     const dataArr = getBlankPrivatePokemonArr();
 
@@ -829,6 +879,49 @@ function getArrayFromPrivatePokemon(
         : TypechartEnum.TYPECHART_ENUM___NULL;
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE] =
         teraType;
+
+    // The truth channel: hp/status/fainted parsed from the REQUEST's own
+    // condition string ("245/272 tox", "0 fnt") -- the one source that is
+    // authoritative by construction. NOT the privateBattle `candidate`: its
+    // hp is log-event-driven and reads 0/0 for a mon the log has not yet
+    // given a reading (measured: request "252/342" against candidate 0/0,
+    // caught by the harness truth invariant on its first run), and NOT the
+    // transform-unwrapped `pokemon`: transform copies appearance, never
+    // condition. Turn counters live only on `candidate.statusState` (the
+    // string has no counters), event-driven and 0 when uninitialised --
+    // exactly the no-status default.
+    const conditionParts = pokemonSet.condition.split(" ");
+    const conditionFainted = conditionParts[1] === "fnt";
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED] =
+        conditionFainted ? 1 : 0;
+    let conditionRatio = 0;
+    if (!conditionFainted) {
+        const [hpPart, maxHpPart] = conditionParts[0].split("/");
+        const conditionHp = parseInt(hpPart);
+        const conditionMaxHp = parseInt(maxHpPart ?? hpPart);
+        conditionRatio = Math.floor(
+            (MAX_RATIO_TOKEN * conditionHp) / Math.max(conditionMaxHp, 1),
+        );
+    }
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO] =
+        conditionRatio;
+    const conditionStatus = conditionFainted ? undefined : conditionParts[1];
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__STATUS] =
+        conditionStatus
+            ? IndexValueFromEnum(StatusEnum, conditionStatus)
+            : StatusEnum.STATUS_ENUM___NULL;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS] =
+        conditionStatus ? 1 : 0;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS] =
+        candidate.statusState.toxicTurns;
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS] =
+        candidate.statusState.sleepTurns;
+
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX] =
+        entityIdxPlusOne;
+
+    dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG] =
+        Math.min(Math.max(requestLagTurns, 0), 8);
 
     return dataArr;
 }
@@ -1598,6 +1691,9 @@ export class EdgeBuffer {
 
     numEdges: number;
     maxEdges: number;
+    // Count of in-place rewrites of rows already handed out (see
+    // `remapEntitySlot`); serialised as `history_rewrite_count`.
+    rewriteCount: number;
 
     constructor(player: TrainablePlayerAI) {
         this.player = player;
@@ -1619,6 +1715,7 @@ export class EdgeBuffer {
         this.fieldData = new DynamicArray(maxEdges, numFieldFeatures);
 
         this.numEdges = 0;
+        this.rewriteCount = 0;
     }
 
     addEdge(edge: Edge) {
@@ -1688,6 +1785,10 @@ export class EdgeBuffer {
         speciesToken?: number;
     }) {
         const { fromSlot, toSlot, startPackedRow, speciesToken } = args;
+        // Counted per call, not per row touched: the consumer's question is
+        // "may any row I already saw have changed", and a call that finds
+        // nothing to move costs it one spurious recompute at most.
+        this.rewriteCount += 1;
         const numRows = this.entityPublicData.size();
         for (let row = startPackedRow; row < numRows; row++) {
             const entityIdxIndex =
@@ -3797,21 +3898,81 @@ export class StateHandler {
         this.player = player;
     }
 
+    /**
+     * The legal-action set, built ONCE as (cell -> the Showdown choice string
+     * that cell means).
+     *
+     * Before 2026-08-29 this method only set bits, and `choiceFromAction`
+     * re-derived the choice string from (src, tgt) by a parallel hand-written
+     * decoder. The two drifted, in three ways that all cost real legality:
+     * the decoder appended " terastallize" to every wildcard while the mask
+     * legalised a wildcard for mega / ultra burst / Z-move too; the decoder
+     * resolved a move's target through `request.active[i].moves[j]` while the
+     * mask indexed `maxMoves.maxMoves`, so under Dynamax the two read
+     * different moves; and team preview lit one cell per remaining position
+     * while the decoder ignored the target entirely, so up to 7 duplicate
+     * cells stood for one choice. Emitting the string where the bit is set
+     * makes all three unrepresentable.
+     */
     getActionMask(args: {
         request?: AnyObject | null;
-        format?: string;
         allyActive: (Pokemon | null)[];
         enemyActive: (Pokemon | null)[];
     }): {
-        actionMask: OneDBoolean;
-        isStruggling: boolean;
+        legalCells: boolean[];
+        choiceByCell: Map<number, string>;
+        structuredMask: ActionMask;
     } {
-        const { request, format, allyActive, enemyActive } = args;
+        const { request, allyActive, enemyActive } = args;
 
-        const arrWidth = numActionFeatures;
-        const arrLength = arrWidth ** 2;
-        const actionMask = new OneDBoolean(arrLength, Uint8Array, arrWidth);
-        let isStruggling = false;
+        const choiceByCell = new Map<number, string>();
+        let kind: ActionRequestKindMap[keyof ActionRequestKindMap] =
+            ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED;
+        // A wait (or no request at all) carries no choice: every cell reads
+        // legal so masked averages downstream never see an empty row, and the
+        // decoder answers "default" for any of them.
+        let allLegal = false;
+
+        // Which ally half this sub-decision is for. Both branches that ask
+        // per-active gate on `i != this.player.choices.length`, so exactly one
+        // half is ever populated and this is that half.
+        let activeSlot = 0;
+
+        // Cells are BLOCK-SPACE indices (proto/service.proto `Action`): the
+        // switch bit, the (move slot, target slot) pair, or the standalone
+        // target slot. One helper per block, and choiceByCell is the single
+        // place a cell becomes legal -- the wire mask is derived from its
+        // keys below, so the message cannot disagree with the map the
+        // decoder reads.
+        const legaliseSwitch = (reserveIndex: number, choice: string) => {
+            choiceByCell.set(reserveIndex, choice);
+        };
+        const legaliseMove = (
+            moveSlot: number,
+            targetSlot: number,
+            choice: string,
+        ) => {
+            const moveBit = MOVE_SLOT_INDICES.indexOf(moveSlot);
+            const targetBit = TARGET_SLOT_INDICES.indexOf(targetSlot);
+            if (moveBit < 0 || targetBit < 0) {
+                throw new Error(
+                    `Move src ${moveSlot} legalised against non-target ${targetSlot}`,
+                );
+            }
+            choiceByCell.set(
+                MOVE_CELL_OFFSET + moveBit * NUM_TARGET_SLOTS + targetBit,
+                choice,
+            );
+        };
+        const legaliseOther = (targetSlot: number, choice: string) => {
+            const targetBit = TARGET_SLOT_INDICES.indexOf(targetSlot);
+            if (targetBit < 0) {
+                throw new Error(
+                    `Standalone action ${targetSlot} is not a target slot`,
+                );
+            }
+            choiceByCell.set(OTHER_CELL_OFFSET + targetBit, choice);
+        };
 
         const moveIndices = [
             [
@@ -3841,14 +4002,6 @@ export class StateHandler {
                 ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
             ],
         ];
-        const reserveIndices = [
-            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-        ];
         const allyTargets = [
             !!allyActive[0] ? ActionEnum.ACTION_ENUM__ALLY_1_TARGET : undefined,
             !!allyActive[1] ? ActionEnum.ACTION_ENUM__ALLY_2_TARGET : undefined,
@@ -3863,19 +4016,14 @@ export class StateHandler {
                 : undefined,
         ];
 
-        const setAll = (val: boolean) => {
-            for (let i = 0; i < arrLength; i++) {
-                actionMask.set(i, val);
-            }
-        };
-        setAll(false);
-
         if (request === undefined || request === null) {
-            setAll(true);
+            allLegal = true;
         } else {
             if (request.wait) {
-                setAll(true);
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__WAIT;
+                allLegal = true;
             } else if (request.forceSwitch) {
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__FORCE_SWITCH;
                 const pokemon = request.side
                     .pokemon as Protocol.Request.SideInfo["pokemon"];
 
@@ -3883,6 +4031,7 @@ export class StateHandler {
                     if (i != this.player.choices.length) {
                         continue;
                     }
+                    activeSlot = i;
 
                     const rowColValPassValue = [
                         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
@@ -3890,11 +4039,7 @@ export class StateHandler {
                     ][i];
 
                     if (!mustSwitch) {
-                        actionMask.setRowCol(
-                            rowColValPassValue,
-                            rowColValPassValue,
-                            true,
-                        );
+                        legaliseOther(rowColValPassValue, "pass");
                         continue;
                     }
 
@@ -3912,27 +4057,16 @@ export class StateHandler {
                         },
                     );
                     if (canSwitch.length === 0) {
-                        actionMask.setRowCol(
-                            rowColValPassValue,
-                            rowColValPassValue,
-                            true,
-                        );
+                        legaliseOther(rowColValPassValue, "pass");
                         continue;
                     }
 
-                    const forcedSwitchSrc = [
-                        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
-                        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
-                    ][i];
                     for (const [j, _] of canSwitch) {
-                        actionMask.setRowCol(
-                            forcedSwitchSrc,
-                            reserveIndices[j],
-                            true,
-                        );
+                        legaliseSwitch(j, `switch ${j + 1}`);
                     }
                 }
             } else if (request.active) {
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__MOVE;
                 let [
                     canMegaEvo,
                     canUltraBurst,
@@ -3948,6 +4082,7 @@ export class StateHandler {
                     if (i != this.player.choices.length) {
                         continue;
                     }
+                    activeSlot = i;
 
                     const rowColValPassValue = [
                         ActionEnum.ACTION_ENUM__ALLY_1_PASS,
@@ -3957,11 +4092,7 @@ export class StateHandler {
                         pokemon[i].condition.endsWith(` fnt`) ||
                         pokemon[i].commanding
                     ) {
-                        actionMask.setRowCol(
-                            rowColValPassValue,
-                            rowColValPassValue,
-                            true,
-                        );
+                        legaliseOther(rowColValPassValue, "pass");
                         continue;
                     }
 
@@ -4116,10 +4247,20 @@ export class StateHandler {
                                     }`,
                                 );
                             }
-                            const srcIndex = moveIndices[i][j];
-                            actionMask.setRowCol(srcIndex, tgtIndex, true);
+                            // The target suffix is resolved from THIS move
+                            // object, which is the max move when maxMoves is in
+                            // play -- the decoder used to re-resolve it through
+                            // request.active[i].moves[j] and read a different
+                            // move under Dynamax.
+                            const moveChoice = `move ${
+                                j + 1
+                            } ${showdownTargetSuffix(move, tgtIndex)}`.trim();
+                            legaliseMove(
+                                moveIndices[i][j],
+                                tgtIndex,
+                                moveChoice,
+                            );
 
-                            const wildCardSrcIndex = wildCardIndices[i][j];
                             const wildCardChosenAlready = this.player.choices
                                 .map((x) =>
                                     WILDCARDS.map((wildcard) =>
@@ -4127,18 +4268,25 @@ export class StateHandler {
                                     ).some((x) => x),
                                 )
                                 .some((x) => x);
-                            const canWildCard =
-                                (!!canMegaEvo ||
-                                    !!canUltraBurst ||
-                                    !!canZMove ||
-                                    !!canTerastallize) &&
-                                !wildCardChosenAlready;
+                            // Which wildcard, not merely whether: the decoder
+                            // hardcoded " terastallize", so a mega- or Z-move-
+                            // legal cell decoded to a choice Showdown rejects.
+                            const wildCardKeyword = wildCardChosenAlready
+                                ? undefined
+                                : chooseWildcardKeyword({
+                                      canMegaEvo,
+                                      canUltraBurst,
+                                      canZMove,
+                                      canTerastallize,
+                                  });
 
-                            actionMask.setRowCol(
-                                wildCardSrcIndex,
-                                tgtIndex,
-                                canWildCard,
-                            );
+                            if (wildCardKeyword !== undefined) {
+                                legaliseMove(
+                                    wildCardIndices[i][j],
+                                    tgtIndex,
+                                    `${moveChoice} ${wildCardKeyword}`,
+                                );
+                            }
                         }
                     }
 
@@ -4156,88 +4304,80 @@ export class StateHandler {
                     );
                     const switches = active.trapped ? [] : canSwitch;
 
-                    const switchSrcIndex = [
-                        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
-                        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
-                    ][i];
-
                     if (switches.length > 0) {
                         for (const [j, _] of switches) {
-                            actionMask.setRowCol(
-                                switchSrcIndex,
-                                reserveIndices[j],
-                                true,
-                            );
+                            legaliseSwitch(j, `switch ${j + 1}`);
                         }
                     }
                 }
             } else if (request.teamPreview) {
-                const reserveSources = [
-                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-                ];
-
-                const activeTargets: number[] = [
-                    ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
-                ];
-
-                if (this.player.privateBattle.gameType === "doubles") {
-                    activeTargets.push(ActionEnum.ACTION_ENUM__ALLY_2_TARGET);
-                }
-
-                const reserveTargets: number[] = [
-                    ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-                    ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-                ];
-
-                if (!this.player.privateBattle.tier.includes("VGC")) {
-                    // Both 6v6 Singles and 6v6 Doubles need at least Reserve 3 and 4
-                    reserveTargets.push(
-                        ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-                        ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-                    );
-
-                    // ONLY 6v6 Singles needs Reserve 5 (1 Active + 5 Reserves = 6 Total)
-                    if (this.player.privateBattle.gameType !== "doubles") {
-                        reserveTargets.push(
-                            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-                        );
+                kind = ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW;
+                // Team preview is "which mon", full stop: the position being
+                // filled is always the next one (this.player.choices.length),
+                // so it carries no choice. Until 2026-08-29 the mask lit one
+                // cell per REMAINING position -- up to 7 -- while
+                // choiceFromAction ignored the target entirely, so the policy
+                // spread its mass over up to 7 exact duplicates of one choice
+                // and the micro-entropy cell count was inflated to match. One
+                // cell per candidate now, at the canonical column.
+                const alreadyChosen = new Set(
+                    this.player.choices
+                        .filter((choice) => choice.startsWith("switch "))
+                        .map((choice) => parseInt(choice.split(" ")[1]) - 1),
+                );
+                for (let j = 0; j < RESERVE_SLOT_INDICES.length; j++) {
+                    if (alreadyChosen.has(j)) {
+                        continue;
                     }
-                }
-
-                const allTargets = [...activeTargets, ...reserveTargets].slice(
-                    this.player.choices.length,
-                );
-                const alreadyChosenSources = this.player.choices.map(
-                    (choice) => {
-                        if (choice.startsWith("switch ")) {
-                            const idx = parseInt(choice.split(" ")[1]) - 1;
-                            return reserveSources[idx];
-                        }
-                        return null;
-                    },
-                );
-                const filteredSources = reserveSources.filter(
-                    (value, index) => {
-                        return (
-                            value !== null &&
-                            !alreadyChosenSources.includes(value)
-                        );
-                    },
-                );
-                for (const src of filteredSources) {
-                    for (const target of allTargets) {
-                        actionMask.setRowCol(src, target, true);
-                    }
+                    legaliseSwitch(j, `switch ${j + 1}`);
                 }
             }
         }
 
-        return { actionMask, isStruggling };
+        // The wire form. Derived from choiceByCell rather than set alongside
+        // it, so there is exactly one place a cell becomes legal and the
+        // message cannot disagree with the map the decoder reads. Cells are
+        // already block indices, so the derivation is pure arithmetic.
+        const structuredMask = new ActionMask();
+        structuredMask.setKind(kind);
+
+        let switchSlots = 0;
+        let otherSrcs = 0;
+        const moveTargets = new Array<number>(MOVE_SLOT_INDICES.length).fill(0);
+
+        for (const cell of choiceByCell.keys()) {
+            if (cell < MOVE_CELL_OFFSET) {
+                switchSlots |= 1 << cell;
+            } else if (cell < OTHER_CELL_OFFSET) {
+                const rel = cell - MOVE_CELL_OFFSET;
+                moveTargets[Math.floor(rel / NUM_TARGET_SLOTS)] |=
+                    1 << rel % NUM_TARGET_SLOTS;
+            } else {
+                otherSrcs |= 1 << (cell - OTHER_CELL_OFFSET);
+            }
+        }
+
+        structuredMask.setSwitchSlots(switchSlots);
+        structuredMask.setMoveTargetsList(moveTargets);
+        structuredMask.setOtherSrcs(otherSrcs);
+        structuredMask.setActiveSlot(activeSlot);
+
+        const legalCells = new Array<boolean>(NUM_ACTION_CELLS).fill(allLegal);
+        for (const cell of choiceByCell.keys()) {
+            legalCells[cell] = true;
+        }
+
+        // Publish here, not at the call site: the baselines build a mask on
+        // their own StateHandler and never reach StateHandler.build, so an
+        // assignment there would leave them decoding against an empty map.
+        // One assignment, at the one place a cell becomes legal. The kind and
+        // ally half ride along so the prev-action features can name the
+        // choice in ActionEnum terms after the fact.
+        this.player.legalChoiceByCell = choiceByCell;
+        this.player.lastMaskKind = kind;
+        this.player.lastMaskActiveSlot = activeSlot;
+
+        return { legalCells, choiceByCell, structuredMask };
     }
 
     getMyMoveset(): Uint8Array {
@@ -4329,10 +4469,48 @@ export class StateHandler {
         return { publicBuffer, revealedBuffer };
     }
 
-    getPrivateTeam(playerIndex: number): Int16Array {
-        const request = this.player.getRequest();
+    /**
+     * The private sheet of `sourcePlayer`, serialised through
+     * EntityPrivateNodeFeature rows. ONE builder for both channels
+     * (2026-09-01): the observer's own sheet (sourcePlayer === this.player --
+     * a missing request is a bug and throws) and the opponent's sheet for the
+     * centralised-value truth channel (sourcePlayer === this.player.opponent
+     * -- absent at deploy, and its request may lag the observer's build, so
+     * both degrade to the all-zero buffer rather than throwing). The stable
+     * index is ALWAYS the observer's identToIndex: idents are side-qualified
+     * ("p2: Name"), so the opponent's request idents resolve in the
+     * observer's map for every mon the observer has seen fielded; a
+     * never-fielded (or still-disguised) mon reads 0.
+     */
+    getPrivateTeam(sourcePlayer: TrainablePlayerAI | undefined): Int16Array {
+        const isOpponentChannel =
+            sourcePlayer !== undefined && sourcePlayer !== this.player;
+        if (isOpponentChannel) {
+            // Every degrade path below leaves the snapshot cleared; the
+            // populated path re-points it at the request it serialised.
+            this.player.lastSerialisedOppRequest = undefined;
+        }
+        if (sourcePlayer === undefined) {
+            // Deploy/eval: there is no opponent object, so their private
+            // info does not exist and the channel stays all-unspecified.
+            return new Int16Array(6 * numPrivateEntityNodeFeatures);
+        }
+        const isOwnChannel = sourcePlayer === this.player;
+        const playerIndex = sourcePlayer.getPlayerIndex();
+        if (playerIndex === undefined) {
+            if (isOwnChannel) {
+                throw new Error("Player index is undefined");
+            }
+            return new Int16Array(6 * numPrivateEntityNodeFeatures);
+        }
+        const request = sourcePlayer.getRequest();
         if (request === undefined) {
-            throw new Error("Request is undefined");
+            if (isOwnChannel) {
+                throw new Error("Request is undefined");
+            }
+            // The opponent's loop is an independent async consumer and may
+            // not have ingested a |request| yet.
+            return new Int16Array(6 * numPrivateEntityNodeFeatures);
         }
         if (request === null) {
             // Spectator-log replay (offline exporter): private info does
@@ -4340,7 +4518,14 @@ export class StateHandler {
             // encoding is public-view only.
             return new Int16Array(6 * numPrivateEntityNodeFeatures);
         }
-        const firstRequest = this.player.firstRequest!;
+        if (isOpponentChannel) {
+            this.player.lastSerialisedOppRequest = request as AnyObject;
+        }
+        const firstRequest = sourcePlayer.firstRequest!;
+        // Staleness in battle turns (see REQUEST_LAG in features.proto):
+        // identically 0 on the own channel.
+        const requestLagTurns =
+            this.player.privateBattle.turn - sourcePlayer.privateBattle.turn;
         const requestPokemon = request.side?.pokemon as
             | Protocol.Request.SideInfo["pokemon"]
             | undefined;
@@ -4376,7 +4561,7 @@ export class StateHandler {
             for (const member of privateOrder) {
                 const name = toID(member.speciesForme);
 
-                const matchedTeamMate = this.player.privateBattle.sides[
+                const matchedTeamMate = sourcePlayer.privateBattle.sides[
                     playerIndex
                 ].team.find((teamMate) => {
                     const setSpecies = toID(
@@ -4398,11 +4583,20 @@ export class StateHandler {
                     throw new Error("cannot find first instance of pokemon");
                 }
 
+                const stableIdx = this.player.eventHandler.identToIndex.get(
+                    member.ident,
+                );
+                let entityIdxPlusOne = 0;
+                if (stableIdx !== undefined) {
+                    entityIdxPlusOne = stableIdx + 1;
+                }
                 buffer.set(
                     getArrayFromPrivatePokemon(
                         matchedTeamMate,
                         member,
                         firstRequestValue,
+                        entityIdxPlusOne,
+                        requestLagTurns,
                     ),
                     offset,
                 );
@@ -4543,13 +4737,15 @@ export class StateHandler {
         }
 
         infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 0;
-        if (!request?.teamPreview && this.player.actions.length > 0) {
+        if (!request?.teamPreview && this.player.actionEnumPairs.length > 0) {
             infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 1;
-            const lastAction = this.player.actions.at(-1)!;
-            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC] =
-                lastAction.getSrc();
-            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT] =
-                lastAction.getTgt();
+            // Named in ActionEnum (src, tgt) terms -- the feature vocabulary
+            // predates the block space and the replay shards carry it, so the
+            // conversion happens at decode time (runner.ts) rather than
+            // changing the wire meaning here.
+            const [prevSrc, prevTgt] = this.player.actionEnumPairs.at(-1)!;
+            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC] = prevSrc;
+            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT] = prevTgt;
         }
 
         // INFO_FEATURE__STATE_POTENTIAL is left at 0: the hand-crafted
@@ -4715,13 +4911,12 @@ export class StateHandler {
         const allyActive = this.player.publicBattle.sides[playerIndex].active;
         const enemyActive =
             this.player.publicBattle.sides[1 - playerIndex].active;
-        const { actionMask } = this.getActionMask({
+        const { structuredMask } = this.getActionMask({
             request,
-            format: this.player.privateBattle.gameType,
             allyActive,
             enemyActive,
         });
-        state.setActionMask(actionMask.buffer);
+        state.setStructuredActionMask(structuredMask);
 
         state.setHistoryEntityPublicCache(historyEntityPublic);
         state.setHistoryEntityRevealedCache(historyEntityRevealed);
@@ -4729,9 +4924,15 @@ export class StateHandler {
         state.setHistoryField(historyField);
         state.setHistoryLength(historyLength);
         state.setHistoryPackedLength(historyPackedLength);
+        state.setHistoryRewriteCount(
+            this.player.eventHandler.edgeBuffer.rewriteCount,
+        );
 
-        const privateTeam = this.getPrivateTeam(playerIndex);
+        const privateTeam = this.getPrivateTeam(this.player);
         state.setPrivateTeam(new Uint8Array(privateTeam.buffer));
+
+        const oppPrivateTeam = this.getPrivateTeam(this.player.opponent);
+        state.setOppPrivateTeam(new Uint8Array(oppPrivateTeam.buffer));
 
         const { publicData, revealedData } = this.getPublicTeam(playerIndex);
         state.setPublicTeam(new Uint8Array(publicData.buffer));

@@ -31,16 +31,17 @@ from flax.traverse_util import flatten_dict
 # A NEW f32 activation fails the test and names itself; a path here that has
 # become bf16 also fails, so the list cannot rot into a blanket exemption.
 F32_ALLOWED = {
-    "policy_head/macro_micro/micro/__call__": (
-        "the per-slot-group RMS gauge (473ba77): the normaliser is computed "
-        "in f32 and stop-gradded so type_scale is the one live factor. "
-        "Without it the loss pins the PRODUCT type_scale.gram at the band — "
-        "measured: type_scale crushed 0.026 -> 1e-4 while raw gram rms grew "
-        "to ~6e3 and the Jacobian entry hit 7e7, killing the micro route "
-        "mid-run."
+    "action_head/__call__": (
+        "the action grid is cast f32 ONCE, at the readout's output, before "
+        "the masked log-softmax. bf16 log_softmax normalisation holds only to "
+        "~3e-3 and every term of the policy loss reads this array. The two "
+        "entries this replaced were the macro/micro RMS gauges, which retired "
+        "with the hierarchical head on 2026-08-29."
     ),
-    "advantage_head/macro_micro/micro/__call__": (
-        "same gauge on the advantage head's grid."
+    "transition/mask_head/__call__": (
+        "the same readout form instantiated a second time on the imagined "
+        "rows (2026-09-05): its 295 cell logits are the next-action-mask BCE's "
+        "input, cast f32 at the readout's output for the same reason."
     ),
 }
 
@@ -103,7 +104,10 @@ def test_forward_computes_in_bf16_except_where_precision_is_paid_for(
                 bf16.append(name)
 
     # Guards the whole test against capturing nothing and passing vacuously.
-    assert len(bf16) > 50, f"only {len(bf16)} bf16 activations — probe broken?"
+    # The bar was >50 while the model unpacked every entity into 10-11
+    # attribute tokens through separately-sown modules; one row per entity
+    # and one trunk sows far fewer, so it is sized to the model that exists.
+    assert len(bf16) > 15, f"only {len(bf16)} bf16 activations — probe broken?"
 
     unexpected = sorted(set(f32) - set(F32_ALLOWED))
     assert not unexpected, (

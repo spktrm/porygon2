@@ -34,10 +34,9 @@ import concurrent.futures as cf
 import logging
 import os
 import pickle
-import threading
 import time
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Callable, Iterator
 
 import jax
 import jax.numpy as jnp
@@ -47,15 +46,55 @@ from rl import checkpoint
 from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput, Trajectory
+from rl.environment.protos.features_pb2 import InfoFeature
 from rl.model.config import get_player_model_config
+from rl.model.constants import IS_WILDCARD_CELL
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
-from rl.online.agent import Agent
+from rl.model.utils import ParamsContainer
+from rl.online.agent import Agent, resolve_actor_device
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.player_actor import PlayerActor
 from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
+
+# rl/online/main.py's EVAL_BASELINE_NAMES: {0: random, 1: default, 2: simpleheuristic}.
+SIMPLE_HEURISTIC_BASELINE_INDEX = 2
+
+# An offline intervention: rewrites the actor input the environment hands
+# back (reset and step alike). The actor never sees the unfiltered one.
+ActorInputFilter = Callable[[PlayerActorInput], PlayerActorInput]
+
+
+class FilteredEnvironment(SinglePlayerSyncEnvironment):
+    def __init__(self, filter_fn: ActorInputFilter, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._filter_fn = filter_fn
+
+    def reset(self, packed_team: list[int] = None):
+        return self._filter_fn(super().reset(packed_team))
+
+    def step(self, action):
+        return self._filter_fn(super().step(action))
+
+
+def hold_tera(min_turn: int) -> ActorInputFilter:
+    """Masks the wildcard (tera) cells while `turn < min_turn`, leaving the
+    mask alone when nothing else is legal. The model teras at its first
+    legal opportunity, so this shifts WHEN it teras, nothing else."""
+
+    def filter_fn(actor_input: PlayerActorInput) -> PlayerActorInput:
+        env = actor_input.env
+        turn = int(np.asarray(env.info)[InfoFeature.INFO_FEATURE__TURN])
+        mask = np.asarray(env.action_mask)
+        if turn >= min_turn or not (mask & ~IS_WILDCARD_CELL).any():
+            return actor_input
+        return actor_input.replace(
+            env=env.replace(action_mask=mask & ~IS_WILDCARD_CELL)
+        )
+
+    return filter_fn
 
 
 class _RunState:
@@ -89,24 +128,58 @@ def play_games(
     generation: int = 9,
     smogon_format: str = "randombattle",
     seed: int = 0,
+    opponent: str = "self",
+    side_filters: dict[int, ActorInputFilter] | None = None,
 ) -> list[list[Trajectory]]:
-    """Plays n_games self-play games (both sides `params`), `pairs` at a
-    time, and returns one chunk list per SIDE (2 per game) in completion
-    order. Games still running at `deadline_s` are abandoned."""
+    """Plays n_games games, `pairs` at a time, and returns one chunk list
+    per PARAMS-DRIVEN side in completion order: `opponent="self"` is
+    self-play (both sides `params`, 2 lists per game); "heuristic" pits
+    `params` against the service's SimpleHeuristic bot (1 list per game,
+    routed by the eval-heuristic username the service's
+    isEvalUser/evalActionMapping read). Games still running at
+    `deadline_s` are abandoned. `side_filters` maps a params-driven side
+    (0 or 1) to an intervention on its actor inputs (e.g. `hold_tera`)."""
+    if opponent not in ("self", "heuristic"):
+        raise ValueError(f"opponent must be 'self' or 'heuristic', got {opponent!r}")
     ctx = OfflineContext()
     ctx.config = get_learner_config()
-    actor_net = get_player_model(get_player_model_config(generation, train=False))
-    agent = Agent(actor_net.apply, gpu_lock=threading.Lock())
-    dev_params = jax.device_put(params)
+    actor_device, actor_dtype = resolve_actor_device(ctx.config.player_actor_device)
+    actor_net = get_player_model(
+        get_player_model_config(generation, train=False, dtype=actor_dtype)
+    )
+    agent = Agent(actor_net.apply, device=actor_device)
+    container = ParamsContainer(
+        step_count=0,
+        player_frame_count=0,
+        builder_frame_count=0,
+        player_params=params,
+        builder_params=None,
+    )
 
     def play_one(game_no: int) -> list[list[Trajectory]]:
         actors, envs = [], []
-        for p in range(2):
-            env = SinglePlayerSyncEnvironment(
-                f"{tag}:g{game_no}p{p}",
-                generation=generation,
-                smogon_format=smogon_format,
-            )
+        if opponent == "self":
+            usernames = [f"{tag}:g{game_no}p{p}" for p in range(2)]
+        else:
+            # SIMPLE_HEURISTIC_BASELINE_INDEX is the evalActionMapping slot.
+            usernames = [
+                f"eval-heuristic-{tag}-g{game_no}:{SIMPLE_HEURISTIC_BASELINE_INDEX:04d}"
+            ]
+        for p, username in enumerate(usernames):
+            filter_fn = (side_filters or {}).get(p)
+            if filter_fn is None:
+                env = SinglePlayerSyncEnvironment(
+                    username,
+                    generation=generation,
+                    smogon_format=smogon_format,
+                )
+            else:
+                env = FilteredEnvironment(
+                    filter_fn,
+                    username,
+                    generation=generation,
+                    smogon_format=smogon_format,
+                )
             envs.append(env)
             actor = PlayerActor(
                 agent,
@@ -119,10 +192,14 @@ def play_games(
             actor.set_game_id(f"{tag}-{game_no}")
             actors.append(actor)
         try:
-            with cf.ThreadPoolExecutor(2) as ex:
+            with cf.ThreadPoolExecutor(len(actors)) as ex:
                 futs = [
                     ex.submit(
-                        a.unroll, jax.random.key(seed * 7 + game_no * 2 + i), dev_params
+                        a.unroll,
+                        jax.device_put(
+                            jax.random.key(seed * 7 + game_no * 2 + i), actor_device
+                        ),
+                        container,
                     )
                     for i, a in enumerate(actors)
                 ]
@@ -189,10 +266,11 @@ def forward(
     generation: int = 9,
 ) -> Iterator[tuple[PlayerActorOutput, object]]:
     """Yields (prediction, stacked batch) over `chunks` in batches, using
-    the learner-side model (train=True, so advantage/q are populated). Batch axis
-    is 1, matching the learner's apply_fn. Leaves are host numpy-able jax
-    arrays; decode Q_all with decode_q(pred, flat_action_mask) and V as
-    pred.value_head.expectation."""
+    the learner-side model (train=True, so the full-support log_policy is
+    populated). Batch axis is 1, matching the learner's apply_fn. Leaves are
+    host numpy-able jax arrays; read the action cells with
+    decode_log_policy(pred, flat_action_mask) and V as
+    pred.value_head.expectation.""" ""
     net = get_player_model(get_player_model_config(generation, train=True))
     apply = jax.jit(jax.vmap(net.apply, in_axes=(None, 1, 1, None), out_axes=1))
     dev_params = jax.device_put(params)
@@ -209,10 +287,16 @@ def forward(
         ), b
 
 
-def decode_q(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
-    """Q = sg(V) + centred A, (T, B, A) — composed in the model since
-    2026-08-25 (heads.compose_q), so this is now just a masked read."""
-    return np.asarray(jnp.where(jnp.asarray(flat_action_mask, bool), pred.q, 0.0))
+def decode_log_policy(pred: PlayerActorOutput, flat_action_mask) -> np.ndarray:
+    """The full-support log-policy over the block cells, (T, B, A), masked
+    to legal cells.
+
+    Replaces decode_q on 2026-08-29. The Q readout it decoded went with the
+    advantage head; the action grid the policy itself scores is what is left,
+    and it is what the separation probe now regresses onto."""
+    return np.asarray(
+        jnp.where(jnp.asarray(flat_action_mask, bool), pred.action_head.log_policy, 0.0)
+    )
 
 
 def gpu_headroom_env(fraction: float = 0.12) -> None:

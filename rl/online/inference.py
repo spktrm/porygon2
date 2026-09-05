@@ -1,18 +1,19 @@
 """Centralized, zero-wait batched inference for training PlayerActors.
 
 Every training actor thread used to dispatch its own batch-1
-``Agent.step_player`` under the shared gpu_lock — ~20 concurrent actors
-each paying full dispatch/kernel-launch overhead per environment step,
-serialized against each other AND against the learner's train_step by
-that same lock. One inference-server thread now runs ONE vmapped
-forward over however many requests are pending, so each gpu_lock
-acquisition serves a whole batch instead of one step.
+``Agent.step_player`` — ~20 concurrent actors each paying full
+dispatch/kernel-launch overhead per environment step. One
+inference-server thread now runs ONE vmapped forward over however many
+requests are pending, so one dispatch serves a whole batch instead of
+one step. (Until 2026-09-03 those dispatches were also serialised
+against the learner's train step by a shared gpu_lock; the lock ordered
+host dispatch only — JAX dispatch is asynchronous, so it never bounded
+GPU execution or VRAM — and it was deleted.)
 
 Batching is ZERO-WAIT (the Sample Factory / SEED RL scheme): the server
 never waits for a batch to fill and never runs a timer — it takes
 whatever is queued at the moment it becomes free. While the GPU runs
-the current forward (or the learner holds the gpu_lock for a train
-step), new requests pile up naturally: GPU busy-time is the batching
+the current forward, new requests pile up naturally: GPU busy-time is the batching
 window. A lone request runs at batch 1 immediately — exactly the old
 path's latency — and under load batches self-size up to
 inference_max_batch. There is deliberately NO min-batch and NO max-wait
@@ -24,44 +25,50 @@ needed for batching to emerge — the queue depth IS the batch).
 Requests batch per params version: (step_count, player_frame_count)
 uniquely identifies both a league snapshot and each successive
 update_live of a live population (frame_count strictly increases). The
-server owns host->device transfer behind an LRU keyed the same way, so
-all of main's actors share ONE device copy per params version instead
-of each `jax.device_put`-ing their own every game — a strict VRAM and
-PCIe improvement over the per-actor copies it replaces.
+server owns host->device transfer behind a DeviceParamsCache (the same
+one the direct Agent path uses, rl/online/agent.py), so all of main's
+actors share ONE device copy per params version instead of each
+`jax.device_put`-ing their own every game — a strict VRAM and PCIe
+improvement over the per-actor copies it replaces.
 
 Compile-shape budget: batch sizes are padded to powers of two (<=
 inference_max_batch) and history lengths arrive already geometrically
 bucketed by PlayerActor.clip_actor_history, so the number of distinct
 traced shapes is (log2(max_batch)+1) x (#history buckets) — the same
 bounded-recompilation reasoning as rl/environment/utils.geometric_bucket.
+
+This is the config.player_actor_device="gpu" arm. Under "cpu" every
+actor runs its own f32 batch-1 forward on the host through Agent.step_
+player and the server is not constructed.
 """
 
 import dataclasses
 import functools
 import queue
 import threading
-from collections import OrderedDict
-from contextlib import nullcontext
+import time
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from constants import NUM_HISTORY
+from rl.environment.actor_stats import ActorStats, timed
 from rl.environment.env import ActorStopped
 from rl.environment.interfaces import (
+    HistoryCarry,
     PlayerActorInput,
     PlayerActorOutput,
     PlayerAgentOutput,
 )
-from rl.environment.utils import _bucket_level, _bucket_value
+from rl.environment.utils import (
+    ACTOR_HISTORY_MIN_LENGTH,
+    joint_history_level,
+    pad_history_to_level,
+)
 from rl.model.heads import HeadParams
-from rl.model.utils import Params, ParamsContainer
-
-# Must match PlayerActor.clip_actor_history's min_length: incoming history
-# lengths are that clip's geometric bucket values, and the shared level
-# below re-buckets against the same base.
-_HISTORY_MIN_LENGTH = 64
+from rl.model.history_encoder import invalid_history_carry
+from rl.model.utils import ParamsContainer
+from rl.online.agent import DeviceParamsCache
 
 
 @dataclasses.dataclass
@@ -70,38 +77,34 @@ class _InferenceRequest:
     rng_key: jax.Array
     actor_input: PlayerActorInput
     done: threading.Event
+    # perf_counter at step_player's enqueue — queue wait is measured
+    # from here to the start of the group that serves the request.
+    enqueued_at: float = 0.0
     output: PlayerAgentOutput | None = None
     error: BaseException | None = None
 
 
-def _stack_axis0_to(target: int):
-    """Returns a tree.map-able stacker: per-request history leaves ->
-    one batch array, each zero-padded on axis 0 to ``target``. Zero IS
-    this codebase's history-padding convention (rl/environment/utils.
-    padnstack zero-fills; a zero FIELD_FEATURE__VALID /
-    SPECIES_ENUM___UNSPECIFIED row is an empty slot).
-
-    ``target`` comes from ONE shared bucket level across the batch's
-    history AND packed_history (computed in _run_group) rather than each
-    leaf group's own max — the same reasoning as the learner's
-    the learner's old _stack_and_pad_batch: both lengths describe the same fact (how far
-    the batch's longest game has run), so bucketing them independently
-    makes XLA trace the PRODUCT of the two axes' bucket sets (4 field x
-    5 packed = 20 combos) instead of the shared level's 5, on top of the
-    5 batch-size buckets."""
-
-    def stack(*leaves: np.ndarray) -> np.ndarray:
-        padded = [
-            (
-                x
-                if x.shape[0] == target
-                else np.pad(x, [(0, target - x.shape[0])] + [(0, 0)] * (x.ndim - 1))
-            )
-            for x in leaves
-        ]
-        return np.stack(padded)
-
-    return stack
+def _stack_history_carries(carries: "list[HistoryCarry]") -> HistoryCarry:
+    """Carry leaves stack on axis 0 like rng_keys — a request that resumes
+    and one that does not differ only in `valid`. A request with NO carry
+    (empty leaves, a caller that never carries) in a group beside one that
+    does gets an invalid carry of the same width, so the group still
+    stacks and that request still computes from h0; a group with no carry
+    leaves at all keeps the empty carry (the encoder's static h0 branch)."""
+    widths = [
+        carry.slot_states.shape[-1]
+        for carry in carries
+        if not isinstance(carry.slot_states, tuple)
+    ]
+    if not widths:
+        return HistoryCarry()
+    filled = []
+    for carry in carries:
+        if isinstance(carry.slot_states, tuple):
+            filled.append(invalid_history_carry(widths[0]))
+        else:
+            filled.append(carry)
+    return jax.tree.map(lambda *xs: np.stack(xs), *filled)
 
 
 _STOP_POLL_SECONDS = 1.0
@@ -118,12 +121,14 @@ class InferenceServer:
     def __init__(
         self,
         player_apply_fn,
-        gpu_lock=None,
         head_params: HeadParams = HeadParams(),
         max_batch: int = 16,
         params_cache_size: int = 16,
+        stats: ActorStats | None = None,
     ):
         self._queue: "queue.SimpleQueue[_InferenceRequest]" = queue.SimpleQueue()
+        # Per-phase timing sink for _run_group (rl/environment/actor_stats.py).
+        self._stats = stats
         # Set by stop() at shutdown: step_player polls its result wait
         # against it and unwinds the calling actor thread with
         # ActorStopped, the same poll-against-stop the game-server
@@ -133,12 +138,11 @@ class InferenceServer:
         # threads then wedged the interpreter's exit-time join (the
         # 2026-08-23 post-checkpoint hang).
         self._stop = threading.Event()
-        self._gpu_lock = gpu_lock or nullcontext()
         self._max_batch = max_batch
-        # LRU of device-resident params, keyed by version — see module
-        # docstring. Only ever touched by the server thread; no lock.
-        self._params_cache: "OrderedDict[tuple[int, int], Params]" = OrderedDict()
-        self._params_cache_size = params_cache_size
+        # Device-resident params per version — see module docstring.
+        self._params_cache = DeviceParamsCache(
+            jax.devices()[0], "player_params", params_cache_size
+        )
 
         apply_with_heads = functools.partial(player_apply_fn, head_params=head_params)
 
@@ -186,6 +190,7 @@ class InferenceServer:
             rng_key=rng_key,
             actor_input=actor_input,
             done=threading.Event(),
+            enqueued_at=time.perf_counter(),
         )
         self._queue.put(request)
         while not request.done.wait(timeout=_STOP_POLL_SECONDS):
@@ -199,18 +204,9 @@ class InferenceServer:
 
     @staticmethod
     def _version_key(container: ParamsContainer) -> tuple[int, int]:
+        """Grouping key only; the params cache is keyed by container
+        identity (DeviceParamsCache)."""
         return (container.step_count, container.player_frame_count)
-
-    def _get_device_params(self, key: tuple[int, int], container) -> Params:
-        params = self._params_cache.get(key)
-        if params is None:
-            params = jax.device_put(container.player_params)
-            self._params_cache[key] = params
-            while len(self._params_cache) > self._params_cache_size:
-                self._params_cache.popitem(last=False)
-        else:
-            self._params_cache.move_to_end(key)
-        return params
 
     def _run(self) -> None:
         while True:
@@ -256,66 +252,76 @@ class InferenceServer:
     @staticmethod
     def _history_level(request: _InferenceRequest) -> int:
         """One shared bucket level across a request's history AND
-        packed_history (see _stack_axis0_to's docstring) — also the
-        grouping key that keeps different-length games out of the same
-        vmap batch (see _run)."""
-        field_len = request.actor_input.history.field.shape[0]
-        packed_len = request.actor_input.packed_history.revealed_cache.shape[0]
-        return max(
-            _bucket_level(field_len, _HISTORY_MIN_LENGTH),
-            _bucket_level(packed_len, _HISTORY_MIN_LENGTH),
-        )
+        packed_history (rl/environment/utils.joint_history_level) — also
+        the grouping key that keeps different-length games out of the
+        same vmap batch (see _run)."""
+        return joint_history_level(request.actor_input, ACTOR_HISTORY_MIN_LENGTH)
 
     def _run_group(self, group: "list[_InferenceRequest]") -> None:
-        params = self._get_device_params(
-            self._version_key(group[0].container), group[0].container
-        )
+        group_start = time.perf_counter()
+        if self._stats is not None:
+            for request in group:
+                self._stats.record(
+                    "actor_infer_queue_wait", (group_start - request.enqueued_at) * 1e3
+                )
+            self._stats.record("actor_infer_batch_size", len(group))
+            self._stats.record(
+                "actor_infer_history_level", self._history_level(group[0])
+            )
+        params = self._params_cache.get(group[0].container)
 
         # All requests in a group share one bucket level by construction
-        # (it's part of the grouping key); each target is capped at its
-        # own natural maximum exactly like the learner's version —
-        # capping only ever pads less, never truncates data.
+        # (it's part of the grouping key), so padding each to that level
+        # gives the group one shape to stack — the same pad the direct
+        # Agent path applies to a lone request.
         level = self._history_level(group[0])
-        history_target = _bucket_value(level, _HISTORY_MIN_LENGTH, NUM_HISTORY)
-        packed_target = _bucket_value(level, _HISTORY_MIN_LENGTH, 2 * NUM_HISTORY)
 
-        stacked = PlayerActorInput(
-            # [B, T=1, ...]: each vmap slice must see env with the same
-            # leading T=1 axis Agent._step_player's `t[None, ...]` adds —
-            # history/packed_history pass through un-expanded there, so
-            # they stack to [B, H, ...] with no extra axis.
-            env=jax.tree.map(
-                lambda *xs: np.expand_dims(np.stack(xs), 1),
-                *[r.actor_input.env for r in group],
-            ),
-            packed_history=jax.tree.map(
-                _stack_axis0_to(packed_target),
-                *[r.actor_input.packed_history for r in group],
-            ),
-            history=jax.tree.map(
-                _stack_axis0_to(history_target),
-                *[r.actor_input.history for r in group],
-            ),
-        )
-        # Pad the batch axis up to the next power of two by replicating
-        # row 0 (extra rows' outputs are simply never read back) — keeps
-        # the traced batch sizes to log2(max_batch)+1 distinct values.
-        batch = len(group)
-        padded_batch = 1 << (batch - 1).bit_length()
-        if padded_batch > batch:
-            pad = padded_batch - batch
-            stacked = jax.tree.map(
-                lambda x: np.concatenate([x, np.repeat(x[:1], pad, axis=0)]),
-                stacked,
+        with timed(self._stats, "actor_infer_stack"):
+            padded = [
+                pad_history_to_level(r.actor_input, level, ACTOR_HISTORY_MIN_LENGTH)
+                for r in group
+            ]
+            stacked = PlayerActorInput(
+                # [B, T=1, ...]: each vmap slice must see env with the same
+                # leading T=1 axis Agent._step_player's `t[None, ...]` adds —
+                # history/packed_history pass through un-expanded there, so
+                # they stack to [B, H, ...] with no extra axis.
+                env=jax.tree.map(
+                    lambda *xs: np.expand_dims(np.stack(xs), 1),
+                    *[p.env for p in padded],
+                ),
+                packed_history=jax.tree.map(
+                    lambda *xs: np.stack(xs), *[p.packed_history for p in padded]
+                ),
+                history=jax.tree.map(
+                    lambda *xs: np.stack(xs), *[p.history for p in padded]
+                ),
+                history_carry=_stack_history_carries([p.history_carry for p in padded]),
             )
-        rng_keys = jnp.stack(
-            [r.rng_key for r in group] + [group[0].rng_key] * (padded_batch - batch)
-        )
+            # Pad the batch axis up to the next power of two by replicating
+            # row 0 (extra rows' outputs are simply never read back) — keeps
+            # the traced batch sizes to log2(max_batch)+1 distinct values.
+            batch = len(group)
+            padded_batch = 1 << (batch - 1).bit_length()
+            if padded_batch > batch:
+                pad = padded_batch - batch
+                stacked = jax.tree.map(
+                    lambda x: np.concatenate([x, np.repeat(x[:1], pad, axis=0)]),
+                    stacked,
+                )
+            rng_keys = jnp.stack(
+                [r.rng_key for r in group] + [group[0].rng_key] * (padded_batch - batch)
+            )
 
-        with self._gpu_lock:
+        # forward = dispatch + completion: device_get blocked on the
+        # result anyway, so block_until_ready only moves the wait onto
+        # its own timer rather than adding one.
+        with timed(self._stats, "actor_infer_forward"):
             batched_output = self._forward(params, rng_keys, stacked)
+            jax.block_until_ready(batched_output)
         # One transfer for the whole batch; actors receive plain numpy.
-        batched_output = jax.device_get(batched_output)
+        with timed(self._stats, "actor_infer_device_get"):
+            batched_output = jax.device_get(batched_output)
 
         for i, request in enumerate(group):
             request.output = PlayerAgentOutput(

@@ -21,7 +21,7 @@ from rl.model.utils import ParamsContainer
 from rl.online.artifact import ckpt_root
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.league import LIVE_KEYS, MAIN_KEY, League, PlayerRef
-from rl.online.training.run_state import AddReason, RunState
+from rl.online.training.run_state import AddReason, EvalSnapshot, RunState
 
 logger = logging.getLogger(__name__)
 
@@ -71,13 +71,45 @@ def should_add_new_player(
     return None
 
 
-def create_params_container(run_state: RunState) -> ParamsContainer:
+def create_params_container(
+    run_state: RunState, target: bool = False, step_count: int = MAIN_KEY
+) -> ParamsContainer:
+    """Host copy of the live params (``target`` = the EMA target params).
+
+    Called on the learner thread only: it is the one place device state
+    is read into host memory, so every other consumer — actors, the
+    inference server, the eval thread — holds numpy that no train step
+    can donate away."""
+    player_state = run_state.player_state
+    builder_state = run_state.builder_state
+    if target:
+        player_params = player_state.target_params
+        builder_params = builder_state.target_params
+    else:
+        player_params = player_state.params
+        builder_params = builder_state.params
     return ParamsContainer(
-        player_frame_count=jax.device_get(run_state.player_state.frame_count).item(),
-        builder_frame_count=jax.device_get(run_state.builder_state.frame_count).item(),
-        step_count=MAIN_KEY,
-        player_params=jax.device_get(run_state.player_state.params),
-        builder_params=jax.device_get(run_state.builder_state.params),
+        player_frame_count=jax.device_get(player_state.frame_count).item(),
+        builder_frame_count=jax.device_get(builder_state.frame_count).item(),
+        step_count=step_count,
+        player_params=jax.device_get(player_params),
+        builder_params=jax.device_get(builder_params),
+    )
+
+
+def publish_live_params(run_state: RunState, league: League) -> None:
+    """Refresh what the actors and the eval thread play from: the league's
+    live main entry (``PlayerActor.pull_own_player``) and the eval
+    snapshot — main AND EMA target params, stamped with the train step, so
+    the eval thread never touches device state (the train step donates
+    its buffers; a live device reference held across an unroll would read
+    deleted arrays — the reason the gpu_lock used to exist)."""
+    league.update_live(MAIN_KEY, create_params_container(run_state))
+    step_count = jax.device_get(run_state.player_state.step_count).item()
+    run_state.eval_snapshot = EvalSnapshot(
+        step_count=step_count,
+        main=create_params_container(run_state, step_count=step_count),
+        ema=create_params_container(run_state, target=True, step_count=step_count),
     )
 
 

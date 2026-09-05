@@ -86,37 +86,6 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # observed). Forces explicit set posteriors into the slot tokens.
     set_loss_weight: float = 0.5
 
-    # Announced-state supervision (Φ_ann): each turn's announced state —
-    # the pre-turn recurrent state advanced once with outcome-masked
-    # messages (both players' revealed choices, chance unresolved) — is an
-    # extra evaluation point trained with the SAME trajectory margin label
-    # through the SAME antisymmetric readout (deep supervision; mirror
-    # antisymmetry of Φ_ann follows automatically, and no new parameters
-    # exist). Trained Φ_ann = E[final outcome | history, announced
-    # actions], the quantity both the replay skill/luck decomposition and
-    # dice-excised PBRS need. Both losses start near ln(13), so 1.0 is
-    # balanced. The announced pathway runs iff this or
-    # announced_distill_weight is > 0; with both 0, with_aux is applied
-    # instead, reproducing pre-announced training exactly.
-    announced_loss_weight: float = 1.0
-    # Announced-state distillation: KL(stopgrad P_Φ(t) ‖ P_Φ_ann(t)) —
-    # train the announced distribution toward the REALISED same-step
-    # distribution. Rationale (measured 2026-07-30: announced-movement
-    # ratio ~0.15): the shared terminal label gives an announcement almost
-    # no marginal CE to earn — the outcome-resolved state predicts the
-    # label at least as well — so SGD never builds the announcement →
-    # consequence circuit. This target demands it per turn: forward KL's
-    # minimiser is E[P_Φ(t) | announcement], the conditional mixture over
-    # dice, which is exactly what the decision/dice decomposition and
-    # dice-excised PBRS want Φ_ann to be. The target is stop-gradient, so
-    # the realised head is never pulled toward Φ_ann; one-step and
-    # on-distribution, so the policy-counterfactual cap on anticipation
-    # (see memory: offline-critic-no-anticipation mechanism 1) does not
-    # apply. The KL is logged as announced_distill_kl even at weight 0 —
-    # measure the gap on a run before paying for closing it. Default off:
-    # an extension beyond the settled announced-states design, A/B it.
-    announced_distill_weight: float = 0.0
-
     # Elo conditioning: with probability rating_dropout, a game's rating
     # features are zeroed (per GAME, not per perspective — mirrored pairs
     # must stay exact mirrors for pair-aware batching). Trains the

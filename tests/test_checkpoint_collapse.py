@@ -30,9 +30,9 @@ pytestmark = [pytest.mark.slow]
 _DEFAULT_CKPT_ROOT = "./ckpts/gen{generation}/"
 
 _EMBEDDING_TABLE_NAMES = (
-    "value_embeddings_table",
-    "target_embeddings",
-    "pass_embeddings",
+    "cls_embedding",
+    "target_slot_embeddings",
+    "sequence_row_bias",
 )
 
 
@@ -64,19 +64,21 @@ def ckpt_target_params(ckpt_dir):
 
     Skips on a checkpoint written by a superseded architecture: this probe
     reads param tables by NAME, so a stale lineage fails on the name
-    rather than on the collapse it is meant to detect. `value_embeddings_table`
-    is the sentinel — it replaced the all/private/public ladder tables when
-    the privileged critic was deleted (2026-08-25)."""
+    rather than on the collapse it is meant to detect. `cls_embedding` is
+    the sentinel — it replaced the 4-row `value_embeddings_table` when the
+    three residual streams became one sequence (2026-08-29), and that in
+    turn had replaced the all/private/public ladder tables when the
+    privileged critic was deleted (2026-08-25)."""
     params = checkpoint.load_component(ckpt_dir, "player", "target_params")
     names = {
         getattr(path[-1], "key", None)
         for path, _ in jax.tree_util.tree_leaves_with_path(params)
         if path
     }
-    if "value_embeddings_table" not in names:
+    if "cls_embedding" not in names:
         pytest.skip(
             "checkpoint predates the current architecture (no "
-            "'value_embeddings_table') — probe it again after the fresh "
+            "'cls_embedding') — probe it again after the fresh "
             "lineage writes its first checkpoint"
         )
     return params
@@ -133,7 +135,7 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
     from rl.online.artifact import merge_params
 
     fresh = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
-    _, kept_fresh = merge_params(fresh, ckpt_target_params)
+    _, kept_fresh, _ = merge_params(fresh, ckpt_target_params)
     if kept_fresh:
         pytest.skip(
             f"checkpoint predates the current architecture "
@@ -173,6 +175,12 @@ def test_checkpoint_embedding_tables_not_collapsed(ckpt_target_params):
         table = _find_leaf(ckpt_target_params, name)
         assert np.isfinite(table).all(), f"{name}: contains non-finite values"
 
+        if table.shape[0] < 2:
+            # A single-row table (the flat trunk's cls_embedding) has no
+            # pairs to compare -- degenerate for this probe, not collapsed.
+            # Same rule as the arch sentinel above: skip what cannot be
+            # judged, never report it as the pathology being probed for.
+            continue
         sims = _pairwise_cosine_similarities(table)
         assert sims.max() < 0.999, (
             f"{name}: two rows are near-duplicate (max cosine {sims.max():.4f}) "

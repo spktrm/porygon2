@@ -58,6 +58,14 @@ class ActionEnum(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     ACTION_ENUM__RESERVE_6_SWITCH_IN: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_1_SWITCH: _ClassVar[ActionEnum]
     ACTION_ENUM__ALLY_2_SWITCH: _ClassVar[ActionEnum]
+
+class ActionRequestKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACTION_REQUEST_KIND___UNSPECIFIED: _ClassVar[ActionRequestKind]
+    ACTION_REQUEST_KIND__MOVE: _ClassVar[ActionRequestKind]
+    ACTION_REQUEST_KIND__FORCE_SWITCH: _ClassVar[ActionRequestKind]
+    ACTION_REQUEST_KIND__TEAM_PREVIEW: _ClassVar[ActionRequestKind]
+    ACTION_REQUEST_KIND__WAIT: _ClassVar[ActionRequestKind]
 MODALITY_ENUM___UNSPECIFIED: ModalityEnum
 MODALITY_ENUM__MOVE: ModalityEnum
 MODALITY_ENUM__SWITCH: ModalityEnum
@@ -104,6 +112,11 @@ ACTION_ENUM__RESERVE_5_SWITCH_IN: ActionEnum
 ACTION_ENUM__RESERVE_6_SWITCH_IN: ActionEnum
 ACTION_ENUM__ALLY_1_SWITCH: ActionEnum
 ACTION_ENUM__ALLY_2_SWITCH: ActionEnum
+ACTION_REQUEST_KIND___UNSPECIFIED: ActionRequestKind
+ACTION_REQUEST_KIND__MOVE: ActionRequestKind
+ACTION_REQUEST_KIND__FORCE_SWITCH: ActionRequestKind
+ACTION_REQUEST_KIND__TEAM_PREVIEW: ActionRequestKind
+ACTION_REQUEST_KIND__WAIT: ActionRequestKind
 
 class ClientRequest(_message.Message):
     __slots__ = ("step", "reset")
@@ -113,13 +126,25 @@ class ClientRequest(_message.Message):
     reset: ResetRequest
     def __init__(self, step: _Optional[_Union[StepRequest, _Mapping]] = ..., reset: _Optional[_Union[ResetRequest, _Mapping]] = ...) -> None: ...
 
+class ActionMask(_message.Message):
+    __slots__ = ("kind", "switch_slots", "move_targets", "other_srcs", "active_slot")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    SWITCH_SLOTS_FIELD_NUMBER: _ClassVar[int]
+    MOVE_TARGETS_FIELD_NUMBER: _ClassVar[int]
+    OTHER_SRCS_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_SLOT_FIELD_NUMBER: _ClassVar[int]
+    kind: ActionRequestKind
+    switch_slots: int
+    move_targets: _containers.RepeatedScalarFieldContainer[int]
+    other_srcs: int
+    active_slot: int
+    def __init__(self, kind: _Optional[_Union[ActionRequestKind, str]] = ..., switch_slots: _Optional[int] = ..., move_targets: _Optional[_Iterable[int]] = ..., other_srcs: _Optional[int] = ..., active_slot: _Optional[int] = ...) -> None: ...
+
 class Action(_message.Message):
-    __slots__ = ("src", "tgt")
-    SRC_FIELD_NUMBER: _ClassVar[int]
-    TGT_FIELD_NUMBER: _ClassVar[int]
-    src: ActionEnum
-    tgt: ActionEnum
-    def __init__(self, src: _Optional[_Union[ActionEnum, str]] = ..., tgt: _Optional[_Union[ActionEnum, str]] = ...) -> None: ...
+    __slots__ = ("cell",)
+    CELL_FIELD_NUMBER: _ClassVar[int]
+    cell: int
+    def __init__(self, cell: _Optional[int] = ...) -> None: ...
 
 class StepRequest(_message.Message):
     __slots__ = ("username", "action", "rqid", "teampreview")
@@ -146,9 +171,9 @@ class ResetRequest(_message.Message):
     def __init__(self, username: _Optional[str] = ..., smogon_format: _Optional[str] = ..., game_id: _Optional[str] = ..., packed_teams: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class EnvironmentState(_message.Message):
-    __slots__ = ("info", "action_mask", "history_entity_public_cache", "history_entity_revealed_cache", "history_entity_edge_cache", "history_field", "history_length", "my_moveset", "opp_moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length")
+    __slots__ = ("info", "packed_action_mask", "history_entity_public_cache", "history_entity_revealed_cache", "history_entity_edge_cache", "history_field", "history_length", "my_moveset", "opp_moveset", "public_team", "revealed_team", "private_team", "field", "rqid", "history_packed_length", "structured_action_mask", "opp_private_team", "history_rewrite_count")
     INFO_FIELD_NUMBER: _ClassVar[int]
-    ACTION_MASK_FIELD_NUMBER: _ClassVar[int]
+    PACKED_ACTION_MASK_FIELD_NUMBER: _ClassVar[int]
     HISTORY_ENTITY_PUBLIC_CACHE_FIELD_NUMBER: _ClassVar[int]
     HISTORY_ENTITY_REVEALED_CACHE_FIELD_NUMBER: _ClassVar[int]
     HISTORY_ENTITY_EDGE_CACHE_FIELD_NUMBER: _ClassVar[int]
@@ -162,8 +187,11 @@ class EnvironmentState(_message.Message):
     FIELD_FIELD_NUMBER: _ClassVar[int]
     RQID_FIELD_NUMBER: _ClassVar[int]
     HISTORY_PACKED_LENGTH_FIELD_NUMBER: _ClassVar[int]
+    STRUCTURED_ACTION_MASK_FIELD_NUMBER: _ClassVar[int]
+    OPP_PRIVATE_TEAM_FIELD_NUMBER: _ClassVar[int]
+    HISTORY_REWRITE_COUNT_FIELD_NUMBER: _ClassVar[int]
     info: bytes
-    action_mask: bytes
+    packed_action_mask: bytes
     history_entity_public_cache: bytes
     history_entity_revealed_cache: bytes
     history_entity_edge_cache: bytes
@@ -177,7 +205,10 @@ class EnvironmentState(_message.Message):
     field: bytes
     rqid: int
     history_packed_length: int
-    def __init__(self, info: _Optional[bytes] = ..., action_mask: _Optional[bytes] = ..., history_entity_public_cache: _Optional[bytes] = ..., history_entity_revealed_cache: _Optional[bytes] = ..., history_entity_edge_cache: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., my_moveset: _Optional[bytes] = ..., opp_moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ..., history_packed_length: _Optional[int] = ...) -> None: ...
+    structured_action_mask: ActionMask
+    opp_private_team: bytes
+    history_rewrite_count: int
+    def __init__(self, info: _Optional[bytes] = ..., packed_action_mask: _Optional[bytes] = ..., history_entity_public_cache: _Optional[bytes] = ..., history_entity_revealed_cache: _Optional[bytes] = ..., history_entity_edge_cache: _Optional[bytes] = ..., history_field: _Optional[bytes] = ..., history_length: _Optional[int] = ..., my_moveset: _Optional[bytes] = ..., opp_moveset: _Optional[bytes] = ..., public_team: _Optional[bytes] = ..., revealed_team: _Optional[bytes] = ..., private_team: _Optional[bytes] = ..., field: _Optional[bytes] = ..., rqid: _Optional[int] = ..., history_packed_length: _Optional[int] = ..., structured_action_mask: _Optional[_Union[ActionMask, _Mapping]] = ..., opp_private_team: _Optional[bytes] = ..., history_rewrite_count: _Optional[int] = ...) -> None: ...
 
 class EnvironmentTrajectory(_message.Message):
     __slots__ = ("states",)

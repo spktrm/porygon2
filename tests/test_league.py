@@ -151,6 +151,53 @@ class TestEviction:
         # The evicted player's payoff rows are garbage-collected too.
         assert all(100 not in k for k in league.games)
 
+    def test_batch_cull_saws_between_cull_size_and_league_size(self):
+        league = League(
+            main_player=make_container(MAIN_KEY),
+            players=[],
+            league_size=4,
+            cull_size=2,
+        )
+        sizes = []
+        for step in range(100, 100 + 10 * 10, 10):
+            league.add_player(make_ref(step))
+            sizes.append(len(league.players))
+        # Nothing is culled until an add pushes the roster PAST league_size,
+        # then the cull lands in one go and the roster fills back up.
+        assert sizes == [1, 2, 3, 4, 2, 3, 4, 2, 3, 4]
+
+    def test_batch_cull_keeps_the_challenging_half(self):
+        league = League(
+            main_player=make_container(MAIN_KEY),
+            players=[],
+            league_size=4,
+            cull_size=2,
+        )
+        for step in (100, 200, 300, 400):
+            league.add_player(make_ref(step))
+        main = league.get_main_player()
+        # Main farms 100, 200 and 300; 400 stays challenging.
+        for _ in range(30):
+            for farmed in (100, 200, 300):
+                league.update_payoff(main, league.players[farmed], payoff=1.0)
+            league.update_payoff(main, league.players[400], payoff=-1.0)
+        league.add_player(make_ref(500))
+        # The challenging veteran and the unsampled newcomer (its UCB bonus
+        # is the largest on the roster, so a cull never removes the snapshot
+        # that triggered it) survive; the three farmed go in one cull.
+        assert set(league.players) == {400, 500}
+        assert all(100 not in k and 200 not in k and 300 not in k for k in league.games)
+
+    def test_cull_size_must_leave_room_below_league_size(self):
+        for cull_size in (0, 5):
+            with pytest.raises(ValueError):
+                League(
+                    main_player=make_container(MAIN_KEY),
+                    players=[],
+                    league_size=4,
+                    cull_size=cull_size,
+                )
+
 
 class TestSerialization:
     def test_roundtrip_preserves_roster_and_stats(self, league):
@@ -172,3 +219,25 @@ class TestSerialization:
         )
         # Regression guard for the origin-filtered pacing gate surviving a resume.
         assert restored.get_latest_player(origin="main").step_count == 100
+
+    def test_resume_takes_sizing_knobs_from_the_caller_not_the_checkpoint(self):
+        league = League(
+            main_player=make_container(MAIN_KEY),
+            players=[],
+            league_size=16,
+            cache_size=16,
+            ucb_c=1.0,
+        )
+        data = league.serialize()
+        # No knobs given: the serialised values stand (old-checkpoint path;
+        # a checkpoint from before cull_size falls back to league_size).
+        legacy = League.deserialize(data)
+        assert (legacy.league_size, legacy.cull_size) == (16, 16)
+        # Knobs given: they win over the checkpoint's copies.
+        restored = League.deserialize(
+            data, league_size=12, cache_size=6, ucb_c=0.5, cull_size=4
+        )
+        assert restored.league_size == 12
+        assert restored.cache_size == 6
+        assert restored.ucb_c == 0.5
+        assert restored.cull_size == 4

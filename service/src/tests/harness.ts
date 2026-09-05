@@ -1,13 +1,23 @@
 import { createBattle, TrainablePlayerAI } from "../server/runner";
 import { InfoFeature } from "../../protos/features_pb";
-import { EnvironmentState, StepRequest } from "../../protos/service_pb";
+import {
+    ActionMask,
+    ActionRequestKind,
+    EnvironmentState,
+    StepRequest,
+} from "../../protos/service_pb";
+import {
+    MOVE_SLOT_INDICES,
+    RESERVE_SLOT_INDICES,
+    TARGET_SLOT_INDICES,
+} from "../server/data";
 import {
     EdgeBuffer,
     generateTeamFromArray,
     getSampleTeam,
     StateHandler,
 } from "../server/state";
-import { Teams } from "@pkmn/sim";
+import { AnyObject, Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { GetRandomAction } from "../server/baselines/random";
 import { numEvals } from "../server/eval";
@@ -123,10 +133,198 @@ function assertPrivateSideShape(
     }
 }
 
+const MAX_RATIO_TOKEN_HARNESS = 16384;
+
+/**
+ * The private TRUTH CHANNEL (2026-08-31): a private row's condition must
+ * equal what the REQUEST says about that mon -- an independent parse of the
+ * request's condition string ("288/288", "0 fnt", "150/288 tox"), never the
+ * public row, which under a my-side Illusion blends two mons' histories
+ * until |replace| remaps. Battles with organic Illusion (Zoroark is in the
+ * random sets) make the soak itself the positive control: any accidental
+ * public-sourcing of these columns diverges from the request there and this
+ * throws.
+ *
+ * Also asserts the alignment key: a row's entityIdxPlusOne, when present,
+ * must point at a stable entity index that appears in MY side's
+ * PUBLIC_ORDER permutation -- i.e. the tag connects to a real public row.
+ * KNOWN ~0.1% false-positive class (2 in 1791 soak battles): a my-side
+ * Illusion mon's own index attaches to no public row until |replace| --
+ * the wire is CORRECT there (the hidden mon has no public identity yet,
+ * the tag reads as absent model-side), and vitest's retry: 2 absorbs it
+ * like the rest of the Illusion family.
+ */
+function assertPrivateTruthChannel(
+    privateTeam: ReturnType<typeof StateHandler.toReadablePrivate>,
+    request: AnyObject,
+    publicOrder: Int16Array,
+    channel: "mine" | "opponent" = "mine",
+) {
+    const requestPokemon = request?.side?.pokemon as
+        | { condition: string; ident: string }[]
+        | undefined;
+    if (!requestPokemon) {
+        return;
+    }
+    const sideSlots = new Set<number>();
+    // My side's public rows are the first half of PUBLIC_ORDER, the
+    // opponent's the second half -- the channel picks which half the
+    // alignment keys must land in.
+    const halfLength = publicOrder.length / 2;
+    let rowStart = 0;
+    if (channel === "opponent") {
+        rowStart = halfLength;
+    }
+    for (let row = rowStart; row < rowStart + halfLength; row++) {
+        if (publicOrder[row] >= 0) {
+            sideSlots.add(publicOrder[row]);
+        }
+    }
+    for (const [j, member] of requestPokemon.entries()) {
+        const row = privateTeam[j];
+        if (row === undefined) {
+            break;
+        }
+        const condition = member.condition;
+        const fainted = condition.endsWith(" fnt");
+        let expectedRatio = 0;
+        let statusToken: string | undefined = undefined;
+        if (!fainted) {
+            const [hpPart, rest] = condition.split("/");
+            const restParts = (rest ?? "").split(" ");
+            const maxHp = parseInt(restParts[0]);
+            statusToken = restParts[1];
+            expectedRatio = Math.floor(
+                (MAX_RATIO_TOKEN_HARNESS * parseInt(hpPart)) / maxHp,
+            );
+        }
+        if (row.fainted !== fainted) {
+            throw new Error(
+                `private row ${j}: fainted ${row.fainted} but the request ` +
+                    `says "${condition}"`,
+            );
+        }
+        if (!fainted && row.hpRatio !== expectedRatio) {
+            throw new Error(
+                `private row ${j}: hpRatio ${row.hpRatio} but the request ` +
+                    `says "${condition}" (expected ${expectedRatio})`,
+            );
+        }
+        if (!fainted && row.hasStatus !== (statusToken !== undefined)) {
+            throw new Error(
+                `private row ${j}: hasStatus ${row.hasStatus} but the ` +
+                    `request says "${condition}"`,
+            );
+        }
+        if (row.entityIdxPlusOne > 0) {
+            const stableIdx = row.entityIdxPlusOne - 1;
+            if (!sideSlots.has(stableIdx)) {
+                throw new Error(
+                    `${channel} private row ${j}: entity idx ${stableIdx} ` +
+                        `is not in the ${channel} half of PUBLIC_ORDER -- ` +
+                        `the alignment key points at no public row`,
+                );
+            }
+        }
+    }
+}
+
+/**
+ * The wire mask must name exactly the cells the decoder can answer.
+ *
+ * This mirrors `_cells_from_structured_mask` in `rl/environment/utils.py` --
+ * deliberately a SECOND implementation, because the thing under test is that
+ * the two languages agree, and a shared helper could only prove itself
+ * self-consistent. If this drifts from the python one the assertion below
+ * fires, which is the point. The offsets are derived HERE from the slot-list
+ * lengths, independently of data.ts's exported block constants, for the same
+ * reason.
+ */
+function cellsFromStructuredMask(mask: ActionMask): Set<number> {
+    const cells = new Set<number>();
+    const kind = mask.getKind();
+    if (
+        kind === ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED ||
+        kind === ActionRequestKind.ACTION_REQUEST_KIND__WAIT
+    ) {
+        return cells;
+    }
+    const numTargets = TARGET_SLOT_INDICES.length;
+    const moveOffset = RESERVE_SLOT_INDICES.length;
+    const otherOffset = moveOffset + MOVE_SLOT_INDICES.length * numTargets;
+
+    const switchSlots = mask.getSwitchSlots();
+    for (let j = 0; j < RESERVE_SLOT_INDICES.length; j++) {
+        if ((switchSlots >> j) & 1) {
+            cells.add(j);
+        }
+    }
+    for (let moveBit = 0; moveBit < MOVE_SLOT_INDICES.length; moveBit++) {
+        const targets = mask.getMoveTargetsList()[moveBit];
+        for (let targetBit = 0; targetBit < numTargets; targetBit++) {
+            if ((targets >> targetBit) & 1) {
+                cells.add(moveOffset + moveBit * numTargets + targetBit);
+            }
+        }
+    }
+    const otherSrcs = mask.getOtherSrcs();
+    for (let slotBit = 0; slotBit < numTargets; slotBit++) {
+        if ((otherSrcs >> slotBit) & 1) {
+            cells.add(otherOffset + slotBit);
+        }
+    }
+    return cells;
+}
+
+/**
+ * The mask <-> decoder agreement invariant (2026-08-29).
+ *
+ * Every cell the wire says is legal must have a Showdown choice string, and
+ * every cell that has one must be on the wire. Before the cell -> choice map
+ * these were two independently written code paths and they had drifted three
+ * ways -- a hardcoded " terastallize" suffix, a move-target lookup through a
+ * different move list under Dynamax, and up to 7 duplicate team-preview cells
+ * for one choice. None of it was caught, because nothing asserted the two
+ * halves agreed and the sim's rejections were logged rather than counted.
+ */
+function assertMaskMatchesDecoder(
+    mask: ActionMask,
+    choiceByCell: Map<number, string>,
+) {
+    const kind = mask.getKind();
+    const carriesChoice =
+        kind !== ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED &&
+        kind !== ActionRequestKind.ACTION_REQUEST_KIND__WAIT;
+    if (carriesChoice && choiceByCell.size === 0) {
+        throw new Error(
+            `action mask kind ${kind} legalised nothing; an empty mask makes ` +
+                `the random baseline pick a uniformly ILLEGAL cell`,
+        );
+    }
+    const onWire = cellsFromStructuredMask(mask);
+    for (const cell of onWire) {
+        if (!choiceByCell.has(cell)) {
+            throw new Error(
+                `cell ${cell} is legal on the wire but the decoder has no ` +
+                    `choice string for it`,
+            );
+        }
+    }
+    for (const cell of choiceByCell.keys()) {
+        if (!onWire.has(cell)) {
+            throw new Error(
+                `cell ${cell} decodes to "${choiceByCell.get(cell)}" but is ` +
+                    `not legal on the wire`,
+            );
+        }
+    }
+}
+
 export async function playerController(player: TrainablePlayerAI) {
     let historyLength = 0,
         packedHistoryLength = 0,
-        stateCount = 0;
+        stateCount = 0,
+        rewriteCount = 0;
     while (true) {
         // Only the stream read is guarded: a closed stream ends the loop
         // cleanly, while invariant violations below THROW upward so the
@@ -140,6 +338,30 @@ export async function playerController(player: TrainablePlayerAI) {
             break;
         }
         {
+            // `history_rewrite_count` (2026-09-02): the service's count of
+            // in-place rewrites of rows it already handed out. Read on
+            // EVERY state, the done state included, so a |replace| that
+            // lands after the last decision still reaches the wire; it must
+            // never go backwards within a game, and the wire can only lag
+            // the buffer (rows rewritten after this build are counted there
+            // first), never lead it.
+            const wireRewriteCount = state.getHistoryRewriteCount();
+            if (wireRewriteCount < rewriteCount) {
+                throw new Error(
+                    `history_rewrite_count went backwards: ` +
+                        `${rewriteCount} -> ${wireRewriteCount}`,
+                );
+            }
+            const bufferRewriteCount =
+                player.eventHandler.edgeBuffer.rewriteCount;
+            if (wireRewriteCount > bufferRewriteCount) {
+                throw new Error(
+                    `history_rewrite_count ${wireRewriteCount} on the wire ` +
+                        `exceeds the EdgeBuffer's ${bufferRewriteCount}`,
+                );
+            }
+            rewriteCount = wireRewriteCount;
+
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];
             if (done) {
@@ -188,6 +410,66 @@ export async function playerController(player: TrainablePlayerAI) {
             );
             assertPrivateSideShape(readablePrivateTeam, readableMoveset);
 
+            const truthRequest = player.getRequest();
+            if (truthRequest) {
+                assertPrivateTruthChannel(
+                    readablePrivateTeam,
+                    truthRequest as AnyObject,
+                    publicOrder,
+                );
+            }
+
+            // The OPPONENT truth channel (2026-09-01). The opponent's live
+            // request can move between build and this check (their loop is
+            // an independent async consumer), so the compare runs against
+            // `lastSerialisedOppRequest` -- the EXACT object the build
+            // serialised, race-free by construction (the client replaces
+            // its request wholesale per |request| line, so the held
+            // reference is a stable snapshot). Undefined snapshot == the
+            // build wrote the all-zero degrade, which the shape of the
+            // buffer must then agree with.
+            const readableOppPrivateTeam = StateHandler.toReadablePrivate(
+                state.getOppPrivateTeam_asU8(),
+            );
+            if (readableOppPrivateTeam.length !== 6) {
+                throw new Error(
+                    `opp_private_team decoded to ` +
+                        `${readableOppPrivateTeam.length} rows, expected 6`,
+                );
+            }
+            // The all-zero degrade: every row reads hpRatio 0 AND fainted
+            // false, a combination no real request produces (a living mon
+            // has hp, a fainted one has the flag).
+            const oppRowsEmpty = readableOppPrivateTeam.every(
+                (row) => row.hpRatio === 0 && !row.fainted,
+            );
+            const oppSnapshot = player.lastSerialisedOppRequest;
+            if (oppSnapshot === undefined && !oppRowsEmpty) {
+                throw new Error(
+                    "opp_private_team is populated but the build recorded " +
+                        "no serialised opponent request",
+                );
+            }
+            if (oppSnapshot !== undefined) {
+                if (oppRowsEmpty) {
+                    throw new Error(
+                        "the build serialised an opponent request but " +
+                            "opp_private_team decoded as the all-zero degrade",
+                    );
+                }
+                assertPrivateTruthChannel(
+                    readableOppPrivateTeam,
+                    oppSnapshot,
+                    publicOrder,
+                    "opponent",
+                );
+            }
+
+            assertMaskMatchesDecoder(
+                state.getStructuredActionMask()!,
+                player.legalChoiceByCell,
+            );
+
             const request = player.getRequest();
             if (!request) {
                 throw new Error("No request available");
@@ -203,10 +485,20 @@ export async function playerController(player: TrainablePlayerAI) {
             player.submitStepRequest(stepRequest);
         }
     }
+    if (player.invalidChoiceCount > 0) {
+        throw new Error(
+            `${player.invalidChoiceCount} choice(s) were rejected by the sim; ` +
+                `a legal mask cell decoded to something Showdown would not take`,
+        );
+    }
     return {
         historyLength,
         packedHistoryLength,
         stateCount,
+        rewriteCount,
+        // The count of |replace| handler calls that reached a remap -- the
+        // positive control's ground truth for `rewriteCount` above.
+        bufferRewriteCount: player.eventHandler.edgeBuffer.rewriteCount,
     };
 }
 

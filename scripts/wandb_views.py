@@ -99,7 +99,15 @@ SH = "EvalActor-simpleheuristic"
 def rl_sections():
     return [
         ws.Section(
-            name="0 · Beats the heuristic?",
+            # NEED-TO-KNOW ONLY: is this run winning, is it healthy, is it
+            # collapsing, is the critic calibrated, is it about to OOM.
+            # Everything else is drill-down detail in the sections below.
+            # 2026-08-30 redesign collapsed 16 sections -> 10 and pulled the
+            # canonical copy of every metric that used to be duplicated
+            # across 3+ sections up here (scripts/wandb_views.py history —
+            # see the old panel list in git log if you need the pre-redesign
+            # layout back).
+            name="0 · At a glance",
             is_open=True,
             panels=[
                 lp(
@@ -136,102 +144,49 @@ def rl_sections():
                     x="lifetime_step",
                     smooth=0,
                 ),
-            ],
-        ),
-        ws.Section(
-            name="1 · Value heads",
-            is_open=True,
-            panels=[
                 lp(
-                    # The one critic's CE against the v-trace win targets.
-                    "Value loss",
-                    ["player_loss_v_win"],
+                    # player_update_skipped is the non-finite gate — a
+                    # poisoned update is permanent and the next periodic
+                    # save overwrites the last good checkpoint with it
+                    # (CLAUDE.md §8), so this is checkpoint protection, not
+                    # just a numerics footnote. Never surfaced before this
+                    # redesign.
+                    "Loss & non-finite gate",
+                    ["player_loss", "player_update_skipped"],
                 ),
                 lp(
-                    # R2 of expectations vs v-trace targets.
+                    # THE collapse watch panel — with the adaptivity
+                    # controller removed (2026-08-13) and the entropy-floor
+                    # dual controllers removed (2026-08-30), modality
+                    # collapse has no automated backstop, only these
+                    # eyes-on axes (1330 died at modality entropy 0.08;
+                    # 1328 gained strength at 0.18-0.26).
+                    "Collapse watch: entropy axes & switch rate",
+                    [
+                        "switch_ratio",
+                        "player_action_normalized_entropy",
+                        "player_normalized_modality_entropy",
+                    ],
+                ),
+                lp(
+                    # R2 of expectations vs v-trace targets — repeated in
+                    # detail in "3 · Critic quality & value" alongside value
+                    # loss and calibration.
                     "Value R2 (main head)",
-                    ["player_value_head_r2"],
-                    range_y=(-1, 1),
-                ),
-            ],
-        ),
-        ws.Section(
-            # Observer stack (2026-08-26): the policy no longer reads the
-            # Q critic, but it remains the matched control and the
-            # starvation discriminators' evidence base.
-            name="1.5 · Q critic",
-            is_open=True,
-            panels=[
-                lp(
-                    # Acceptance: q_r2 climbing into the V head's band.
-                    # Lagging early is expected (one action's target per
-                    # state vs every state for V); plateauing far below
-                    # means per-action values aren't extractable from the
-                    # action embeddings.
-                    "Q calibration vs V head (R2)",
-                    ["player_q_r2", "player_value_head_r2"],
-                    range_y=(-1, 1),
-                ),
-                lp(
-                    # THE switching readout: best legal switch E[Q] minus
-                    # best legal move E[Q], joint-read with switch_ratio.
-                    # Gap positive while switch_ratio collapses = the
-                    # self-reinforcing ratchet; gap negative = the critic
-                    # agrees with not switching on the visited data (fix
-                    # is opponents/data, not the policy update).
-                    "Switch-vs-move value gap & switch rate",
-                    ["player_q_switch_move_gap", "switch_ratio"],
-                ),
-                lp(
-                    # |sum(pi*E[Q]) - V|: both critics learn the PLAIN
-                    # game (the reference is a policy-objective term
-                    # only since 2026-08-25), so this is calibration
-                    # debt and nothing else.
-                    "Q-V state-value agreement",
-                    ["player_q_ev_gap"],
-                ),
-                lp(
-                    # Gap discriminator 1/3 — calibration by context.
-                    # Forced switches (post-faint) stay data-rich through
-                    # a switch collapse; voluntary ones starve. Forced
-                    # calibrated + voluntary degraded = starvation
-                    # artefact (don't trust the gap); all three tracking
-                    # together = the critic means it.
-                    "Q calibration by context (R2)",
                     [
-                        "player_q_r2_move",
-                        "player_q_r2_switch_forced",
-                        "player_q_r2_switch_voluntary",
+                        # THE privileged-premise discriminator (2026-09-01):
+                        # priv >= deploy from 20k is the gate; priv < deploy
+                        # sustained past 30k is the abort (the 2026-08-25
+                        # falsification re-run on its own instrument).
+                        "player_value_head_r2",
+                        "player_priv_value_head_r2",
                     ],
                     range_y=(-1, 1),
                 ),
                 lp(
-                    # Gap discriminator 2/3 — how much CE gradient switch
-                    # cells actually receive (the CE trains only the
-                    # taken action's cell). Voluntary frac -> 0 is the
-                    # starvation mechanism in the flesh.
-                    "Q training coverage by modality",
-                    [
-                        "player_q_switch_target_frac",
-                        "player_q_voluntary_switch_target_frac",
-                    ],
-                ),
-                lp(
-                    # Gap discriminator 3/3 — head-independent: mean
-                    # Retrace return after a voluntary switch vs after a
-                    # move, both over states offering both modalities. If
-                    # the data itself says switches lose, the negative
-                    # gap is honest and the fix is opponent pressure /
-                    # exploration coverage, not the improvement term.
-                    "Empirical returns: voluntary switch vs move",
-                    [
-                        "player_q_target_voluntary_switch",
-                        "player_q_target_move",
-                    ],
-                ),
-                lp(
-                    "Q loss & head gradient",
-                    ["player_loss_q", "player_advantage_head_gradient_norm"],
+                    "Process RSS (MB)",
+                    ["diag_rss_mb", "diag_node_rss_mb"],
+                    smooth=0,
                 ),
             ],
         ),
@@ -241,8 +196,9 @@ def rl_sections():
             # action's pi/mu ratio over the batch-normalised v-trace
             # advantage, plus a differentiated forward KL magnet to the
             # periodically snapped reference and an entropy bonus inside
-            # the same bracket.
-            name="1.6 · NashPG policy loss",
+            # the same bracket. The entropy/switch-rate abort watch lives
+            # in "0 · At a glance" now — not repeated here.
+            name="1 · Policy loss (NashPG)",
             is_open=True,
             panels=[
                 lp(
@@ -263,237 +219,159 @@ def rl_sections():
                     ["player_pg_adv_mean", "player_pg_adv_std"],
                 ),
                 lp(
-                    # The magnet cycle: KL(pi || pi_reg) sawtooths — up
-                    # against the FROZEN reference, ~0 at each snap. A
-                    # level climbing ACROSS snaps is a policy outrunning
-                    # the snap period.
-                    "Magnet: reference KL sawtooth & snaps",
-                    ["player_ref_kl", "player_reg_snapped"],
-                ),
-                lp(
-                    # Entropy bonus value (alpha-weighted since 2026-08-28)
-                    # and the two normalised entropies. A cliff here now
-                    # means the CONTROLLER is losing at its alpha ceiling,
-                    # not that a static coef needs a bump.
-                    "Entropy bonus & abort watch",
-                    [
-                        "player_loss_entropy",
-                        "player_action_normalized_entropy",
-                        "player_normalized_modality_entropy",
-                    ],
-                ),
-                lp(
-                    # The per-axis normalised entropies the floor holds
-                    # (targets player_ent_target_{macro,micro} = 0.5).
-                    # micro_taken staying off its floor on switch-heavy
-                    # batches is the which-axis plasticity signal.
-                    "Entropy floor: per-axis normalised entropies",
+                    # Per-axis normalised entropies, OBSERVERS since
+                    # 2026-08-30: macro dying while the joint H holds is
+                    # the modality-collapse shape the global panel in
+                    # "0 · At a glance" cannot see.
+                    "Per-axis normalised entropies (observers)",
                     [
                         "player_entropy_macro",
                         "player_entropy_micro_taken",
                     ],
                 ),
                 lp(
-                    # The dual temperatures (2026-08-28). Equilibrium away
-                    # from both bounds = the floor holds at finite cost;
-                    # pinned at alpha_max (0.5) = the ask is infeasible
-                    # against the PG at this bound — the abort instrument;
-                    # at alpha_min = the axis holds itself for free.
-                    "Entropy floor: dual temperatures alpha",
-                    [
-                        "player_ent_alpha_macro",
-                        "player_ent_alpha_micro",
-                    ],
+                    # Modality decomposition of the throttle on any
+                    # taken-action update: per-cell pi mass, as a
+                    # switch/move ratio. A falling ratio is the starvation
+                    # signature.
+                    "Starvation watch (ratio, switch/move)",
+                    ["player_policy_prob_ratio"],
                     log_y=True,
                 ),
                 lp(
-                    # Modality decomposition of the two throttles on any
-                    # taken-action update: per-cell pi mass and the
-                    # observer critic's |A|, as switch/move ratios.
-                    # prob_ratio falling while absadv_ratio holds ~ 1 is
-                    # the starvation signature — the critic still
-                    # believes, the policy has stopped sampling.
-                    "Starvation watch (ratios, switch/move)",
-                    ["player_policy_prob_ratio", "player_policy_absadv_ratio"],
-                    log_y=True,
-                ),
-                lp(
-                    "Starvation factors: per-cell pi and |A|",
+                    "Starvation factors: per-cell pi",
                     [
                         "player_policy_prob_switch",
                         "player_policy_prob_move",
-                        "player_policy_absadv_switch",
-                        "player_policy_absadv_move",
                     ],
                     log_y=True,
                 ),
+                lp(
+                    # The zero-avoiding term on the MODALITY MARGINAL:
+                    # forward KL from uniform over live modalities, the one
+                    # force in the bracket that is not pi-prefactored and so
+                    # the only one still acting on an abandoned modality --
+                    # identically silent within a modality since 2026-08-31
+                    # (the sp75c row form flattened WHICH-move). Read
+                    # against prob_switch -- rising mass with this falling
+                    # is the term doing its job and relaxing; pinned with
+                    # mass unmoved is paying and buying nothing.
+                    "Zero-avoiding KL & switch mass",
+                    ["player_loss_modality_kl", "player_policy_prob_switch"],
+                ),
+                lp(
+                    "Loss components",
+                    [
+                        "player_loss_pg",
+                        "player_loss_entropy",
+                        "player_loss_modality_kl",
+                        "player_loss_kl",
+                        "player_loss_v_win",
+                    ],
+                ),
+                lp("NLL sum", ["player_nll_sum"]),
             ],
         ),
         ws.Section(
-            # Observer critic quality. The policy no longer reads the Q
-            # stack (2026-08-26; its link to return is the v-trace
-            # advantage), but an action-flat critic still voids the
-            # matched control and the starvation discriminators above.
-            name="1.7 · Critic quality (observer stack)",
+            # What is left of the critic section after the advantage head
+            # retired (2026-08-29) and the one-step-label panels went with
+            # the last of the Q machinery (2026-08-30), merged with Step 1
+            # of docs/critic-weakness-analysis.md (2026-08-23): the per-row
+            # JOINT statistics that judge every later step, from the
+            # completed-game outcome carried on every chunk. NaN where a
+            # batch has no rows in the slice (wandb skips them).
+            name="2 · Switch & critic evidence",
             is_open=True,
             panels=[
                 lp(
-                    # Action-value spread. Near-zero means the critic
-                    # cannot tell actions apart, so there is nothing to
-                    # push toward. p90 alongside the mean: spread
-                    # concentrates in few high-leverage states, so the
-                    # mean undersells by construction.
-                    # The uniform (π-free) pair is the flat-vs-anti-switch
-                    # discriminator: uniform ≫ π-weighted = spread lives on
-                    # abandoned actions (critic discriminates, policy
-                    # collapsed); both ≈ 0 = critic genuinely action-flat.
-                    "Action-value spread: Var_a~pi[Q] + uniform",
+                    # How much gradient switch cells actually receive. The
+                    # policy loss trains only the taken action, so
+                    # voluntary frac -> 0 IS the starvation mechanism in the
+                    # flesh, whatever the head looks like.
+                    "Training coverage by modality",
                     [
-                        "player_q_action_var",
-                        "player_q_action_var_p90",
-                        "player_q_action_var_uniform",
-                        "player_q_action_var_uniform_p90",
+                        "player_taken_switch_frac",
+                        "player_taken_voluntary_switch_frac",
                     ],
                 ),
                 lp(
-                    # Uniform spread split by modality (2026-08-24): the
-                    # head is macro[modality] + gated micro, so between =
-                    # the switch-vs-move bit the macro carries and within
-                    # = which move / which reserve, which ONLY the pointer
-                    # micro grid can carry. within ≈ 0 with between ≈
-                    # uniform = the critic resolves one bit (70mhptdc
-                    # read: uniform ≈ p(1-p)·gap² all run).
-                    "Action-value spread: within vs between modality",
+                    # The flat readout's own way to fail, and it is the same
+                    # SHAPE as the dx65cpwp runaway these panels were built
+                    # for: the bilinear is a two-factor product with ONE
+                    # zero-init factor. query must leave 0 within ~200 steps
+                    # (its gradient is a rank-1 outer product of live rows);
+                    # key must leave lecun 0.0625 shortly after (its gradient
+                    # is proportional to query, so it is frozen for exactly
+                    # one step). Either still flat at 2k IS the stall.
+                    "Action readout: drift from init",
                     [
-                        "player_q_action_var_within_modality",
-                        "player_q_action_var_within_modality_p90",
-                        "player_q_action_var_between_modality",
+                        "player_pointer_query_rms",
+                        "player_pointer_key_rms",
+                        "player_pointer_local_src_rms",
+                        "player_pointer_local_tgt_rms",
+                        "player_switch_head_rms",
+                        "player_other_head_rms",
                     ],
                 ),
                 lp(
-                    # Advantage scale per SLOT GROUP (2026-08-25). Each
-                    # group now owns its micro parameters, so one group
-                    # pinned near zero while the others move = that group's
-                    # readout is not training. The target group's scalar was
-                    # bitwise zero for the whole of the previous lineage.
-                    "Advantage rms by slot group",
+                    "Trunk & head gradient norms",
                     [
-                        "player_adv_rms",
-                        "player_adv_rms_move",
-                        "player_adv_rms_switch",
-                        "player_adv_rms_target",
+                        "player_trunk_attn_out_rms",
+                        "player_trunk_mlp_out_rms",
+                        "player_action_head_grad_norm",
+                        "player_trunk_grad_norm",
                     ],
                 ),
                 lp(
-                    # Is the within-modality route learning at all? The
-                    # zero-init micro gate (move/switch groups; target is
-                    # never legal in singles) and drift-from-init of the
-                    # out layers: pointer kernels at 0.0625 (lecun) with a
-                    # flat gate = the micro path is a random walk.
-                    "Q head: micro gate & drift from init",
+                    # Rows of the trunk's OUTPUT converging to one direction
+                    # (Noci et al. 2022 rank collapse): cosine rising toward
+                    # 1 / participation falling toward 1 is the alarm
+                    # (> 0.9 / < 4 pre-registered); ckpt_00182000 read
+                    # 0.173 / 10.9 offline, and the first live points
+                    # after that restart must match.
+                    "Trunk row homogeneity",
+                    ["player_trunk_row_cosine", "player_trunk_row_participation"],
+                ),
+                lp(
+                    # The 2026-09-01 opponent-code leaves against their
+                    # known init (all lecun 0.0625). Still there tens of
+                    # thousands of steps in = never trained: the code is a
+                    # random hash and the belief head is learning it.
+                    "Opp code: drift from init",
                     [
-                        "player_adv_type_scale_move",
-                        "player_adv_type_scale_switch",
-                        "player_q_micro_kernel_rms",
-                        "player_q_micro_local_rms",
-                        "player_q_macro_out_rms",
-                        "player_q_adapter_out_rms",
+                        "player_opp_code_logits_rms",
+                        "player_opp_code_embedding_rms",
+                        "player_belief_head_out_rms",
+                        "player_species_belief_rms",
+                        "player_revealed_belief_rms",
                     ],
                 ),
                 lp(
-                    # Policy micro type_scale (2026-08-25): the gram is
-                    # rms-normalised per slot group, so this IS the micro
-                    # logit scale. Watch it regrow from ~0 smoothly;
-                    # collapse toward 0 with grads climbing was the
-                    # two-factor runaway the normalisation removes.
-                    "Policy micro type_scale (normalised gram)",
+                    # Pre-clip grad norms on the same leaves. The embedding
+                    # gets gradient on ONE row per (mon, group) through the
+                    # straight-through argmax, so a dead group reads as one
+                    # row absorbing it -- read beside code_perplexity_min.
+                    "Opp code: gradient norms",
                     [
-                        "player_policy_type_scale_move",
-                        "player_policy_type_scale_switch",
-                        "player_policy_type_scale_target",
+                        "player_opp_code_logits_grad_norm",
+                        "player_opp_code_embedding_grad_norm",
+                        "player_belief_head_gradient_norm",
                     ],
                 ),
                 lp(
-                    # Policy-head param drift (2026-08-26): the dx65cpwp
-                    # micro runaway lived here — local_tgt 0.0028 -> 0.070,
-                    # adapter 0.006 -> 0.105 — with no panel watching.
-                    # Healthy O(0.005); a march toward 0.07 is the runaway
-                    # re-forming. tgt/src split: coherent tgt-column
-                    # accumulation was the 7.5x diagnostic asymmetry.
-                    "Policy head: param drift from init",
+                    # The 2026-09-02 history-encoder leaves. attn_out is
+                    # ZERO-init and must leave 0 within ~200 steps (still
+                    # flat at 2k = the two-factor stall; fallback is a
+                    # lecun attn_out behind a zero-init scalar gate);
+                    # query/key start at lecun ~0.044, the slot write gate
+                    # at ~0.028.
+                    "History encoder: drift from init",
                     [
-                        "player_policy_micro_local_tgt_rms",
-                        "player_policy_micro_local_src_rms",
-                        "player_policy_adapter_rms",
+                        "player_history_step_attn_out_rms",
+                        "player_history_step_attn_qk_rms",
+                        "player_history_slot_gate_rms",
+                        "player_history_step_attn_grad_norm",
                     ],
-                ),
-                lp(
-                    # Pre-clip grad norm per policy-head subtree, the
-                    # policy pathway's own gradient scale (the Q-head pair
-                    # below stayed calm through both dx65cpwp failures).
-                    "Policy head: grad norm by subtree",
-                    [
-                        "player_policy_grad_norm_micro",
-                        "player_policy_grad_norm_macro",
-                        "player_policy_head_gradient_norm",
-                    ],
-                ),
-                lp(
-                    # Pre-clip grad norm per Q-head subtree. micro ≪
-                    # macro = the loss is finding the modality offset
-                    # but not the cells.
-                    "Q head: grad norm by subtree",
-                    [
-                        "player_q_grad_norm_micro",
-                        "player_q_grad_norm_macro",
-                        "player_advantage_head_gradient_norm",
-                    ],
-                ),
-                lp(
-                    # The Q readout should calibrate at least as well as
-                    # the V head on fresh rows. q_fresh persistently below
-                    # value_fresh = the policy is steering off the worse
-                    # critic.
-                    "Calibration r2: Q fresh/replay vs V fresh",
-                    [
-                        "player_q_calibration_r2_fresh",
-                        "player_q_calibration_r2_replay",
-                        "player_value_r2_fresh",
-                    ],
-                ),
-                lp(
-                    # switch_ratio is the number this whole saga is about;
-                    # an entropy cliff is the abort signal (raise
-                    # player_ent_coef first; back player_pg_coef off).
-                    "Outcome watch: switch ratio & modality entropy",
-                    [
-                        "switch_ratio",
-                        "player_normalized_modality_entropy",
-                    ],
-                ),
-            ],
-        ),
-        ws.Section(
-            # Step 1 of docs/critic-weakness-analysis.md (2026-08-23): the
-            # per-row JOINT statistics that judge every later step, from
-            # the completed-game outcome now carried on every chunk. NaN
-            # where a batch has no rows in the slice (wandb skips them).
-            name="1.75 · Critic telemetry (Step 1: labels, matched-V, support)",
-            is_open=True,
-            panels=[
-                lp(
-                    # Offline reference 18.7x (34x on voluntary switches):
-                    # the variance a one-step label would remove.
-                    "Label variance around Q: outcome vs one-step, by modality",
-                    [
-                        "player_q_label_var_outcome_move",
-                        "player_q_label_var_onestep_move",
-                        "player_q_label_var_outcome_forced",
-                        "player_q_label_var_onestep_forced",
-                        "player_q_label_var_outcome_voluntary",
-                        "player_q_label_var_onestep_voluntary",
-                    ],
-                    log_y=True,
                 ),
                 lp(
                     # Realised outcome of voluntary switches minus moves at
@@ -508,21 +386,6 @@ def rl_sections():
                         "player_mv_bin3_gap_realised",
                         "player_mv_bin4_gap_realised",
                         "player_mv_pooled_gap_realised",
-                    ],
-                    smooth=0.99,
-                ),
-                lp(
-                    # The critic's mean-over-legal-cells gap in the SAME
-                    # bins. Flat across bins = a modality offset (the
-                    # collapse signature); state-dependent = resolution.
-                    "Matched-V critic gap (Q_sw − Q_mv) per V bin",
-                    [
-                        "player_mv_bin0_gap_critic",
-                        "player_mv_bin1_gap_critic",
-                        "player_mv_bin2_gap_critic",
-                        "player_mv_bin3_gap_critic",
-                        "player_mv_bin4_gap_critic",
-                        "player_mv_pooled_gap_critic",
                     ],
                     smooth=0.99,
                 ),
@@ -548,7 +411,7 @@ def rl_sections():
                     # Outcome calibration of the V head (offline 0.265 on
                     # fresh on-policy games). prev_switch vs prev_move is
                     # the post-switch pessimism read.
-                    "V outcome R²: all / phase / after switch vs move; V vs one-step",
+                    "V outcome R²: all / phase / after switch vs move",
                     [
                         "player_v_outcome_r2_all",
                         "player_v_outcome_r2_early",
@@ -556,7 +419,6 @@ def rl_sections():
                         "player_v_outcome_r2_late",
                         "player_v_outcome_r2_prev_switch",
                         "player_v_outcome_r2_prev_move",
-                        "player_v_onestep_r2",
                     ],
                     smooth=0.99,
                 ),
@@ -573,26 +435,10 @@ def rl_sections():
                     smooth=0.99,
                 ),
                 lp(
-                    # Storage-level (chunks holding a voluntary switch) and
-                    # optimisation-level (loss share) support — the
-                    # acceptance measure for the Step-2 ramp and any row
-                    # weighting.
-                    "Q support: loss share by modality, chunk frac, edge frac",
-                    [
-                        "player_q_loss_share_move",
-                        "player_q_loss_share_forced",
-                        "player_q_loss_share_voluntary",
-                        "player_q_support_chunk_vol_switch_frac",
-                        "player_q_target_edge_frac",
-                    ],
-                ),
-                lp(
-                    # Step 3 residual critic (2026-08-23): Huber on the
-                    # taken cell vs the one-step label; MSE alongside, and
-                    # the fraction of legal cells whose unclipped V + A
-                    # leaves the reward support (expect ~0).
-                    "Q Huber + MSE (residual critic) and saturation",
-                    ["player_loss_q", "player_q_mse", "player_q_saturation_frac"],
+                    # Storage-level support: fraction of stored chunks
+                    # holding at least one voluntary switch.
+                    "Voluntary-switch chunk fraction",
+                    ["player_chunk_vol_switch_frac"],
                 ),
                 lp(
                     # THE DEADLINE PANEL. Voluntary-switch rows per batch is
@@ -605,72 +451,454 @@ def rl_sections():
                     # 3.9 (33k), halving every ~8k.
                     "Voluntary-switch rows per batch (absorbing floor = 1.0)",
                     [
-                        "player_q_support_vol_switch_rows",
-                        "player_q_support_forced_switch_rows",
+                        "player_vol_switch_rows",
+                        "player_forced_switch_rows",
                     ],
                     log_y=True,
                 ),
                 lp(
-                    # The reference cycle against the switch support it
-                    # must hold: voluntary-switch target fraction >= 0.2
-                    # is the wire every collapsed lineage tripped.
+                    # The magnet/reference cycle against the switch support
+                    # it must hold: KL(pi || pi_reg) sawtooths up against
+                    # the FROZEN reference, ~0 at each snap (a level
+                    # climbing ACROSS snaps is a policy outrunning the snap
+                    # period); voluntary-switch target fraction >= 0.2 is
+                    # the wire every collapsed lineage tripped.
                     "Reference cycle & switch support",
                     [
                         "player_ref_kl",
-                        "player_q_voluntary_switch_target_frac",
+                        "player_taken_voluntary_switch_frac",
                         "player_reg_snapped",
                     ],
                 ),
             ],
         ),
         ws.Section(
-            # 2026-08-19 reframing: a negative MEAN switch/move gap is the
-            # expected sign under correct play (switching spends a turn),
-            # so collapse detection lives in the tail — states where the
-            # critic actually prefers the switch. Conditioned on the STATE
-            # (critic flag), not the taken action, dodging the
-            # chosen-switch selection bias of the Aug-15 crossover read.
-            name="1.8 · Pivotal-state switch decisions",
+            # The opponent-belief SSL pair (2026-09-01): the discrete code
+            # the secret rows carry (grounded by the privileged value CE)
+            # and the belief head predicting it from public rows. Split out
+            # of the critic section so the mechanism has its own address.
+            name="3 · Opponent belief (SSL) & code",
             is_open=True,
             panels=[
                 lp(
-                    # Collapse signature #1: the critic stops flagging ANY
-                    # state as switch-worthy. Healthy is a modest nonzero
-                    # fraction (~0.2 early on the q-boost lineage).
-                    "Pivotal fraction (critic prefers switch | both legal)",
-                    ["player_q_pivotal_frac"],
+                    # CE from public rows to the sg'd code, mean over
+                    # groups. Falling = beliefs sharpening. Since
+                    # 2026-09-05 (irqeetfg ~1.15M) the label is the code
+                    # of each mon's HIDDEN tokens only, so every belief
+                    # panel breaks there: before, the full-sheet code.
+                    "Belief loss",
+                    ["player_loss_belief"],
                 ),
                 lp(
-                    # Collapse signature #2: policy ignores the flags —
-                    # switch mass / taken-switch rate cratering on pivotal
-                    # states while pivotal_frac holds.
-                    "Compliance on pivotal states",
+                    # Per-group argmax accuracy (floor 1/16), the fraction
+                    # of mons with an aligned public row, and of those the
+                    # share still carrying a hidden token (the label
+                    # supply is their product).
+                    "Belief accuracy & label supply",
                     [
-                        "player_q_pivotal_pi_switch_mass",
-                        "player_q_pivotal_taken_switch_frac",
+                        "player_belief_accuracy",
+                        "player_belief_matched_frac",
+                        "player_belief_hidden_frac",
                     ],
                 ),
                 lp(
-                    # Same state class, different action — the closest
-                    # available reading of "are switches better where they
-                    # matter". Empty slices log 0; read alongside the
-                    # compliance panel.
-                    "Pivotal return split: switched vs stayed",
+                    # The accuracy made honest (2026-09-02): the majority
+                    # rate a constant predictor scores on the SAME rows,
+                    # and accuracy minus it. Above-marginal ~0 = the head
+                    # has learnt the batch marginal and nothing else
+                    # (a collapsed group is predicted at 100% for free).
+                    "Belief accuracy above marginal",
                     [
-                        "player_q_pivotal_ret_switch",
-                        "player_q_pivotal_ret_stay",
+                        "player_belief_accuracy_above_marginal",
+                        "player_belief_majority_rate",
+                    ],
+                ),
+                lp(
+                    # The species-only matched control (2026-09-02): a
+                    # table keyed on the public row's species, scored on
+                    # the same labels and rows. Gain = belief minus
+                    # species accuracy: > 0.05 = the head reads public
+                    # evidence beyond species; <= 0 = a species lookup.
+                    # Read only once the table's own accuracy plateaus
+                    # (~2-5k steps after it lands).
+                    "Belief gain over species control",
+                    [
+                        "player_belief_gain_over_species",
+                        "player_species_belief_accuracy",
+                        "player_species_belief_accuracy_above_marginal",
+                    ],
+                ),
+                lp(
+                    # The revealed-row control: an MLP over the matched
+                    # mon's own PRE-trunk public row alone (species, revealed
+                    # moves, item, ability, state), same labels and rows.
+                    # Margin = belief minus its accuracy = inference from
+                    # CONTEXT (history, the other rows); up is good. B3
+                    # rule (2026-09-04) FIRED: margin 0.20 -> 0.017 by
+                    # 1.15M, the control read the full-sheet label off the
+                    # row's own tokens. Under the hidden-token label
+                    # (2026-09-05) this control is the positive control:
+                    # its above-marginal accuracy must FALL to the
+                    # species control's (the row shows nothing the label
+                    # encodes), and the head's must stay above both.
+                    "Belief context margin over revealed-row control",
+                    [
+                        "player_belief_context_margin",
+                        "player_revealed_belief_accuracy",
+                        "player_revealed_belief_accuracy_above_marginal",
+                    ],
+                ),
+                lp(
+                    "Control losses",
+                    ["player_loss_species_belief", "player_loss_revealed_belief"],
+                ),
+                lp(
+                    # Opponent-code usage perplexity per group: min pinned
+                    # at 1 = a dead group = the code is ungrounded there
+                    # (the collapse instrument for the Dreamer code).
+                    "Opponent code perplexity",
+                    [
+                        "player_code_perplexity_mean",
+                        "player_code_perplexity_min",
+                    ],
+                ),
+                lp(
+                    # The belief LABEL's usage over the rows the loss
+                    # scores: the same code net over the hidden tokens
+                    # alone. Min pinned at 1 = a dead label; read beside
+                    # above-marginal, which is floored by 1/perplexity.
+                    "Hidden-token label perplexity",
+                    [
+                        "player_hidden_code_perplexity_mean",
+                        "player_hidden_code_perplexity_min",
+                    ],
+                ),
+                lp(
+                    # Fraction of value-masked steps carrying any live
+                    # opponent row -- the wire supply for all of the above.
+                    "Opponent row supply",
+                    ["player_code_row_frac"],
+                ),
+            ],
+        ),
+        ws.Section(
+            # The latent transition model (2026-09-05): g = 2 trunk blocks
+            # over the 73 policy-readable post-trunk rows conditioned on
+            # the taken cell's readout rows and a chance code z (2 groups
+            # x 16 classes; prior from h_t and the cell, posterior also
+            # from sg(h_{t+1}), straight-through). Heads on the imagined
+            # rows: consistency to the real next rows, grounding to the 21
+            # pre-trunk target rows (the old dynamics head's label, in the
+            # NEXT step's layout), the SHARED value head and readout, the
+            # next legal set + request kind, done. KL balanced 0.5 / 0.1
+            # with 1 free nat. Every panel says which decode it reads:
+            # posterior sample (what the model can fit given the outcome)
+            # or prior mode (what a rollout could imagine).
+            name="3b · Transition model",
+            is_open=True,
+            panels=[
+                lp(
+                    # The bracket and its terms; every one is 0-best. The
+                    # grounding term's copy predictor scores exactly 1.
+                    "Transition loss terms",
+                    [
+                        "player_loss_transition",
+                        "player_loss_transition_ground",
+                        "player_loss_transition_cons",
+                        "player_loss_transition_kl",
+                        "player_loss_transition_value",
+                        "player_loss_transition_policy",
+                        "player_loss_transition_mask",
+                        "player_loss_transition_kind",
+                        "player_loss_transition_done",
+                    ],
+                ),
+                lp(
+                    # Nats per transition between posterior and prior --
+                    # THE chance-node number: how much of the transition
+                    # the code carries that h_t and my action do not.
+                    # Gate 0.5-3.0: -> 0 is posterior collapse (a mean
+                    # model with a dead code), at the 5.5-nat capacity is
+                    # the posterior copying t+1. free_frac = share of
+                    # transitions under the 1-nat floor (no gradient).
+                    "Transition KL (nats)",
+                    ["player_transition_kl", "player_transition_kl_free_frac"],
+                ),
+                lp(
+                    # KL split by the transition's shape: spanned edges
+                    # (short <= 2 vs long >= 4) and whether a matched
+                    # opponent row changed an id token. The plan's
+                    # prediction is long > short and reveal > no_reveal by
+                    # >= 0.2 nats -- the code should carry MORE where more
+                    # unobserved things happened.
+                    "Transition KL by span / reveal",
+                    [
+                        "player_transition_kl_short",
+                        "player_transition_kl_long",
+                        "player_transition_kl_reveal",
+                        "player_transition_kl_no_reveal",
+                    ],
+                ),
+                lp(
+                    # Code usage from the batch marginals, per group (mean
+                    # and the worst group). 1 = a dead group; 16 = uniform.
+                    # Gate: post min >= 1.5, prior min >= 1.3. agree = the
+                    # prior's argmax matches the posterior's.
+                    "Transition code perplexity",
+                    [
+                        "player_transition_post_perplexity_mean",
+                        "player_transition_post_perplexity_min",
+                        "player_transition_prior_perplexity_mean",
+                        "player_transition_prior_perplexity_min",
+                        "player_transition_prior_post_agree",
+                    ],
+                ),
+                lp(
+                    # Grounding R^2 of the aligned change per row group,
+                    # posterior-sample decode: 1 = perfect, 0 = the copy
+                    # predictor, negative = worse than copying. The mean
+                    # head banked 0.528 / 0.487 / 0.626; gate public >= 0.68.
+                    "Transition grounding gain (posterior)",
+                    [
+                        "player_transition_gain_public",
+                        "player_transition_gain_private",
+                        "player_transition_gain_field",
+                    ],
+                ),
+                lp(
+                    # The same public read from the PRIOR-MODE decode, and
+                    # the hp-moved subset both ways. The prior read is
+                    # EXPECTED BELOW the mean head's 0.528: one branch of a
+                    # bimodal law is further from the truth in MSE than the
+                    # mean. Not a regression; the KL panel is where the
+                    # branching went.
+                    "Transition grounding gain: prior vs posterior",
+                    [
+                        "player_transition_gain_public",
+                        "player_transition_gain_public_prior",
+                        "player_transition_gain_hp_moved",
+                        "player_transition_gain_hp_moved_prior",
+                        "player_transition_hp_moved_frac",
+                    ],
+                ),
+                lp(
+                    # Grounding gain on the public rows split by the
+                    # transition's shape (posterior decode).
+                    "Transition grounding gain by span / reveal",
+                    [
+                        "player_transition_gain_public_short",
+                        "player_transition_gain_public_long",
+                        "player_transition_gain_public_reveal",
+                        "player_transition_gain_public_no_reveal",
+                    ],
+                ),
+                lp(
+                    # Consistency R^2 of the imagined post-trunk rows per
+                    # row kind against the real next rows (copy = 0).
+                    "Transition consistency gain by row kind",
+                    [
+                        "player_transition_cons_gain_cls",
+                        "player_transition_cons_gain_public_entity",
+                        "player_transition_cons_gain_private_entity",
+                        "player_transition_cons_gain_move_slot",
+                        "player_transition_cons_gain_target_slot",
+                        "player_transition_cons_gain_field",
+                        "player_transition_cons_gain_history_field",
+                        "player_transition_cons_gain_prev_action",
+                        "player_transition_cons_gain_info",
+                        "player_transition_cons_gain_history_entity",
+                    ],
+                ),
+                lp(
+                    # The calibration read search depends on: R^2 of the
+                    # SHARED value head on the imagined CLS row against the
+                    # t+1 win_returns, beside the same head on real rows.
+                    # Gate >= 0.85 (real 0.967). value_gap = |V(imagined)
+                    # - v_target(t+1)| in support units, lower is better.
+                    "Transition value calibration",
+                    [
+                        "player_transition_value_r2",
+                        "player_value_head_r2",
+                        "player_transition_value_gap",
+                    ],
+                ),
+                lp(
+                    # The next decision's legal set: per-cell accuracy over
+                    # 295 cells (gate >= 0.98 -- legal cells are ~3% so
+                    # read recall beside it), the share of transitions
+                    # whose whole mask is exact, the next request kind
+                    # (gate >= 0.95) and done.
+                    "Transition mask / kind / done accuracy",
+                    [
+                        "player_transition_mask_acc",
+                        "player_transition_mask_recall",
+                        "player_transition_mask_exact_frac",
+                        "player_transition_kind_acc",
+                        "player_transition_done_acc",
+                    ],
+                ),
+                lp(
+                    # Spanned engine steps per transition (mean / p90) and
+                    # the share with an opponent reveal -- the data
+                    # geometry the split panels condition on. Also the row
+                    # supply: transitions with a valid t+1 and matched
+                    # grounding rows.
+                    "Transition geometry and supply",
+                    [
+                        "player_transition_edges_mean",
+                        "player_transition_edges_p90",
+                        "player_transition_reveal_frac",
+                        "player_transition_rows_frac",
+                        "player_transition_ground_rows_frac",
+                    ],
+                ),
+                lp(
+                    # THE gaming instrument. The normaliser is learnable
+                    # (the state linears train under every loss, the EMA
+                    # copies them), so a normalised MSE can SHRINK the
+                    # unpredictable directions instead of predicting them.
+                    # hp_share = the public delta's energy in the hp input
+                    # subspace of public_persistent_linear; falling while
+                    # gain_public rises = hp made small, not predicted (the
+                    # abort -> whiten the delta).
+                    "Transition: hp share of the public delta",
+                    ["player_transition_hp_share"],
+                ),
+                lp(
+                    # Column-block rms of the three state kernels (public
+                    # persistent / transient, private) by feature group,
+                    # against "other" (level, gender, item effect, pp, tera,
+                    # volatiles, stats). hp falling relative to other is the
+                    # same gaming shape read on the parameter.
+                    "State kernel rms by feature group",
+                    [
+                        "player_state_kernel_rms_hp",
+                        "player_state_kernel_rms_status",
+                        "player_state_kernel_rms_boosts",
+                        "player_state_kernel_rms_other",
+                    ],
+                ),
+                lp(
+                    # Drift against init: out_proj is the ONE zero factor
+                    # (exactly 0 at init; must leave it within ~200 steps
+                    # or the blocks and code paths behind it never train),
+                    # action_proj ~0.044 / code_proj ~0.0625 lecun,
+                    # code_table 0.088.
+                    "Transition model: drift",
+                    [
+                        "player_transition_out_proj_rms",
+                        "player_transition_action_proj_rms",
+                        "player_transition_code_proj_rms",
+                        "player_transition_code_table_rms",
+                    ],
+                ),
+                lp(
+                    # Pre-clip grad norms of the model, its blocks and the
+                    # two code nets beside the value head's: the aux term
+                    # dwarfing the value head's is it stealing the trunk.
+                    "Transition model: gradient",
+                    [
+                        "player_transition_grad_norm",
+                        "player_transition_blocks_grad_norm",
+                        "player_transition_prior_grad_norm",
+                        "player_transition_posterior_grad_norm",
+                        "player_value_head_gradient_norm",
                     ],
                 ),
             ],
         ),
         ws.Section(
+            # Observer critic quality. The policy no longer reads a Q stack
+            # (retired 2026-08-26/30; its link to return is the v-trace
+            # advantage), but an action-flat critic still voids the matched
+            # control and the starvation discriminators above.
+            name="4 · Critic quality & value",
+            is_open=True,
+            panels=[
+                lp(
+                    # Both critics' CE against the SAME v-trace win targets
+                    # (deployable = matched control, privileged = the
+                    # estimator under player_privileged_targets).
+                    "Value loss (deploy vs privileged)",
+                    ["player_loss_v_win", "player_loss_v_win_priv"],
+                ),
+                lp(
+                    # Mean |priv - deploy| expectation: the 2026-08-25
+                    # "worth 0.005 value units" number, re-measured live.
+                    "Privileged value gap",
+                    ["player_priv_value_gap"],
+                ),
+                lp(
+                    # Directed-message sanity: fraction of valid history
+                    # steps with an identified SOURCE row (expect >> 0.5).
+                    "History src fraction",
+                    ["player_history_src_frac"],
+                ),
+                lp(
+                    # The step GAT reading "who did this to me": the mass a
+                    # NON-source row places on the step's source rows,
+                    # beside what uniform attention would place (the source
+                    # rows' share of live rows). Above uniform = the
+                    # relation is being read; at uniform with the
+                    # normalised entropy pinned at 1.0 = the GAT never
+                    # learned to select (read with attn_out rms).
+                    "History step attention",
+                    [
+                        "player_history_step_attn_to_src",
+                        "player_history_step_attn_to_src_uniform",
+                        "player_history_step_attn_entropy",
+                    ],
+                ),
+                lp(
+                    # The backbone's mean slot write gate over touched
+                    # steps. Pinned at 0 (nothing written) or 1 (memory
+                    # overwritten every step) is the collapse shape;
+                    # pre-registered band (0.1, 0.9).
+                    "History write gate",
+                    ["player_history_gate_mean"],
+                ),
+                lp(
+                    # Fresh-row calibration. Was framed as "Q fresh/replay
+                    # vs V fresh" pre-2026-08-30 — the Q side retired with
+                    # the Q head; only the V-fresh reading remains.
+                    "Value R2 calibration (fresh rows)",
+                    ["player_value_r2_fresh"],
+                ),
+                lp(
+                    # R2 of expectations vs v-trace targets. Also shown
+                    # summarised in "0 · At a glance"; this is the detail
+                    # copy beside the rest of the critic reading.
+                    "Value R2 (main head)",
+                    ["player_value_head_r2"],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    # Pre-clip grad norm per policy-head subtree, the
+                    # policy pathway's own gradient scale (the retired
+                    # Q-head pair stayed calm through both dx65cpwp
+                    # failures).
+                    "Policy head: grad norm by subtree",
+                    ["player_policy_head_gradient_norm"],
+                ),
+                lp(
+                    "Value expectation",
+                    ["value_expectation_mean", "value_expectation_early_mean"],
+                ),
+                lp(
+                    "Win returns",
+                    ["player_win_returns_sum", "player_win_returns_min"],
+                ),
+            ],
+        ),
+        ws.Section(
             # Does the switch modality's signal actually reach the
-            # learner? Both readouts exist because the global staleness
-            # instruments are structurally blind to a rare modality:
-            # the actor-KL feeding the replay reuse controller is an
-            # expectation over the policy, and the capacity probe grades
-            # VALUE error, not action-distribution fidelity.
-            name="1.9 · Modality-resolved staleness & attenuation",
+            # learner, and is the trust region behaving. Both readouts
+            # exist because the global staleness instruments are
+            # structurally blind to a rare modality: the actor-KL feeding
+            # the replay reuse controller is an expectation over the
+            # policy, and the capacity probe grades VALUE error, not
+            # action-distribution fidelity.
+            name="5 · Staleness, ISR & trust region",
             is_open=True,
             panels=[
                 lp(
@@ -713,31 +941,6 @@ def rl_sections():
                     range_y=(0, 1),
                 ),
                 lp(
-                    # What the Retrace baseline is worth: the value target
-                    # now subtracts Q = V + A, so the attenuation above
-                    # bites only on the residual A cannot explain. Flat at
-                    # ~0 means the advantage head is supplying nothing and
-                    # the mechanism is inert.
-                    "Retrace baseline |A(s, a_taken)|",
-                    [
-                        "player_retrace_baseline_abs",
-                        "player_retrace_baseline_switch",
-                        "player_retrace_baseline_move",
-                    ],
-                ),
-                lp(
-                    # Context: the reuse cap the controller is holding,
-                    # and the global upside-clip fraction.
-                    "Replay reuse cap & rho clip fraction",
-                    ["player_replay_max_reuses", "player_rho_clip_frac"],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="2 · Optimiser guardrails",
-            is_open=True,
-            panels=[
-                lp(
                     "Actor KL (ceiling 0.045)",
                     [
                         "player_learner_actor_backward_kl",
@@ -745,37 +948,31 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    "Replay reuse (controller)",
+                    "Replay reuse (controller & cap)",
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
                 ),
                 lp(
-                    # THE collapse watch panel — with the adaptivity
-                    # controller removed (2026-08-13) modality collapse
-                    # has no automated backstop, only these eyes-on axes
-                    # (1330 died at modality entropy 0.08; 1328 gained
-                    # strength at 0.18-0.26).
-                    "Entropy axes & switch rate",
-                    [
-                        "player_action_normalized_entropy",
-                        "player_normalized_modality_entropy",
-                        "switch_ratio",
-                    ],
+                    "Clip fractions",
+                    ["player_impact_clip_frac", "player_rho_clip_frac"],
+                ),
+                lp("ISR ESS", ["player_isr_ess"]),
+                lp(
+                    "Ratios",
+                    ["player_learner_actor_ratio", "player_learner_target_ratio"],
                 ),
                 lp(
-                    "Gradient / param norm",
-                    ["player_gradient_norm", "player_param_norm"],
+                    "Target KLs",
+                    [
+                        "player_learner_target_backward_kl",
+                        "player_learner_target_forward_kl",
+                    ],
                 ),
             ],
         ),
         ws.Section(
-            name="3 · League",
+            name="6 · League",
             is_open=True,
             panels=[
-                lp(
-                    "Main vs league winrates",
-                    [],
-                    regex="^league_main_v_.*_winrate$",
-                ),
                 # The learner logs the payoff matrix through a custom
                 # Vega-Lite preset registered once via
                 # scripts/register_wandb_charts.py (learner._get_league_
@@ -800,77 +997,21 @@ def rl_sections():
                     chart_strings={"title": "league payoff table (row beats column)"},
                 ),
                 lp(
-                    "Fresh vs replayed value error",
-                    [
-                        "plasticity_fresh_value_err",
-                        "plasticity_replay_value_err",
-                        "plasticity_value_err_reuse_gap",
-                    ],
+                    # The heatmap above is a snapshot; this is the trend.
+                    # league_main_v_{label}_winrate is dynamically keyed per
+                    # opponent (step-numbered snapshots AND br-{step} BR
+                    # probes both land here), so a regex panel is the only
+                    # way to see it over time — this is also where the
+                    # project's only ground-truth exploitability read (the
+                    # BR probe curve) becomes visible on the dashboard.
+                    "League winrate trend (snapshots & BR probes)",
+                    None,
+                    regex=r"league_main_v_.*_winrate",
                 ),
             ],
         ),
         ws.Section(
-            name="Losses",
-            panels=[
-                lp("Total player loss", ["player_loss"]),
-                lp(
-                    "Loss components",
-                    [
-                        "player_loss_pg",
-                        "player_loss_entropy",
-                        "player_loss_kl",
-                        "player_loss_v_win",
-                        "player_loss_q",
-                    ],
-                ),
-                lp("NLL sum", ["player_nll_sum"]),
-            ],
-        ),
-        ws.Section(
-            name="Ratios & trust region",
-            panels=[
-                lp(
-                    "Clip fractions",
-                    ["player_impact_clip_frac", "player_rho_clip_frac"],
-                ),
-                lp("ISR ESS", ["player_isr_ess"]),
-                lp(
-                    "Ratios",
-                    ["player_learner_actor_ratio", "player_learner_target_ratio"],
-                ),
-                lp(
-                    "Target KLs",
-                    [
-                        "player_learner_target_backward_kl",
-                        "player_learner_target_forward_kl",
-                    ],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="Value & advantages",
-            panels=[
-                lp(
-                    "Value expectation",
-                    ["value_expectation_mean", "value_expectation_early_mean"],
-                ),
-                lp(
-                    "Win returns",
-                    ["player_win_returns_sum", "player_win_returns_min"],
-                ),
-                lp(
-                    # The one critic's R2 against the v-trace win targets.
-                    # The all/private/public ladder went with the
-                    # privileged rung (2026-08-25) — its final readings are
-                    # in docs/qva-redesign-step0-reference.md.
-                    "Value R2",
-                    ["player_value_head_r2"],
-                    range_y=(-1, 1),
-                ),
-            ],
-        ),
-        ws.Section(
-            name="Behaviour & environment",
+            name="7 · Behaviour & environment",
             panels=[
                 lp("Move / switch ratio", ["move_ratio", "switch_ratio"]),
                 lp("Early finish rate", ["early_finish_rate"]),
@@ -917,7 +1058,7 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="Gradient norms by module",
+            name="8 · Gradient norms by module",
             panels=[
                 lp(
                     # Keys are f"player_{module}_gradient_norm" over the
@@ -929,14 +1070,17 @@ def rl_sections():
                         "player_history_encoder_gradient_norm",
                         "player_policy_head_gradient_norm",
                         "player_v_head_gradient_norm",
-                        "player_advantage_head_gradient_norm",
                     ],
                     log_y=True,
+                ),
+                lp(
+                    "Gradient / param norm (aggregate)",
+                    ["player_gradient_norm", "player_param_norm"],
                 ),
             ],
         ),
         ws.Section(
-            name="Throughput",
+            name="9 · Throughput & compile",
             panels=[
                 lp(
                     "Frame counts",
@@ -953,19 +1097,101 @@ def rl_sections():
                     ["training_step", "lifetime_step"],
                     smooth=0,
                 ),
+                lp(
+                    # Which (chunk_rows, history_rows) combo of
+                    # player_shape_lattice a batch hit — relevant given the
+                    # shape-lattice OOM-guard history (CLAUDE.md §1): a
+                    # surprise top-bucket compile is what killed three runs
+                    # before the lattice was enumerated up front.
+                    "Shape lattice combo (T, H)",
+                    ["player_shape_T", "player_shape_H"],
+                    smooth=0,
+                ),
+            ],
+        ),
+        ws.Section(
+            # Fed by the ActorStats sink (rl/environment/actor_stats.py):
+            # every training actor, its env and the InferenceServer record
+            # wall-time per phase, drained every actor_stats_log_steps as
+            # means over the pool. Where an actor's step goes — the
+            # system rate is actor-bound (learner alone ~3x faster), and
+            # this is the baseline the history-carry pass is judged on.
+            name="9b · Actor step timing",
+            panels=[
+                lp(
+                    # service_wait includes the OPPONENT actor's whole
+                    # step in self-play (both sides choose before the sim
+                    # advances) — "waiting on the game server", not
+                    # service CPU. other = step_total minus the four.
+                    "Actor step decomposition (ms)",
+                    [
+                        "actor_time_step_total",
+                        "actor_time_service_wait",
+                        "actor_time_process_state",
+                        "actor_time_history_clip",
+                        "actor_time_inference",
+                        "actor_time_other",
+                    ],
+                ),
+                lp(
+                    # Inside step_player on the server: queue_wait is
+                    # enqueue -> group start; forward is dispatch +
+                    # block_until_ready, so the history share of the
+                    # actor forward is read here against the bucket level.
+                    "Inference server phases (ms)",
+                    [
+                        "actor_infer_queue_wait",
+                        "actor_infer_stack",
+                        "actor_infer_forward",
+                        "actor_infer_device_get",
+                    ],
+                ),
+                lp(
+                    # level 0 = the smallest history bucket; a carried
+                    # suffix request should sit there.
+                    "Inference batch size & history level",
+                    ["actor_infer_batch_size", "actor_infer_history_level"],
+                ),
+                lp(
+                    # actor = pool aggregate of env steps; learner = the
+                    # SYSTEM rate (learner steps per wall second over the
+                    # drain interval). The speed comparison reads both
+                    # against the carry-OFF window on the same code.
+                    "Steps/sec: actors (pool) & learner (system rate)",
+                    ["actor_steps_per_sec", "learner_steps_per_sec"],
+                ),
+                lp(
+                    # The carry path's own read: steps / packed rows of
+                    # the suffix a request actually sends (ex.bin ~3 / ~5
+                    # per request against the 64/128+ a full window pads
+                    # to).
+                    "History carry: suffix size per request",
+                    ["actor_history_suffix_steps", "actor_history_suffix_rows"],
+                ),
+                lp(
+                    # Fraction of requests recomputed from h0, by reason.
+                    # game_start ~ 1/60; rewrite = an Illusion |replace|
+                    # rewrote past rows; gap = the window no longer holds
+                    # the carried step. Total > 0.1 = a continuity bug,
+                    # not a tuning question.
+                    "History carry: recompute fraction",
+                    [
+                        "actor_history_recompute_frac",
+                        "actor_history_recompute_game_start",
+                        "actor_history_recompute_rewrite",
+                        "actor_history_recompute_gap",
+                    ],
+                ),
             ],
         ),
         ws.Section(
             # Fed by learner.py's _log_memory_diagnostics (main-only, every
             # memory_diag_interval steps) plus the service's own 10s
             # process.memoryUsage() write — see index.ts:writeMemoryStats.
-            name="Memory",
+            # Process RSS is summarised in "0 · At a glance"; not repeated
+            # here.
+            name="10 · Memory",
             panels=[
-                lp(
-                    "Process RSS (MB)",
-                    ["diag_rss_mb", "diag_node_rss_mb"],
-                    smooth=0,
-                ),
                 lp(
                     # node's own heap is the tiny GameServer coordinator
                     # thread only (Node quirk — memoryUsage() can't see
@@ -978,18 +1204,6 @@ def rl_sections():
                 lp(
                     "Thread counts",
                     ["diag_os_threads", "diag_py_threads", "diag_node_num_workers"],
-                    smooth=0,
-                ),
-                lp(
-                    "Python thread buckets",
-                    [],
-                    regex="^diag_py_threads_",
-                    smooth=0,
-                ),
-                lp(
-                    "Replay buffer bytes (MB)",
-                    [],
-                    regex="^diag_(player|builder)_replay_mb_",
                     smooth=0,
                 ),
                 lp(
@@ -1018,10 +1232,7 @@ def offline_sections():
                     ["eval_accuracy_mean", "eval_accuracy_last_step_mean"],
                 ),
                 lp("Margin MAE", members("eval_margin_mae")),
-                lp(
-                    "Margin std (train batch)",
-                    ["margin_std_mean", "announced_margin_std_mean"],
-                ),
+                lp("Margin std (train batch)", ["margin_std_mean"]),
             ],
         ),
         ws.Section(
@@ -1031,18 +1242,6 @@ def offline_sections():
                 lp("Member disagreement (std)", ["eval_gate_member_std"]),
                 lp("Gated |Φ| (scale 5)", ["eval_gate_abs_phi"]),
                 lp("Gated sign accuracy", ["eval_gate_accuracy"]),
-            ],
-        ),
-        ws.Section(
-            name="2 · Announced head (Φ_ann)",
-            is_open=True,
-            panels=[
-                lp("Held-out announced loss", members("eval_announced_loss")),
-                lp("Announced sign accuracy", members("eval_announced_accuracy")),
-                lp(
-                    "Distill KL (realised ↔ announced)",
-                    members("eval_announced_distill_kl"),
-                ),
             ],
         ),
         ws.Section(

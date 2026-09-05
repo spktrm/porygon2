@@ -38,12 +38,47 @@ export namespace ClientRequest {
   }
 }
 
-export class Action extends jspb.Message {
-  getSrc(): ActionEnumMap[keyof ActionEnumMap];
-  setSrc(value: ActionEnumMap[keyof ActionEnumMap]): void;
+export class ActionMask extends jspb.Message {
+  getKind(): ActionRequestKindMap[keyof ActionRequestKindMap];
+  setKind(value: ActionRequestKindMap[keyof ActionRequestKindMap]): void;
 
-  getTgt(): ActionEnumMap[keyof ActionEnumMap];
-  setTgt(value: ActionEnumMap[keyof ActionEnumMap]): void;
+  getSwitchSlots(): number;
+  setSwitchSlots(value: number): void;
+
+  clearMoveTargetsList(): void;
+  getMoveTargetsList(): Array<number>;
+  setMoveTargetsList(value: Array<number>): void;
+  addMoveTargets(value: number, index?: number): number;
+
+  getOtherSrcs(): number;
+  setOtherSrcs(value: number): void;
+
+  getActiveSlot(): number;
+  setActiveSlot(value: number): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): ActionMask.AsObject;
+  static toObject(includeInstance: boolean, msg: ActionMask): ActionMask.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: ActionMask, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): ActionMask;
+  static deserializeBinaryFromReader(message: ActionMask, reader: jspb.BinaryReader): ActionMask;
+}
+
+export namespace ActionMask {
+  export type AsObject = {
+    kind: ActionRequestKindMap[keyof ActionRequestKindMap],
+    switchSlots: number,
+    moveTargetsList: Array<number>,
+    otherSrcs: number,
+    activeSlot: number,
+  }
+}
+
+export class Action extends jspb.Message {
+  getCell(): number;
+  setCell(value: number): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): Action.AsObject;
@@ -57,8 +92,7 @@ export class Action extends jspb.Message {
 
 export namespace Action {
   export type AsObject = {
-    src: ActionEnumMap[keyof ActionEnumMap],
-    tgt: ActionEnumMap[keyof ActionEnumMap],
+    cell: number,
   }
 }
 
@@ -136,10 +170,10 @@ export class EnvironmentState extends jspb.Message {
   getInfo_asB64(): string;
   setInfo(value: Uint8Array | string): void;
 
-  getActionMask(): Uint8Array | string;
-  getActionMask_asU8(): Uint8Array;
-  getActionMask_asB64(): string;
-  setActionMask(value: Uint8Array | string): void;
+  getPackedActionMask(): Uint8Array | string;
+  getPackedActionMask_asU8(): Uint8Array;
+  getPackedActionMask_asB64(): string;
+  setPackedActionMask(value: Uint8Array | string): void;
 
   getHistoryEntityPublicCache(): Uint8Array | string;
   getHistoryEntityPublicCache_asU8(): Uint8Array;
@@ -200,6 +234,19 @@ export class EnvironmentState extends jspb.Message {
   getHistoryPackedLength(): number;
   setHistoryPackedLength(value: number): void;
 
+  hasStructuredActionMask(): boolean;
+  clearStructuredActionMask(): void;
+  getStructuredActionMask(): ActionMask | undefined;
+  setStructuredActionMask(value?: ActionMask): void;
+
+  getOppPrivateTeam(): Uint8Array | string;
+  getOppPrivateTeam_asU8(): Uint8Array;
+  getOppPrivateTeam_asB64(): string;
+  setOppPrivateTeam(value: Uint8Array | string): void;
+
+  getHistoryRewriteCount(): number;
+  setHistoryRewriteCount(value: number): void;
+
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): EnvironmentState.AsObject;
   static toObject(includeInstance: boolean, msg: EnvironmentState): EnvironmentState.AsObject;
@@ -213,7 +260,7 @@ export class EnvironmentState extends jspb.Message {
 export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
-    actionMask: Uint8Array | string,
+    packedActionMask: Uint8Array | string,
     historyEntityPublicCache: Uint8Array | string,
     historyEntityRevealedCache: Uint8Array | string,
     historyEntityEdgeCache: Uint8Array | string,
@@ -227,6 +274,9 @@ export namespace EnvironmentState {
     field: Uint8Array | string,
     rqid: number,
     historyPackedLength: number,
+    structuredActionMask?: ActionMask.AsObject,
+    oppPrivateTeam: Uint8Array | string,
+    historyRewriteCount: number,
   }
 }
 
@@ -450,4 +500,14 @@ export interface ActionEnumMap {
 }
 
 export const ActionEnum: ActionEnumMap;
+
+export interface ActionRequestKindMap {
+  ACTION_REQUEST_KIND___UNSPECIFIED: 0;
+  ACTION_REQUEST_KIND__MOVE: 1;
+  ACTION_REQUEST_KIND__FORCE_SWITCH: 2;
+  ACTION_REQUEST_KIND__TEAM_PREVIEW: 3;
+  ACTION_REQUEST_KIND__WAIT: 4;
+}
+
+export const ActionRequestKind: ActionRequestKindMap;
 

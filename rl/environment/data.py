@@ -96,6 +96,15 @@ ENTITY_PUBLIC_MAX_VALUES = {
 
 ENTITY_PRIVATE_MAX_VALUES = {
     EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE: NUM_TYPECHART,
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO: MAX_RATIO_TOKEN,
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__STATUS: NUM_STATUS,
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS: 2,
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS: 8,
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS: 4,
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED: 2,
+    # Turn-delta staleness of the source request, clipped 0..8 by the
+    # service; identically 0 on the own channel.
+    EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG: 9,
 }
 
 
@@ -137,8 +146,11 @@ FIELD_MAX_VALUES = {
 # which every move is disabled mask alike), and NUM_ACTIVE is the doubles
 # handle; neither is a FieldFeature, so neither can ride _embed_field, which
 # is shared with history rows that have no info array.
+# The transition model's next-request-kind label reads the RAW enum value,
+# UNSPECIFIED included (the one-hot input above excludes it).
+NUM_REQUEST_TYPES = len(RequestType.keys())
 INFO_MAX_VALUES = {
-    InfoFeature.INFO_FEATURE__REQUEST_TYPE: len(RequestType.keys()) - 1,
+    InfoFeature.INFO_FEATURE__REQUEST_TYPE: NUM_REQUEST_TYPES - 1,
     InfoFeature.INFO_FEATURE__NUM_ACTIVE: 2,
 }
 
@@ -257,18 +269,6 @@ MOVE_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
     ]
 )
-REGULAR_MOVE_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
-    ]
-)
 WILDCARD_MOVE_INDICES = np.array(
     [
         ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
@@ -309,98 +309,7 @@ ENEMY_TARGET_INDICES = np.array(
         ActionEnum.ACTION_ENUM__ENEMY_2_TARGET,
     ]
 )
-PASS_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
-        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
-    ]
-)
-TARGET_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__TARGET_AUTO,
-        ActionEnum.ACTION_ENUM__TARGET_ALL,
-        ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE,
-        ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE,
-        ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM,
-        ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
-        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT,
-        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES,
-        ActionEnum.ACTION_ENUM__TARGET_ALLIES,
-    ]
-)
-ALLY_1_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
-        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
-    ]
-)
-ALLY_2_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
-        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
-    ]
-)
 
-
-def calculate_flat_modality_mask():
-    action_indices = np.arange(NUM_ACTION_FEATURES**2)
-    src_indices = action_indices // NUM_ACTION_FEATURES
-
-    is_move = (
-        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1)
-        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4)
-    ) | (
-        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1)
-        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4)
-    )
-    is_wildcard = (
-        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD)
-        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD)
-    ) | (
-        (src_indices >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD)
-        & (src_indices <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
-    )
-    # Battle switches are (ALLY_i_SWITCH src, RESERVE_j tgt); team preview
-    # still uses RESERVE_j as the src, so both classify as switch modality.
-    is_switch = (
-        (src_indices == ActionEnum.ACTION_ENUM__ALLY_1_SWITCH)
-        | (src_indices == ActionEnum.ACTION_ENUM__ALLY_2_SWITCH)
-        | (
-            (src_indices >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN)
-            & (src_indices <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN)
-        )
-    )
-    is_other = ~(is_move | is_wildcard | is_switch)
-    return (
-        ModalityEnum.MODALITY_ENUM__MOVE * is_move
-        + ModalityEnum.MODALITY_ENUM__WILDCARD * is_wildcard
-        + ModalityEnum.MODALITY_ENUM__SWITCH * is_switch
-        + ModalityEnum.MODALITY_ENUM__OTHER * is_other
-    )
-
-
-FLAT_MODALITY_MASK = calculate_flat_modality_mask()
-# Modality is a function of the src half only, so any column of the
-# (src, tgt) grid gives the per-src-action modality.
-SRC_MODALITY_MASK = FLAT_MODALITY_MASK.reshape(
-    NUM_ACTION_FEATURES, NUM_ACTION_FEATURES
-)[:, 0]
 
 for indices in [
     MOVE_INDICES,
@@ -408,42 +317,55 @@ for indices in [
     ALLY_SWITCH_INDICES,
     ALLY_TARGET_INDICES,
     ENEMY_TARGET_INDICES,
-    PASS_INDICES,
-    TARGET_INDICES,
-    ALLY_1_INDICES,
-    ALLY_2_INDICES,
 ]:
     assert len(indices) == len(set(indices)), "Duplicate indices found"
     indices.sort()
 
 
-# Typed action-slot partition (2026-08-17): move / switch / target — the
-# canonical source for the encoder's typed residual streams and the policy
-# readout's per-type scales. Move slots are move-feature-derived (regular +
-# wildcard); switch slots are entity-derived (the reserve candidates —
-# battle-switch tgt keys / preview srcs — plus the two ALLY_i_SWITCH srcs
-# carrying the outgoing active); the remaining structural slots (ally/enemy
-# targets, TARGET_*, pass, default) only ever act as grid keys or
-# OTHER-modality srcs. The three groups partition all NUM_ACTION_FEATURES
-# slots (asserted below).
+# ---- the block action space (2026-08-31) -----------------------------------
+# The policy's action space is ActionMask's own fields flattened in field
+# order -- see proto/service.proto `Action`. Offsets derive from the three
+# slot-list lengths, which are the shared contract with the service
+# (service/src/server/data.ts derives the same three and both suites assert
+# the 295 total). The 41x41 (src, tgt) grid this replaced kept ~82% dead
+# cells purely so the readout's scatter had somewhere to land.
+NUM_SWITCH_CELLS = len(RESERVE_ENTITY_INDICES)
+NUM_MOVE_SLOTS = len(MOVE_INDICES)
 MOVE_SLOT_INDICES = MOVE_INDICES
-SWITCH_SLOT_INDICES = np.sort(
-    np.concatenate([RESERVE_ENTITY_INDICES, ALLY_SWITCH_INDICES])
-)
 TARGET_SLOT_INDICES = np.setdiff1d(
     np.arange(NUM_ACTION_FEATURES),
-    np.concatenate([MOVE_SLOT_INDICES, SWITCH_SLOT_INDICES]),
+    np.concatenate([MOVE_INDICES, RESERVE_ENTITY_INDICES, ALLY_SWITCH_INDICES]),
 )
-NUM_ACTION_SLOT_GROUPS = 3
-# Per-src-slot group id (0 = move, 1 = switch, 2 = target) and its
-# per-grid-cell broadcast: modality — and therefore group — is a function
-# of the src half only, like FLAT_MODALITY_MASK above.
-SRC_GROUP_MASK = np.full(NUM_ACTION_FEATURES, 2, dtype=np.int32)
-SRC_GROUP_MASK[MOVE_SLOT_INDICES] = 0
-SRC_GROUP_MASK[SWITCH_SLOT_INDICES] = 1
-FLAT_SRC_GROUP_MASK = np.repeat(SRC_GROUP_MASK, NUM_ACTION_FEATURES)
+NUM_TARGET_SLOTS = len(TARGET_SLOT_INDICES)
+MOVE_CELL_OFFSET = NUM_SWITCH_CELLS
+OTHER_CELL_OFFSET = MOVE_CELL_OFFSET + NUM_MOVE_SLOTS * NUM_TARGET_SLOTS
+NUM_ACTION_CELLS = OTHER_CELL_OFFSET + NUM_TARGET_SLOTS
+assert NUM_ACTION_CELLS == 295, "Block layout drifted from the proto contract"
 
-assert (
-    len(MOVE_SLOT_INDICES) + len(SWITCH_SLOT_INDICES) + len(TARGET_SLOT_INDICES)
-    == NUM_ACTION_FEATURES
-), "Typed slot groups must partition the action slots"
+
+def calculate_cell_modality_mask():
+    """Per-cell modality over the block space.
+
+    The same per-cell values the grid form carried -- switch cells (battle
+    switch AND team preview lead) are SWITCH, a move cell inherits its move
+    slot's regular/wildcard split, standalone cells are OTHER -- so
+    `player_entropy_macro` and every modality-marginal consumer keeps its
+    meaning across the 2026-08-31 grid retirement.
+    """
+    switch_block = np.full(
+        NUM_SWITCH_CELLS, ModalityEnum.MODALITY_ENUM__SWITCH, dtype=np.int32
+    )
+    is_wildcard_slot = np.isin(MOVE_INDICES, WILDCARD_MOVE_INDICES)
+    move_slot_modality = np.where(
+        is_wildcard_slot,
+        ModalityEnum.MODALITY_ENUM__WILDCARD,
+        ModalityEnum.MODALITY_ENUM__MOVE,
+    ).astype(np.int32)
+    move_block = np.repeat(move_slot_modality, NUM_TARGET_SLOTS)
+    other_block = np.full(
+        NUM_TARGET_SLOTS, ModalityEnum.MODALITY_ENUM__OTHER, dtype=np.int32
+    )
+    return np.concatenate([switch_block, move_block, other_block])
+
+
+CELL_MODALITY_MASK = calculate_cell_modality_mask()

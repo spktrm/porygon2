@@ -5,6 +5,7 @@ covered in test_targets.py (reference_kl) and the train_step smoke."""
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from rl.online.training.loss import (
     clip_fraction,
@@ -96,10 +97,10 @@ class TestFactorisedEntropies:
     two mask-semantics edges."""
 
     def _setup(self):
-        from rl.environment.data import FLAT_MODALITY_MASK
+        from rl.environment.data import CELL_MODALITY_MASK
         from rl.environment.protos.service_pb2 import ModalityEnum
 
-        flat = np.asarray(FLAT_MODALITY_MASK)
+        flat = np.asarray(CELL_MODALITY_MASK)
         legal = np.zeros(flat.shape[0], dtype=bool)
         move_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__MOVE)[:4]
         switch_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__SWITCH)[:3]
@@ -168,3 +169,102 @@ class TestFactorisedEntropies:
         )
         np.testing.assert_allclose(float(h_uni_switch), 1.0, rtol=1e-5)
         np.testing.assert_allclose(float(h_uni_move), 1.0, rtol=1e-5)
+
+
+class TestUniformKlModalities:
+    """The zero-avoiding term on the MODALITY MARGINAL: the WHETHER/WHICH
+    split as an algebraic identity, with the row-form failure (sp75c: mass
+    bought by flattening the move row) as the thing made unrepresentable."""
+
+    def _legal_and_logits(self, starve_switch=False):
+        from rl.environment.data import CELL_MODALITY_MASK
+        from rl.environment.protos.service_pb2 import ModalityEnum
+
+        flat = np.asarray(CELL_MODALITY_MASK)
+        legal = np.zeros(flat.shape[0], dtype=bool)
+        move_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__MOVE)[:3]
+        switch_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__SWITCH)[:2]
+        legal[move_cells] = True
+        legal[switch_cells] = True
+        rng = np.random.default_rng(7)
+        logits = rng.normal(size=legal.shape).astype(np.float32)
+        if starve_switch:
+            logits[switch_cells] = -14.0
+        return (
+            jnp.asarray(legal),
+            jnp.asarray(logits),
+            move_cells,
+            switch_cells,
+        )
+
+    def _loss(self, legal):
+        from rl.model.utils import legal_log_policy
+        from rl.online.training.loss import uniform_kl_modalities
+
+        def loss(y):
+            return uniform_kl_modalities(legal_log_policy(y, legal), legal)
+
+        return loss
+
+    def test_modality_level_gradient_is_pi_m_minus_one_over_m(self):
+        from rl.model.utils import legal_log_policy
+
+        legal, logits, move_cells, switch_cells = self._legal_and_logits()
+        grad = np.asarray(jax.grad(self._loss(legal))(logits))
+        pi = np.asarray(jnp.exp(legal_log_policy(logits, legal)))
+
+        pi_move = pi[move_cells].sum()
+        pi_switch = pi[switch_cells].sum()
+        np.testing.assert_allclose(grad[move_cells].sum(), pi_move - 0.5, atol=1e-5)
+        np.testing.assert_allclose(grad[switch_cells].sum(), pi_switch - 0.5, atol=1e-5)
+        assert abs(grad.sum()) < 1e-5, "zero-sum over live modalities"
+
+    def test_starved_modality_still_feels_the_full_pull(self):
+        """No pi_m prefactor: at pi_switch ~ 1e-6 the modality-level force is
+        the full -(1/M - pi_m), where every pi-prefactored term in the
+        bracket is numerically dead. This is the property the term exists
+        for."""
+        legal, logits, _, switch_cells = self._legal_and_logits(starve_switch=True)
+        grad = np.asarray(jax.grad(self._loss(legal))(logits))
+        assert grad[switch_cells].sum() == pytest.approx(-0.5, abs=1e-3)
+
+    def test_within_modality_redistribution_is_invariant(self):
+        """The loss reads the marginals alone, so swapping two move cells'
+        logits -- a pure WHICH-move change -- is exactly invariant. The
+        positive control swaps mass ACROSS the modality boundary, which a
+        vacuously-flat loss would also ignore."""
+        legal, logits, move_cells, switch_cells = self._legal_and_logits()
+        loss = self._loss(legal)
+        base = float(loss(logits))
+
+        swapped = np.asarray(logits).copy()
+        swapped[move_cells[0]], swapped[move_cells[1]] = (
+            swapped[move_cells[1]],
+            swapped[move_cells[0]],
+        )
+        np.testing.assert_allclose(float(loss(jnp.asarray(swapped))), base, atol=1e-6)
+
+        crossed = np.asarray(logits).copy()
+        crossed[move_cells[0]], crossed[switch_cells[0]] = (
+            crossed[switch_cells[0]],
+            crossed[move_cells[0]],
+        )
+        assert float(loss(jnp.asarray(crossed))) != pytest.approx(base, abs=1e-4)
+
+    def test_one_live_modality_is_silent(self):
+        """A forced row (only one modality live) contributes -log 1 = 0 and
+        zero gradient -- no mask plumbing needed for forced switches."""
+        from rl.environment.data import CELL_MODALITY_MASK
+        from rl.environment.protos.service_pb2 import ModalityEnum
+
+        flat = np.asarray(CELL_MODALITY_MASK)
+        legal = np.zeros(flat.shape[0], dtype=bool)
+        switch_cells = np.flatnonzero(flat == ModalityEnum.MODALITY_ENUM__SWITCH)[:3]
+        legal[switch_cells] = True
+        logits = jnp.asarray(
+            np.random.default_rng(11).normal(size=legal.shape).astype(np.float32)
+        )
+        loss = self._loss(jnp.asarray(legal))
+        assert float(loss(logits)) == pytest.approx(0.0, abs=1e-6)
+        grad = np.asarray(jax.grad(loss)(logits))
+        np.testing.assert_allclose(grad, 0.0, atol=1e-6)

@@ -50,8 +50,12 @@ import numpy as np
 
 from constants import NUM_HISTORY
 from rl.environment.data import (
+    ALLY_SWITCH_INDICES,
     EX_BATCH,
+    MOVE_CELL_OFFSET,
+    MOVE_INDICES,
     NUM_ABILITIES,
+    NUM_ACTION_CELLS,
     NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_PRIVATE_FEATURES,
@@ -65,7 +69,12 @@ from rl.environment.data import (
     NUM_NATURES,
     NUM_PACKED_SET_FEATURES,
     NUM_SPECIES,
+    NUM_SWITCH_CELLS,
+    NUM_TARGET_SLOTS,
     NUM_TYPECHART,
+    OTHER_CELL_OFFSET,
+    RESERVE_ENTITY_INDICES,
+    TARGET_SLOT_INDICES,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -86,7 +95,11 @@ from rl.environment.protos.features_pb2 import (
     FieldFeature,
     InfoFeature,
 )
-from rl.environment.protos.service_pb2 import EnvironmentState
+from rl.environment.protos.service_pb2 import (
+    ActionMask,
+    ActionRequestKind,
+    EnvironmentState,
+)
 from rl.model.heads import CategoricalValueHeadOutput
 
 T = TypeVar("T")
@@ -186,11 +199,112 @@ def clip_packed_history(
     return jax.tree.map(lambda x: x[:rounded_length], packed_history)
 
 
+def joint_history_level(actor_input: PlayerActorInput, min_length: int) -> int:
+    """ONE bucket level across a request's history AND packed_history,
+    read off the axes' lengths (the request arrives clipped, so each axis
+    already sits at its own bucket). Both lengths describe the same fact
+    (how far the game has run), so bucketing them independently makes XLA
+    trace the PRODUCT of the two axes' bucket sets instead of the shared
+    level's count — geometric_bucket's docstring. The inference server
+    groups requests by this level; the direct Agent path pads to it."""
+    field_len = actor_input.history.field.shape[0]
+    packed_len = actor_input.packed_history.revealed_cache.shape[0]
+    return max(
+        _bucket_level(field_len, min_length), _bucket_level(packed_len, min_length)
+    )
+
+
+def _pad_axis0_to(leaf: np.ndarray, target: int) -> np.ndarray:
+    if leaf.shape[0] == target:
+        return leaf
+    if leaf.shape[0] > target:
+        raise ValueError(f"axis 0 is {leaf.shape[0]} rows, past the target {target}")
+    return np.pad(leaf, [(0, target - leaf.shape[0])] + [(0, 0)] * (leaf.ndim - 1))
+
+
+def pad_history_to_level(
+    actor_input: PlayerActorInput, level: int, min_length: int
+) -> PlayerActorInput:
+    """Zero-pads history to ``min_length * 2**level`` steps (capped at
+    NUM_HISTORY) and packed_history to twice that (capped at
+    2 * NUM_HISTORY), the joint-level shape both inference paths run at.
+    Zero IS the history-padding convention (padnstack zero-fills; a zero
+    FIELD_FEATURE__VALID / SPECIES_ENUM___UNSPECIFIED row is an empty
+    slot). Capping only ever pads less, never truncates."""
+    history_target = _bucket_value(level, min_length, NUM_HISTORY)
+    packed_target = _bucket_value(level, min_length, 2 * NUM_HISTORY)
+    return actor_input.replace(
+        history=jax.tree.map(
+            lambda leaf: _pad_axis0_to(leaf, history_target), actor_input.history
+        ),
+        packed_history=jax.tree.map(
+            lambda leaf: _pad_axis0_to(leaf, packed_target),
+            actor_input.packed_history,
+        ),
+    )
+
+
 # All eight RELEVANT_ENTITY_IDX columns (the model's _RELEVANT_ENTITY_
 # FEATURES reads the first four; the service writes up to eight).
 _ALL_RELEVANT_IDX_COLUMNS = np.array(
     [FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{k}") for k in range(8)]
 )
+
+
+def packed_valid_rows(packed_history: PlayerPackedHistoryOutput) -> int:
+    """Occupied packed-cache rows, inferred from the species sentinel (the
+    known-open derivation -- CLAUDE.md; the suffix cut and the tail cut
+    share it so both flip together)."""
+    return int(
+        np.asarray(
+            packed_history.revealed_cache[
+                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
+            ]
+            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
+        ).sum()
+    )
+
+
+def _cut_history_windows(
+    history: PlayerHistoryOutput,
+    packed_history: PlayerPackedHistoryOutput,
+    start_step: int,
+    keep_steps: int,
+    start_row: int,
+    packed_end: int,
+    history_rows: int,
+    packed_rows: int,
+) -> tuple[PlayerHistoryOutput, PlayerPackedHistoryOutput]:
+    """Cut field steps [start_step, start_step + keep_steps) and packed rows
+    [start_row, packed_end) into zero-padded windows of exactly
+    (history_rows, packed_rows), rebasing every RELEVANT_ENTITY_IDX column
+    of the kept steps by -start_row -- the ONE place the two axes are cut
+    together (state.ts getHistory's counterpart), shared by the trailing
+    window and the actor's suffix."""
+    field = np.asarray(history.field)
+    new_field = np.zeros((history_rows, field.shape[1]), dtype=field.dtype)
+    new_field[:keep_steps] = field[start_step : start_step + keep_steps]
+    if start_row > 0 and keep_steps > 0:
+        # Rebase every index column of the kept rows; entries past a row's
+        # NUM_RELEVANT are padding the consumers mask out — clip keeps them
+        # in gather range regardless.
+        rebase_at = np.ix_(np.arange(keep_steps), _ALL_RELEVANT_IDX_COLUMNS)
+        new_field[rebase_at] = np.clip(
+            new_field[rebase_at] - start_row, 0, packed_rows - 1
+        )
+
+    keep_rows = max(0, packed_end - start_row)
+
+    def cut_packed(x) -> np.ndarray:
+        x = np.asarray(x)
+        out = np.zeros((packed_rows, *x.shape[1:]), dtype=x.dtype)
+        out[:keep_rows] = x[start_row:packed_end]
+        return out
+
+    return (
+        history.replace(field=new_field),
+        jax.tree.map(cut_packed, packed_history),
+    )
 
 
 def clip_history_windows_tail(
@@ -213,14 +327,7 @@ def clip_history_windows_tail(
     from that row, and rebase the index columns to the new start."""
     field = np.asarray(history.field)
     valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
-    packed_valid = int(
-        np.asarray(
-            packed_history.revealed_cache[
-                ..., EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
-            ]
-            != SpeciesEnum.SPECIES_ENUM___UNSPECIFIED
-        ).sum()
-    )
+    packed_valid = packed_valid_rows(packed_history)
     max_packed_rows = 2 * history_length
 
     keep_steps = min(valid_steps, history_length)
@@ -245,37 +352,176 @@ def clip_history_windows_tail(
             field[valid_steps - 1, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0]
         )
 
-    start_step = valid_steps - keep_steps
-    new_field = np.zeros((history_length, field.shape[1]), dtype=field.dtype)
-    new_field[:keep_steps] = field[start_step:valid_steps]
-    if start_row > 0 and keep_steps > 0:
-        # Rebase every index column of the kept rows; entries past a row's
-        # NUM_RELEVANT are padding the consumers mask out — clip keeps them
-        # in gather range regardless.
-        rebase_at = np.ix_(np.arange(keep_steps), _ALL_RELEVANT_IDX_COLUMNS)
-        new_field[rebase_at] = np.clip(
-            new_field[rebase_at] - start_row, 0, max_packed_rows - 1
-        )
-
     packed_end = min(packed_valid, start_row + max_packed_rows)
-    keep_rows = max(0, packed_end - start_row)
-
-    def cut_packed(x) -> np.ndarray:
-        x = np.asarray(x)
-        out = np.zeros((max_packed_rows, *x.shape[1:]), dtype=x.dtype)
-        out[:keep_rows] = x[start_row:packed_end]
-        return out
-
-    return (
-        history.replace(field=new_field),
-        jax.tree.map(cut_packed, packed_history),
+    return _cut_history_windows(
+        history,
+        packed_history,
+        start_step=valid_steps - keep_steps,
+        keep_steps=keep_steps,
+        start_row=start_row,
+        packed_end=packed_end,
+        history_rows=history_length,
+        packed_rows=max_packed_rows,
     )
 
 
+# The actor path's geometric-bucket base for BOTH history axes: the actor
+# clips to these bucket values and the inference server re-buckets the
+# batch against the same base (a shared level per group), so the two must
+# agree -- written once, read by both. 32 (was 64, 2026-09-02): a carried
+# request's suffix is ~3 steps / ~5 packed rows, so the smallest bucket is
+# what the carry path runs at; levels 32/64/128/256/512 are ONE extra
+# forward-only compile per batch bucket on the actor family (the learner's
+# shape lattice is untouched), and the scan is O(log H), so 16 would buy
+# little over 32.
+ACTOR_HISTORY_MIN_LENGTH = 32
+
+
+def clip_history_suffix(
+    actor_input: PlayerActorInput,
+    last_step_index: int,
+    min_length: int = ACTOR_HISTORY_MIN_LENGTH,
+) -> tuple[PlayerActorInput | None, int]:
+    """The actor's incremental window: the field steps AFTER absolute step
+    ``last_step_index`` (FIELD_FEATURE__INDEX, the carry's last consumed
+    step; -1 = nothing consumed) and exactly the packed rows they reference,
+    each axis rounded up to its own geometric bucket -> (the clipped input,
+    the number of new steps). Returns (None, 0) when the window cannot be
+    resumed from that point -- the carried step is neither in the window
+    nor immediately before it -- and the caller recomputes from scratch.
+    Zero new steps is a valid suffix: an all-zero window, from which the
+    encoder returns the carry itself."""
+    field = np.asarray(actor_input.history.field)
+    valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
+    index = field[:valid_steps, FieldFeature.FIELD_FEATURE__INDEX]
+    first = int(np.searchsorted(index, last_step_index, side="right"))
+    if first == 0:
+        if valid_steps == 0:
+            contiguous = last_step_index == -1
+        else:
+            contiguous = int(index[0]) == last_step_index + 1
+    else:
+        contiguous = int(index[first - 1]) == last_step_index
+    if not contiguous:
+        return None, 0
+
+    keep_steps = valid_steps - first
+    packed_end = packed_valid_rows(actor_input.packed_history)
+    if keep_steps > 0:
+        start_row = int(field[first, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0])
+    else:
+        start_row = packed_end
+    history_rows = _bucket_value(
+        _bucket_level(keep_steps, min_length), min_length, field.shape[0]
+    )
+    packed_rows = _bucket_value(
+        _bucket_level(packed_end - start_row, min_length),
+        min_length,
+        actor_input.packed_history.revealed_cache.shape[0],
+    )
+    history, packed_history = _cut_history_windows(
+        actor_input.history,
+        actor_input.packed_history,
+        start_step=first,
+        keep_steps=keep_steps,
+        start_row=start_row,
+        packed_end=packed_end,
+        history_rows=history_rows,
+        packed_rows=packed_rows,
+    )
+    return (
+        actor_input.replace(history=history, packed_history=packed_history),
+        keep_steps,
+    )
+
+
+def _cells_from_structured_mask(mask: ActionMask) -> np.ndarray:
+    """The block-space legal mask (NUM_ACTION_CELLS,) from the wire's mask.
+
+    The block layout is the flattening of ActionMask's own fields in field
+    order (proto/service.proto `Action`): the 6 switch bits, then the 16x17
+    move_targets rows, then the standalone bits. Bit positions index the
+    ActionEnum slot lists both sides build, never raw enum values, and `kind`
+    only matters to the DECODER (lead vs switch choice string) -- the mask
+    cells are the same either way.
+    """
+    cells = np.zeros(NUM_ACTION_CELLS, dtype=bool)
+
+    if mask.kind in (
+        ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED,
+        ActionRequestKind.ACTION_REQUEST_KIND__WAIT,
+    ):
+        # Nothing is being asked. The service lights every cell so masked
+        # averages downstream never meet an empty row, and the decoder answers
+        # "default" whichever cell comes back.
+        cells[:] = True
+        return cells
+
+    for switch_bit in range(NUM_SWITCH_CELLS):
+        cells[switch_bit] = (mask.switch_slots >> switch_bit) & 1
+
+    for move_slot, targets in enumerate(mask.move_targets):
+        if targets == 0:
+            continue
+        base = MOVE_CELL_OFFSET + move_slot * NUM_TARGET_SLOTS
+        for target_bit in range(NUM_TARGET_SLOTS):
+            cells[base + target_bit] = (targets >> target_bit) & 1
+
+    for other_bit in range(NUM_TARGET_SLOTS):
+        cells[OTHER_CELL_OFFSET + other_bit] = (mask.other_srcs >> other_bit) & 1
+    return cells
+
+
+def _cells_from_packed_grid(grid: np.ndarray) -> np.ndarray:
+    """Block mask from a legacy 41x41 grid (replay shards only).
+
+    The inverse of the retired scatter over the ~18% reachable cells: battle
+    switches lived at (ALLY_i_SWITCH, RESERVE_j) and team-preview leads at
+    (RESERVE_j, tgt), both folding onto switch cell j; moves at
+    (MOVE_INDICES[m], TARGET_SLOT_INDICES[t]); standalone on the target-slot
+    diagonal. An all-lit grid (the WAIT sentinel) folds onto all-lit cells.
+    """
+    cells = np.zeros(NUM_ACTION_CELLS, dtype=bool)
+    switch_via_tgt = grid[ALLY_SWITCH_INDICES][:, RESERVE_ENTITY_INDICES].any(axis=0)
+    switch_via_src = grid[RESERVE_ENTITY_INDICES].any(axis=-1)
+    cells[:NUM_SWITCH_CELLS] = switch_via_tgt | switch_via_src
+    move_block = grid[MOVE_INDICES][:, TARGET_SLOT_INDICES]
+    cells[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET] = move_block.reshape(-1)
+    cells[OTHER_CELL_OFFSET:] = grid[TARGET_SLOT_INDICES, TARGET_SLOT_INDICES]
+    return cells
+
+
+def _decode_private_rows(raw: bytes) -> np.ndarray:
+    """One private sheet -> (6, NUM_ENTITY_PRIVATE_FEATURES) int32.
+
+    Right-pads a short buffer with zero COLUMNS to the current width: the
+    replay shards (spectator logs, no |request|) store private blocks frozen
+    at an older feature count, and 0 is UNSPECIFIED for every appended field
+    -- padding is semantically exact where a reshape would raise. Appending
+    private features is therefore safe; renumbering never is. An EMPTY buffer
+    (opp_private_team on old shards and at deploy) decodes as all zeros --
+    the documented "does not exist" encoding.
+    """
+    flat = np.frombuffer(raw, dtype=np.int16)
+    if flat.shape[0] == 0:
+        return np.zeros((6, NUM_ENTITY_PRIVATE_FEATURES), dtype=np.int32)
+    rows = flat.reshape(6, flat.shape[0] // 6).astype(np.int32)
+    missing_columns = NUM_ENTITY_PRIVATE_FEATURES - rows.shape[1]
+    if missing_columns > 0:
+        rows = np.pad(rows, ((0, 0), (0, missing_columns)))
+    return rows
+
+
 def get_action_mask(state: EnvironmentState):
-    buffer = np.frombuffer(state.action_mask, dtype=np.uint8)
+    if state.HasField("structured_action_mask"):
+        return _cells_from_structured_mask(state.structured_action_mask)
+    # Replay shards predate the structured mask (2026-08-29) and carry the
+    # 1681-bit packed grid instead. Delete this branch, and the proto field it
+    # reads, when replays/shards is next rebuilt.
+    buffer = np.frombuffer(state.packed_action_mask, dtype=np.uint8)
     mask = np.unpackbits(buffer, axis=-1)[: NUM_ACTION_FEATURES**2]
-    return mask.astype(bool).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    grid = mask.astype(bool).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
+    return _cells_from_packed_grid(grid)
 
 
 def process_state(
@@ -338,11 +584,17 @@ def process_state(
         .reshape(16, NUM_MOVE_FEATURES)
         .astype(np.int32)
     )
-    private_team = (
-        np.frombuffer(state.private_team, dtype=np.int16)
-        .reshape(6, NUM_ENTITY_PRIVATE_FEATURES)
-        .astype(np.int32)
-    )
+    # Right-pad a short private buffer with zero COLUMNS to the current
+    # width: the replay shards (spectator logs, no |request|) store private
+    # blocks frozen at an older feature count, and 0 is UNSPECIFIED for
+    # every appended field -- padding is semantically exact where a reshape
+    # would raise. Appending private features is therefore safe; renumbering
+    # never is.
+    private_team = _decode_private_rows(state.private_team)
+    # The opponent truth channel (2026-09-01): absent entirely on old shards
+    # and at deploy -- all-zero rows are the documented "does not exist"
+    # encoding, matching the service's own zero-buffer branches.
+    opp_private_team = _decode_private_rows(state.opp_private_team)
     revealed_team = (
         np.frombuffer(state.revealed_team, dtype=np.int16)
         .reshape(6 * 2, NUM_ENTITY_REVEALED_FEATURES)
@@ -382,6 +634,7 @@ def process_state(
         field=field,
         my_moveset=my_moveset,
         opp_moveset=opp_moveset,
+        opp_private_team=opp_private_team,
         action_mask=get_action_mask(state),
     )
     if with_history:
@@ -427,11 +680,7 @@ def get_ex_player_step() -> tuple[PlayerActorInput, PlayerActorOutput]:
                 log_probs=np.zeros((env.done.shape[0], 1, 3), dtype=np.float32),
                 expectation=np.zeros((env.done.shape[0], 1), dtype=np.float32),
             ),
-            action_head=PolicyHeadOutput(
-                action_index=env.action_mask.reshape(
-                    env.action_mask.shape[:-2] + (-1,)
-                ).argmax(-1)
-            ),
+            action_head=PolicyHeadOutput(action_index=env.action_mask.argmax(-1)),
         ),
     )
 

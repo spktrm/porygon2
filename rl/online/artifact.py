@@ -5,12 +5,12 @@ which trained RL products are created, saved, restored and merged.
 Checkpoints are written with a manifest.json capturing the architecture
 capabilities (entity size, decision slots, policy-head variant) so loads
 across architecture changes fail with a sentence instead of a pytree
-error — the same fail-loudly convention as the offline critic's
-announced-states manifest flag. rl/checkpoint.py stays the shared
-low-level serialisation beneath both.
+error. rl/checkpoint.py stays the shared low-level serialisation beneath
+both.
 """
 
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -57,27 +57,24 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         smogon_format=learner_config.smogon_format,
         entity_size=int(model_cfg.entity_size),
         num_decision_slots=int(model_cfg.num_decision_slots),
-        pi_head="action_score_grouped_micro",
-        # The advantage head is structural — always present, so the
-        # manifest records the ARCHITECTURE variant, and a checkpoint whose
-        # variant string differs must go through load-mode "params"
-        # (fresh-inits the head, carries everything else).
+        # "flat_bilinear_readout" (2026-08-29) = FlatActionReadout over ONE
+        # 61-row sequence: a scalar per sheet row for switching, one bilinear
+        # for moves x targets, a scalar per target row for pass/default, and
+        # a flat pre-RMSNorm trunk behind it. Predecessors:
+        # "action_score_grouped_micro" (2026-08-25, ActionScoreHead with
+        # per-slot-group micro and per-modality macro, Q composed in
+        # heads.compose_q), "hierarchical_two_rung" (2026-08-20) and
+        # "privileged_two_rung" (2026-08-17).
         #
-        # "action_score_grouped_micro" (2026-08-25) = ActionScoreHead —
-        # per-slot-group micro q/k + per-group zero-init type_scale and
-        # local src/tgt routes, per-MODALITY macro MLP and out layer, ONE
-        # rung, Q composed in heads.compose_q. Predecessors:
-        # "hierarchical_two_rung" (2026-08-20, owned ActionAdapter +
-        # shared flat MacroMicroHead, plus a second privileged rung) and
-        # "privileged_two_rung" (2026-08-17, flat cond-MLP bilinear grid).
+        # BUMPING THIS IS NOT COSMETIC: the literal was left stale through
+        # the 2026-08-25 redesign, so a pre-redesign checkpoint passed
+        # check_manifest STRICT and would have been restored onto a
+        # structurally different param tree. The manifest exists precisely to
+        # stop that, and it only works if the literal moves with the head.
         #
-        # BUMPING THESE IS NOT COSMETIC: both literals were left stale
-        # through the 2026-08-25 redesign, so a pre-redesign checkpoint
-        # passed check_manifest STRICT and would have been restored onto a
-        # structurally different param tree. The manifest exists precisely
-        # to stop that, and it only works if the literal moves with the
-        # head class.
-        q_head="advantage_grouped_micro",
+        # `q_head` sat beside it until 2026-08-29 and went with the advantage
+        # head itself.
+        pi_head="flat_bilinear_readout",
     )
 
 
@@ -145,21 +142,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
 
-    # Entropy-floor dual variables (2026-08-28): log-space per-axis entropy
-    # temperatures, updated by loss.entropy_floor_step inside train_step.
-    # Traced leaves, NOT config — a coefficient that varies during a run in
-    # static config is the run-1326 recompile bug. Init from
-    # config.player_ent_coef in create_train_state; the defaults here are
-    # log(0.05) so a state built without the config path matches it.
-    log_ent_alpha_macro: jax.Array = struct.field(
-        default_factory=lambda: jnp.log(jnp.array(0.05, dtype=jnp.float32)),
-        pytree_node=True,
-    )
-    log_ent_alpha_micro: jax.Array = struct.field(
-        default_factory=lambda: jnp.log(jnp.array(0.05, dtype=jnp.float32)),
-        pytree_node=True,
-    )
-
 
 class Porygon2BuilderTrainState(train_state.TrainState):
     apply_fn: Callable[
@@ -218,12 +200,6 @@ def create_train_state(
         target_params=jax.tree.map(jnp.copy, initial_player_params),
         reg_params=jax.tree.map(jnp.copy, initial_player_params),
         tx=player_optimizer,
-        log_ent_alpha_macro=jnp.log(
-            jnp.array(config.player_ent_coef, dtype=jnp.float32)
-        ),
-        log_ent_alpha_micro=jnp.log(
-            jnp.array(config.player_ent_coef, dtype=jnp.float32)
-        ),
     )
 
     builder_params_init_fn = functools.partial(
@@ -302,20 +278,12 @@ def player_scalar_components(
     Both save paths (save_state here, and the learner's background
     checkpoint writer) go through this, so a leaf added to the TrainState
     cannot be persisted by one path and silently dropped by the other —
-    which is exactly how the entropy-floor dual temperatures went unsaved
-    from the day they landed.
-
-    The temperatures belong here rather than in `params`: they are
-    controller state, not parameters. Resuming without them resets the
-    dual ascent to config init — measured on ckpt_00067000, that is
-    alpha_macro 0.075 → 0.05 and alpha_micro 0.005 → 0.05, a 10x jump on
-    the axis the controller had deliberately driven to its floor.
+    which is exactly how the (since-removed) entropy-floor dual
+    temperatures went unsaved from the day they landed.
     """
     return dict(
         step_count=player_state.step_count,
         frame_count=player_state.frame_count,
-        log_ent_alpha_macro=player_state.log_ent_alpha_macro,
-        log_ent_alpha_micro=player_state.log_ent_alpha_micro,
     )
 
 
@@ -335,21 +303,13 @@ def apply_player_scalars(
     scalars: dict[str, Any],
 ) -> Porygon2PlayerTrainState:
     """Inverse of `player_scalar_components`: put a checkpoint's scalar
-    block back onto a live TrainState.
-
-    A key the checkpoint does not carry keeps the LIVE state's value, so a
-    checkpoint written before the dual temperatures were persisted resumes
-    at config init — the old behaviour — instead of raising.
+    block back onto a live TrainState. Keys this state does not carry —
+    e.g. the removed entropy-floor temperatures in a pre-2026-08-30
+    checkpoint — are simply ignored.
     """
     return player_state.replace(
         step_count=scalars["step_count"],
         frame_count=scalars["frame_count"],
-        log_ent_alpha_macro=scalars.get(
-            "log_ent_alpha_macro", player_state.log_ent_alpha_macro
-        ),
-        log_ent_alpha_micro=scalars.get(
-            "log_ent_alpha_micro", player_state.log_ent_alpha_micro
-        ),
     )
 
 
@@ -497,6 +457,7 @@ def _init_league(
         league_size=learner_config.league_size,
         cache_size=learner_config.league_cache_size,
         ucb_c=learner_config.league_ucb_c,
+        cull_size=learner_config.league_cull_size,
     )
 
 
@@ -523,6 +484,7 @@ def load_from_checkpoint(
     learner_config: Porygon2LearnerConfig,
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
+    reset_league: bool = False,
 ) -> tuple[
     Porygon2PlayerTrainState,
     Porygon2BuilderTrainState,
@@ -532,6 +494,14 @@ def load_from_checkpoint(
     """
     Full restoration: loads params, opt_state, step counts, league and the
     host-side controller state.
+
+    reset_league drops the serialised roster and starts main-only, keeping
+    everything else (optimiser, counts, EMA, magnet reference, wandb run).
+    The one-shot for an architecture change carried through the by-path
+    merge: the snapshots on disk are the OLD tree, and League.materialize
+    loads them raw, so under the new tree they are not the policies the
+    payoff table describes (2026-09-03 — the attention-pool snapshots
+    raised on the first forward and the pair handler masked it).
     """
     tqdm.write(f"Loading checkpoint from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=True)
@@ -548,28 +518,69 @@ def load_from_checkpoint(
     tqdm.write(pformat(player_scalars))
     tqdm.write(pformat(builder_scalars))
 
-    if ckpt_league_bytes is not None:
-        league = League.deserialize(ckpt_league_bytes)
+    if reset_league:
+        logger.warning(
+            "Resetting the league to main-only: the roster serialised in %s "
+            "is dropped, the checkpoint's snapshots stay on disk unreferenced.",
+            ckpt_path,
+        )
+        league = _init_league(learner_config, player_state, builder_state)
+    elif ckpt_league_bytes is not None:
+        league = League.deserialize(
+            ckpt_league_bytes,
+            league_size=learner_config.league_size,
+            cache_size=learner_config.league_cache_size,
+            ucb_c=learner_config.league_ucb_c,
+            cull_size=learner_config.league_cull_size,
+        )
     else:
         # Fallback if league is missing in ckpt
         league = _init_league(learner_config, player_state, builder_state)
 
+    # Every tree is merged BY PATH onto the fresh state's own (2026-09-02):
+    # a param leaf added since the checkpoint keeps its fresh init and, in
+    # the optimiser state, its fresh ZERO moments; a leaf the architecture
+    # no longer has is dropped rather than riding along dead in every
+    # checkpoint after. The manifest check above still refuses a genuinely
+    # different architecture; this handles the one-leaf deltas that used to
+    # force params mode -- and with it a fresh league and a fresh Adam.
     player_state = player_state.replace(
-        params=ckpt_player_state["params"],
-        target_params=ckpt_player_state["target_params"],
+        params=_merged(
+            "player params", player_state.params, ckpt_player_state["params"]
+        ),
+        target_params=_merged(
+            "player target_params",
+            player_state.target_params,
+            ckpt_player_state["target_params"],
+        ),
         # Checkpoints from before the reference policy existed seed it
         # from the target (KL 0 at resume; the next snap takes over from there).
-        reg_params=ckpt_player_state.get(
-            "reg_params", jax.tree.map(jnp.copy, ckpt_player_state["target_params"])
+        reg_params=_merged(
+            "player reg_params",
+            player_state.reg_params,
+            ckpt_player_state.get(
+                "reg_params",
+                jax.tree.map(jnp.copy, ckpt_player_state["target_params"]),
+            ),
         ),
-        opt_state=ckpt_player_state["opt_state"],
+        opt_state=merge_opt_state(
+            player_state.opt_state, ckpt_player_state["opt_state"]
+        ),
     )
     player_state = apply_player_scalars(player_state, player_scalars)
 
     builder_state = builder_state.replace(
-        params=ckpt_builder_state["params"],
-        target_params=ckpt_builder_state["target_params"],
-        opt_state=ckpt_builder_state["opt_state"],
+        params=_merged(
+            "builder params", builder_state.params, ckpt_builder_state["params"]
+        ),
+        target_params=_merged(
+            "builder target_params",
+            builder_state.target_params,
+            ckpt_builder_state["target_params"],
+        ),
+        opt_state=merge_opt_state(
+            builder_state.opt_state, ckpt_builder_state["opt_state"]
+        ),
         step_count=builder_scalars["step_count"],
         frame_count=builder_scalars["frame_count"],
     )
@@ -594,17 +605,18 @@ def load_from_checkpoint(
     )
 
 
-def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
+def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str], list[str]]:
     """Overlay checkpoint params onto a freshly initialized tree.
 
     Keys present in both trees with matching leaf shapes take the loaded
     (trained) value; keys only in the fresh tree (newly added modules) keep
     their random/zero init; keys only in the checkpoint (removed modules)
     are dropped; shape mismatches fall back to fresh init. Returns the
-    merged tree plus the paths that kept their fresh initialization, so a
-    resume across architecture changes is auditable.
+    merged tree plus the paths that kept their fresh initialization and
+    the paths dropped, so a resume across architecture changes is auditable.
     """
     kept_fresh: list[str] = []
+    dropped: list[str] = []
 
     def _merge(fresh_node, loaded_node, path: str):
         if isinstance(fresh_node, Mapping):
@@ -616,6 +628,10 @@ def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
                 else:
                     out[key] = fresh_child
                     kept_fresh.append(child_path)
+            if isinstance(loaded_node, Mapping):
+                for key in loaded_node:
+                    if key not in fresh_node:
+                        dropped.append(f"{path}/{key}")
             return out
         fresh_shape = getattr(fresh_node, "shape", None)
         loaded_shape = getattr(loaded_node, "shape", None)
@@ -624,7 +640,113 @@ def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str]]:
         kept_fresh.append(f"{path} (shape {loaded_shape} -> {fresh_shape})")
         return fresh_node
 
-    return _merge(fresh, loaded, ""), kept_fresh
+    return _merge(fresh, loaded, ""), kept_fresh, dropped
+
+
+def _merged(label: str, fresh: Params, loaded: Params) -> Params:
+    """merge_params with its audit printed: which paths kept fresh init and
+    which were dropped, under `label`, or nothing when the trees agree."""
+    merged, kept_fresh, dropped = merge_params(fresh, loaded)
+    for verb, paths in (("kept fresh init", kept_fresh), ("dropped", dropped)):
+        if paths:
+            tqdm.write(f"{label}: {len(paths)} subtrees {verb}:")
+            for path in paths:
+                tqdm.write(f"  {path}")
+    return merged
+
+
+def merge_opt_state(fresh, loaded):
+    """Overlay a checkpoint optimiser state onto a fresh one by param path.
+
+    optax states are (named) tuples whose param-shaped members are
+    Mappings: every Mapping node merges exactly as params do -- a leaf
+    added since the checkpoint keeps its fresh ZERO moments, a removed one
+    is dropped -- and every other leaf (the step counts) is the
+    checkpoint's. A container shape the two disagree on is a different
+    optimiser, not a param delta, and raises.
+    """
+    if isinstance(fresh, Mapping):
+        if not isinstance(loaded, Mapping):
+            raise ValueError(
+                f"optimiser state mismatch: {type(loaded)} for a param tree"
+            )
+        merged, _, _ = merge_params(fresh, loaded)
+        return merged
+    if isinstance(fresh, tuple):
+        if not isinstance(loaded, tuple) or len(fresh) != len(loaded):
+            raise ValueError(
+                f"optimiser state mismatch: {type(fresh).__name__}[{len(fresh)}] "
+                f"vs {type(loaded).__name__}[{len(loaded)}]"
+            )
+        merged = [
+            merge_opt_state(fresh_child, loaded_child)
+            for fresh_child, loaded_child in zip(fresh, loaded)
+        ]
+        if hasattr(fresh, "_fields"):
+            return type(fresh)(*merged)
+        return tuple(merged)
+    return loaded
+
+
+def apply_br_init(
+    merged: Params,
+    init_fn: Callable[[jax.Array], Params],
+    learner_config: Porygon2LearnerConfig,
+) -> Params:
+    """BR-init transform on the merged PLAYER params (config.br_init).
+
+    The fresh component is drawn from init_fn under a key folded OFF
+    the lineage seed. Every lineage inits from jax.random.key(42)
+    (rl/online/main.py) — the TARGET included — so a same-seed fresh
+    tree is the target's own ancestor: with t = f + delta the
+    interpolation collapses to f + (1-frac)*delta, a rewind along the
+    target's own training path with no new direction in it. The first
+    sp75 probe shipped exactly that and measured cos 0.95 to the target
+    at its first checkpoint (2026-08-30). And a CONSTANT fold is the
+    same defect one level down: every launch would share one draw, so a
+    BR against a checkpoint descended from a shrink-perturb BR would
+    interpolate toward that target's own ancestor again. The fold is
+    therefore derived from the run's identity (target ckpt + BR
+    subtree) — unique per new run, since a reused tag resumes instead
+    of re-initialising, and reproducible from the config alone.
+
+    "target" (and every non-BR params-mode load, where br_init sits at
+    its default) is the identity and never pays the init call.
+    "scratch" never reaches here: it takes the scratch load path — and
+    note scratch itself inits from the lineage seed, i.e. the target's
+    ancestor. The returned tree is what params/target_params/reg_params
+    are all set to, so the magnet anchors to the TRANSFORMED policy —
+    post-reset the anchor is near-uniform, not the inherited collapse.
+    """
+    if learner_config.br_init == "target":
+        return merged
+    if learner_config.br_init not in ("head-reset", "shrink-perturb"):
+        raise ValueError(f"unknown br_init {learner_config.br_init!r}")
+    run_identity = f"{learner_config.br_target_ckpt}:{learner_config.ckpt_subdir}"
+    fold = int.from_bytes(hashlib.blake2s(run_identity.encode()).digest()[:4], "little")
+    tqdm.write(f"br_init={learner_config.br_init}: fresh draw folds {fold} off key(42)")
+    fresh = init_fn(jax.random.fold_in(jax.random.key(42), fold))
+    if learner_config.br_init == "head-reset":
+        inner = dict(merged["params"])
+        if "action_head" not in inner:
+            raise KeyError(
+                "br_init='head-reset': no 'action_head' subtree in the "
+                "player params — the readout was renamed out from under "
+                "this transform"
+            )
+        inner["action_head"] = fresh["params"]["action_head"]
+        grafted = dict(merged)
+        grafted["params"] = inner
+        return grafted
+    frac = learner_config.br_perturb_frac
+    if not 0.0 <= frac <= 1.0:
+        raise ValueError(f"br_perturb_frac={frac} outside [0, 1]")
+
+    def interpolate(trained, init):
+        mixed = (1.0 - frac) * trained + frac * init
+        return jnp.asarray(mixed, dtype=jnp.asarray(trained).dtype)
+
+    return jax.tree.map(interpolate, merged, fresh)
 
 
 def load_from_params(
@@ -650,17 +772,10 @@ def load_from_params(
     loaded_player_params = checkpoint.load_component(ckpt_path, "player", "params")
     loaded_builder_params = checkpoint.load_component(ckpt_path, "builder", "params")
 
-    player_params, player_kept_fresh = merge_params(
-        player_state.params, loaded_player_params
-    )
-    builder_params, builder_kept_fresh = merge_params(
-        builder_state.params, loaded_builder_params
-    )
-    for name, kept in (("player", player_kept_fresh), ("builder", builder_kept_fresh)):
-        if kept:
-            tqdm.write(f"{name}: {len(kept)} param subtrees kept fresh init:")
-            for path in kept:
-                tqdm.write(f"  {path}")
+    player_params = _merged("player", player_state.params, loaded_player_params)
+    builder_params = _merged("builder", builder_state.params, loaded_builder_params)
+
+    player_params = apply_br_init(player_params, player_state.init_fn, learner_config)
 
     # target_params gets the same merged tree: leaving it at fresh init
     # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
@@ -691,6 +806,7 @@ def load_train_state(
     builder_state: Porygon2BuilderTrainState,
     mode: Literal["scratch", "checkpoint", "params"] = "checkpoint",
     ckpt_path: str | None = None,
+    reset_league: bool = False,
 ) -> tuple[
     Porygon2PlayerTrainState,
     Porygon2BuilderTrainState,
@@ -705,6 +821,12 @@ def load_train_state(
     implicit most-recent lookup, where "no checkpoint yet" is a normal
     first launch.
     """
+    if reset_league and mode != "checkpoint":
+        raise ValueError(
+            f"reset_league only applies to mode='checkpoint' (got {mode!r}) "
+            "— scratch and params modes already start main-only"
+        )
+
     # 1. Force Scratch
     if mode == "scratch":
         if ckpt_path is not None:
@@ -746,5 +868,9 @@ def load_train_state(
 
     # 4. Standard Checkpoint Load (Default)
     return load_from_checkpoint(
-        latest_ckpt, learner_config, player_state, builder_state
+        latest_ckpt,
+        learner_config,
+        player_state,
+        builder_state,
+        reset_league=reset_league,
     )

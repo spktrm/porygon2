@@ -62,9 +62,71 @@ enum ActionEnum {
     ACTION_ENUM__ALLY_2_SWITCH = 40;
 }
 
+// How the environment is asking us to choose. READ, not decorative: the
+// switch block means a different Showdown choice depending on it -- a lead at
+// TEAM_PREVIEW, a `switch` otherwise -- and WAIT/UNSPECIFIED light every cell
+// so masked averages never meet an empty row.
+enum ActionRequestKind {
+    ACTION_REQUEST_KIND___UNSPECIFIED = 0;
+    ACTION_REQUEST_KIND__MOVE = 1;
+    ACTION_REQUEST_KIND__FORCE_SWITCH = 2;
+    ACTION_REQUEST_KIND__TEAM_PREVIEW = 3;
+    ACTION_REQUEST_KIND__WAIT = 4;
+}
+
+// The legal-action set, shaped like the DECISION. The 41x41 (src, tgt) grid
+// it replaced (2026-08-29) was a model-side artefact that leaked onto the
+// wire: only ~264 of its 1681 cells were reachable in any format and ~9 legal
+// at a given step. Since 2026-08-31 this message's fields, flattened in field
+// order, ARE the model's action space -- see `Action` below.
+//
+// Bit indices are positions in the ActionEnum-derived slot lists both sides
+// build (rl/environment/data.py MOVE_INDICES / TARGET_SLOT_INDICES /
+// RESERVE_ENTITY_INDICES; service/src/server/data.ts the same three), NOT raw
+// enum values -- so the lists are the shared contract and are asserted equal
+// in both test suites.
+message ActionMask {
+    ActionRequestKind kind = 1;
+
+    // Bit j: RESERVE_j_SWITCH_IN is a legal switch-in (MOVE / FORCE_SWITCH) or
+    // a legal lead (TEAM_PREVIEW). One field for all three because it is one
+    // question -- "may this mon come in" -- and `kind` says which choice
+    // string it decodes to.
+    uint32 switch_slots = 2;
+
+    // One entry per MOVE_INDICES slot, in that order (16 = 2 allies x 4 moves
+    // x {regular, wildcard}). Bit t indexes TARGET_SLOT_INDICES: that target is
+    // legal for that move slot.
+    repeated uint32 move_targets = 3 [packed = true];
+
+    // Bit s over TARGET_SLOT_INDICES: slot s is legal as a standalone action.
+    // Today that is ALLY_i_PASS only.
+    uint32 other_srcs = 4;
+
+    // Which ally half this sub-decision is for -- 0 in singles, 0 or 1 in
+    // doubles, where the service asks one slot at a time. READ: `switch_slots`
+    // says WHICH mon may come in but not which active it replaces; the decoder
+    // needs this to build the choice string. Before 2026-08-29 the packed grid
+    // carried it implicitly, in which ally half happened to be lit.
+    int32 active_slot = 5;
+}
+
+// The chosen action, as an index into the BLOCK SPACE -- the flattening of
+// ActionMask's own fields, in field order:
+//
+//   [0, 6)     switch     bit j of `switch_slots` (RESERVE_j comes in / leads)
+//   [6, 278)   move       move_targets, row-major: slot m of MOVE_INDICES x
+//                         bit t of TARGET_SLOT_INDICES, cell 6 + 17*m + t
+//   [278, 295) standalone bit s of `other_srcs`
+//
+// This layout is the shared contract between the service's cell->choice map
+// and the model's readout; both sides derive the offsets from the same three
+// slot-list lengths (rl/environment/data.py and service/src/server/data.ts)
+// and assert the 295 total. It replaced Action{src, tgt} -- an index pair
+// into the 41x41 scoring grid -- when the grid was retired (2026-08-31):
+// `kind` + `active_slot` on the mask carry what the two halves used to.
 message Action {
-    ActionEnum src = 1;
-    ActionEnum tgt = 2;
+    int32 cell = 1;
 }
 
 message StepRequest {
@@ -83,7 +145,15 @@ message ResetRequest {
 
 message EnvironmentState {
     bytes info = 1;
-    bytes action_mask = 2;
+
+    // DEPRECATED UNTIL THE REPLAY SHARDS ARE REBUILT. The 1681-bit packed grid
+    // the service no longer writes -- `structured_action_mask` below replaced
+    // it 2026-08-29. It stays declared because replays/shards holds 8.8GB of
+    // serialised EnvironmentState that rl/offline/dataset.py still reads
+    // through process_state, and dropping the field would strand them.
+    // get_action_mask prefers the structured field and falls back to this.
+    // Delete both this and the fallback when those shards are next rebuilt.
+    bytes packed_action_mask = 2;
     bytes history_entity_public_cache = 3;
     bytes history_entity_revealed_cache = 4;
     bytes history_entity_edge_cache = 5;
@@ -97,6 +167,26 @@ message EnvironmentState {
     bytes field = 13;
     int32 rqid = 14;
     int32 history_packed_length = 15;
+    ActionMask structured_action_mask = 16;
+    // The OPPONENT's last request, serialised through the same
+    // EntityPrivateNodeFeature rows as `private_team` -- the centralised-value
+    // truth channel (2026-09-01). Written only in training self-play (the
+    // builder reads `player.opponent`); empty at deploy, for baselines'
+    // observers and for spectator exports, and the decode zero-fills so old
+    // shards keep parsing. NEVER reachable by the policy: the model routes
+    // these rows into a leak-masked trunk partition read only by the
+    // privileged value head. Field 16 above RE-USED the deleted
+    // opp_private_team's number, so this channel takes 17 -- never reuse a
+    // freed number here.
+    bytes opp_private_team = 17;
+    // How many times a PAST history row has been rewritten in place this
+    // game (2026-09-02) -- incremented by `EdgeBuffer.remapEntitySlot`, the
+    // one writer of already-serialised rows (an Illusion |replace| moves the
+    // disguised period's edges onto the true pokemon's slot). Monotone
+    // non-decreasing within a game. An actor carrying history state across
+    // requests recomputes from scratch when this moves; every other
+    // consumer ignores it. Not a model input.
+    int32 history_rewrite_count = 18;
 }
 
 message EnvironmentTrajectory {

@@ -76,6 +76,43 @@ enum EntityPrivateNodeFeature {
     ENTITY_PRIVATE_NODE_FEATURE__SPD_STAT = 12;
     ENTITY_PRIVATE_NODE_FEATURE__SPE_STAT = 13;
     ENTITY_PRIVATE_NODE_FEATURE__TERA_TYPE = 14;
+    // ---- the truth channel (2026-08-31) ------------------------------------
+    // Current condition, parsed from the REQUEST's own condition string
+    // ("245/272 tox", "0 fnt") -- authoritative by construction; turn
+    // counters from the privateBattle member (the string has none). Never
+    // from publicBattle: under a my-side Illusion the public row BLENDS two
+    // mons' histories until |replace| remaps, so no join can recover the
+    // truth -- only this channel has it. (The privateBattle member's own hp
+    // is also unreliable: log-event-driven, it reads 0/0 for a mon the log
+    // has not yet given a reading -- caught by the harness truth invariant
+    // on its first run.)
+    // The private and public condition blocks are not duplicates: they
+    // coincide only when no deception is active, and diverge into
+    // truth-vs-opponent-belief exactly when it is. Encodings match the
+    // public fields (HP_RATIO = floor(16384 * hp/maxhp), StatusEnum vocab,
+    // toxic capped 8 / sleep capped 4). Appended, never renumbered: the
+    // decode pads short buffers (replay shards store all-zero private
+    // blocks), so 0..14 must keep their meaning.
+    ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO = 15;
+    ENTITY_PRIVATE_NODE_FEATURE__STATUS = 16;
+    ENTITY_PRIVATE_NODE_FEATURE__HAS_STATUS = 17;
+    ENTITY_PRIVATE_NODE_FEATURE__TOXIC_TURNS = 18;
+    ENTITY_PRIVATE_NODE_FEATURE__SLEEP_TURNS = 19;
+    ENTITY_PRIVATE_NODE_FEATURE__FAINTED = 20;
+    // The exact private<->public ALIGNMENT KEY: 1 + the stable entity index
+    // (identToIndex, revelation order across both sides), 0 when this mon
+    // has never been fielded. Lets the model line truth up against the
+    // opponent's belief about it without the forme-fragile species match.
+    ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX = 21;
+    // Staleness of the request this row was parsed from, in battle turns:
+    // clip(observer's privateBattle.turn - source's privateBattle.turn, 0, 8).
+    // Identically 0 on the player's own channel (observer == source); on
+    // `opp_private_team` it is >0 exactly when the opponent's client has not
+    // yet ingested the observer's current turn (the two player loops are
+    // independent async consumers), so the model can weigh how fresh the
+    // truth is. Turn delta, not rqid delta: rqid counters drift apart
+    // legitimately (force-switch turns give one side extra requests).
+    ENTITY_PRIVATE_NODE_FEATURE__REQUEST_LAG = 22;
 }
 
 

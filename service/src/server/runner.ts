@@ -13,12 +13,16 @@ import { Dex } from "@pkmn/dex";
 import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, RewardTracker, StateHandler } from "./state";
+import { cellToEnumPair } from "./data";
 import { Protocol } from "@pkmn/protocol";
+import fs from "fs";
 import {
     Action,
+    ActionEnum,
+    ActionRequestKind,
+    ActionRequestKindMap,
     EnvironmentState,
     StepRequest,
-    ActionEnum,
 } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
@@ -141,14 +145,6 @@ export class AsyncQueue<T> implements Queue<T> {
     }
 }
 
-const CHOOSABLE_TARGETS = new Set([
-    "normal",
-    "any",
-    "adjacentAlly",
-    "adjacentAllyOrSelf",
-    "adjacentFoe",
-]);
-
 const globalGens = new Generations(Dex);
 
 export class TrainablePlayerAI extends RandomPlayerAI {
@@ -172,6 +168,23 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     rqid: number;
     choices: string[];
     actions: Action[];
+    // The taken actions named in ActionEnum (src, tgt) terms, for the
+    // PREV_ACTION_SRC/TGT info features -- recorded at decode time, where the
+    // request kind that disambiguates a switch cell is still known.
+    actionEnumPairs: [number, number][];
+    // block cell -> the Showdown choice string that cell means, rebuilt by
+    // StateHandler.getActionMask on every request (and, in doubles, every
+    // sub-decision). choiceFromAction is a lookup in it, so the mask and the
+    // decoder cannot disagree about what a cell means. Empty until the first
+    // state is built, and on requests that carry no choice.
+    legalChoiceByCell: Map<number, string> = new Map();
+    // The request kind and ally half the current legalChoiceByCell was built
+    // for, published by getActionMask alongside the map.
+    lastMaskKind: ActionRequestKindMap[keyof ActionRequestKindMap] =
+        ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED;
+    lastMaskActiveSlot: number = 0;
+    // How many choices this battle's sim rejected outright. Should be 0.
+    invalidChoiceCount: number = 0;
 
     isBaseline: boolean;
     baselineIndex: number;
@@ -182,6 +195,13 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // have no opponent object, so everything reading this must tolerate
     // undefined (the opponent's private info simply does not exist there).
     opponent: TrainablePlayerAI | undefined;
+    // The exact opponent request object the most recent build() serialised
+    // into opp_private_team (undefined when that build wrote the all-zero
+    // degrade). The opponent's live request is replaced wholesale per
+    // |request| line, so holding the reference IS a stable snapshot -- the
+    // harness truth invariant compares against this, never against the
+    // live request, which can move between build and check.
+    lastSerialisedOppRequest: AnyObject | undefined;
     constructor(
         userName: string,
         playerStream: ObjectReadWriteStream<string>,
@@ -202,6 +222,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.done = false;
         this.choices = [];
         this.actions = [];
+        this.actionEnumPairs = [];
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
         this.tasks = new TaskQueueSystem();
@@ -294,161 +315,31 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         return true;
     }
 
-    getShowdownTargetFormat(
-        allyIndex: number,
-        moveIndex: number,
-        tgtIndex: number,
-    ): string {
-        const targetLookup = {
-            [ActionEnum.ACTION_ENUM__ALLY_1_TARGET]: "-1",
-            [ActionEnum.ACTION_ENUM__ALLY_2_TARGET]: "-2",
-            [ActionEnum.ACTION_ENUM__ENEMY_1_TARGET]: "+1",
-            [ActionEnum.ACTION_ENUM__ENEMY_2_TARGET]: "+2",
-            [ActionEnum.ACTION_ENUM__TARGET_AUTO]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALL]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES]: "",
-            [ActionEnum.ACTION_ENUM__TARGET_ALLIES]: "",
-        };
-
-        const request = this.getRequest()! as AnyObject;
-        const allyMoves = request?.active?.[allyIndex]?.moves;
-        const chosenMove = allyMoves?.[moveIndex];
-        const moveTarget = chosenMove?.target;
-
-        if (!CHOOSABLE_TARGETS.has(moveTarget)) {
-            return "";
-        }
-
-        const showdownFormat =
-            targetLookup[tgtIndex as keyof typeof targetLookup];
-
-        if (showdownFormat === undefined) {
-            throw new Error(`Invalid target index: ${tgtIndex}`);
-        }
-
-        return showdownFormat;
-    }
-
+    /**
+     * The chosen cell -> the Showdown choice string, by lookup in the map
+     * StateHandler.getActionMask built when it legalised that cell.
+     *
+     * This used to be a hand-written decoder that re-derived the string from
+     * (src, tgt) independently of the mask, and the two drifted: it appended
+     * " terastallize" to every wildcard, it re-resolved move targets through a
+     * different move list than the mask indexed under Dynamax, and it ignored
+     * the target on team preview entirely. One table, built where the facts
+     * are, makes all three unrepresentable.
+     */
     choiceFromAction(action: Action): string {
-        const srcIndex = action.getSrc();
-        const tgtIndex = action.getTgt();
-
-        // Safe mapping for switch-ins since they are interleaved with RESERVE_MOVEs in V2
-        const reserveSwitchIndices: number[] = [
-            ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-            ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-        ];
-
-        if (
-            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1 <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4
-        ) {
-            const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1;
-            const showdownFormat = this.getShowdownTargetFormat(
-                0,
-                moveIndex,
-                tgtIndex,
-            );
-
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return `move ${moveIndex + 1} ${showdownFormat}`.trim();
-        } else if (
-            ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD
-        ) {
-            const moveIndex =
-                srcIndex - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD;
-            const showdownFormat = this.getShowdownTargetFormat(
-                0,
-                moveIndex,
-                tgtIndex,
-            );
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return (
-                `move ${moveIndex + 1} ${showdownFormat}`.trim() +
-                " terastallize"
-            );
-        } else if (
-            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1 <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4
-        ) {
-            const moveIndex = srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1;
-            const showdownFormat = this.getShowdownTargetFormat(
-                1,
-                moveIndex,
-                tgtIndex,
-            );
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return `move ${moveIndex + 1} ${showdownFormat}`.trim();
-        } else if (
-            ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD <= srcIndex &&
-            srcIndex <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD
-        ) {
-            const moveIndex =
-                srcIndex - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD;
-            const showdownFormat = this.getShowdownTargetFormat(
-                1,
-                moveIndex,
-                tgtIndex,
-            );
-            if (showdownFormat === undefined) {
-                throw new Error(`Invalid target index: ${tgtIndex}`);
-            }
-
-            return (
-                `move ${moveIndex + 1} ${showdownFormat}`.trim() +
-                " terastallize"
-            );
-        } else if (
-            srcIndex === ActionEnum.ACTION_ENUM__ALLY_1_SWITCH ||
-            srcIndex === ActionEnum.ACTION_ENUM__ALLY_2_SWITCH
-        ) {
-            // Battle switch: the reserve mon switching in is encoded as the target.
-            const switchIndex = reserveSwitchIndices.indexOf(tgtIndex);
-            if (switchIndex === -1) {
-                throw new Error(
-                    `Invalid switch target index: ${tgtIndex} for src: ${srcIndex}`,
-                );
-            }
-
-            return `switch ${switchIndex + 1}`;
-        } else if (reserveSwitchIndices.includes(srcIndex)) {
-            // Team preview: the chosen mon is still encoded as the source.
-            const switchIndex = reserveSwitchIndices.indexOf(srcIndex);
-
-            return `switch ${switchIndex + 1}`;
-        } else if (srcIndex === ActionEnum.ACTION_ENUM__DEFAULT) {
-            return "default";
-        } else if (
-            (srcIndex === ActionEnum.ACTION_ENUM__ALLY_1_PASS &&
-                srcIndex === tgtIndex) ||
-            (srcIndex === ActionEnum.ACTION_ENUM__ALLY_2_PASS &&
-                srcIndex === tgtIndex)
-        ) {
-            return "pass";
-        } else {
-            throw new Error(
-                `Invalid src index: ${srcIndex} and tgt index: ${tgtIndex}`,
-            );
+        const cell = action.getCell();
+        const choice = this.legalChoiceByCell.get(cell);
+        if (choice !== undefined) {
+            return choice;
         }
+        // An empty map means the current request carries no choice (a wait, or
+        // no request at all). getActionMask lights every cell in that case so
+        // masked averages downstream never see an empty row, and "default" is
+        // the only thing any of those cells can mean.
+        if (this.legalChoiceByCell.size === 0) {
+            return "default";
+        }
+        throw new Error(`Action cell ${cell} is not a legal cell`);
     }
 
     addLine(cmd: string, line: string) {
@@ -488,6 +379,23 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         const action = stepRequest.getAction()!;
         this.actions.push(action);
+        // Named in ActionEnum terms while the kind that disambiguates a
+        // switch cell is still current; a no-choice request (empty map)
+        // records DEFAULT.
+        if (this.legalChoiceByCell.size === 0) {
+            this.actionEnumPairs.push([
+                ActionEnum.ACTION_ENUM__DEFAULT,
+                ActionEnum.ACTION_ENUM__DEFAULT,
+            ]);
+        } else {
+            this.actionEnumPairs.push(
+                cellToEnumPair(
+                    action.getCell(),
+                    this.lastMaskKind,
+                    this.lastMaskActiveSlot,
+                ),
+            );
+        }
 
         return this.choiceFromAction(action);
     }
@@ -580,6 +488,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.choices = [];
         this.actions = [];
+        this.actionEnumPairs = [];
 
         return choice;
     }
@@ -589,6 +498,12 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         for await (const chunk of this.stream) {
             if (chunk.startsWith("|error|")) {
                 if (chunk.includes("Invalid choice")) {
+                    // Counted, not merely logged: a mask cell whose choice
+                    // string the sim rejects is exactly the drift the
+                    // cell -> choice map exists to prevent, and a console line
+                    // is invisible to the test suite. The harness asserts this
+                    // stays at zero.
+                    this.invalidChoiceCount += 1;
                     console.error(`Invalid choice error in stream: ${chunk}`);
                 } else if (chunk.includes("Unavailable choice")) {
                     console.log(`Unavailable move error in stream: ${chunk}`);
@@ -597,7 +512,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                 }
             }
 
-            if (this.done || this.finishedEarly) {
+            if (this.done || this.finishedEarly || this.destroyed) {
                 break;
             }
 
@@ -620,6 +535,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
                         const choice = await this.getChoices();
 
+                        // The battle may have been torn down while the
+                        // choice was pending (an abort, or the harness
+                        // destroying a concluded game): the sim's Battle is
+                        // nulled and its stream ended, so a late choose is
+                        // an unhandled rejection inside the sim's own
+                        // `void write` -- unreachable from the catch below.
+                        if (this.destroyed) break;
+
                         choices.push(choice);
 
                         // Process the received action
@@ -641,7 +564,23 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.done = true;
 
+        // An aborted battle has no consumer left: abortBattle cleared the
+        // outgoing queue and dropped the player from the worker's mapping.
+        if (this.destroyed) return;
         this.sendFinalState();
+        this.dumpBattleLog();
+    }
+
+    // Offline diagnostics only: with BATTLE_LOG_DIR set, p1 writes the
+    // battle's full protocol log (both sides' lines, its own hp absolute,
+    // the opponent's in %) at the end — the same text a downloaded human
+    // replay carries, so one parser reads both populations.
+    dumpBattleLog() {
+        const dir = process.env.BATTLE_LOG_DIR;
+        if (!dir || this.getPlayerIndex() !== 0) return;
+        const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        const path = `${dir}/${this.userName.replace(/[^A-Za-z0-9_-]/g, "_")}-${stamp}.log`;
+        fs.writeFileSync(path, this.log.join("\n") + "\n");
     }
 
     // One-shot battle-stream teardown shared by BOTH players of a game,
@@ -658,7 +597,16 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // (see the 2026-08-13 service crash).
     endBattleStream: (() => void) | undefined;
 
+    // Set by destroy(): the client Battles null their sides, so nothing
+    // may build a state from them afterwards. `start()`'s loop exits when
+    // destroy() ends the stream and would otherwise build the final state
+    // on the torn-down battle -- an unhandled rejection that took the
+    // WORKER down with every other game on it (2026-09-03, at a watchdog
+    // abort: `Cannot read properties of null (reading 'team')`).
+    destroyed = false;
+
     destroy() {
+        this.destroyed = true;
         this.privateBattle.destroy();
         this.publicBattle.destroy();
         this.endBattleStream?.();
@@ -749,8 +697,11 @@ export function createBattle(
     p1.endBattleStream = endBattleStream;
     p2.endBattleStream = endBattleStream;
 
-    p1.start();
-    p2.start();
+    // A rejection from either loop must stay this game's failure, never
+    // the worker's: the abort path tears the game down and the worker
+    // reports it; an uncaught rejection here would exit the process.
+    p1.start().catch((err) => console.error(`p1 loop failed: ${err}`));
+    p2.start().catch((err) => console.error(`p2 loop failed: ${err}`));
 
     void streams.omniscient.write(`>start ${JSON.stringify(spec)}
 >player p1 ${JSON.stringify(p1spec)}

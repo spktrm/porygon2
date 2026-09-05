@@ -13,42 +13,484 @@ import optax
 
 from rl.environment.data import (
     CAT_VF_SUPPORT,
-    FLAT_SRC_GROUP_MASK,
     PackedSetFeature,
 )
 from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
+from rl.environment.protos.features_pb2 import (
+    EntityPublicNodeFeature,
+    FieldFeature,
+    InfoFeature,
+)
+from rl.model.constants import (
+    DYNAMICS_GROUP_SLICES,
+    LEARNER_ONLY_GROUPS,
+    POLICY_READABLE_ROWS,
+    SEQUENCE_GROUP_IDS,
+    SequenceGroup,
+)
 from rl.model.heads import HeadParams
+from rl.model.history_encoder import major_arg_step_mask
+from rl.model.player_model import dynamics_alignment
+from rl.model.state_features import REVEALED_ID_COLUMNS, hp_input_rows
+from rl.model.transition import unimix_probs
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
-    entropy_floor_step,
     factorised_entropies,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
+    uniform_kl_modalities,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
-    compute_q_onestep_targets,
     reference_kl,
 )
 from rl.online.training.telemetry import (
     action_axis_masks,
+    belief_accuracy_logs,
     calculate_r2,
+    code_usage_logs,
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
     head_param_telemetry,
-    modality_means,
     promote_map,
-    q_fit_telemetry,
 )
 from rl.utils import average
 
 logger = logging.getLogger(__name__)
+
+
+# Floor on a group's per-batch normaliser (mean squared delta, row units).
+# The field rows move on few steps, so on a small batch their mean squared
+# delta is often ~0.03 and sometimes EXACTLY 0 (nothing on the field
+# changed in any chunk); under a 1e-6 eps that batch scored loss ~400 and a
+# 2.5e4 head gradient norm, which the global clip (10) turned into a wasted
+# step for every other loss (irqeetfg @633-637k, ~1 logged step in 5). The
+# floor is ~1/50 of the public scale (0.53) and under the field scale on
+# every normal batch read, so it only binds where the ratio is degenerate;
+# the gradient amplification of the normaliser is bounded at 1/floor.
+DYNAMICS_SCALE_FLOOR = 1e-2
+
+
+def dynamics_hp_basis(params: Params) -> jax.Array:
+    """(D, r): an orthonormal basis of the subspace the public row's hp
+    tokens write into -- QR of the EMA `public_persistent_linear` kernel's
+    hp input rows. The instrument for the delta loss's known shortcoming:
+    the target's per-feature scale is learnable (the state linears train
+    under every loss and the EMA copies them), so a normalised MSE can
+    shrink the unpredictable directions' share of the normaliser instead
+    of predicting them. `player_dynamics_hp_share` reads the public delta's
+    variance in this subspace; falling while the public gain rises is the
+    gaming shape."""
+    kernel = params["params"]["encoder"]["public_persistent_linear"]["kernel"]
+    rows = kernel[hp_input_rows("public_persistent_linear")].astype(jnp.float32)
+    basis, _ = jnp.linalg.qr(rows.T)
+    return jax.lax.stop_gradient(basis)
+
+
+# The transition-split instruments (2026-09-05, stochastic-transition plan
+# step 1). A learner row is a REQUEST, and the edges the sim runs between
+# request t and t+1 -- the opponent's decisions, the rolls, the reveals --
+# are the unobserved branches the delta head's mean sits between. The
+# service stamps every edge with the count of the request it PRECEDES
+# (`_preprocessEdge` reads `player.requestCount` after the choose-time
+# increment, `runner.ts`), so the steps a transition spans are exactly the
+# window steps whose REQUEST_COUNT equals the info count at t+1.
+TRANSITION_SHORT_EDGES = 2
+TRANSITION_LONG_EDGES = 4
+
+
+def transition_edges(env_output, history_field: jax.Array) -> jax.Array:
+    """(T-1, B) int32: how many valid history-window steps transition
+    t -> t+1 spans. 0 where the window no longer holds them."""
+    request_counts = env_output.info[..., InfoFeature.INFO_FEATURE__REQUEST_COUNT]
+    field_valid = history_field[..., FieldFeature.FIELD_FEATURE__VALID] > 0
+    field_requests = history_field[..., FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
+    spanned = field_valid[None] & (field_requests[None] == request_counts[1:, None])
+    return spanned.sum(axis=1).astype(jnp.int32)
+
+
+def transition_reveals(
+    env_output, matched: jax.Array, next_index: jax.Array
+) -> jax.Array:
+    """(T-1, B) bool: some OPPONENT public row, matched across the step,
+    changed an identity token -- a reveal (or an Illusion rewrite), the
+    hidden-information branch of the transition."""
+    public = DYNAMICS_GROUP_SLICES["public"]
+    ids = env_output.revealed_team[..., REVEALED_ID_COLUMNS]
+    ids_next = jnp.take_along_axis(ids[1:], next_index[..., public, None], axis=2)
+    changed = (ids[:-1] != ids_next).any(-1)
+    theirs = (
+        env_output.public_team[
+            :-1, ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ]
+        == 0
+    )
+    return (changed & matched[..., public] & theirs).any(-1)
+
+
+def masked_percentile(values: jax.Array, mask: jax.Array, fraction: float) -> jax.Array:
+    """The `fraction` quantile of `values` where `mask` (nearest rank), by one sort (no
+    data-derived shapes); -1 when nothing is masked in."""
+    flat = jnp.sort(jnp.where(mask, values, -1).ravel())
+    count = mask.sum()
+    index = flat.shape[0] - count + jnp.round(fraction * (count - 1)).astype(jnp.int32)
+    return flat[jnp.clip(index, 0, flat.shape[0] - 1)]
+
+
+def dynamics_losses(
+    pred: jax.Array,
+    pred_prior: jax.Array,
+    target: jax.Array,
+    env_output,
+    acted_mask: jax.Array,
+    value_mask: jax.Array,
+    hp_basis: jax.Array | None = None,
+    history_field: jax.Array | None = None,
+) -> tuple[jax.Array, dict[str, jax.Array], dict[str, jax.Array]]:
+    """The transition model's GROUNDING loss and the transition-split
+    instruments (2026-09-04 delta head; 2026-09-05 relabelled).
+
+    `pred` (T, B, R, D) is the grounding head's read of the imagined next
+    sequence at step t: the predicted CHANGE, t -> t+1, of the target
+    row that lands at position j of the NEXT step (the imagined rows keep
+    the next step's layout). `target` is the pre-trunk content of the
+    target rows (`dynamics_target`, computed outside the loss fn so it
+    carries no gradient). Row j at t is matched to its next-step row
+    through `dynamics_alignment` (public rows re-sort every step; private
+    rows follow the request order) and the prediction is gathered to it,
+    so the label is `target_next - target_now` on the current row and the
+    error is normalised by the COPY predictor's, `|target_next -
+    target_now|^2`: the static tokens cancel in the label, the zero
+    prediction IS the copy and scores exactly 1 per group, and the
+    head's zero-init output starts there. (A content-valued head was
+    tried first, 2026-09-05: against this normaliser it started at loss
+    ~18 -- the static tokens' reconstruction error -- and its gradient
+    alone ran at 2x the global clip.) A row counts when it
+    is matched, an action was taken at t (`acted_mask`, which drops the
+    done row) and t+1 is a real state (`value_mask` -- the bootstrap-only
+    final row is a valid TARGET). Forced rows stay in: the transition is
+    real even when the choice was not.
+
+    Per group g of DYNAMICS_GROUP_SLICES, f32:
+
+        num_g   = average(|pred_delta - (target_next - target_now)|^2, mask_g)
+        scale_g = sg(average(|target_next - target_now|^2, mask_g))
+        loss_g  = num_g / max(scale_g, floor)
+
+    mean over groups, so the field rows' small movements neither vanish
+    under the public scale nor dominate it; `gain_g = 1 - loss_g` is the
+    R^2 of the change (0 = copy, negative = worse than copy). An
+    all-masked group averages to 0 on both sides and contributes 0; a
+    group whose rows did not move on the batch is normalised at
+    DYNAMICS_SCALE_FLOOR instead of dividing by ~0.
+
+    `pred_prior` is the same read of a no-gradient decode from the prior
+    MODE -- the rollout-side number. It is EXPECTED BELOW the posterior
+    gain (a sample from a two-branch law is further from the truth in MSE
+    than the mean the old head fitted); the panel exists so nobody reads
+    it as a regression.
+
+    `..._gain_hp_moved` is the public gain on the rows whose wire HP_RATIO
+    changed across the step, scaled on that subset: the counters (turn,
+    toxic, sleep) inflate R^2 on every row, and this subset is where the
+    branching lives. With `history_field` the public gain is also split by
+    what the transition spans (`transition_edges`: short <= 2, long >= 4
+    window steps) and by whether an opponent row revealed a token
+    (`transition_reveals`); the splits are returned for the KL panels.
+    """
+    matched, next_index = jax.vmap(jax.vmap(dynamics_alignment))(
+        jax.tree.map(lambda leaf: leaf[:-1], env_output),
+        jax.tree.map(lambda leaf: leaf[1:], env_output),
+    )
+    target = target.astype(jnp.float32)
+
+    def gather_next(rows):
+        return jnp.take_along_axis(
+            rows.astype(jnp.float32), next_index[..., None], axis=2
+        )
+
+    target_next = gather_next(target[1:])
+    delta = target_next - target[:-1]
+    valid_step = acted_mask[:-1] & value_mask[1:]
+    mask = matched & valid_step[..., None]
+    sq_err = jnp.square(gather_next(pred[:-1]) - delta).sum(-1)
+    sq_err_prior = jnp.square(gather_next(pred_prior[:-1]) - delta).sum(-1)
+    sq_delta = jnp.square(delta).sum(-1)
+
+    def normalised(rows_mask, err=sq_err):
+        num = average(err, rows_mask)
+        scale = jax.lax.stop_gradient(average(sq_delta, rows_mask))
+        return num / jnp.maximum(scale, DYNAMICS_SCALE_FLOOR), scale
+
+    logs = dict(
+        player_transition_ground_rows_frac=average(
+            mask.astype(jnp.float32).mean(-1), valid_step
+        ),
+    )
+    group_losses = []
+    for group, rows in DYNAMICS_GROUP_SLICES.items():
+        group_mask = jnp.zeros_like(mask).at[..., rows].set(mask[..., rows])
+        group_loss, group_scale = normalised(group_mask)
+        group_losses.append(group_loss)
+        logs[f"player_transition_gain_{group}"] = 1.0 - group_loss
+        logs[f"player_transition_ground_scale_{group}"] = group_scale
+    loss = jnp.mean(jnp.stack(group_losses))
+    logs["player_loss_transition_ground"] = loss
+
+    public = DYNAMICS_GROUP_SLICES["public"]
+    public_mask = jnp.zeros_like(mask).at[..., public].set(mask[..., public])
+    prior_loss, _ = normalised(public_mask, sq_err_prior)
+    logs["player_transition_gain_public_prior"] = 1.0 - prior_loss
+    hp_ratio = env_output.public_team[
+        ..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
+    ]
+    hp_next = jnp.take_along_axis(hp_ratio[1:], next_index[..., public], axis=2)
+    hp_moved = jnp.zeros_like(mask).at[..., public].set(hp_ratio[:-1] != hp_next)
+    moved_loss, _ = normalised(public_mask & hp_moved)
+    logs["player_transition_gain_hp_moved"] = 1.0 - moved_loss
+    moved_prior_loss, _ = normalised(public_mask & hp_moved, sq_err_prior)
+    logs["player_transition_gain_hp_moved_prior"] = 1.0 - moved_prior_loss
+    logs["player_transition_hp_moved_frac"] = average(
+        hp_moved[..., public].astype(jnp.float32).mean(-1), valid_step
+    )
+    if hp_basis is not None:
+        hp_energy = jnp.square(delta @ hp_basis).sum(-1)
+        logs["player_transition_hp_share"] = average(hp_energy, public_mask) / (
+            jnp.maximum(average(sq_delta, public_mask), DYNAMICS_SCALE_FLOOR)
+        )
+    splits = {}
+    if history_field is not None:
+        edges = transition_edges(env_output, history_field)
+        logs["player_transition_edges_mean"] = average(
+            edges.astype(jnp.float32), valid_step
+        )
+        logs["player_transition_edges_p90"] = masked_percentile(
+            edges, valid_step, 0.9
+        ).astype(jnp.float32)
+        reveal = transition_reveals(env_output, matched, next_index)
+        logs["player_transition_reveal_frac"] = average(
+            reveal.astype(jnp.float32), valid_step
+        )
+        splits = dict(
+            short=edges <= TRANSITION_SHORT_EDGES,
+            long=edges >= TRANSITION_LONG_EDGES,
+            reveal=reveal,
+            no_reveal=~reveal,
+        )
+        for name, rows in splits.items():
+            split_loss, _ = normalised(public_mask & rows[..., None])
+            logs[f"player_transition_gain_public_{name}"] = 1.0 - split_loss
+    return loss, logs, splits
+
+
+def _code_perplexity(probs: jax.Array, mask: jax.Array, prefix: str) -> dict:
+    """Usage perplexity of a (T-1, B, G, K) code over the masked
+    transitions: exp(H) of each group's batch marginal, mean and min over
+    groups (min -> 1 is a dead group)."""
+    weights = mask.astype(jnp.float32)[..., None, None]
+    marginal = (probs * weights).sum(axis=(0, 1)) / jnp.maximum(weights.sum(), 1.0)
+    marginal = marginal / jnp.maximum(marginal.sum(-1, keepdims=True), 1e-8)
+    entropy = -(marginal * jnp.log(jnp.maximum(marginal, 1e-8))).sum(-1)
+    perplexity = jnp.exp(entropy)
+    return {
+        f"{prefix}_perplexity_mean": perplexity.mean(),
+        f"{prefix}_perplexity_min": perplexity.min(),
+    }
+
+
+def transition_losses(
+    pred,
+    env_output,
+    acted_mask: jax.Array,
+    value_mask: jax.Array,
+    policy_mask: jax.Array,
+    flat_action_mask: jax.Array,
+    win_returns: jax.Array,
+    v_target: jax.Array,
+    target_log_policy: jax.Array,
+    cat_vf_support: jax.Array,
+    splits: dict[str, jax.Array],
+    config: Porygon2LearnerConfig,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """Every transition-model loss except grounding (2026-09-05,
+    rl/model/transition.py), each on an OBSERVED label at t+1, over the
+    transitions with an action taken at t and a real state at t+1:
+
+    - consistency: per sequence group, the imagined rows' squared error
+      against the real next post-trunk rows normalised by the copy
+      predictor's (`|h_{t+1} - h_t|^2`, per-group scale, the grounding
+      form) -- the copy scores 1, and the zero-init `out_proj` starts
+      there;
+    - the KL halves (DreamerV3): prior <- sg(posterior) at dyn_coef,
+      posterior <- sg(prior) at rep_coef, each clipped below at free_nats
+      per transition (summed over groups);
+    - value: the shared critic on the imagined CLS row, CE to the t+1
+      win_returns; `value_r2` beside `player_value_head_r2` and
+      `value_gap` (|V(imagined) - V_target(real t+1)|, support units --
+      the step-1 probe's number, 0.031 for the mean head);
+    - policy: the shared readout on the imagined rows, forward KL from
+      the sg'd target policy at t+1 over the real next legal set;
+    - the next action mask (per-cell BCE) with its request kind (CE) and
+      done (BCE).
+
+    `player_transition_kl` is the unclipped prior<-posterior KL per
+    transition, THE chance-node number, split by spanned edges and by
+    reveals: a code that carries the unobserved branches reads higher
+    where more happened.
+    """
+    valid_step = acted_mask[:-1] & value_mask[1:]
+    logs = {}
+
+    err = pred.transition_cons_err[:-1].astype(jnp.float32)
+    scale = pred.transition_cons_scale[:-1].astype(jnp.float32)
+    group_ids = SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS]
+    group_losses = []
+    for group in SequenceGroup:
+        if group in LEARNER_ONLY_GROUPS:
+            continue
+        group_mask = valid_step[..., None] & jnp.asarray(group_ids == group)
+        num = average(err, group_mask)
+        group_scale = jax.lax.stop_gradient(average(scale, group_mask))
+        group_loss = num / jnp.maximum(group_scale, DYNAMICS_SCALE_FLOOR)
+        group_losses.append(group_loss)
+        logs[f"player_transition_cons_gain_{group.name.lower()}"] = 1.0 - group_loss
+    loss_cons = jnp.mean(jnp.stack(group_losses))
+
+    prior_logits = pred.transition_prior_logits[:-1]
+    post_logits = pred.transition_post_logits[:-1]
+    if prior_logits.shape[-2] > 0:
+        prior = unimix_probs(prior_logits)
+        post = unimix_probs(post_logits)
+
+        def kl(from_probs, to_probs):
+            return (from_probs * (jnp.log(from_probs) - jnp.log(to_probs))).sum(
+                axis=(-2, -1)
+            )
+
+        kl_dyn = kl(jax.lax.stop_gradient(post), prior)
+        kl_rep = kl(post, jax.lax.stop_gradient(prior))
+        free = config.player_transition_free_nats
+        loss_kl = config.player_transition_dyn_coef * average(
+            jnp.maximum(kl_dyn, free), valid_step
+        ) + config.player_transition_rep_coef * average(
+            jnp.maximum(kl_rep, free), valid_step
+        )
+        kl_value = jax.lax.stop_gradient(kl_dyn)
+        logs["player_transition_kl"] = average(kl_value, valid_step)
+        logs["player_transition_kl_free_frac"] = average(
+            (kl_value < free).astype(jnp.float32), valid_step
+        )
+        for name, rows in splits.items():
+            logs[f"player_transition_kl_{name}"] = average(kl_value, valid_step & rows)
+        logs.update(_code_perplexity(post, valid_step, "player_transition_post"))
+        logs.update(_code_perplexity(prior, valid_step, "player_transition_prior"))
+        logs["player_transition_prior_post_agree"] = average(
+            (prior.argmax(-1) == post.argmax(-1)).all(-1).astype(jnp.float32),
+            valid_step,
+        )
+    else:
+        loss_kl = jnp.zeros((), jnp.float32)
+
+    value_head = pred.transition_value_head
+    next_returns = win_returns[1:].astype(jnp.float32)
+    loss_value = average(
+        optax.softmax_cross_entropy(
+            logits=value_head.logits[:-1].astype(jnp.float32), labels=next_returns
+        ),
+        valid_step,
+    )
+    expectation = value_head.expectation[:-1].astype(jnp.float32)
+    logs["player_transition_value_r2"] = calculate_r2(
+        value_prediction=expectation,
+        value_target=next_returns @ cat_vf_support.astype(jnp.float32),
+        mask=valid_step,
+    )
+    logs["player_transition_value_gap"] = average(
+        jnp.abs(expectation - v_target[1:].astype(jnp.float32)), valid_step
+    )
+
+    next_mask = flat_action_mask[1:]
+    target_policy = masked_policy(target_log_policy[1:], next_mask)
+    target_log = jnp.where(next_mask, target_log_policy[1:].astype(jnp.float32), 0.0)
+    imagined_log = pred.transition_log_policy[:-1].astype(jnp.float32)
+    policy_rows = acted_mask[:-1] & policy_mask[1:]
+    loss_policy = average(
+        (target_policy * (target_log - imagined_log)).sum(-1), policy_rows
+    )
+
+    mask_logits = pred.transition_mask_logits[:-1].astype(jnp.float32)
+    mask_labels = next_mask.astype(jnp.float32)
+    loss_mask = average(
+        optax.sigmoid_binary_cross_entropy(mask_logits, mask_labels).mean(-1),
+        valid_step,
+    )
+    mask_hit = (mask_logits > 0) == next_mask
+    logs["player_transition_mask_acc"] = average(mask_hit.mean(-1), valid_step)
+    logs["player_transition_mask_exact_frac"] = average(
+        mask_hit.all(-1).astype(jnp.float32), valid_step
+    )
+    # Of the legal cells, the share predicted legal: the number "all off"
+    # cannot score on (legal cells are ~3% of the block space).
+    logs["player_transition_mask_recall"] = average(
+        (mask_hit & next_mask).sum(-1) / jnp.maximum(next_mask.sum(-1), 1),
+        valid_step,
+    )
+
+    kind_labels = env_output.info[1:, ..., InfoFeature.INFO_FEATURE__REQUEST_TYPE]
+    kind_logits = pred.transition_kind_logits[:-1].astype(jnp.float32)
+    loss_kind = average(
+        optax.softmax_cross_entropy_with_integer_labels(kind_logits, kind_labels),
+        valid_step,
+    )
+    logs["player_transition_kind_acc"] = average(
+        (kind_logits.argmax(-1) == kind_labels).astype(jnp.float32), valid_step
+    )
+
+    done_labels = env_output.done[1:].astype(jnp.float32)
+    done_logit = pred.transition_done_logit[:-1].astype(jnp.float32)
+    loss_done = average(
+        optax.sigmoid_binary_cross_entropy(done_logit, done_labels), valid_step
+    )
+    logs["player_transition_done_acc"] = average(
+        ((done_logit > 0) == (done_labels > 0)).astype(jnp.float32), valid_step
+    )
+    logs["player_transition_done_frac"] = average(done_labels, valid_step)
+
+    loss = (
+        loss_cons
+        + loss_kl
+        + loss_value
+        + loss_policy
+        + loss_mask
+        + loss_kind
+        + loss_done
+    )
+    logs.update(
+        player_loss_transition_cons=loss_cons,
+        player_loss_transition_kl=loss_kl,
+        player_loss_transition_value=loss_value,
+        player_loss_transition_policy=loss_policy,
+        player_loss_transition_mask=loss_mask,
+        player_loss_transition_kind=loss_kind,
+        player_loss_transition_done=loss_done,
+        player_transition_rows_frac=average(
+            valid_step.astype(jnp.float32), jnp.ones_like(valid_step)
+        ),
+    )
+    return loss, logs
+
+
+def masked_policy(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
+    """f32 probabilities over legal cells: exp(log_policy), illegal cells
+    zeroed, renormalised so the legal mass sums to 1."""
+    policy = jnp.exp(log_policy.astype(jnp.float32)) * legal_mask
+    return policy / jnp.maximum(policy.sum(axis=-1, keepdims=True), 1e-8)
 
 
 def train_step(
@@ -112,6 +554,20 @@ def train_step(
 
     training_logs = {}
 
+    # Directed-message sanity (2026-09-01): fraction of valid history steps
+    # carrying an identified SOURCE row (a real major arg). Expect >> 0.5;
+    # a collapse here says the src identification broke, not the game.
+    history_field = player_history.field
+    step_is_valid = history_field[..., FieldFeature.FIELD_FEATURE__VALID] > 0
+    step_has_src = jax.vmap(major_arg_step_mask, in_axes=(1, 1), out_axes=1)(
+        history_field, player_packed_history.edge_cache
+    )
+    training_logs["player_history_src_frac"] = jnp.where(
+        step_is_valid.sum() > 0,
+        (step_has_src & step_is_valid).sum() / step_is_valid.sum().clip(min=1),
+        0.0,
+    )
+
     target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
     target_actor_ratio = jnp.exp(target_actor_log_ratio)
     # mu/pi_target clipped at 2, telemetry only (player_impact_clip_frac):
@@ -119,24 +575,19 @@ def train_step(
     # reads how far behaviour has drifted from the fast target.
     actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
 
-    # Retrace baseline (targets.py): the TARGET critic's advantage at the
-    # action actually taken. Zero on terminal rows — the reward lands on the
-    # terminal OBSERVATION row, where no action was taken, so that row's
-    # error must stay r - V. Same condition as q_mask below.
-    adv_taken = jnp.take_along_axis(
-        player_target_pred.advantage.astype(jnp.float32),
-        player_actor_action_head.action_index[..., None],
-        axis=-1,
-    ).squeeze(-1)
-    adv_taken = jnp.where(player_valid, adv_taken, 0.0)
-
     # IMPACT-style targets: the fast target network supplies the Retrace
-    # reference policy and value/kl bootstraps.
+    # reference policy and value/kl bootstraps. Under
+    # player_privileged_targets the bootstraps -- and therefore
+    # pg_advantages -- come from the PRIVILEGED head (asymmetric
+    # actor-critic, 2026-09-01); False is bit-for-bit the old estimator.
+    if config.player_privileged_targets:
+        target_value_log_probs = player_target_pred.priv_value_head.log_probs
+    else:
+        target_value_log_probs = player_target_pred.value_head.log_probs
     player_targets, channel_logs = compute_player_targets(
         batch,
-        value_log_probs=player_target_pred.value_head.log_probs,
+        value_log_probs=target_value_log_probs,
         isr=target_actor_ratio,
-        adv_taken=adv_taken,
         config=config,
     )
     training_logs.update(channel_logs)
@@ -183,8 +634,8 @@ def train_step(
                 "plasticity_value_err_reuse_gap": fresh_err - replay_err,
             }
         )
-    action_mask = player_transitions.env_output.action_mask
-    flat_action_mask = action_mask.reshape(*action_mask.shape[:-2], -1)
+    # Already flat: the env mask IS the block-cell vector since 2026-08-31.
+    flat_action_mask = player_transitions.env_output.action_mask
 
     # NashPG advantage: the plain v-trace pass from targets.py, batch-
     # normalised over the surrogate's own rows with masked mean/std (the
@@ -208,80 +659,32 @@ def train_step(
 
     player_targets = promote_map(player_targets, float_dtype)
 
-    # Residual Q critic (Step 3, docs/critic-weakness-analysis.md,
-    # 2026-08-23): Q = sg(V) + A centred under pi, composed in the MODEL
-    # (heads.compose_q) and read here — trained by Huber on the taken cell
-    # against the TD(0) label r + gamma*V_win_target(s'), plain Q^pi, no
-    # trace, no transformed bootstrap. ONE rung since 2026-08-25: the
-    # critic and the policy share an information set, so there is no
-    # privileged sibling to compare against. The policy no longer reads
-    # this stack (2026-08-26): it is the matched-control observer and the
-    # Retrace value baseline.
     v_target = player_target_pred.value_head.expectation.astype(jnp.float32)
     # The critics learn the PLAIN game: NashPG carries its reference KL
     # in the POLICY objective and uses no reward transform
     # (arXiv:2510.18183), so no penalty stream enters the labels or
     # bootstraps.
-    q_target = player_target_pred.q.astype(jnp.float32)
-    adv_target = player_target_pred.advantage.astype(jnp.float32)
-    q_label = compute_q_onestep_targets(batch, v_target, config)
-    q_taken_target = jnp.take_along_axis(
-        q_target, player_actor_action_head.action_index[..., None], axis=-1
-    ).squeeze(-1)
-    # Q(s, a) exists wherever an action was actually taken — including
-    # forced single-option steps (policy_mask excludes those; the Q
-    # regression must not) — but not on terminal rows.
-    q_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
-    # Legal cells whose UNCLIPPED Q = V + A leaves the reward support —
-    # the residual composition has no bin bound, the policy clips; a
-    # rising fraction is the head inflating A beyond what V + outcome
-    # allow (Step 3 panel, expect ~0).
-    training_logs["player_q_saturation_frac"] = average(
-        (jnp.abs(q_target) > 1.0).astype(jnp.float32).sum(axis=-1)
-        / jnp.maximum(flat_action_mask.sum(axis=-1), 1),
-        q_mask,
-    )
-    # The direct "what does the critic think switching is worth"
-    # readout: best legal switch's E[Q] minus best legal move's, over
-    # states offering both. The number the switch-collapse investigation
-    # (Aug 2026) had no way to measure. Since 2026-08-25 the critic's
-    # information set IS the policy's, so the old "grade this on the
-    # deployable rung" caveat is structural rather than a choice.
+    # An action was actually taken here — including on forced single-option
+    # steps, which policy_mask excludes — but not on terminal rows.
+    acted_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
     # One derivation of the switch/move predicates for the whole step —
     # the panels below, critic_outcome_telemetry and the policy-loss
     # telemetry all read THESE, so they cannot drift apart again
     # (telemetry.ActionAxisMasks).
     axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
-    valid_switch = axis.valid_switch
-    valid_move = axis.valid_move
-    best_switch = jnp.max(jnp.where(valid_switch, q_target, -jnp.inf), axis=-1)
-    best_move = jnp.max(jnp.where(valid_move, q_target, -jnp.inf), axis=-1)
-    has_both = axis.has_both
-    training_logs["player_q_switch_move_gap"] = average(
-        jnp.where(has_both, best_switch - best_move, 0.0), q_mask & has_both
-    )
-
-    # Discriminators for a negative gap: starved switch cells vs a
-    # genuine judgement. The Huber loss only trains the taken action's cell,
-    # so a collapsing switch_ratio starves voluntary-switch cells of
-    # gradient while forced replacements (post-faint, no legal move)
-    # keep flowing regardless of policy. Coverage says how bad the
-    # starvation is; the conditional one-step-label means are the
-    # head-independent answer to "do voluntary switches actually lead
-    # to worse outcomes than moves from the same kind of state?".
     taken_switch = axis.taken_switch
     has_move = axis.has_move
-    q_voluntary_switch_mask = q_mask & taken_switch & has_move
-    q_forced_switch_mask = q_mask & taken_switch & jnp.logical_not(has_move)
-    q_move_mask = q_mask & jnp.logical_not(taken_switch)
-    training_logs["player_q_switch_target_frac"] = average(
-        taken_switch.astype(jnp.float32), q_mask
+    voluntary_switch_mask = acted_mask & taken_switch & has_move
+    forced_switch_mask = acted_mask & taken_switch & jnp.logical_not(has_move)
+    move_mask = acted_mask & jnp.logical_not(taken_switch)
+    # Realised behaviour frequency on the axis every collapse formed in
+    # (RENAMED off the player_q_* prefix 2026-08-30 with the last of the Q
+    # machinery — same quantities, fresh wandb continuity by design).
+    training_logs["player_taken_switch_frac"] = average(
+        taken_switch.astype(jnp.float32), acted_mask
     )
-    training_logs["player_q_voluntary_switch_target_frac"] = average(
-        (taken_switch & has_move).astype(jnp.float32), q_mask
-    )
-    training_logs["player_q_target_voluntary_switch"] = average(
-        q_label, q_voluntary_switch_mask
+    training_logs["player_taken_voluntary_switch_frac"] = average(
+        (taken_switch & has_move).astype(jnp.float32), acted_mask
     )
 
     # Off-policy attenuation audit, split by the TAKEN modality. isr =
@@ -300,197 +703,35 @@ def train_step(
     # mean (isr is heavy-tailed on the upside).
     isr_f32 = target_actor_ratio.astype(jnp.float32)
     training_logs["player_isr_switch_voluntary"] = average(
-        isr_f32, q_voluntary_switch_mask
+        isr_f32, voluntary_switch_mask
     )
-    training_logs["player_isr_switch_forced"] = average(isr_f32, q_forced_switch_mask)
-    training_logs["player_isr_move"] = average(isr_f32, q_move_mask)
+    training_logs["player_isr_switch_forced"] = average(isr_f32, forced_switch_mask)
+    training_logs["player_isr_move"] = average(isr_f32, move_mask)
     training_logs["player_isr_below1_switch_voluntary"] = average(
-        (isr_f32 < 1.0).astype(jnp.float32), q_voluntary_switch_mask
+        (isr_f32 < 1.0).astype(jnp.float32), voluntary_switch_mask
     )
     training_logs["player_isr_below1_move"] = average(
-        (isr_f32 < 1.0).astype(jnp.float32), q_move_mask
+        (isr_f32 < 1.0).astype(jnp.float32), move_mask
     )
-    # How much action-conditional baseline the advantage head is actually
-    # supplying to the Retrace errors above. At zero the value target is
-    # bit-identical to the old v-trace one, so a flat ~0 here means the
-    # mechanism is inert and should be reverted rather than kept.
-    adv_taken_abs = jnp.abs(adv_taken)
-    training_logs["player_retrace_baseline_abs"] = average(adv_taken_abs, q_mask)
-    training_logs["player_retrace_baseline_switch"] = average(
-        adv_taken_abs, q_voluntary_switch_mask
-    )
-    training_logs["player_retrace_baseline_move"] = average(adv_taken_abs, q_move_mask)
-    training_logs["player_q_target_move"] = average(q_label, q_move_mask & has_both)
 
-    # Pivotal-state decision panel (2026-08-19). A negative MEAN gap is
-    # the expected sign under correct play — switching spends a turn, so
-    # most both-modality states correctly favour the move, and the
-    # state-averaged statistics above are nearly blind to the collapse
-    # failure mode. The signal lives in the tail: the states where the
-    # critic actually prefers the switch. Conditioning on the STATE
-    # (critic flag) rather than the taken action also dodges the
-    # chosen-switch selection bias that muddied the Aug-15 crossover
-    # reading (a 2% switch mass keeps only the policy's most confident
-    # pivots, so "chosen switches outperform moves" proves little).
-    # Collapse signature: pivotal_frac bleeding to ~0 (critic stops
-    # flagging any state as switch-worthy) or pi_switch_mass /
-    # taken_switch_frac cratering on pivotal states while pivotal_frac
-    # holds (policy ignoring the critic's flags).
-    pivotal_mask = q_mask & has_both & (best_switch > best_move)
-    training_logs["player_q_pivotal_frac"] = average(
-        (best_switch > best_move).astype(jnp.float32), q_mask & has_both
-    )
     if not isinstance(batch.game_outcome, tuple):
-        # Step-1 panels (docs/critic-weakness-analysis.md). Since Step 3
-        # the one-step label IS the Q label; the outcome/onestep split
-        # of the label-variance panels is kept as the record of why.
+        # Step-1 panels (docs/critic-weakness-analysis.md): the realised-
+        # outcome instruments, a property of the games, not of any critic.
         training_logs.update(
             critic_outcome_telemetry(
                 game_outcome=batch.game_outcome,
                 game_length=batch.game_length,
                 game_step_offset=batch.game_step_offset,
                 v_target=v_target,
-                onestep_label=q_label,
-                q_label=q_label,
-                q_taken=q_taken_target,
-                q_all=q_target,
                 flat_action_mask=flat_action_mask,
                 masks=axis,
-                q_mask=q_mask,
+                acted_mask=acted_mask,
                 value_mask=value_mask,
             )
         )
-    pi_target = (
-        jnp.exp(player_target_pred.action_head.log_policy.astype(jnp.float32))
-        * flat_action_mask
-    )
-    pi_target = pi_target / jnp.maximum(pi_target.sum(axis=-1, keepdims=True), 1e-8)
-    # == v_target by the pi-centring in heads.compose_q (kept as the variance baseline).
-    q_v_exp = (pi_target * q_target).sum(axis=-1)
-    training_logs["player_q_pivotal_pi_switch_mass"] = average(
-        (pi_target * valid_switch).sum(axis=-1), pivotal_mask
-    )
-    training_logs["player_q_pivotal_taken_switch_frac"] = average(
-        taken_switch.astype(jnp.float32), pivotal_mask
-    )
-    # Within-class return split: same critic-flagged state class,
-    # different action — the closest available reading of "are switches
-    # better where they matter". Empty slices log 0 (average clips the
-    # denominator), so read alongside pivotal_frac/taken_switch_frac.
-    training_logs["player_q_pivotal_ret_switch"] = average(
-        q_label, pivotal_mask & taken_switch
-    )
-    training_logs["player_q_pivotal_ret_stay"] = average(
-        q_label, pivotal_mask & jnp.logical_not(taken_switch)
-    )
-
-    # Loss-free critic-quality diagnostics, on permanently: action-value
-    # spread (is there anything to prefer?) and calibration of the
-    # taken-cell readout against its own realised one-step labels.
-    #
-    # pi_target computed above (pivotal-state panel). The MEAN
-    # undersells the spread by construction when action-value spread
-    # concentrates in few high-leverage states (which is how this game
-    # works) — the p90 is the honest readout.
-    qvar_state = (pi_target * jnp.square(q_target - q_v_exp[..., None])).sum(axis=-1)
-    training_logs["player_q_action_var"] = average(qvar_state, q_mask)
-    training_logs["player_q_action_var_p90"] = jnp.nanquantile(
-        jnp.where(q_mask, qvar_state, jnp.nan), 0.9
-    )
-    # π-free counterpart: uniform-over-legal variance of the same
-    # per-cell Q means. The π-weighted qvar above is squashed by a
-    # collapsed policy regardless of what the critic believes (94%
-    # move mass hides any spread on the move↔switch axis), so it
-    # can't distinguish "critic is action-flat" from "critic is
-    # confidently anti-switch" — opposite remedies (head capacity /
-    # supervision vs nothing). Read the pair together: uniform ≫
-    # π-weighted means the spread lives on actions the policy has
-    # abandoned; both ≈ 0 means the critic genuinely can't tell
-    # actions apart.
-    n_legal = jnp.maximum(flat_action_mask.sum(axis=-1), 1)
-    q_mean_uniform = jnp.where(flat_action_mask, q_target, 0.0).sum(axis=-1) / n_legal
-    qvar_uniform = (
-        jnp.where(
-            flat_action_mask,
-            jnp.square(q_target - q_mean_uniform[..., None]),
-            0.0,
-        ).sum(axis=-1)
-        / n_legal
-    )
-    training_logs["player_q_action_var_uniform"] = average(qvar_uniform, q_mask)
-    training_logs["player_q_action_var_uniform_p90"] = jnp.nanquantile(
-        jnp.where(q_mask, qvar_uniform, jnp.nan), 0.9
-    )
-
-    # Within- vs between-MODALITY split of the uniform spread (2026-08-24,
-    # docs/critic-weakness-analysis.md). The head composes per-cell Q as
-    # macro[modality] + gated micro, so the uniform variance is exactly
-    # between (what the per-modality macro can carry: switch-vs-move) +
-    # within (which move / which reserve — only the pointer micro grid
-    # can carry it). 70mhptdc read uniform ≈ p(1-p)·gap² for the whole
-    # run, i.e. the critic resolved one bit; this pair says so directly.
-    # One rung since 2026-08-25.
-    def modality_var_split(q_all):
-        cell_mean = modality_means(q_all, flat_action_mask)
-        within = jnp.where(flat_action_mask, jnp.square(q_all - cell_mean), 0.0)
-        between = jnp.where(
-            flat_action_mask, jnp.square(cell_mean - q_mean_uniform[..., None]), 0.0
-        )
-        return within.sum(axis=-1) / n_legal, between.sum(axis=-1) / n_legal
-
-    q_within, q_between = modality_var_split(q_target)
-    training_logs["player_q_action_var_within_modality"] = average(q_within, q_mask)
-    training_logs["player_q_action_var_within_modality_p90"] = jnp.nanquantile(
-        jnp.where(q_mask, q_within, jnp.nan), 0.9
-    )
-    training_logs["player_q_action_var_between_modality"] = average(q_between, q_mask)
-
-    # Advantage-axis scale, read off A directly (2026-08-25). Every panel
-    # above is a Q spread and therefore V-invariant already; these name the
-    # quantity honestly and, crucially, SPLIT IT BY SLOT GROUP — the readout
-    # that says whether each group's now-separate parameters are carrying
-    # signal. Before the separation the three groups shared one projection
-    # and the target group's only parameter was still bitwise zero at 84.9k.
-    #
-    # There is deliberately no "centring term" panel: A is pi-centred inside
-    # the model (heads.compose_q), so E_pi[A] = 0 by construction and the
-    # old "is the head leaking state level into A" question is answered
-    # structurally rather than measured (tests/test_q_identity.py pins it).
-    adv_sq = jnp.square(adv_target)
-    training_logs["player_adv_rms"] = average(
-        jnp.sqrt(jnp.where(flat_action_mask, adv_sq, 0.0).sum(axis=-1) / n_legal),
-        q_mask,
-    )
-    for gid, gname in enumerate(("move", "switch", "target")):
-        in_group = flat_action_mask & (jnp.asarray(FLAT_SRC_GROUP_MASK) == gid)
-        cnt = in_group.sum(axis=-1)
-        training_logs[f"player_adv_rms_{gname}"] = average(
-            jnp.sqrt(
-                jnp.where(in_group, adv_sq, 0.0).sum(axis=-1) / jnp.maximum(cnt, 1)
-            ),
-            q_mask & (cnt > 0),
-        )
     if not isinstance(batch.reuse_count, tuple):
         fresh_cols = batch.reuse_count[0] == 0
-        replay_cols = ~fresh_cols
-
-        def q_calibration_r2(cols):
-            # NaN (not 0.0) on an empty slice: under replay ratio 8 a
-            # batch rarely holds a fresh chunk, and the 0.0 read as a
-            # flat-zero panel for a whole run (2026-08-23).
-            m = q_mask & cols[None, :]
-            return jnp.where(
-                m.sum() >= 2,
-                calculate_r2(
-                    value_prediction=q_taken_target,
-                    value_target=q_label,
-                    mask=m,
-                ),
-                jnp.nan,
-            )
-
-        training_logs["player_q_calibration_r2_fresh"] = q_calibration_r2(fresh_cols)
-        training_logs["player_q_calibration_r2_replay"] = q_calibration_r2(replay_cols)
+        ~fresh_cols
         vm_fresh = value_mask & fresh_cols[None, :]
         training_logs["player_value_r2_fresh"] = jnp.where(
             vm_fresh.any(),
@@ -532,6 +773,109 @@ def train_step(
             ),
             value_mask,
         )
+        # The privileged critic: SAME labels, SAME mask -- the deployable
+        # head above stays trained unchanged as the matched control, and
+        # the priv-vs-deploy R2 pair is the discriminator the 2026-08-25
+        # falsification never had.
+        learner_priv_value_head = learner_player_pred.priv_value_head
+        loss_v_win_priv = average(
+            optax.softmax_cross_entropy(
+                logits=learner_priv_value_head.logits.astype(jnp.float32),
+                labels=player_targets.win_returns.astype(jnp.float32),
+            ),
+            value_mask,
+        )
+        # Belief-state shaping: CE from each matched public row's belief
+        # logits to the STOPPED hidden-token code (the code net trains
+        # through the privileged value CE, never through its own
+        # prediction; the label is its reading of the tokens the public
+        # row does NOT show, so the CE cannot be paid by re-reading the
+        # row -- 2026-09-05, after the revealed-row control caught the
+        # full-sheet label: margin 0.20 -> 0.017). Mean over groups so the
+        # scale is K-independent; masked to rows where the alignment
+        # holds, the mon still has a hidden token, AND the step counts
+        # for value.
+        belief_labels = jax.lax.stop_gradient(
+            learner_player_pred.hidden_code.astype(jnp.float32)
+        )
+        belief_ce = optax.softmax_cross_entropy(
+            logits=learner_player_pred.belief_logits.astype(jnp.float32),
+            labels=belief_labels,
+        ).mean(axis=-1)
+        belief_mask = (
+            learner_player_pred.belief_matched
+            & learner_player_pred.belief_hidden_any
+            & value_mask[..., None]
+        )
+        loss_belief = average(belief_ce, belief_mask)
+        belief_logs = belief_accuracy_logs(
+            learner_player_pred.belief_logits, belief_labels, belief_mask
+        )
+        # The species-only matched control: the same CE on the same labels
+        # and rows from a table keyed on the public row's species token.
+        # `player_belief_gain_over_species` is what the belief head reads
+        # from the public row BEYOND its species; ~0 says it is a lookup.
+        species_ce = optax.softmax_cross_entropy(
+            logits=learner_player_pred.species_belief_logits.astype(jnp.float32),
+            labels=belief_labels,
+        ).mean(axis=-1)
+        loss_species_belief = average(species_ce, belief_mask)
+        species_logs = belief_accuracy_logs(
+            learner_player_pred.species_belief_logits,
+            belief_labels,
+            belief_mask,
+            prefix="player_species_belief",
+        )
+        # The revealed-row matched control: the same CE again from an MLP
+        # over the matched mon's own pre-trunk public row (stop-gradient),
+        # so it scores everything that row says in isolation.
+        # `player_belief_context_margin` = belief minus this: what the head
+        # infers from CONTEXT (history, the other rows); ~0 says the head
+        # only reads the mon's own revealed tokens.
+        revealed_ce = optax.softmax_cross_entropy(
+            logits=learner_player_pred.revealed_belief_logits.astype(jnp.float32),
+            labels=belief_labels,
+        ).mean(axis=-1)
+        loss_revealed_belief = average(revealed_ce, belief_mask)
+        revealed_logs = belief_accuracy_logs(
+            learner_player_pred.revealed_belief_logits,
+            belief_labels,
+            belief_mask,
+            prefix="player_revealed_belief",
+        )
+
+        # The latent transition model (rl/model/transition.py): grounding
+        # against the pre-trunk label -- `player_target_pred`'s copy,
+        # computed outside this fn, so it carries no gradient -- and every
+        # other head against its observed t+1 label. The target and reg
+        # forwards' own transition leaves are never read, so XLA drops
+        # those two passes.
+        loss_ground, ground_logs, transition_splits = dynamics_losses(
+            learner_player_pred.transition_ground,
+            learner_player_pred.transition_ground_prior,
+            player_target_pred.dynamics_target,
+            player_transitions.env_output,
+            acted_mask,
+            value_mask,
+            hp_basis=dynamics_hp_basis(player_state.target_params),
+            history_field=history_field,
+        )
+        loss_transition_rest, transition_logs = transition_losses(
+            learner_player_pred,
+            player_transitions.env_output,
+            acted_mask,
+            value_mask,
+            policy_mask,
+            flat_action_mask,
+            player_targets.win_returns,
+            v_target,
+            player_target_pred.action_head.log_policy,
+            cat_vf_support,
+            transition_splits,
+            config,
+        )
+        loss_transition = loss_ground + loss_transition_rest
+        transition_logs["player_loss_transition"] = loss_transition
 
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
@@ -562,48 +906,6 @@ def train_step(
         normalized_modality_entropy = average(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
-
-        # (player_commit_cov removed 2026-08-14 at the user's request: as
-        # a correlation with the advantages the policy itself generated,
-        # it largely measured what it was correlated with. With the
-        # adaptivity controller also gone, modality collapse has NO
-        # automated backstop — watch player_normalized_modality_entropy
-        # on the dashboard; 1330 died at 0.08 on that axis.)
-
-        # Residual Q loss: Huber on the taken cell against the one-step
-        # label. Q = sg(V) + A is composed in the MODEL (heads.compose_q),
-        # so this only reads it.
-        #
-        # The state route is closed — every state-level degree of freedom
-        # sits in V and this loss cannot move it — but WHY changed on
-        # 2026-08-25 and the new reason is the thing to protect. It used to
-        # hold for free: the composition used the TARGET net's V, which is
-        # not a differentiated leaf. It now holds because compose_q
-        # stop-gradients the learner's OWN V explicitly. Delete that
-        # stop_gradient and this loss silently starts fitting the label
-        # through the state route instead of the action axis — which the
-        # Step-6 probe in docs/critic-weakness-analysis.md showed it will
-        # do, reaching the label-entropy floor while within-state action
-        # variance FELL 5x. tests/test_q_identity.py pins it.
-        q_taken_pred = jnp.take_along_axis(
-            learner_player_pred.q.astype(jnp.float32),
-            player_actor_action_head.action_index[..., None],
-            axis=-1,
-        ).squeeze(-1)
-        q_err_rows = optax.huber_loss(q_taken_pred, q_label, delta=1.0)
-        loss_q = average(q_err_rows, q_mask)
-        q_fit_logs = q_fit_telemetry(
-            q_err_rows=q_err_rows,
-            q_taken_pred=q_taken_pred,
-            q_label=q_label,
-            q_mask=q_mask,
-            context_masks={
-                "move": q_move_mask,
-                "forced": q_forced_switch_mask,
-                "voluntary": q_voluntary_switch_mask,
-            },
-        )
-
         # Real-choice rows on the stay/switch axis: both a switch and a
         # a MOVE are legal. This is the slice the collapse forms in, and
         # every policy-modality readout below is scoped to it.
@@ -618,21 +920,10 @@ def train_step(
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # JOINT PPO surrogate (2026-08-28, reverting the 2026-08-27
-        # per-level split): one pi/mu ratio on the taken action, one clip.
-        # The factorised-PPO lineage answered its own gate — two trust
-        # regions did not slow the collapse (type_scale_switch trained
-        # NEGATIVE, prob_switch 0.131 -> 0.02 by 77k) — and the 77638 BR
-        # probe located the deficit in evidence supply, not trust-region
-        # geometry. The per-level ENTROPY terms below STAY: they are the
-        # axis handles the entropy-floor controllers act on, and their row
-        # masks (macro >= 2 live modalities, micro >= 2 legal cells in the
-        # taken modality) are theirs now.
+        # JOINT surrogate: one pi/mu ratio on the taken action (the
+        # 2026-08-27 per-level split is reverted — 2026-08-28 ledger).
         learner_log_policy = learner_action_head.log_policy
-        pi_learner = jnp.exp(learner_log_policy.astype(jnp.float32)) * flat_action_mask
-        pi_learner = pi_learner / jnp.maximum(
-            pi_learner.sum(axis=-1, keepdims=True), 1e-8
-        )
+        pi_learner = masked_policy(learner_log_policy, flat_action_mask)
 
         macro_valid = policy_mask & (axis.num_legal_modalities >= 2)
         micro_valid = policy_mask & (axis.taken_modality_count >= 2)
@@ -644,29 +935,18 @@ def train_step(
             threshold=config.player_ppo_clip,
             objective=config.player_pg_objective,
         )
-        # Per-level entropy (2026-08-27, the Oct–Nov 2025 form): unit-weight
-        # H(macro) + H(micro | taken modality), each masked-averaged over
-        # its OWN row set. The joint entropy this replaces weighted the
-        # within-switch term by pi_macro(switch) — defunding the which-axis
-        # exactly as the modality shrank — and offered one budget the
-        # policy could pay wherever entropy was cheapest. Unit weights are
-        # per-axis budgets; the masked average is inverse-frequency
-        # amplification for rare taken modalities; and as a bonus (not a
-        # target) it is a temperature real advantages beat.
+        # Per-level entropies (macro = modality marginal, micro = within
+        # the taken modality) are OBSERVERS only — the collapse instruments
+        # the acceptance gates read. The regulariser itself is NashPG's:
+        # the plain joint entropy bonus at the static player_ent_coef
+        # (2026-08-30; the per-axis dual temperatures are removed).
         h_macro_rows, h_micro_rows = factorised_entropies(
             learner_log_policy, axis.taken_modality, flat_action_mask
         )
         entropy_macro = average(h_macro_rows, macro_valid)
         entropy_micro_taken = average(h_micro_rows, micro_valid)
-        # Entropy floor (2026-08-28): each axis's temperature is a dual
-        # variable off the train state (log-space; dual-ascent update after
-        # the grad step, loss.entropy_floor_step), holding its NORMALISED
-        # entropy at config.player_ent_target_{macro,micro}. Read here, not
-        # differentiated — the alphas are state leaves, not params.
-        alpha_macro = jnp.exp(player_state.log_ent_alpha_macro)
-        alpha_micro = jnp.exp(player_state.log_ent_alpha_micro)
-        loss_entropy = -(
-            alpha_macro * entropy_macro + alpha_micro * entropy_micro_taken
+        loss_entropy = -average(
+            learner_action_head.entropy.astype(jnp.float32), policy_mask
         )
         # Magnet: full-distribution KL(pi || pi_reg) per row —
         # differentiated through the learner side (reg_log_policy comes
@@ -675,13 +955,20 @@ def train_step(
             learner_log_policy, reg_log_policy, flat_action_mask
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
-        # The support anchor family (forward KL toward a temperature-raised
-        # / advantage-tilted reference, phases 1-4) was REMOVED 2026-08-27:
-        # every mass-restoring force either erased within-modality
-        # discrimination or taught the mean switch's (losing) value — see
-        # the CLAUDE.md removal ledger. The factorised objective below is
-        # the replacement: the axes get their own trust regions and their
-        # own entropy budgets, and mass is left to follow value.
+
+        # The zero-avoiding term, on the MODALITY MARGINAL (2026-08-31):
+        # forward KL from uniform over live modalities, modality-level
+        # gradient exactly pi_m - 1/M. It is the only force in this bracket
+        # that is not pi-prefactored, so it is the only one still acting on
+        # a modality the policy has abandoned -- and unlike the row form it
+        # replaced (the sp75c lesson) the loss is IDENTICALLY invariant to
+        # within-modality redistribution, so it restores WHETHER-to-switch
+        # mass without flattening WHICH-move-to-pick. The constant reference
+        # still cannot be ratcheted flat or invert on the Q^pi sign.
+        loss_modality_kl = average(
+            uniform_kl_modalities(learner_log_policy, flat_action_mask),
+            policy_mask,
+        )
 
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
@@ -693,26 +980,18 @@ def train_step(
         pg_row = switch_choice_mask[..., None]
         pg_switch_cells = flat_action_mask & switch_actions & pg_row
         pg_move_cells = flat_action_mask & jnp.logical_not(switch_actions) & pg_row
-        abs_adv = jnp.abs(adv_target)
 
         def modality_ratio(numerator, denominator):
             return numerator / jnp.maximum(denominator, 1e-8)
 
         policy_prob_switch = average(pi_learner, pg_switch_cells)
         policy_prob_move = average(pi_learner, pg_move_cells)
-        policy_absadv_switch = average(abs_adv, pg_switch_cells)
-        policy_absadv_move = average(abs_adv, pg_move_cells)
 
         pg_logs = dict(
             player_loss_pg=loss_pg,
             player_loss_entropy=loss_entropy,
             player_entropy_macro=entropy_macro,
             player_entropy_micro_taken=entropy_micro_taken,
-            # Row occupancy per axis: consumed by the dual update outside
-            # the closure (an axis with no rows this batch freezes its
-            # alpha — average() reads 0.0 there, a spurious full deficit).
-            player_ent_rows_macro=macro_valid.sum().astype(jnp.float32),
-            player_ent_rows_micro=micro_valid.sum().astype(jnp.float32),
             player_ppo_clip_frac=clip_fraction(
                 policy_ratios=learner_actor_ratio,
                 valid=policy_mask,
@@ -723,80 +1002,99 @@ def train_step(
             player_policy_prob_ratio=modality_ratio(
                 policy_prob_switch, policy_prob_move
             ),
-            player_policy_absadv_switch=policy_absadv_switch,
-            player_policy_absadv_move=policy_absadv_move,
-            player_policy_absadv_ratio=modality_ratio(
-                policy_absadv_switch, policy_absadv_move
-            ),
             # KL(pi_learner || pi_reg) per state — the magnet loss's own
             # value (name kept across the transition). Sawtooth: drifts
             # up against the FROZEN reference, drops to ~0 at each snap;
             # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
             player_ref_kl=loss_mag,
+            player_loss_modality_kl=loss_modality_kl,
         )
-
-        # Calibration by context. The contexts exist to interpret the
-        # switch/move gap, so they grade the same Q — there has been one
-        # rung since 2026-08-25. Forced switches stay data-rich
-        # through a switch collapse; voluntary ones starve. Calibrated
-        # forced + degraded voluntary = starvation artefact; both
-        # calibrated with the gap still negative = the critic means it
-        # (0.0 sentinel when a batch has no steps in a context).
-        def q_context_r2(context_mask):
-            return jnp.where(
-                context_mask.any(),
-                calculate_r2(
-                    value_prediction=q_taken_pred,
-                    value_target=q_label,
-                    mask=context_mask,
-                ),
-                0.0,
-            )
-
-        q_logs = dict(
-            player_loss_q=loss_q,
-            player_q_r2=calculate_r2(
-                value_prediction=q_taken_pred,
-                value_target=q_label,
-                mask=q_mask,
-            ),
-            player_q_r2_move=q_context_r2(q_move_mask),
-            player_q_r2_switch_forced=q_context_r2(q_forced_switch_mask),
-            player_q_r2_switch_voluntary=q_context_r2(q_voluntary_switch_mask),
-            **q_fit_logs,
-        )
-        # pg bracket + (v + q) + kl.
+        # pg bracket + v + kl.
         loss = (
-            # pg: the NashPG bracket — the PPO surrogate is the only term
-            # that moves the action logits toward return; the entropy
-            # bonus and the magnet sit inside the bracket so one
-            # coefficient scales improvement and regularisation together.
+            # pg: the NashPG bracket — surrogate + ent_coef * (-H) +
+            # mag_coef * KL(pi || pi_reg), one coefficient scaling
+            # improvement and regularisation together — plus the
+            # zero-avoiding KL, which is the one deliberate divergence from
+            # the reference actor loss (the reference carries no
+            # mass-independent restorer in either mag_divergence mode).
             config.player_pg_coef
             * (
-                # loss_entropy carries the per-axis dual temperatures
-                # (player_ent_coef is their INIT, not a live multiplier).
                 loss_pg
-                + loss_entropy
+                + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
+                + config.player_uniform_kl_coef * loss_modality_kl
             )
-            # v + q: the critic stack — one V on the deploy-time
-            # information set, one all-action advantage over it (the
-            # policy no longer reads it: matched-control observer and
-            # Retrace baseline).
-            + (
-                config.player_value_head_loss_coef * loss_v_win
-                + config.player_q_coef * loss_q
-            )
+            # v: one critic, on the deploy-time information set. The
+            # all-action advantage that sat beside it retired 2026-08-29 --
+            # the policy stopped reading it at the NashPG switch, which left
+            # it a matched control for an architecture that is now gone.
+            + config.player_value_head_loss_coef * loss_v_win
+            + config.player_priv_value_head_loss_coef * loss_v_win_priv
+            + config.player_belief_coef * loss_belief
+            + config.player_dynamics_coef * loss_transition
+            # The species control, unscaled: its only param is the table
+            # (an integer input has no gradient), and its gradient norm is
+            # O(0.05) against a total of ~10, so the global clip is unmoved.
+            + loss_species_belief
+            # The revealed-row control, likewise unscaled: its input is under
+            # stop_gradient, so only its own MLP receives the gradient.
+            + loss_revealed_belief
             # kl: trust region against the behaviour policy — the
             # replay-staleness guard alongside the PPO clip.
             + config.player_kl_loss_coef * loss_actor_backward_kl
         )
 
         return loss, dict(
-            **q_logs,
             **pg_logs,
             player_loss_v_win=loss_v_win,
+            player_loss_v_win_priv=loss_v_win_priv,
+            player_loss_belief=loss_belief,
+            **belief_logs,
+            player_loss_species_belief=loss_species_belief,
+            **species_logs,
+            player_belief_gain_over_species=belief_logs["player_belief_accuracy"]
+            - species_logs["player_species_belief_accuracy"],
+            player_loss_revealed_belief=loss_revealed_belief,
+            **revealed_logs,
+            player_belief_context_margin=belief_logs["player_belief_accuracy"]
+            - revealed_logs["player_revealed_belief_accuracy"],
+            player_belief_matched_frac=average(
+                learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
+                value_mask,
+            ),
+            # Of the matched mons, the share still carrying a hidden token
+            # (the belief loss's population); 1 - this is fully-revealed.
+            player_belief_hidden_frac=average(
+                learner_player_pred.belief_hidden_any.astype(jnp.float32),
+                learner_player_pred.belief_matched & value_mask[..., None],
+            ),
+            **ground_logs,
+            **transition_logs,
+            # Trunk over-smoothing (cosine up / participation down = rows
+            # converging); the offline per-block twin is
+            # rl/offline/trunk_homogeneity.py.
+            player_trunk_row_cosine=average(
+                learner_player_pred.trunk_row_cosine, value_mask
+            ),
+            player_trunk_row_participation=average(
+                learner_player_pred.trunk_row_participation, value_mask
+            ),
+            # The history encoder's step GAT and write gate
+            # (history_encoder.history_step_stats): per-trajectory scalars
+            # broadcast over T, so this is the valid-step-weighted batch mean.
+            player_history_step_attn_entropy=average(
+                learner_player_pred.history_step_attn_entropy, value_mask
+            ),
+            player_history_step_attn_to_src=average(
+                learner_player_pred.history_step_attn_to_src, value_mask
+            ),
+            player_history_step_attn_to_src_uniform=average(
+                learner_player_pred.history_step_attn_to_src_uniform, value_mask
+            ),
+            player_history_gate_mean=average(
+                learner_player_pred.history_gate_mean, value_mask
+            ),
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
@@ -836,12 +1134,44 @@ def train_step(
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=value_mask,
             ),
+            # THE discriminator for the privileged premise: this pair on one
+            # panel. The 2026-08-25 rung read WORSE than the deployable head
+            # and was deleted for it; priv < deploy sustained past 30k is
+            # this pass's pre-registered abort.
+            player_priv_value_head_r2=calculate_r2(
+                value_prediction=learner_priv_value_head.expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            # Mean absolute priv-minus-deploy expectation gap: the "worth
+            # 0.005 value units" number, re-measured live.
+            player_priv_value_gap=average(
+                jnp.abs(
+                    learner_priv_value_head.expectation - learner_value_head.expectation
+                ),
+                value_mask,
+            ),
             player_nll_sum=(
                 batch.player_transitions.agent_output.actor_output.action_head.log_prob
                 * policy_mask
             )
             .sum(axis=0)
             .mean(),
+            **code_usage_logs(
+                learner_player_pred.opp_code,
+                batch.player_transitions.env_output.opp_private_team,
+                value_mask,
+            ),
+            # The label's own usage over the rows the belief loss scores:
+            # a hidden code pinned at perplexity 1 is a dead label, not a
+            # solved belief.
+            **code_usage_logs(
+                learner_player_pred.hidden_code,
+                batch.player_transitions.env_output.opp_private_team,
+                value_mask,
+                row_mask=belief_mask,
+                prefix="player_hidden_code",
+            ),
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
@@ -865,35 +1195,6 @@ def train_step(
             config.player_ema_update_rate,
         ),
     )
-    # Entropy-floor dual update (2026-08-28): BEFORE the finite gate below,
-    # so a poisoned batch reverts the alphas along with everything else.
-    # Target 0.0 is that axis's controller OFF — the alpha stays at its
-    # player_ent_coef init, which is exactly the static-coefficient
-    # behaviour (a static python branch: config is a jit-static arg).
-    if config.player_ent_target_macro > 0.0:
-        player_state = player_state.replace(
-            log_ent_alpha_macro=entropy_floor_step(
-                player_state.log_ent_alpha_macro,
-                target=config.player_ent_target_macro,
-                entropy_value=player_logs["player_entropy_macro"],
-                rows=player_logs["player_ent_rows_macro"],
-                alpha_lr=config.player_ent_alpha_lr,
-                alpha_min=config.player_ent_alpha_min,
-                alpha_max=config.player_ent_alpha_max,
-            )
-        )
-    if config.player_ent_target_micro > 0.0:
-        player_state = player_state.replace(
-            log_ent_alpha_micro=entropy_floor_step(
-                player_state.log_ent_alpha_micro,
-                target=config.player_ent_target_micro,
-                entropy_value=player_logs["player_entropy_micro_taken"],
-                rows=player_logs["player_ent_rows_micro"],
-                alpha_lr=config.player_ent_alpha_lr,
-                alpha_min=config.player_ent_alpha_min,
-                alpha_max=config.player_ent_alpha_max,
-            )
-        )
     # A non-finite loss or gradient must never reach the params or the EMA
     # scalars: one poisoned update is permanent, and the next periodic save
     # then overwrites the last good checkpoint with it. Keep the previous
@@ -913,11 +1214,6 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            # Post-gate dual temperatures: pinned at player_ent_alpha_max =
-            # the floor is infeasible against the PG at this bound (abort
-            # instrument); back at min = the axis holds itself for free.
-            player_ent_alpha_macro=jnp.exp(player_state.log_ent_alpha_macro),
-            player_ent_alpha_micro=jnp.exp(player_state.log_ent_alpha_micro),
             # Q-head learning readouts: the three-scalar micro gate, the
             # drift-from-init of the zero-init out layers and the pointer
             # kernels, and per-subtree grad norms (pre-clip). A micro

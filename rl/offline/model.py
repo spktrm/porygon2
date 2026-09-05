@@ -9,7 +9,6 @@ from ml_collections import ConfigDict
 from rl.environment.data import NUM_MOVES
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.features_pb2 import InfoFeature
-from rl.model.config import get_player_model_config
 from rl.model.encoder import Encoder
 from rl.model.heads import CategoricalValueHeadOutput
 from rl.model.modules import (
@@ -277,33 +276,11 @@ class Porygon2OfflineCritic(nn.Module):
         return mixed[:, :-1, :], mixed[:, -1, :]
 
     def _history_tokens(self, actor_input: PlayerActorInput):
-        slot_states, field_state, node_states = self.encoder.encode_history(
+        slot_states, field_state, node_states, _ = self.encoder.encode_history(
             actor_input.env, actor_input.packed_history, actor_input.history
         )
         return self._tokens_from_states(
             node_states, slot_states, field_state, self._token_valid(actor_input)
-        )
-
-    def _history_tokens_with_announced(self, actor_input: PlayerActorInput):
-        """Realised AND announced token banks, per request. The announced
-        bank (Φ_ann) runs the SAME modules end to end — cross-read,
-        relational rounds, side-pooling, antisymmetric readout — over the
-        announced recurrent state (pre-turn state + outcome-masked turn
-        messages) and pre-turn node snapshots, so mirror antisymmetry of
-        Φ_ann follows automatically and no new parameters exist."""
-        states, announced = self.encoder.encode_history_with_announced(
-            actor_input.env, actor_input.packed_history, actor_input.history
-        )
-        slot_states, field_state, node_states = states
-        ann_slot_states, ann_field_state, pre_node_states = announced
-        token_valid = self._token_valid(actor_input)
-        return (
-            self._tokens_from_states(
-                node_states, slot_states, field_state, token_valid
-            ),
-            self._tokens_from_states(
-                pre_node_states, ann_slot_states, ann_field_state, token_valid
-            ),
         )
 
     def _outcome(
@@ -375,53 +352,3 @@ class Porygon2OfflineCritic(nn.Module):
                 revealed_set=self.set_head(tokens),
             ),
         )
-
-    def announced(
-        self, actor_input: PlayerActorInput
-    ) -> tuple[CategoricalValueHeadOutput, CategoricalValueHeadOutput]:
-        """Consumption entry point for the skill/luck decomposition and
-        dice-excised shaping: (Φ, Φ_ann) per step, both through the SAME
-        antisymmetric readout. Φ_ann(t) is the margin belief given the
-        pre-turn state plus both players' announced choices for the turn
-        leading into state t, chance unresolved — so per turn:
-        decision = Φ_ann(t+1) − Φ(t), dice = Φ(t+1) − Φ_ann(t+1).
-        Adds no parameters: any artifact computes it, but only artifacts
-        trained at announced points (manifest announced_states) produce
-        calibrated values."""
-        (tokens, field_state), (ann_tokens, ann_field_state) = (
-            self._history_tokens_with_announced(actor_input)
-        )
-        return (
-            self._outcome(actor_input, tokens, field_state),
-            self._outcome(actor_input, ann_tokens, ann_field_state),
-        )
-
-    def with_aux_and_announced(self, actor_input: PlayerActorInput) -> tuple[
-        CategoricalValueHeadOutput,
-        OfflineAuxOutput,
-        CategoricalValueHeadOutput,
-    ]:
-        """Training entry point with announced states: with_aux plus the
-        Φ_ann margin head. Announced states are extra supervision points
-        for the same trajectory margin label (deep supervision through the
-        shared readout); aux heads stay realised-state-only."""
-        (tokens, field_state), (ann_tokens, ann_field_state) = (
-            self._history_tokens_with_announced(actor_input)
-        )
-        return (
-            self._outcome(actor_input, tokens, field_state),
-            OfflineAuxOutput(
-                survival=self.survival_head(tokens),
-                next_action=self.next_action_head(tokens),
-                unseen=self.unseen_head(tokens),
-                revealed_set=self.set_head(tokens),
-            ),
-            self._outcome(actor_input, ann_tokens, ann_field_state),
-        )
-
-
-def get_offline_critic(generation: int, rating_conditioning: bool = True) -> nn.Module:
-    return Porygon2OfflineCritic(
-        get_player_model_config(generation, train=False),
-        rating_conditioning=rating_conditioning,
-    )

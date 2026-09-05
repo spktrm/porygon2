@@ -339,7 +339,6 @@ class TestTrainStepBudget:
         # burned loop iterations on idle warm-up ticks and ended the run at
         # 1891 of 5000 train steps. num_steps must bound host_step.
         import queue as queue_mod
-        import threading
 
         import rl.online.training.learner as learner_mod
         from rl.online.training.learner import Learner
@@ -363,7 +362,6 @@ class TestTrainStepBudget:
         learner.config = make_config(num_steps=3, br_target_ckpt=None)
         learner.run_state = run_state
         learner.done = False
-        learner.gpu_lock = threading.Lock()
         learner._train_step = lambda rs, batch: {}
         learner._handle_periodic_tasks = lambda rs, step, logs: None
         checkpoints = []
@@ -396,6 +394,8 @@ class TestResolveRunSetup:
             br_target=None,
             run_tag=None,
             br_winrate=None,
+            br_init="target",
+            br_perturb_frac=None,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)

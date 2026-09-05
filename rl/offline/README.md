@@ -106,36 +106,15 @@ retrain one bad member without touching the others. Config is
 Artifacts: `ckpts/offline/{format_id}/ckpt_{step:08}/` in the standard
 checkpoint layout (`player/params` via cloudpickle) plus a `manifest.json`.
 
-## Announced states (Φ_ann) — skill/luck decomposition
+## Announced states (Φ_ann) — DELETED 2026-09-02
 
-Each turn additionally gets an **announced state**: both players' choices
-visible, chance unresolved. It is built by MASKING, not new features — the
-packed edge cache keeps only `MAJOR_ARG`, `MOVE_TOKEN`, `ENTITY_IDX`
-(everything else → `_UNSPECIFIED`; edges whose major arg is
-`cant`/`faint`/`drag`/`replace` are outcome events and drop entirely; see
-`mask_outcome_features` in rl/model/history_encoder.py), node snapshots
-stay at pre-turn values, and the pre-turn recurrent state is advanced
-**one** extra step with the masked messages (`announced_states_at_requests`
-— no second scan). Φ_ann runs through the same antisymmetric readout
-(mirror antisymmetry is automatic, zero new parameters) and trains as an
-extra supervision point with the same margin label
-(`announced_loss_weight`; the manifest's `announced_states` flag is the
-capability marker, since the param tree can't be). Trained
-Φ_ann = E[outcome | history, announced actions], which buys:
-
-1. **Replay analysis:** per turn, decision = Φ_ann(t+1) − Φ(t) and
-   dice = Φ(t+1) − Φ_ann(t+1) (damage rolls included).
-2. **Dice-excised PBRS (later, learner-side):** shaped term
-   γ·Φ_ann(t+1) − Φ(t) — same conditional expectation as standard PBRS
-   (unbiased by the tower property), strictly lower variance: the shaping
-   channel stops paying the agent for crits. Not yet wired into the
-   learner — gated on a validated announced-state critic run.
-
-The invariance check this needs (perturb one turn's outcome features —
-crit bits, damage/heal ratios, post-event hp snapshots — and assert Φ_ann
-is bit-invariant for that turn while the realised Φ moves) lived in
-`announced_leak.py`, deleted 2026-08-21. Note it was always **one-sided**:
-a Φ_ann that never reads the turn at all passes it perfectly.
+The announced-state path (outcome-masked one-step advance of the pre-turn
+recurrent state, `announced_states_at_requests`, `announced_loss_weight`,
+the manifest's `announced_states` flag) was deleted with the history
+encoder restructure: it had been broken since the 2026-09-01 GRU hoist
+and never shipped a validated critic. The skill/luck decomposition and
+dice-excised PBRS it was built for are recorded in the CLAUDE.md ledger;
+`announced_leak.py`, its one-sided invariance check, went 2026-08-21.
 
 ## Stage 4 — consumption by the RL pipeline
 

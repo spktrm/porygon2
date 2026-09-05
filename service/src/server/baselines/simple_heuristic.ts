@@ -22,8 +22,13 @@ import { Battle, Pokemon } from "@pkmn/client";
 import { AnyObject } from "@pkmn/sim";
 import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
-import { OneDBoolean } from "../utils";
-import { Action, ActionEnum, ActionEnumMap } from "../../../protos/service_pb";
+import {
+    Action,
+    ActionEnum,
+    ActionEnumMap,
+    ActionRequestKindMap,
+} from "../../../protos/service_pb";
+import { cellToEnumPair } from "../data";
 
 /* ----------------------------------------------------------------- */
 /* ----------------------- src classification ----------------------- */
@@ -347,28 +352,36 @@ function voluntarySwitchScore(
 /* --------------------------- main entry --------------------------- */
 /* ----------------------------------------------------------------- */
 
-function legalPairs(mask: OneDBoolean): {
+function legalPairs(
+    legalCells: boolean[],
+    kind: number,
+    activeSlot: number,
+): {
+    cell: number;
     src: ActionEnumMap[keyof ActionEnumMap];
     tgt: ActionEnumMap[keyof ActionEnumMap];
 }[] {
-    const width = mask.width;
-    if (width === undefined) {
-        throw new Error("Action mask width is undefined");
-    }
-    const flat = mask.toBinaryVector();
     const pairs: {
+        cell: number;
         src: ActionEnumMap[keyof ActionEnumMap];
         tgt: ActionEnumMap[keyof ActionEnumMap];
     }[] = [];
-    for (let i = 0; i < flat.length; i++) {
-        if (flat[i] === 1) {
-            pairs.push({
-                src: Math.floor(
-                    i / width,
-                ) as ActionEnumMap[keyof ActionEnumMap],
-                tgt: (i % width) as ActionEnumMap[keyof ActionEnumMap],
-            });
+    for (let cell = 0; cell < legalCells.length; cell++) {
+        if (!legalCells[cell]) {
+            continue;
         }
+        // The scoring below still thinks in ActionEnum (src, tgt) terms;
+        // cellToEnumPair is the exact naming the grid used to carry.
+        const [src, tgt] = cellToEnumPair(
+            cell,
+            kind as ActionRequestKindMap[keyof ActionRequestKindMap],
+            activeSlot,
+        );
+        pairs.push({
+            cell,
+            src: src as ActionEnumMap[keyof ActionEnumMap],
+            tgt: tgt as ActionEnumMap[keyof ActionEnumMap],
+        });
     }
     return pairs;
 }
@@ -385,9 +398,8 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
     const stateHandler = new StateHandler(player);
     const allyActive = player.publicBattle.sides[playerIndex].active;
     const enemyActive = player.publicBattle.sides[1 - playerIndex].active;
-    const { actionMask } = stateHandler.getActionMask({
+    const { legalCells, structuredMask } = stateHandler.getActionMask({
         request,
-        format: battle.gameType,
         allyActive,
         enemyActive,
     });
@@ -406,12 +418,17 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
     };
 
     let best: {
+        cell: number;
         src: ActionEnumMap[keyof ActionEnumMap];
         tgt: ActionEnumMap[keyof ActionEnumMap];
         score: number;
     } | null = null;
 
-    for (const { src, tgt } of legalPairs(actionMask)) {
+    for (const { cell, src, tgt } of legalPairs(
+        legalCells,
+        structuredMask.getKind(),
+        structuredMask.getActiveSlot(),
+    )) {
         let score = -1e4; // Default fallback for unhandled pairs
 
         if (src === ActionEnum.ACTION_ENUM__DEFAULT || isPassSrc(src)) {
@@ -471,18 +488,17 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
 
         // TypeScript can track this synchronous mutation perfectly
         if (best === null || score > best.score) {
-            best = { src, tgt, score };
+            best = { cell, src, tgt, score };
         }
     }
 
     const action = new Action();
     if (best === null) {
-        // No legal action found — emit DEFAULT and let the engine resolve it.
-        action.setSrc(ActionEnum.ACTION_ENUM__DEFAULT);
-        action.setTgt(ActionEnum.ACTION_ENUM__DEFAULT);
+        // No legal action found — the not-a-cell sentinel decodes to
+        // "default" when the request carries no choice map.
+        action.setCell(-1);
         return action;
     }
-    action.setSrc(best.src);
-    action.setTgt(best.tgt);
+    action.setCell(best.cell);
     return action;
 };
