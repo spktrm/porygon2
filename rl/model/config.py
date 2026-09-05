@@ -190,8 +190,8 @@ def get_player_model_config(
     # on the taken cell's readout rows and a chance code z of
     # `code_groups` categoricals over `code_classes` (prior from h_t and
     # a; posterior also reads the real t+1 rows, learner-only). Heads on
-    # the imagined rows: grounding (per row -> the t+1 pre-trunk content of
-    # the DYNAMICS_TARGET_ROWS), the next action mask (the action readout's
+    # the imagined rows: grounding (per row -> the t -> t+1 CHANGE in the
+    # DYNAMICS_TARGET_ROWS' pre-trunk content), the next action mask (the action readout's
     # own form, instantiated a second time), and one cls head for the next
     # request kind + done. `code_groups = 0` is the mean latent model
     # (no code path at all). The shared v_head / action_head are applied

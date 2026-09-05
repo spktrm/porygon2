@@ -157,16 +157,21 @@ def dynamics_losses(
     instruments (2026-09-04 delta head; 2026-09-05 relabelled).
 
     `pred` (T, B, R, D) is the grounding head's read of the imagined next
-    sequence at step t -- row j of it is the NEXT step's target row j,
-    the imagined rows keep the next step's layout -- and `target` is the
-    pre-trunk content of the target rows (`dynamics_target`, computed
-    outside the loss fn so it carries no gradient). Row j at t is matched
-    to its next-step row through `dynamics_alignment` (public rows re-sort
-    every step; private rows follow the request order) and the prediction
-    is gathered to it, so the label is `target_next` and the error is
-    normalised by the COPY predictor's, `|target_next - target_now|^2`:
-    the same static-token cancellation the delta form had, on the same
-    scale, with the copy scoring exactly 1 per group. A row counts when it
+    sequence at step t: the predicted CHANGE, t -> t+1, of the target
+    row that lands at position j of the NEXT step (the imagined rows keep
+    the next step's layout). `target` is the pre-trunk content of the
+    target rows (`dynamics_target`, computed outside the loss fn so it
+    carries no gradient). Row j at t is matched to its next-step row
+    through `dynamics_alignment` (public rows re-sort every step; private
+    rows follow the request order) and the prediction is gathered to it,
+    so the label is `target_next - target_now` on the current row and the
+    error is normalised by the COPY predictor's, `|target_next -
+    target_now|^2`: the static tokens cancel in the label, the zero
+    prediction IS the copy and scores exactly 1 per group, and the
+    head's zero-init output starts there. (A content-valued head was
+    tried first, 2026-09-05: against this normaliser it started at loss
+    ~18 -- the static tokens' reconstruction error -- and its gradient
+    alone ran at 2x the global clip.) A row counts when it
     is matched, an action was taken at t (`acted_mask`, which drops the
     done row) and t+1 is a real state (`value_mask` -- the bootstrap-only
     final row is a valid TARGET). Forced rows stay in: the transition is
@@ -174,7 +179,7 @@ def dynamics_losses(
 
     Per group g of DYNAMICS_GROUP_SLICES, f32:
 
-        num_g   = average(|pred_next - target_next|^2, mask_g)
+        num_g   = average(|pred_delta - (target_next - target_now)|^2, mask_g)
         scale_g = sg(average(|target_next - target_now|^2, mask_g))
         loss_g  = num_g / max(scale_g, floor)
 
@@ -214,8 +219,8 @@ def dynamics_losses(
     delta = target_next - target[:-1]
     valid_step = acted_mask[:-1] & value_mask[1:]
     mask = matched & valid_step[..., None]
-    sq_err = jnp.square(gather_next(pred[:-1]) - target_next).sum(-1)
-    sq_err_prior = jnp.square(gather_next(pred_prior[:-1]) - target_next).sum(-1)
+    sq_err = jnp.square(gather_next(pred[:-1]) - delta).sum(-1)
+    sq_err_prior = jnp.square(gather_next(pred_prior[:-1]) - delta).sum(-1)
     sq_delta = jnp.square(delta).sum(-1)
 
     def normalised(rows_mask, err=sq_err):

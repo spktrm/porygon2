@@ -1065,6 +1065,33 @@ band, `learner_steps_per_sec` ≥ 6.5 (from 7.19). Abort ladder in the plan
 strength cost → coef 0.25 then sg on g's input; `value_r2` < 0.7 → search
 does not launch).
 
+**LAUNCH CHECK, 1266k–1292k (2026-09-05): the grounding head shipped
+predicting CONTENT and was rewritten to the DELTA form, own commit.** Every
+other panel opened inside its band (`kl` 0.65–0.76, `post_perplexity_min`
+~4.2, `prior_perplexity_min` ~3.6, `mask_acc` 0.995, `kind_acc` 0.99,
+`value_r2` tracking `player_value_head_r2` batch for batch, `out_proj_rms`
+0.0073, forward KL ~0.003) — but `player_loss_transition_ground` started at
+17.8 (→ 4.8 by 1292k), `gain_public` −12 → −5.4, `gain_private` −36 → −5.9,
+and `player_transition_grad_norm` sat at 22 → 18.3 against the global clip
+of 10 (`blocks_grad_norm` 1.3 → 3.2). The head predicted the 21 target
+rows' full pre-trunk content at t+1 through a lecun-init output, and the
+loss normalised that by the DELTA's mean squared size — so the static
+tokens' reconstruction error (species, item, moveset: unchanged across a
+transition, large in norm) was scored against a normaliser sized for what
+changes, and one head's gradient alone was 2x the clip, spending every
+other loss's step (the eed695e shape again). Fix: `ground_delta_head`
+predicts the t → t+1 CHANGE of each target row in the next step's layout
+(the old delta head's label) through a ZERO-init output, so the head starts
+exactly at the copy predictor (gain 0, loss 1) and every number it emits is
+on the delta's own scale. RENAMED, not edited in place: the by-path merge
+loads any same-name same-shape leaf, so a content-trained kernel would have
+resumed under the delta loss at ~18 again — a changed-meaning module with
+unchanged shapes must change its NAME to init fresh (Adam moments included).
+Rule with teeth: **a grounding head predicts the delta, zero-init, or its
+static-token reconstruction error dominates the gradient.** Tests pin the
+all-zero prediction at exactly loss 1 / gain 0 across a resort, the exact
+delta at 0, its negation at 4, and content-constant invariance.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

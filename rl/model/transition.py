@@ -11,8 +11,13 @@ covers all three, inferred through a bottleneck (LAPO/Genie's shape) from
 the real next rows by the posterior and predicted from `h_t` and my
 action by the prior. Every head here is trained on an OBSERVED label:
 
-- grounding: per imagined row -> the DYNAMICS_TARGET_ROWS' pre-trunk
-  content at t+1 (the old delta head's label, in the next step's layout);
+- grounding: per imagined row -> the CHANGE in the DYNAMICS_TARGET_ROWS'
+  pre-trunk content, t -> t+1, in the next step's layout (the old delta
+  head's label and its zero-init output: the head starts AT the copy
+  predictor, gain 0, and its loss is on the delta's own scale -- a
+  content target was tried first and started at loss ~18, the static
+  tokens' reconstruction error against a delta-sized normaliser, with
+  the head's gradient alone at 2x the global clip);
 - the next action mask: the action readout's own form instantiated a
   second time (`mask_head`), so a rollout knows its next legal set;
 - one cls head off the imagined CLS row: the next request kind (a
@@ -121,7 +126,9 @@ class TransitionModel(nn.Module):
             self.code_proj = nn.Dense(model_size, dtype=self.dtype, name="code_proj")
             self.prior_net = MLP(**self.cfg.prior.mlp.to_dict())
             self.posterior_net = MLP(**self.cfg.posterior.mlp.to_dict())
-        self.ground_head = MLP(**self.cfg.ground.mlp.to_dict())
+        self.ground_delta_head = MLP(
+            **self.cfg.ground.mlp.to_dict(), final_kernel_init=nn.initializers.zeros
+        )
         self.mask_head = FlatActionReadout(self.cfg.action_head, name="mask_head")
         self.cls_head = MLP(**self.cfg.cls_head.mlp.to_dict())
 
@@ -211,9 +218,9 @@ class TransitionModel(nn.Module):
             post_one_hot = jnp.zeros(code_shape, jnp.float32)
             pred = self.imagine(rows, row_valid, src_row, tgt_row, None)
             pred_prior = jax.lax.stop_gradient(pred)
-        ground = self.ground_head(pred[DYNAMICS_TARGET_ROWS])
+        ground = self.ground_delta_head(pred[DYNAMICS_TARGET_ROWS])
         ground_prior = jax.lax.stop_gradient(
-            self.ground_head(pred_prior[DYNAMICS_TARGET_ROWS])
+            self.ground_delta_head(pred_prior[DYNAMICS_TARGET_ROWS])
         )
         mask_logits = self.mask_head(
             pred[PRIVATE_ROWS], pred[MOVE_ROWS], pred[TARGET_ROWS]

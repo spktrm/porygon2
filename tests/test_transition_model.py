@@ -2,7 +2,7 @@
 
 Fast half, on synthetic rows: the grounding loss aligns the label across
 the public resort with the copy predictor at exactly 1 and a perfect one
-at 0 (the label now lives in the NEXT step's layout); the hp-moved and
+at 0 (the label is each row's CHANGE, placed in the NEXT step's layout); the hp-moved and
 transition-split instruments read their subsets; the zero-delta floor;
 the standalone module's init contract (g is the copy predictor, every
 mask logit 0, the posterior reads t+1 where the prior does not, out_proj
@@ -134,6 +134,15 @@ def _in_next_layout(values, next_index):
     return jnp.asarray(np.concatenate([placed, placed[-1:]], axis=0))
 
 
+def _perfect(label, next_index):
+    """The grounding head's exact answer: each current row's t -> t+1
+    change, placed where the next step's layout has that row. The copy
+    predictor is the all-zero prediction."""
+    label = np.asarray(label)
+    aligned_next = np.take_along_axis(label[1:], next_index[..., None], axis=2)
+    return _in_next_layout(aligned_next - label[:-1], next_index)
+
+
 def _ground(pred, target, env, acted, valid, **kwargs):
     loss, logs, _ = dynamics_losses(
         pred, jax.lax.stop_gradient(pred), target, env, acted, valid, **kwargs
@@ -193,45 +202,42 @@ def test_grounding_aligns_the_label_across_the_resort():
     next_index = _next_index(env)
 
     # Static content: every aligned delta is 0, so the scale is 0 per
-    # group and the prediction that carries each entity's content to its
-    # NEXT row scores 0. Control: the unaligned rows do see the resort.
-    carried = _in_next_layout(target[:-1], next_index)
-    loss, logs = _ground(carried, jnp.asarray(target), env, acted, valid)
+    # group and the zero prediction (each entity's content carried to its
+    # NEXT row) scores 0. Control: the unaligned rows do see the resort.
+    loss, logs = _ground(
+        jnp.zeros_like(jnp.asarray(target)), jnp.asarray(target), env, acted, valid
+    )
     assert float(logs["player_transition_ground_rows_frac"]) == 1.0
     assert float(loss) == 0.0
     for group in DYNAMICS_GROUP_SLICES:
         assert float(logs[f"player_transition_ground_scale_{group}"]) == 0.0
     assert float(jnp.abs(jnp.asarray(target[1:] - target[:-1])).max()) > 0.0
 
-    # Real change: the perfect predictor IS the next step's label (the
-    # positional layout), the copy predictor carries the current content
-    # and scores exactly 1, and the reflected one (2 now - next) exactly 4.
+    # Real change: the perfect predictor IS each row's aligned change in
+    # the next step's layout, the zero prediction (copy) scores exactly
+    # 1, and the reflected one (-delta) exactly 4.
     drift = rng.normal(size=target.shape).astype(np.float32) * 0.1
     label = jnp.asarray(target + drift)
-    perfect = jnp.concatenate([label[1:], label[-1:]], axis=0)
+    perfect = _perfect(label, next_index)
     loss, logs = _ground(perfect, label, env, acted, valid)
     assert float(loss) == pytest.approx(0.0, abs=1e-5)
     for group in DYNAMICS_GROUP_SLICES:
         assert float(logs[f"player_transition_ground_scale_{group}"]) > 0.0
-    copy = _in_next_layout(np.asarray(label[:-1]), next_index)
-    loss, logs = _ground(copy, label, env, acted, valid)
+    loss, logs = _ground(jnp.zeros_like(label), label, env, acted, valid)
     assert float(loss) == pytest.approx(1.0, abs=1e-5)
     for group in DYNAMICS_GROUP_SLICES:
         assert float(logs[f"player_transition_gain_{group}"]) == pytest.approx(
             0.0, abs=1e-5
         )
-    aligned_next = np.take_along_axis(
-        np.asarray(label[1:]), next_index[..., None], axis=2
-    )
-    reflected = _in_next_layout(2 * np.asarray(label[:-1]) - aligned_next, next_index)
+    reflected = -perfect
     loss, _ = _ground(reflected, label, env, acted, valid)
     assert float(loss) == pytest.approx(4.0, abs=1e-4)
 
-    # Copy-invariance: a constant added to BOTH the label and the
-    # prediction (a persisted token) leaves the loss unchanged. Control:
-    # adding it to the next rows of the label only IS a change.
+    # Copy-invariance: a constant added to the label at every step (a
+    # persisted token) leaves the label's change, and the loss, unchanged.
+    # Control: adding it to the next rows of the label only IS a change.
     constant = jnp.asarray(rng.normal(size=(1, 1, 1, width)).astype(np.float32) * 3.0)
-    loss_shifted, _ = _ground(reflected + constant, label + constant, env, acted, valid)
+    loss_shifted, _ = _ground(reflected, label + constant, env, acted, valid)
     assert float(loss_shifted) == pytest.approx(4.0, abs=1e-4)
     loss_next_only, _ = _ground(
         reflected, label.at[1:].add(constant), env, acted, valid
@@ -265,8 +271,8 @@ def test_prior_panels_read_the_prior_decode():
     env = _batch_env(orders, np.arange(1, 7, dtype=np.int32))
     acted = jnp.ones((num_steps, 1), bool)
     label = jnp.asarray(rng.normal(size=(num_steps, 1, NUM_DYNAMICS_ROWS, width)))
-    perfect = jnp.concatenate([label[1:], label[-1:]], axis=0)
-    copy = _in_next_layout(np.asarray(label[:-1]), _next_index(env))
+    perfect = _perfect(label, _next_index(env))
+    copy = jnp.zeros_like(label)
     _, logs, _ = dynamics_losses(perfect, copy, label, env, acted, acted)
     assert float(logs["player_transition_gain_public"]) == pytest.approx(1.0, abs=1e-5)
     assert float(logs["player_transition_gain_public_prior"]) == pytest.approx(
@@ -288,8 +294,8 @@ def test_hp_moved_gain_reads_the_hp_rows_only():
     env = _batch_env(orders, entity_idx, hps)
     acted = jnp.ones((num_steps, 1), bool)
     label = jnp.asarray(rng.normal(size=(num_steps, 1, NUM_DYNAMICS_ROWS, width)))
-    perfect = jnp.concatenate([label[1:], label[-1:]], axis=0)
-    copy = _in_next_layout(np.asarray(label[:-1]), _next_index(env))
+    perfect = _perfect(label, _next_index(env))
+    copy = jnp.zeros_like(label)
     # Perfect on the moved row only: the moved-subset gain reads 1 while
     # the public gain is well below it.
     only_moved = copy.at[:, :, 2].set(perfect[:, :, 2])
@@ -329,7 +335,7 @@ def test_zero_delta_group_is_floored_not_divided_by_zero():
     env = _batch_env(orders, np.arange(1, 7, dtype=np.int32))
     acted = jnp.ones((num_steps, 1), bool)
     valid = jnp.ones((num_steps, 1), bool)
-    perfect = jnp.concatenate([label[1:], label[-1:]], axis=0)
+    perfect = _perfect(label, _next_index(env))
     loss, logs = _ground(perfect + 0.02, label, env, acted, valid)
     for group in DYNAMICS_GROUP_SLICES:
         assert float(logs[f"player_transition_ground_scale_{group}"]) == 0.0
@@ -338,7 +344,7 @@ def test_zero_delta_group_is_floored_not_divided_by_zero():
     assert float(loss) < 1.0
     assert bool(jnp.isfinite(loss))
     moving = label + jnp.asarray(rng.normal(size=label.shape).astype(np.float32) * 0.5)
-    perfect_moving = jnp.concatenate([moving[1:], moving[-1:]], axis=0)
+    perfect_moving = _perfect(moving, _next_index(env))
     loss_moving, logs = _ground(perfect_moving + 0.02, moving, env, acted, valid)
     for group in DYNAMICS_GROUP_SLICES:
         assert (
@@ -385,8 +391,8 @@ def test_transition_splits_read_spanned_edges_and_opponent_reveals():
     )
     acted = jnp.ones((num_steps, 1), bool)
     valid = jnp.ones((num_steps, 1), bool)
-    perfect = jnp.concatenate([label[1:], label[-1:]], axis=0)
-    copy = _in_next_layout(np.asarray(label[:-1]), np.asarray(next_index))
+    perfect = _perfect(label, np.asarray(next_index))
+    copy = jnp.zeros_like(label)
     pred = copy.at[jnp.asarray([0, 2])].set(perfect[jnp.asarray([0, 2])])
     _, logs, splits = dynamics_losses(
         pred, pred, label, env, acted, valid, history_field=history_field
@@ -467,6 +473,8 @@ def test_module_init_is_the_copy_predictor_with_silent_readouts(module_and_param
     # contract).
     np.testing.assert_array_equal(np.asarray(out.pred), np.asarray(rows))
     np.testing.assert_array_equal(np.asarray(out.mask_logits), 0.0)
+    # The grounding head starts AT the copy predictor: zero change.
+    np.testing.assert_array_equal(np.asarray(out.ground), 0.0)
     assert out.prior_logits.shape == (3, cfg.code_groups, cfg.code_classes)
     assert out.prior_logits.dtype == jnp.float32
     # A one-hot code per group, straight-through.
