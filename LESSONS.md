@@ -1088,6 +1088,73 @@ consequence: C (K = 2) and rung 2 do NOT proceed; the decode path
 through four gradient regimes) gets its own structural commit. The go
 decision is the user's.
 
+## Diagnostic audit — 2026-09-07 latent transition at 1.835M
+
+Read-only model audit of `irqeetfg`, final step 1,835,215, resumed at
+1,759,999 on commit `b88463f`. Full local W&B history supplied 75,217
+learner rows. No model change or restart was performed. The final window
+1,815,000–1,835,215 contains 20,216 rows: mean posterior/prior-mode
+`value_delta_r2` 0.264 / -0.081; public grounding gain 0.532 / 0.352;
+KL 0.909, free fraction 0.031, posterior usage perplexity 2.508 (minimum
+1.975), prior/posterior joint-mode agreement 0.552. Real critic R² 0.923,
+switch mass 0.0418. Posterior mask accuracy 0.9953 hides recall 0.8265
+and exact-set accuracy 0.5322. CLS consistency gain deteriorated from
+-1.318 at 1.760–1.780M to -2.915 in the final window; its loss is disabled.
+These are means of logged batch metrics, not pooled transition-level scores.
+
+Full resumed-segment EMA evaluation: temperature-1 control 685/1410 wins
+(0.4858), search 725/1333 (0.5439), difference +0.0581; nominal independent
+binomial 95% interval [+0.0207, +0.0954]. Evolving checkpoints and unpaired
+games limit this comparison. Search root KL 0.02194; mean game-step time
+218 ms versus 59 ms across EMA and main evaluation games. No legal-cell
+truncation was logged. This supports a depth-1 benefit against this evaluator,
+not a deeper-search verdict or a general opponent-strength claim.
+
+**Corrections to earlier mathematical interpretations:**
+
+- Learner `delta_gain` uses `1 - SSE / sum(delta²)`, with copy exactly 0.
+  Offline `search_samples_probe._r2` uses centred SST. Copy there is
+  `-n * mean(delta)² / SST`, not necessarily 0. The historical -0.057
+  expectation score alone therefore does not prove worse-than-copy MSE.
+  Recompute both on the same transitions before using that gate. Average
+  batch ratios are also unstable: five switch-score rows in this segment
+  have magnitude >100, with a minimum near -1.206e6. Pool numerator and
+  denominator and bootstrap by game. The final-window prior CE is 0.51726
+  versus copy 0.51526 and real 0.48944: ratio of window means gives -0.0775,
+  while mean logged CE-gain ratios gives -0.447.
+- Posterior-conditioned MSE has optimum `E[h_next | h, a, z]`; it does not
+  inherently erase branches distinguished by z. Removing consistency on
+  the unconditional-mean argument was not mathematically compelled.
+  EfficientZero (arxiv.org/abs/2111.00210) supplies precedent for consistency,
+  but its end-to-end deterministic model is not this observer architecture.
+- A small `out_proj` parameter RMS does not determine its functional gain
+  or the code-to-value Jacobian. The prior-mixture error does not isolate
+  that projection as the cause. Code usage perplexity is marginal entropy,
+  not mutual information or evidence that all available classes are needed.
+
+**Concrete structural limitation:** `TransitionModel.imagine` applies the
+current `row_valid` to its blocks and final output. Encoder move/target
+validity depends on the current legal action mask. A currently invalid row
+is thus identically zero after imagination even when valid at the next
+request; its output gradient is zero too. In particular force-switch to
+move requests cannot create the new move rows. Bias-free readouts cannot
+recover those rows' missing state dependence. Fix by separating observed
+input validity from future output queries/validity, retaining policy-only
+inputs and fixed shapes. Measure newly-valid-row and request-kind splits;
+do not feed the real next validity to the deployed decoder.
+
+**Unmeasured distributional hypothesis:** the 2x16 prior is a product of
+categoricals. Averaging the posterior over possible next observations need
+not preserve that independence; correlated posterior code pairs can produce
+unsupported cross-pairs under prior sampling. Fit/evaluate a conditional
+joint or autoregressive prior with encoder and decoder frozen, splitting by
+whole game. A 256-pair enumeration can remove sampling noise from offline
+value calibration. This hypothesis is not established by current marginal
+perplexity/agreement panels. DreamerV3's representation KL encourages
+predictability under its factorised prior (arxiv.org/abs/2301.04104); this
+run has rep coefficient 0 and is not the reference objective. Stochastic
+MuZero also differs through its afterstate model and VQ chance encoder.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by
