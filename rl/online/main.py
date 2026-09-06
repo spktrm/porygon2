@@ -21,8 +21,9 @@ from tqdm import tqdm
 import wandb
 from rl import checkpoint
 from rl.environment.actor_stats import ActorStats
-from rl.environment.data import CAT_VF_SUPPORT
+from rl.environment.data import CAT_VF_SUPPORT, NUM_SWITCH_CELLS
 from rl.environment.env import BattleError, SinglePlayerSyncEnvironment
+from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
@@ -185,6 +186,59 @@ def run_training_actor_pair(
             raise e
 
 
+def eval_game_logs(
+    eval_trajectory: Trajectory, unroll_seconds: float, session_id: str
+) -> dict[str, float]:
+    """Per-game reads off the LAST chunk of an eval game (its padding rows
+    copy the terminal step, so only the first `game_length - offset` rows
+    are real, and the done row takes no action). Logged for every eval
+    arm so the search slot has a matched control on each:
+
+    - switch-frac: voluntary switches per decision that offered one (the
+      action mask legalises a switch cell AND a non-switch cell) -- the
+      axis the BR probes located the exploit on; higher is not better by
+      itself, it is read against the `-t1` slot;
+    - ms-per-step: unroll wall time per real step (search's cost);
+    - search-*: the search read (rl/model/search.py) when the arm ran
+      it -- root-kl is KL(pi_search || pi) per decision (0 = the operator
+      is inert, > 0.5 = it replaced the policy), value-gap is the search
+      value minus V at the root (positive = search expects to do better
+      than the policy's own estimate), legal-truncated is the share of
+      decisions with more legal cells than cfg.search.max_cells scored.
+    """
+    transitions = eval_trajectory.player_transitions
+    env_output = transitions.env_output
+    num_rows = env_output.done.shape[0]
+    num_real = int(eval_trajectory.game_length[0] - eval_trajectory.game_step_offset[0])
+    real = np.arange(num_rows) < num_real
+    acted = real & ~np.asarray(env_output.done, dtype=bool)
+    action_mask = np.asarray(env_output.action_mask, dtype=bool)
+    switch_legal = action_mask[:, :NUM_SWITCH_CELLS].any(-1)
+    other_legal = action_mask[:, NUM_SWITCH_CELLS:].any(-1)
+    offered = acted & switch_legal & other_legal
+    action_index = np.asarray(
+        transitions.agent_output.actor_output.action_head.action_index
+    )
+    took_switch = action_index < NUM_SWITCH_CELLS
+    logs = {
+        f"ms-per-step-{session_id}": 1000.0 * unroll_seconds / max(num_real, 1),
+    }
+    if offered.any():
+        logs[f"switch-frac-{session_id}"] = float(took_switch[offered].mean())
+    search = transitions.agent_output.actor_output.search
+    if not isinstance(search.root_kl, tuple) and acted.any():
+        logs[f"search-root-kl-{session_id}"] = float(
+            np.asarray(search.root_kl)[acted].mean()
+        )
+        logs[f"search-value-gap-{session_id}"] = float(
+            np.asarray(search.root_value_gap)[acted].mean()
+        )
+        logs[f"search-legal-truncated-{session_id}"] = float(
+            np.asarray(search.legal_truncated)[acted].mean()
+        )
+    return logs
+
+
 def run_eval_heuristic(
     actor: PlayerActor,
     executor: concurrent.futures.ThreadPoolExecutor,
@@ -236,8 +290,10 @@ def run_eval_heuristic(
                     prefix = "ema"
                     player = snapshot.ema
 
+                unroll_started = time.perf_counter()
                 future1 = executor.submit(actor.unroll_and_push, player)
                 eval_trajectory = future1.result()
+                unroll_seconds = time.perf_counter() - unroll_started
 
                 payoff = (
                     eval_trajectory.player_transitions.env_output.win_reward[-1]
@@ -265,6 +321,7 @@ def run_eval_heuristic(
                     f"{prefix}-wr-{session_id}": float(payoff > 0),
                     f"{prefix}-margin-{session_id}": margin,
                     f"games-{session_id}": games,
+                    **eval_game_logs(eval_trajectory, unroll_seconds, session_id),
                 }
                 if not use_main:
                     smooth_wr = smooth_decay * smooth_wr + float(payoff > 0)
@@ -445,6 +502,9 @@ def main(args: argparse.Namespace):
     learner_player_model_config = get_player_model_config(
         learner_config.generation, train=True
     )
+    learner_player_model_config.transition.value_trains_v_head = (
+        learner_config.player_transition_value_trains_v_head
+    )
     learner_builder_model_config = get_builder_model_config(
         learner_config.generation, train=True
     )
@@ -506,6 +566,26 @@ def main(args: argparse.Namespace):
         builder_head_params=HeadParams(temp=1.0),
         device=actor_device,
     )
+    # The SEARCH eval arm (2026-09-06): the same params through an actor
+    # network whose config enables cfg.search -- depth-1 expectimax over
+    # the transition model's prior samples, added to the logits before
+    # sampling (rl/model/search.py). A separate network object because
+    # search is a static config branch; the param tree is the learner's,
+    # unchanged. temp 1.0 so the `-t1` slot is its matched control.
+    eval_agent_search = None
+    if learner_config.eval_search_slots > 0:
+        search_player_model_config = get_player_model_config(
+            learner_config.generation, train=False, dtype=actor_dtype
+        )
+        search_player_model_config.search.enabled = True
+        search_player_network = get_player_model(search_player_model_config)
+        eval_agent_search = Agent(
+            search_player_network.apply,
+            actor_builder_network.apply,
+            player_head_params=HeadParams(temp=1.0),
+            builder_head_params=HeadParams(temp=1.0),
+            device=actor_device,
+        )
     # One timing sink shared by every training actor, its env and the
     # server; the learner drains it (actor_stats_log_steps).
     actor_stats = ActorStats()
@@ -704,22 +784,29 @@ def main(args: argparse.Namespace):
             )
 
         logger.info(
-            "Initializing %d evaluation actors (baseline indices: %s)...",
-            len(learner_config.eval_baselines),
+            "Initializing %d evaluation actors (baseline indices: %s, "
+            "search slots: %d)...",
+            len(learner_config.eval_baselines) + learner_config.eval_search_slots,
             learner_config.eval_baselines,
+            learner_config.eval_search_slots,
         )
+        # Slot order: the tempered slots, the untempered `-t1` slot, then
+        # the search slots against the same (last) baseline. The suffix is
+        # the thread name's, i.e. the wandb series' -- the three arms land
+        # on separate series.
+        eval_slots = []
         for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
-            baseline_name = EVAL_BASELINE_NAMES[baseline_index]
-            # The last slot runs untempered, and says so in its thread name --
-            # metric identity comes from that name, so the two arms land on
-            # separate wandb series.
             untempered = eval_id == len(learner_config.eval_baselines) - 1
             if untempered:
-                slot_agent = eval_agent_untempered
-                slot_suffix = "-t1"
+                eval_slots.append((baseline_index, eval_agent_untempered, "-t1"))
             else:
-                slot_agent = eval_agent
-                slot_suffix = ""
+                eval_slots.append((baseline_index, eval_agent, ""))
+        for _ in range(learner_config.eval_search_slots):
+            eval_slots.append(
+                (learner_config.eval_baselines[-1], eval_agent_search, "-search")
+            )
+        for eval_id, (baseline_index, slot_agent, slot_suffix) in enumerate(eval_slots):
+            baseline_name = EVAL_BASELINE_NAMES[baseline_index]
             actor = PlayerActor(
                 agent=slot_agent,
                 # The username MUST start with "eval-heuristic" (the

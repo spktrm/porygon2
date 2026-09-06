@@ -23,6 +23,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # steps) while winrate-vs-simple-heuristic — the series runs are judged
     # by — was starved at ~1 game per 80 learner steps.
     eval_baselines: tuple[int, ...] = (2, 2, 2)
+    # Search eval slots (2026-09-06, stochastic-transition Step 3): extra
+    # eval threads against the LAST baseline above, playing the same EMA
+    # params through a search-enabled actor network (cfg.search.enabled,
+    # depth-1 expectimax over the transition model's prior samples) at
+    # temp 1.0 -- the matched arm of the `-t1` slot. wr(search) - wr(t1)
+    # on the same checkpoint is the model's worth in play. 0 = no search
+    # arm (the search network is not even built).
+    eval_search_slots: int = 1
     # Every Nth eval game per thread uses the live (main) params instead of
     # the EMA target as a divergence sanity check. The target lags the live
     # params by only ~1/player_ema_update_rate steps, so alternating every
@@ -351,12 +359,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # lambda=1.0 MC-anchor row of the aux spectrum used to keep a live
     # bootstrap-bias readout (player_bootstrap_gap) on this
     # bootstrap-heavy target; the aux heads went 2026-08-21, so that
-    # instrument is gone with them (CLAUDE.md ledger).
+    # instrument is gone with them (LESSONS.md ledger).
     player_lambda: float = 0.8
 
     # No adaptivity/entropy controller fields anymore. The
     # AdaptivityController was removed entirely 2026-08-13 (hard to tune,
-    # harder to predict — see CLAUDE.md 10
+    # harder to predict — see LESSONS.md 10
     # for the bug history). Its entropy sensors are still logged from
     # train_step (player_action_normalized_entropy,
     # player_normalized_modality_entropy); modality collapse (1330 died
@@ -428,11 +436,59 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # DreamerV3's KL balancing: the prior is pulled to the sg'd posterior
     # at dyn_coef, the posterior to the sg'd prior at rep_coef, each half
     # clipped below at free_nats per transition (summed over code groups)
-    # so a code that is already predictable pays nothing. Posterior
-    # collapse (kl < 0.1 for 5k) -> rep 0.05 and free nats 2, once.
+    # so a code that is already predictable pays nothing. The floor is
+    # sized PER GROUP: DreamerV3's 1 nat is over a 32-group code (1/32 nat
+    # each), and at 1.0 over our 2 groups it sat above the KL on 93% of
+    # transitions (irqeetfg 1266k-1312k: kl 0.64, kl_free_frac 0.93) --
+    # zero gradient on both halves, the prior never trained
+    # (prior_grad_norm -> 0, prior_post_agree 0.58 -> 0.30) and the
+    # posterior drifted through the straight-through decode alone
+    # (perplexity 2.35 of 16, falling). 1/32 x 2 = 0.0625. The floor
+    # never goes UP.
+    # rep_coef 0.1 -> 0.0, 2026-09-06 (Step 3b D): Stochastic MuZero's
+    # posterior form -- no pull of the posterior toward the prior, the
+    # prior still chases the sg'd posterior at dyn_coef. Triggered as
+    # pre-registered: with the consistency force out and v_head live
+    # (the B relaunch, 1654k-1674k) every decode-side bar stayed at its
+    # launch value -- out_proj_rms 0.0168 -> 0.0178 (bar > 0.03),
+    # gain_public / gain_hp_moved 0.51 / 0.56 (bars 0.528 / 0.588),
+    # value_delta_r2 0.29 with the prior-mode read at -0.11 (below copy),
+    # kl 0.17 flat (predicted 0.3-0.6) -- with the matched control fine
+    # (player_value_head_r2 0.926). A code the rep half keeps pinned to
+    # the prior can only encode what the prior already predicts. 0.1 is
+    # the DreamerV3 form and the abort's restore: kl > 4 or
+    # prior_post_agree -> 1/16 for 5k puts it back (a reference-form
+    # toggle, never a retune). The old "posterior collapse -> rep 0.05"
+    # rung is retired with it.
     player_transition_dyn_coef: float = 0.5
-    player_transition_rep_coef: float = 0.1
-    player_transition_free_nats: float = 1.0
+    player_transition_rep_coef: float = 0.0
+    player_transition_free_nats: float = 0.0625
+    # Raw-row consistency (per-row normalised MSE of the imagined rows
+    # against the real next rows) inside the dynamics bracket. 2026-09-06,
+    # Step 3b: OFF. That loss is minimised by the conditional MEAN of
+    # h_{t+1}, exactly what a sampleable model must not produce, and it
+    # was the largest term the blocks saw -- out_proj_rms 0.0156 (a
+    # quarter of lecun scale) and a prior-mode grounding of 0.336 against
+    # the deleted mean head's 0.528 were its signature. The observed
+    # labels (grounding, mask, kind, done, value) carry the model, as in
+    # MuZero (no consistency term); EfficientZero's PROJECTED consistency
+    # is the fallback if the value bars fail, never 0.5 here (a cut that
+    # delays onset is falsified). The loss is still computed and logged
+    # (`player_loss_transition_cons`, `cons_gain_<group>`) as a read;
+    # 1.0 is bit-for-bit the pre-3b gradient.
+    player_transition_cons_coef: float = 0.0
+    # 2026-09-06, Step 3b: the shared v_head TRAINS on the imagined CLS
+    # row (MuZero's value target: the real t+1 win_returns through the
+    # imagined state -- the same labels the head already fits, on a wider
+    # input distribution). The trunk stays unreachable (g's input is
+    # sg'd) and the action readout stays FROZEN on imagined rows (launch
+    # check 2's anti-switch smoothing lived in that term). False = the
+    # frozen clone, bit-identical to the 2026-09-05 observer form -- the
+    # abort switch if `player_value_head_r2` leaves 0.90 +- 0.02 while
+    # the imagined-side bars pass. Read into the model config at the
+    # learner's construction sites (the model forward branches on it
+    # statically).
+    player_transition_value_trains_v_head: bool = True
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
@@ -484,7 +540,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # SAC-style dual temperatures holding each at a normalised target
     # (2026-08-28) are removed with the forward-KL-to-uniform term — the
     # per-level entropies survive as OBSERVER panels only
-    # (loss.factorised_entropies). Revert handles in the CLAUDE.md
+    # (loss.factorised_entropies). Revert handles in the LESSONS.md
     # ledgers.
     player_ent_coef: float = 0.01
     # The ZERO-AVOIDING term (loss.uniform_kl_modalities): forward KL from
@@ -528,7 +584,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # switch's losing value. Replaced by the per-level ENTROPY terms above
     # (the PPO surrogate was split per-level in the same pass and
     # re-joined 2026-08-28 — see that revert commit) — see train_step's
-    # policy bracket and the CLAUDE.md ledgers for history and handles.
+    # policy bracket and the LESSONS.md ledgers for history and handles.
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —

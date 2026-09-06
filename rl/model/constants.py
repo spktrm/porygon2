@@ -105,7 +105,7 @@ class SequenceGroup(IntEnum):
     What that trades away is on the record: with one token per mon, THEIR
     individual revealed moves no longer coexist with anything as separate
     rows, so a move-token x species-token comparison across two mons can only
-    happen inside a pooled vector (CLAUDE.md 13). MY sixteen candidate moves
+    happen inside a pooled vector (LESSONS.md 13). MY sixteen candidate moves
     stay their own rows and the four entity-derived target rows are built
     from the opposing actives, so the matchup direction a decision actually
     turns on keeps both operands. If matchup reasoning proves to be the

@@ -186,6 +186,7 @@ def test_opp_private_team_cannot_reach_the_policy(
     for leaf in (
         "transition_prior_logits",
         "transition_post_logits",
+        "transition_post_one_hot",
         "transition_ground",
         "transition_ground_prior",
         "transition_mask_logits",
@@ -193,10 +194,20 @@ def test_opp_private_team_cannot_reach_the_policy(
         "transition_kind_logits",
         "transition_done_logit",
         "transition_cons_err",
+        "transition_pred_rms",
     ):
         np.testing.assert_array_equal(
             np.asarray(getattr(base, leaf), dtype=np.float32),
             np.asarray(getattr(moved, leaf), dtype=np.float32),
+            err_msg=leaf,
+        )
+    # The imagined-row value heads (Step 3b, 2026-09-06): the LIVE `v_head`
+    # on the posterior decode's CLS row and its frozen clone on the
+    # prior-mode decode. Both read imagined policy-readable rows only.
+    for leaf in ("transition_value_head", "transition_value_head_prior"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(base, leaf).logits, dtype=np.float32),
+            np.asarray(getattr(moved, leaf).logits, dtype=np.float32),
             err_msg=leaf,
         )
     np.testing.assert_array_equal(

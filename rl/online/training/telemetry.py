@@ -260,7 +260,7 @@ def _has(tree, path) -> bool:
 # kernel 0.0058 -> 0.105 -- and was invisible on wandb; diagnosing it needed
 # checkpoint forensics. The head that grew those numbers is gone, but the
 # flat readout has its own way to fail and it is the same shape: the bilinear
-# is a two-factor product with ONE zero-init factor, and CLAUDE.md 13 records
+# is a two-factor product with ONE zero-init factor, and LESSONS.md 13 records
 # a learned grid behind a zero-init scale sitting at lecun init for 60k steps.
 #
 # Expected at init and what to watch:
@@ -358,6 +358,12 @@ _TRANSITION_LEAVES = {
 # duplicated here.
 _GRAD_SUBTREES = {
     "player_action_head_grad_norm": ("action_head",),
+    # The TOTAL gradient into the deployable value head -- real-row CE plus,
+    # under cfg.transition.value_trains_v_head (2026-09-06, Step 3b), the
+    # imagined-row CE. The imagined share alone would cost a second
+    # backward; read this beside player_loss_v_win / player_value_head_r2
+    # (the matched control) instead.
+    "player_value_head_grad_norm": ("v_head",),
     "player_trunk_grad_norm": ("encoder", "trunk"),
     "player_opp_code_logits_grad_norm": ("encoder", "opp_code_logits"),
     "player_opp_code_embedding_grad_norm": ("encoder", "opp_code_embedding"),
@@ -368,8 +374,8 @@ _GRAD_SUBTREES = {
     ),
     "player_transition_grad_norm": ("transition",),
     "player_transition_blocks_grad_norm": ("transition", "blocks"),
-    "player_transition_prior_grad_norm": ("transition", "prior_net"),
-    "player_transition_posterior_grad_norm": ("transition", "posterior_net"),
+    "player_transition_prior_grad_norm": ("transition", "prior_read_net"),
+    "player_transition_posterior_grad_norm": ("transition", "posterior_read_net"),
 }
 
 
@@ -457,7 +463,7 @@ class ActionAxisMasks(NamedTuple):
     which also admits WILDCARD / OTHER / TARGET cells. Both called
     themselves "a switch and a non-switch are both legal", so the
     `player_policy_*` and `player_q_*` families were scoped to different row
-    populations while CLAUDE.md 3's decision rule reads one against the
+    populations while LESSONS.md 3's decision rule reads one against the
     other (`absadv_ratio` against `player_q_switch_target_frac`).
 
     Unified 2026-08-25 on the STRICT reading: a stay/switch decision only

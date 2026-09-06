@@ -62,11 +62,13 @@ UNIMIX = 0.01
 
 class TransitionOutput(NamedTuple):
     """Per-step outputs, all leading (T, ...). `pred` is the imagined
-    next sequence decoded from the POSTERIOR sample; `ground_prior` is the
-    grounding read of a no-gradient decode from the prior MODE, the honest
-    rollout-side number. Logits are f32; the code arrays are (T, G, K)."""
+    next sequence decoded from the POSTERIOR sample; `pred_prior` is the
+    no-gradient decode from the prior MODE and `ground_prior` its grounding
+    read, the honest rollout-side numbers. Logits are f32; the code arrays are (T, G, K).
+    """
 
     pred: jax.Array
+    pred_prior: jax.Array
     prior_logits: jax.Array
     post_logits: jax.Array
     post_one_hot: jax.Array
@@ -83,17 +85,39 @@ def unimix_probs(logits: jax.Array) -> jax.Array:
     return (1.0 - UNIMIX) * probs + UNIMIX / logits.shape[-1]
 
 
-def straight_through_sample(probs: jax.Array) -> jax.Array:
-    """Argmax one-hot forward, the probabilities' gradient backward."""
-    hard = jax.nn.one_hot(
-        jnp.argmax(probs, axis=-1), probs.shape[-1], dtype=probs.dtype
-    )
+def straight_through_sample(probs: jax.Array, rng: jax.Array | None) -> jax.Array:
+    """One-hot forward, the probabilities' gradient backward. With a key the
+    forward is a categorical DRAW from `probs` (the unimix floor is what
+    makes every class reachable), so every class the posterior gives mass
+    to is decoded and trained through the decode; without one it is the
+    argmax -- the mode decode, which under straight-through only ever
+    decodes each group's leading class and lets the rest die (usage
+    perplexity pinned ~2.6 of 16 for 400k steps)."""
+    if rng is None:
+        index = jnp.argmax(probs, axis=-1)
+    else:
+        index = jax.random.categorical(rng, jnp.log(probs), axis=-1)
+    hard = jax.nn.one_hot(index, probs.shape[-1], dtype=probs.dtype)
     return hard + probs - jax.lax.stop_gradient(probs)
 
 
-def masked_mean_rows(rows: jax.Array, row_valid: jax.Array) -> jax.Array:
-    weights = row_valid.astype(rows.dtype)[:, None]
-    return (rows * weights).sum(axis=0) / jnp.maximum(weights.sum(), 1.0)
+class RowRead(nn.Module):
+    """ONE Dense(D -> width) applied to every row, masked by validity and
+    flattened in row order, so a reader sees WHICH row carries what. The
+    mean pool it replaces cancelled a row's identity (an additive bias
+    present at t and t+1 alike) and diluted a one-row change by the row
+    count -- "my active lost 40%" and "theirs did" pooled to the same
+    vector, and the posterior could not see the branch it was meant to
+    code (irqeetfg 1266k-1312k: kl_long < kl_short, reveal margin 0.04).
+    Position is the identity: the layout is named rows."""
+
+    width: int
+    dtype: jnp.dtype
+
+    @nn.compact
+    def __call__(self, rows: jax.Array, row_valid: jax.Array) -> jax.Array:
+        read = nn.Dense(self.width, dtype=self.dtype, name="read")(rows)
+        return jnp.where(row_valid[:, None], read, 0).reshape(-1)
 
 
 class TransitionModel(nn.Module):
@@ -124,8 +148,15 @@ class TransitionModel(nn.Module):
                 (code_groups, self.cfg.code_classes, model_size // code_groups),
             )
             self.code_proj = nn.Dense(model_size, dtype=self.dtype, name="code_proj")
-            self.prior_net = MLP(**self.cfg.prior.mlp.to_dict())
-            self.posterior_net = MLP(**self.cfg.posterior.mlp.to_dict())
+            self.row_read = RowRead(
+                self.cfg.row_read_width, self.dtype, name="row_read"
+            )
+            # `_read_net`, not `_net`: the nets that read the mean pool were
+            # renamed so the by-path checkpoint merge inits them fresh --
+            # the later layers' shapes are unchanged and would otherwise
+            # resume weights trained on features that no longer exist.
+            self.prior_read_net = MLP(**self.cfg.prior.mlp.to_dict())
+            self.posterior_read_net = MLP(**self.cfg.posterior.mlp.to_dict())
         self.ground_delta_head = MLP(
             **self.cfg.ground.mlp.to_dict(), final_kernel_init=nn.initializers.zeros
         )
@@ -169,22 +200,31 @@ class TransitionModel(nn.Module):
         pred = rows + self.out_proj(hidden)
         return jnp.where(row_valid[:, None], pred, 0)
 
-    def action_features(
-        self, rows: jax.Array, row_valid: jax.Array, action_cell: jax.Array
-    ):
-        src_row, tgt_row = chosen_bank_rows(
+    def action_rows(self, rows: jax.Array, action_cell: jax.Array):
+        return chosen_bank_rows(
             rows[PRIVATE_ROWS],
             rows[MOVE_ROWS],
             rows[TARGET_ROWS],
             action_cell.reshape(()),
         )
-        pooled = masked_mean_rows(rows, row_valid)
-        return src_row, tgt_row, jnp.concatenate((pooled, src_row, tgt_row), axis=-1)
+
+    def prior_features(
+        self,
+        rows: jax.Array,
+        row_valid: jax.Array,
+        src_row: jax.Array,
+        tgt_row: jax.Array,
+    ) -> jax.Array:
+        return jnp.concatenate(
+            (self.row_read(rows, row_valid), src_row, tgt_row), axis=-1
+        )
 
     def prior(self, rows: jax.Array, row_valid: jax.Array, action_cell: jax.Array):
         """The rollout-side code distribution, (G, K) f32 logits."""
-        _, _, features = self.action_features(rows, row_valid, action_cell)
-        return self.code_logits(self.prior_net, features)
+        src_row, tgt_row = self.action_rows(rows, action_cell)
+        return self.code_logits(
+            self.prior_read_net, self.prior_features(rows, row_valid, src_row, tgt_row)
+        )
 
     def _step(
         self,
@@ -193,18 +233,26 @@ class TransitionModel(nn.Module):
         action_cell: jax.Array,
         next_rows: jax.Array,
         next_valid: jax.Array,
+        rng: jax.Array | None,
     ) -> TransitionOutput:
-        src_row, tgt_row, features = self.action_features(rows, row_valid, action_cell)
+        src_row, tgt_row = self.action_rows(rows, action_cell)
         code_shape = (self.cfg.code_groups, self.cfg.code_classes)
         if self.has_code:
-            prior_logits = self.code_logits(self.prior_net, features)
+            features = self.prior_features(rows, row_valid, src_row, tgt_row)
+            prior_logits = self.code_logits(self.prior_read_net, features)
             # The posterior is LEARNER-ONLY: it reads the real next rows
-            # (stop-gradient at the call site), which no rollout has.
+            # (stop-gradient at the call site), which no rollout has -- as
+            # the per-row CHANGE, the thing the code must explain, through
+            # the same read the prior applies to the state.
             post_features = jnp.concatenate(
-                (features, masked_mean_rows(next_rows, next_valid)), axis=-1
+                (
+                    features,
+                    self.row_read(next_rows - rows, row_valid & next_valid),
+                ),
+                axis=-1,
             )
-            post_logits = self.code_logits(self.posterior_net, post_features)
-            post_one_hot = straight_through_sample(unimix_probs(post_logits))
+            post_logits = self.code_logits(self.posterior_read_net, post_features)
+            post_one_hot = straight_through_sample(unimix_probs(post_logits), rng)
             prior_mode = jax.nn.one_hot(
                 jnp.argmax(prior_logits, axis=-1), code_shape[1], dtype=jnp.float32
             )
@@ -228,6 +276,7 @@ class TransitionModel(nn.Module):
         cls_logits = self.cls_head(pred[CLS_ROW]).astype(jnp.float32)
         return TransitionOutput(
             pred=pred,
+            pred_prior=pred_prior,
             prior_logits=prior_logits,
             post_logits=post_logits,
             post_one_hot=post_one_hot,
@@ -249,5 +298,12 @@ class TransitionModel(nn.Module):
         """Leading axis T on every input: rows (T, 73, D), row_valid (T,
         73), action_cell (T,), next_rows / next_valid the same rows one
         step on (the caller pairs them; the last step is self-paired and
-        masked by the loss)."""
-        return jax.vmap(self._step)(rows, row_valid, action_cell, next_rows, next_valid)
+        masked by the loss). A "sampling" rng, when the caller supplies
+        one, draws the posterior code per step; without it (init, probes,
+        the offline harness) the posterior decodes its mode."""
+        keys = None
+        if self.has_code and self.has_rng("sampling"):
+            keys = jax.random.split(self.make_rng("sampling"), rows.shape[0])
+        return jax.vmap(self._step)(
+            rows, row_valid, action_cell, next_rows, next_valid, keys
+        )
