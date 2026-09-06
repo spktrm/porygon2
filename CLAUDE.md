@@ -1274,6 +1274,53 @@ a loss term** — the next unfired rung after D is the prior's READ.
 |---|---|---|
 | D: `player_transition_rep_coef` 0.1 → 0.0 | Stochastic MuZero's posterior form — the posterior is pulled toward nothing, the prior chases the sg'd posterior at `dyn_coef` 0.5 under F 0.0625; the KL-side posterior gradient is exactly 0 (test-pinned WITH the rep 0.1 control, which the default no longer supplies) | trigger as pre-registered: B's grounding bars failed AND `kl` < 0.5 at the hold's end. Acceptance (20k): `kl` into 0.5–3.0, `post_perplexity_mean` ≥ 3 (from 2.62), `prior_post_agree` ≥ 0.4 (from 0.45), prior-mode grounding ≥ 0.62 × posterior. Abort: `kl` > 4 or `agree` → 1/16 for 5k → restore 0.1 (a reference-form toggle, never a retune); D falsified → the prior's read (learned-query attention over rows), own commit. The old "posterior collapse → rep 0.05" rung is retired |
 
+## Addition ledger — 2026-09-06 stochastic transition, Step 3b D result, posterior sampling, Step 4 event probe
+
+**D RESULT (1682k → 1754k, read on 10k windows, 2026-09-06): kept.**
+No abort clause fired and three of four acceptance clauses passed —
+`kl` 0.17 → 0.64 (band 0.5–3.0; the rep half was the brake, as D
+predicted), `kl_free_frac` 0.41 → 0.06 (the floor no longer binds),
+`prior_post_agree` 0.45 → 0.47 (≥ 0.4), prior-mode grounding
+`gain_public_prior` 0.29 → 0.33 against `gain_public` 0.51 → 0.53
+(0.63× — at the 0.62 bar), `gain_hp_moved_prior` 0.34 → 0.42 (0.73×).
+The clause that FAILED: `post_perplexity_mean` 2.62 → 2.60, flat at
+~2.6 of 16 per group under F 0.0625, RowRead, rep 0.1 and rep 0.0
+alike. Rollout-side value decode unmoved: `value_delta_r2_prior` −0.12
+→ −0.05 (still below the copy predictor's 0), `value_gain_prior`
+−0.66 → −0.32, posterior `value_delta_r2` 0.29 flat; `out_proj_rms`
+0.0176 → 0.0208 (bar > 0.03 unmet in a THIRD gradient regime). Matched
+control fine throughout (`player_value_head_r2` 0.92, `loss_v_win`
+0.49, `prob_switch` 0.040–0.044, trunk grad norm 3.6–4.0, ~5.0 steps/s).
+
+| mechanism | what | why |
+|---|---|---|
+| `rl/offline/event_probe.py` (Step 4b widened; ckpt_01682407, 60 games / 120 sides / 3639 transitions) | the opponent's first EXECUTED decision event on the spanned edges (NONE / MOVE / SWITCH / CANT; MOVE_TOKEN on MOVE rows) predicted from FROZEN inputs by a stop-gradient linear + MLP readout, held out by side; reported as accuracy above the majority marginal (marginals NONE 0.153 / MOVE 0.624 / SWITCH 0.186 / CANT 0.037; edges mean 4.0, p90 6). **A measurement of what each input carries, never a label the model sees** | above-marginal linear / MLP: posterior z **+0.158 / +0.204**, prior z +0.118 / +0.134, prior features +0.071 / +0.134, `RowRead(h_{t+1} − h_t)` +0.232 / +0.261, pooled rows +0.079 / +0.130, rows PCA +0.114 / +0.105; MY-event control +0.20–0.27, so the label's ceiling is ~0.25 and the plan's 0.3 bar was above what the label allows; the move token reads ~0 from every input (n-limited — needs ~300 games and a coarser label). Verdict: prior z ≈ the best MLP on the prior's own input, so the prior's READ is NOT the deficit (the plan's attention-read rung does not fire); `h_t` holds ~half the ceiling of opponent intent; the posterior carries ¾ of what the next state reveals; posterior − prior ≈ 0.07 is the opponent-choice content of the chance node. Readout caveats: C fixed at 0.1, the mirrored side is in-sample |
+| `transition.straight_through_sample` (commit `b88463f`, relaunched from `ckpt_01759998` at 1760k) | the training decode draws z from the 1%-unimix'd posterior categorical (`jax.random.categorical`, `hard + probs − sg(probs)`) instead of its argmax; rng = `make_rng("sampling")` inside the learner apply only (per-step keys over T, per-batch keys fold `step_count` into a fixed root — no checkpoint leaf); without an rng the module is the argmax bit for bit, so the prior-MODE decode, every `_prior` panel, `prior_post_agree` and search are untouched. Liveness panel `player_transition_post_sample_is_mode` (fraction of valid transitions whose drawn class is the mode in every group; exactly 1.0 = the rng never reached the learner) | the diagnosis for flat usage was rich-get-richer through the argmax: only the mode's class ever received the decode gradient. User's stated worst case: the other codes encode redundancy rather than being ignored. **20k HOLD (1760k → 1793k, 8k windows): the mechanism is live and the diagnosis is FALSIFIED as the cause of flat usage.** `post_sample_is_mode` 0.82 → 0.84 (18% of draws off the mode — live — and sharpening), `post_perplexity_mean` 2.54 → 2.50 (bar ≥ 3; FELL), `post_perplexity_min` 2.04 → 1.99. What did move: `kl` 0.64 → 0.92 → 0.91 (in band), `prior_post_agree` 0.47 → 0.53 → 0.55 (rising), `prior_grad_norm` 0.38 → 0.57, `kl_long` 1.14 vs `kl_short` 0.74 (the ≥ 0.2 margin clause PASSES for the first time), `kl_reveal` 1.01 vs `kl_no_reveal` 0.85 (+0.16, just under). Unmoved: `gain_public` 0.53 / `_prior` 0.35, `gain_hp_moved` 0.58 / `_prior` 0.44, `value_delta_r2` 0.27 / `_prior` −0.09..−0.12 (below copy), `out_proj_rms` 0.0215 → 0.0222, `pred_rms` 0.89. Controls: `player_value_head_r2` 0.92–0.93, `loss_v_win` 0.487, `prob_switch` 0.040, `entropy_macro` 0.52, trunk grad norm 3.9–4.0, 5.5–5.6 steps/s. Mechanism as now understood: with rep 0.0 nothing opposes sharpening, and a sampled decode PAYS for its off-mode draws in the decode losses (a rarely-used class's `code_table` row decodes worse), so the STE gradient pushes mass back onto the mode — rich-get-richer through the decode loss, which sampling cannot fix. KEPT (nothing regressed, the KL and its splits improved); usage widening is not a lever this family has, and a usage-entropy force would be a new force answering the four questions first |
+
+**Search read, 1/4-subsampled wandb rows (2026-09-06):** since launch
+t1 0.481 (n 295) vs search 0.556 (n 270), **+0.074 ± 0.042, z 1.77**;
+the D era alone +0.063 ± 0.061 (0.460 vs 0.522); `root_kl` mean 0.027
+(below the 0.05 band floor). Point estimate above the +0.03 bar,
+confidence not yet — read again at ≥ 300 games per arm on the full
+rows. Note the t1 arm itself drifted 0.50 → 0.46 over the D era while
+the search arm held 0.52 — inside the stalled 0.40–0.48 band, not a
+new regression.
+
+**Where this leaves the ladder.** The plan's next rung on a D failure
+was the prior's attention read; the event probe retired it (the prior
+reads its input as well as an MLP can). Three gradient regimes have
+now left `out_proj` at 0.02 and the prior-mode value decode below
+copy, so the bottleneck is on the DECODE side. Owed before any search
+or structural change: the expectation-form calibration read —
+`value_delta_r2` of `E_z[V(g(h, a, z))] − V(h_t)` over prior SAMPLES
+on the real change — because every `_prior` panel decodes the prior's
+MODE, and a mode decode of a 55%-agree prior is expected to read below
+copy on the 45% where the mode is the wrong branch even when the
+mixture is calibrated. That is the number search uses; if it clears
+copy the mode panels were the wrong instrument and C (K = 2) / rung 2
+proceed on it; if it does not, the decode path (`code_proj` →
+`out_proj`) is the falsified piece and gets its own commit.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by
