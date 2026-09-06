@@ -1321,6 +1321,35 @@ copy the mode panels were the wrong instrument and C (K = 2) / rung 2
 proceed on it; if it does not, the decode path (`code_proj` →
 `out_proj`) is the falsified piece and gets its own commit.
 
+**EXPECTATION-FORM READ (ckpt_01800000, 2026-09-06, 500 transitions
+off self-play games through the second service, 32 prior draws per
+transition; `search_samples_probe.py --calibration --calibration-samples`):
+the expectation does NOT clear copy — the decode path is the falsified
+piece.** `value_delta_r2` = R² of the decoded CHANGE in value
+(V(decode) − V(h_t)) on the real change (V(h_{t+1}) − V(h_t)); the copy
+predictor scores exactly 0, higher is better. All / switch taken (118) /
+move taken (382): posterior decode **0.210** / 0.243 / 0.192; prior
+MODE −0.104 / −0.101 / −0.120; prior EXPECTATION over 32 samples
+**−0.057** / −0.013 / −0.081; a SINGLE prior sample −0.270 / −0.208 /
+−0.302. `expect_sigma_z` (std of V over the 32 draws at the taken
+action) 0.050 (switch 0.027, move 0.057), `abs_real_delta_v` 0.115,
+sign_acc 0.63. The MSE-gain form on the MC outcome (copy 0, real 1)
+reads negative everywhere except the posterior on switch rows (+0.43)
+and is the noisier instrument. The ordering sample < mode < expectation
+< 0 is what averaging out a ~0.05-wide branch spread buys: the
+expectation removes the sampling variance and still lands below copy,
+so the prior's mixture is NOT calibrated on value — the mode panels
+were the RIGHT instrument, only slightly pessimistic (−0.10 vs −0.06).
+Also on the record: the posterior decode reads 0.21 here against 0.446
+on ckpt_01560000 (pre-B, cons_coef 1.0) — different games, n=500, but
+the learner panel's 0.27–0.29 across the B/D holds says the same:
+dropping raw-row consistency cost the posterior decode's value
+alignment and bought nothing on the prior side. Pre-registered
+consequence: C (K = 2) and rung 2 do NOT proceed; the decode path
+(`code_proj` → `out_proj`, the single zero factor pinned at 0.02 rms
+through four gradient regimes) gets its own structural commit. The go
+decision is the user's.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

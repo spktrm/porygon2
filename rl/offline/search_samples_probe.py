@@ -142,10 +142,31 @@ class Root:
     root_value: float
 
 
-def _calibration(module, rows, row_valid, action, next_rows, next_valid):
-    """V on the real root, the real next request, the posterior decode and
-    the prior-mode decode: expectations and f32 logits, one transition."""
-    out = module.transition._step(rows, row_valid, action, next_rows, next_valid)
+def _calibration(
+    module, rows, row_valid, action, next_rows, next_valid, rng, num_samples
+):
+    """V on the real root, the real next request, the posterior decode, the
+    prior-MODE decode (the learner's `_prior` panels) and the prior
+    EXPECTATION decode: `num_samples` codes drawn from the transition prior
+    at the TAKEN action, each decoded with `imagine`, V averaged over z --
+    the number search reads (`Q(a) = E_z[V(g(h, a, z))]`). `sample` is the
+    first draw alone (one rollout branch); `expect_sigma_z` the std of V
+    over the draws. Expectations and f32 logits, one transition."""
+    transition = module.transition
+    out = transition._step(rows, row_valid, action, next_rows, next_valid, None)
+    prior_logits = transition.prior(rows, row_valid, action)
+    code_probs = unimix_probs(prior_logits)
+    samples = jax.random.categorical(
+        rng, jnp.log(code_probs), axis=-1, shape=(num_samples, *code_probs.shape[:-1])
+    )
+    code_one_hot = jax.nn.one_hot(samples, code_probs.shape[-1], dtype=jnp.float32)
+    src_row, tgt_row = transition.action_rows(rows, action)
+    imagined = jax.vmap(transition.imagine, (None, None, None, None, 0))(
+        rows, row_valid, src_row, tgt_row, code_one_hot
+    )
+    sampled = module.v_head(imagined[:, CLS_ROW])
+    sampled_v = sampled.expectation.astype(jnp.float32)
+    sampled_probs = jax.nn.softmax(sampled.logits.astype(jnp.float32), axis=-1)
     reads = {
         "root": rows[CLS_ROW],
         "real": next_rows[CLS_ROW],
@@ -157,6 +178,11 @@ def _calibration(module, rows, row_valid, action, next_rows, next_valid):
         head = module.v_head(cls)
         values[f"{name}_v"] = head.expectation
         values[f"{name}_logits"] = head.logits
+    values["expect_v"] = sampled_v.mean(0)
+    values["expect_logits"] = jnp.log(sampled_probs.mean(0) + 1e-8)
+    values["expect_sigma_z"] = sampled_v.std(0)
+    values["sample_v"] = sampled_v[0]
+    values["sample_logits"] = sampled.logits[0]
     return values
 
 
@@ -255,7 +281,7 @@ def collect(net, variables, chunks, roots, num_samples, samples_per_call, seed):
     return out
 
 
-def collect_calibration(net, variables, chunks, outcomes, roots):
+def collect_calibration(net, variables, chunks, outcomes, roots, num_samples, seed):
     """One record per root whose next request is real: `outcomes[i]` is
     the terminal result of the side chunk i belongs to."""
     encode = jax.jit(
@@ -268,9 +294,10 @@ def collect_calibration(net, variables, chunks, outcomes, roots):
         )
     )
     calibrate = jax.jit(
-        lambda params, *args: net.apply(params, *args, method=_calibration)
+        lambda params, *args: net.apply(params, *args, num_samples, method=_calibration)
     )
     dev_variables = jax.device_put(variables)
+    rng = jax.random.PRNGKey(seed)
     by_chunk = {}
     for chunk_index, step in roots:
         by_chunk.setdefault(chunk_index, []).append(step)
@@ -288,6 +315,7 @@ def collect_calibration(net, variables, chunks, outcomes, roots):
             if step + 1 >= usable.shape[0] or not usable[step + 1]:
                 continue
             action = int(actions[step, 0])
+            rng, draw = jax.random.split(rng)
             read = calibrate(
                 dev_variables,
                 rows[step, 0],
@@ -295,6 +323,7 @@ def collect_calibration(net, variables, chunks, outcomes, roots):
                 jnp.asarray(action),
                 rows[step + 1, 0],
                 row_valid[step + 1, 0],
+                draw,
             )
             out.append(
                 Transition(
@@ -349,8 +378,9 @@ def summarise_calibration(transitions: list[Transition]) -> dict[str, float]:
         "ce_real": ce_real,
         "mse_copy": mse_copy,
         "mse_real": mse_real,
+        "expect_sigma_z": float(stack["expect_sigma_z"].mean()),
     }
-    for name in ("post", "prior"):
+    for name in ("post", "prior", "expect", "sample"):
         mse_imagined = float(np.mean((stack[f"{name}_v"] - outcomes) ** 2))
         stats[f"value_gain_mse_{name}"] = (mse_copy - mse_imagined) / max(
             mse_copy - mse_real, 1e-3
@@ -461,7 +491,14 @@ def main(argv=None):
     parser.add_argument(
         "--calibration",
         action="store_true",
-        help="value_delta_r2 / value_gain of the posterior and prior decodes",
+        help="value_delta_r2 / value_gain of the posterior, prior-mode, "
+        "prior-expectation and single-sample decodes",
+    )
+    parser.add_argument(
+        "--calibration-samples",
+        type=int,
+        default=32,
+        help="prior draws per transition for the expectation decode",
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
@@ -501,7 +538,15 @@ def main(argv=None):
     switches_only = [root for root in data if root.is_switch.all()]
     print_stats("switches only (force-switch / preview)", summarise(switches_only))
     if args.calibration:
-        transitions = collect_calibration(net, variables, chunks, outcomes, roots)
+        transitions = collect_calibration(
+            net,
+            variables,
+            chunks,
+            outcomes,
+            roots,
+            args.calibration_samples,
+            args.seed,
+        )
         print_calibration("all transitions", summarise_calibration(transitions))
         switch_taken = [t for t in transitions if t.is_switch]
         print_calibration("switch taken", summarise_calibration(switch_taken))
