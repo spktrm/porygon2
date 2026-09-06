@@ -731,7 +731,11 @@ def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
     transition below F has no gradient at all. The prior/posterior are
     made to AGREE per transition where the clip should fire."""
     inputs = _bracket_inputs()
-    config = inputs["config"]
+    # The balancing read is pinned at DreamerV3's rep 0.1 explicitly --
+    # the default is 0.0 (Step 3b D) and would pass the posterior half
+    # vacuously.
+    config = dataclasses.replace(inputs["config"], player_transition_rep_coef=0.1)
+    inputs = {**inputs, "config": config}
 
     def kl_part(prior_logits, post_logits, free_nats):
         pred = dataclasses.replace(
@@ -787,6 +791,28 @@ def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
         * config.player_transition_free_nats
     )
     assert float(logs["player_transition_prior_post_agree"]) == 1.0
+    # rep_coef 0 (Step 3b D, Stochastic MuZero's form): the posterior's
+    # KL-side gradient is exactly zero and the prior's is untouched -- the
+    # rep 0.1 read above is the control that the half was live.
+    rep_off = dataclasses.replace(config, player_transition_rep_coef=0.0)
+
+    def kl_part_rep_off(prior_logits, post_logits):
+        pred = dataclasses.replace(
+            inputs["pred"],
+            transition_prior_logits=prior_logits,
+            transition_post_logits=post_logits,
+        )
+        cfg = dataclasses.replace(rep_off, player_transition_free_nats=0.0)
+        _, logs = transition_losses(**{**inputs, "pred": pred, "config": cfg})
+        return logs["player_loss_transition_kl"]
+
+    grad_prior_off, grad_post_off = jax.grad(kl_part_rep_off, argnums=(0, 1))(
+        prior, post
+    )
+    assert float(jnp.abs(grad_post_off).max()) == 0.0
+    np.testing.assert_allclose(
+        np.asarray(grad_prior_off), np.asarray(grad_prior), rtol=1e-5
+    )
 
 
 # ---- the real model --------------------------------------------------

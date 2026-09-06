@@ -443,10 +443,25 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # zero gradient on both halves, the prior never trained
     # (prior_grad_norm -> 0, prior_post_agree 0.58 -> 0.30) and the
     # posterior drifted through the straight-through decode alone
-    # (perplexity 2.35 of 16, falling). 1/32 x 2 = 0.0625. Posterior
-    # collapse (kl < 0.1 for 5k) -> rep 0.05 once; the floor never goes UP.
+    # (perplexity 2.35 of 16, falling). 1/32 x 2 = 0.0625. The floor
+    # never goes UP.
+    # rep_coef 0.1 -> 0.0, 2026-09-06 (Step 3b D): Stochastic MuZero's
+    # posterior form -- no pull of the posterior toward the prior, the
+    # prior still chases the sg'd posterior at dyn_coef. Triggered as
+    # pre-registered: with the consistency force out and v_head live
+    # (the B relaunch, 1654k-1674k) every decode-side bar stayed at its
+    # launch value -- out_proj_rms 0.0168 -> 0.0178 (bar > 0.03),
+    # gain_public / gain_hp_moved 0.51 / 0.56 (bars 0.528 / 0.588),
+    # value_delta_r2 0.29 with the prior-mode read at -0.11 (below copy),
+    # kl 0.17 flat (predicted 0.3-0.6) -- with the matched control fine
+    # (player_value_head_r2 0.926). A code the rep half keeps pinned to
+    # the prior can only encode what the prior already predicts. 0.1 is
+    # the DreamerV3 form and the abort's restore: kl > 4 or
+    # prior_post_agree -> 1/16 for 5k puts it back (a reference-form
+    # toggle, never a retune). The old "posterior collapse -> rep 0.05"
+    # rung is retired with it.
     player_transition_dyn_coef: float = 0.5
-    player_transition_rep_coef: float = 0.1
+    player_transition_rep_coef: float = 0.0
     player_transition_free_nats: float = 0.0625
     # Raw-row consistency (per-row normalised MSE of the imagined rows
     # against the real next rows) inside the dynamics bracket. 2026-09-06,

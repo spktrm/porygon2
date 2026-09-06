@@ -1219,6 +1219,61 @@ make every logit 0 and g the copy predictor, so the read would pass
 vacuously) — the searched arm's entropy differs from the plain arm's
 and the plain arm carries no search leaves.
 
+## Addition ledger — 2026-09-06 stochastic transition, Step 3b (the model priced by search; B and D)
+
+**Step 3 launch read fired the "search agrees with π" branch** (`root_kl`
+0.015–0.04, 3.4x ms/decision, search removing switch mass 0.131 →
+0.089), and the "Do 1" probe priced it: `rl/offline/search_samples_probe.py`
+on ckpt_01560000, 500 self-play roots, the EXACT `Q(a) = E_z[V(g(h,a,z))]`
+over all 256 codes (expectation units over CAT_VF_SUPPORT, range 2 —
+halve for win probability): `spread` (max − min Q over legal cells) mean
+0.039 / median 0.029, `sigma_z` (std of V over z at fixed a) 0.060,
+`oracle_gain` (best Q − E_π[Q], the most a perfect operator could buy)
+0.014 / p90 0.026, `root_kl` at 1/8/32/64 draws 0.079/0.029/0.022/0.020
+with `snr` 0.70/1.98/3.97/5.61 — ~0.02 is the depth-1 operator's ceiling
+and sampling is NOT the lever; `q_best_switch_minus_best_move` −0.090
+(the model's Q^π ranks a move above every switch at 90%+ of roots;
+diagnosis (f), open). **Corrections banked so they are not re-made:**
+`value_r2` 0.84 was VACUOUS — V barely moves between requests (mean
+|ΔV| 0.12), so V(h_t) scores high on the t+1 label by itself; the honest
+number is an R² on the CHANGE in value, where the copy predictor is
+exactly 0. Search removing switch mass is faithfulness to Q^π (the
+entropy and modality terms hold mass above greedy), not a broken model.
+
+| mechanism | what | why |
+|---|---|---|
+| A: `player_transition_value_delta_r2{,_prior,_switch,_move}`, `player_transition_value_gain{,_prior}`, `value_gap_{prior,switch,move}`, `policy_kl_copy`, `pred_rms`, `player_value_head_grad_norm`; `TransitionOutput.pred_prior` | delta-R² = R² of (V(ĥ) − V(h_t)) on (V(h_{t+1}) − V(h_t)) over valid transitions, copy = 0; value gain = (ce_copy − ce_imagined)/max(ce_copy − ce_real, 1e-3) on the t+1 two-hot label, copy 0 / real 1; every `_prior` panel reads a no-gradient decode from the prior's MODE — the rollout-side number search samples from | pre-fix offline (ckpt_01560000, `--calibration`): delta-R² posterior 0.446 / prior **−0.242** (move-taken −0.283 drives it), MSE gain 0.296 / −0.106 — the posterior decode moves value the right way, the prior's mode is WORSE than not rolling out. The CE-form offline read (1.006 / 0.659) is outlier-driven against a one-hot MC label and is not to be read; the learner panel uses the two-hot v-trace label |
+| B: `player_transition_value_trains_v_head` True + `player_transition_cons_coef` 1.0 → 0.0 | the shared `v_head` trains through the imagined CLS row (MuZero's value target on the real t+1 win_returns — the same labels on a wider input distribution); the trunk stays unreachable (g's input sg'd) and the readout FROZEN on imagined rows (launch check 2's collapse lived there); False = the frozen clone bit for bit. Raw-row consistency leaves the gradient, still logged as a read (`cons_gain_<group>`, `loss_transition_cons`) | the per-row MSE is minimised by the conditional MEAN of h_{t+1}, exactly what a sampleable model must not produce, and it was the largest term the blocks saw — `out_proj_rms` 0.0156 (a quarter of lecun) and prior-mode grounding 0.336 vs the mean head's 0.528 read as its signature. **The observer rule is AMENDED by user decision: transition losses reach `{transition, v_head}` and nothing else** (reach test pins the pair on / `{transition}` off) |
+
+**B RESULT (1654k → 1674k, the 20k hold, 2026-09-06): the matched
+control held and NOTHING on the decode side moved — diagnosis (a)
+falsified as written.** Windowed means first half / second half /
+last quarter: `out_proj_rms` 0.0168 / 0.0174 / 0.0178 (bar > 0.03);
+`gain_public` 0.513 / 0.509 / 0.515 and `gain_hp_moved` 0.565 / 0.559 /
+0.562 (bars 0.528 / 0.588 — still below the deleted mean head);
+`value_delta_r2` 0.302 / 0.291 / 0.294 (bar ≥ gain_hp_moved) with
+`_prior` −0.118 / −0.108 / −0.092 (below copy); `value_gain` 0.216 /
+0.212 / 0.224 (positive, NOT rising) with `_prior` −0.42 / −0.39 / −0.31;
+`kl` 0.173 flat (predicted 0.3–0.6 — the consistency term was not
+starving the code); `pred_rms` 0.88 flat. Consistency reads drifted as
+the clause allowed (`cons_gain_cls` −0.06 → −0.38, `cons_gain_field`
+0.70 → 0.52) but the bars they were conditional on did not pass. Matched
+control: `player_value_head_r2` 0.921 → 0.926 (band 0.90 ± 0.02),
+`player_loss_v_win` 0.489–0.494 (0.485 ± 0.01), priv 0.922; leak reads
+`prob_switch` 0.040 → 0.043, `entropy_macro` 0.53 → 0.54, trunk grad
+norm 3.99; 5.33 steps/s against the pre-stop 5.83 (the ≥ 6.5 gate was
+already failing before B; read as no new cost). Abort rung (2) fired —
+grounding bars failed with the control fine and `out_proj_rms` < 0.03 —
+so D lands as pre-registered. Rule with teeth: **removing the force
+that looked like the cause did not unpin the single zero factor; two
+gradient regimes (with and without consistency, frozen and live head)
+left `out_proj` at a quarter of lecun scale, so the bottleneck is not
+a loss term** — the next unfired rung after D is the prior's READ.
+
+| mechanism | what | why |
+|---|---|---|
+| D: `player_transition_rep_coef` 0.1 → 0.0 | Stochastic MuZero's posterior form — the posterior is pulled toward nothing, the prior chases the sg'd posterior at `dyn_coef` 0.5 under F 0.0625; the KL-side posterior gradient is exactly 0 (test-pinned WITH the rep 0.1 control, which the default no longer supplies) | trigger as pre-registered: B's grounding bars failed AND `kl` < 0.5 at the hold's end. Acceptance (20k): `kl` into 0.5–3.0, `post_perplexity_mean` ≥ 3 (from 2.62), `prior_post_agree` ≥ 0.4 (from 0.45), prior-mode grounding ≥ 0.62 × posterior. Abort: `kl` > 4 or `agree` → 1/16 for 5k → restore 0.1 (a reference-form toggle, never a retune); D falsified → the prior's read (learned-query attention over rows), own commit. The old "posterior collapse → rep 0.05" rung is retired |
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by
