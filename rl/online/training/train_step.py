@@ -51,6 +51,7 @@ from rl.online.training.targets import (
     reference_kl,
 )
 from rl.online.training.telemetry import (
+    ActionAxisMasks,
     action_axis_masks,
     belief_accuracy_logs,
     calculate_r2,
@@ -289,6 +290,17 @@ def dynamics_losses(
     return loss, logs, splits
 
 
+def delta_gain(prediction: jax.Array, target: jax.Array, mask: jax.Array) -> jax.Array:
+    """Share of the target's energy the prediction explains, 1 - |t - p|^2 /
+    |t|^2 over the masked rows -- the UNCENTRED R2. A zero prediction (the
+    copy predictor on a delta target) scores exactly 0 whatever the target's
+    mean, where the centred form scores -n * mean^2 / var; the exact target
+    scores 1. An empty mask reads 1 (0 / eps), finite by construction."""
+    residual = jnp.sum((target - prediction) ** 2, where=mask)
+    energy = jnp.sum(target**2, where=mask)
+    return 1.0 - residual / (energy + 1e-8)
+
+
 def _code_perplexity(probs: jax.Array, mask: jax.Array, prefix: str) -> dict:
     """Usage perplexity of a (T-1, B, G, K) code over the masked
     transitions: exp(H) of each group's batch marginal, mean and min over
@@ -316,6 +328,7 @@ def transition_losses(
     target_log_policy: jax.Array,
     cat_vf_support: jax.Array,
     splits: dict[str, jax.Array],
+    axis: ActionAxisMasks,
     config: Porygon2LearnerConfig,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Every transition-model loss except grounding (2026-09-05,
@@ -333,7 +346,19 @@ def transition_losses(
     - value: the shared critic on the imagined CLS row, CE to the t+1
       win_returns; `value_r2` beside `player_value_head_r2` and
       `value_gap` (|V(imagined) - V_target(real t+1)|, support units --
-      the step-1 probe's number, 0.031 for the mean head);
+      the step-1 probe's number, 0.031 for the mean head). Both are
+      VACUOUS against the copy predictor -- V barely moves between
+      consecutive requests (|V(t+1) - V(t)| ~0.12), so V(h_t) already
+      scores high R2 on the t+1 label -- which is what the calibration
+      block (2026-09-06, Step 3b) exists for: `value_delta_r2` is the R2
+      of the imagined CHANGE in value against the real change (the copy
+      predictor scores exactly 0) and `value_gain` the CE improvement
+      over the copy baseline scaled so copy = 0 and the real next state
+      = 1; each has a `_prior` twin from the prior-MODE decode (the
+      rollout-side number) and the delta-R2 / gap split by the taken
+      modality. `policy_kl_copy` is the copy baseline for the policy
+      term: KL(pi_target(t+1) || pi_target(t)) over the cells legal at
+      both steps;
     - policy: the shared readout on the imagined rows, forward KL from
       the sg'd target policy at t+1 over the real next legal set;
     - the next action mask (per-cell BCE) with its request kind (CE) and
@@ -411,9 +436,59 @@ def transition_losses(
         value_target=next_returns @ cat_vf_support.astype(jnp.float32),
         mask=valid_step,
     )
-    logs["player_transition_value_gap"] = average(
-        jnp.abs(expectation - v_target[1:].astype(jnp.float32)), valid_step
+    next_v_target = v_target[1:].astype(jnp.float32)
+    value_gap = jnp.abs(expectation - next_v_target)
+    logs["player_transition_value_gap"] = average(value_gap, valid_step)
+
+    # Calibration against the copy predictor (2026-09-06, Step 3b). Every
+    # read has copy = 0; the delta-R2 and the gain also have real = 1.
+    real_head = pred.value_head
+    real_v = real_head.expectation.astype(jnp.float32)
+    real_logits = real_head.logits.astype(jnp.float32)
+    target_delta = real_v[1:] - real_v[:-1]
+    prior_head = pred.transition_value_head_prior
+    prior_expectation = prior_head.expectation[:-1].astype(jnp.float32)
+    switch_step = valid_step & axis.taken_switch[:-1] & axis.has_move[:-1]
+    move_step = valid_step & jnp.logical_not(axis.taken_switch[:-1])
+    for name, rows in (
+        ("", valid_step),
+        ("_switch", switch_step),
+        ("_move", move_step),
+    ):
+        logs[f"player_transition_value_delta_r2{name}"] = delta_gain(
+            expectation - real_v[:-1], target_delta, rows
+        )
+    logs["player_transition_value_delta_r2_prior"] = delta_gain(
+        prior_expectation - real_v[:-1], target_delta, valid_step
     )
+    logs["player_transition_value_gap_prior"] = average(
+        jnp.abs(prior_expectation - next_v_target), valid_step
+    )
+    logs["player_transition_value_gap_switch"] = average(value_gap, switch_step)
+    logs["player_transition_value_gap_move"] = average(value_gap, move_step)
+    ce_copy = average(
+        optax.softmax_cross_entropy(logits=real_logits[:-1], labels=next_returns),
+        valid_step,
+    )
+    ce_real = average(
+        optax.softmax_cross_entropy(logits=real_logits[1:], labels=next_returns),
+        valid_step,
+    )
+    ce_prior = average(
+        optax.softmax_cross_entropy(
+            logits=prior_head.logits[:-1].astype(jnp.float32), labels=next_returns
+        ),
+        valid_step,
+    )
+    ce_headroom = jnp.maximum(ce_copy - ce_real, 1e-3)
+    logs["player_transition_value_gain"] = (ce_copy - loss_value) / ce_headroom
+    logs["player_transition_value_gain_prior"] = (ce_copy - ce_prior) / ce_headroom
+    logs["player_transition_value_ce_copy"] = ce_copy
+    logs["player_transition_value_ce_real"] = ce_real
+    logs["player_transition_value_ce_prior"] = ce_prior
+    logs["player_transition_pred_rms"] = pred.transition_pred_rms.astype(
+        jnp.float32
+    ).mean()
 
     next_mask = flat_action_mask[1:]
     target_policy = masked_policy(target_log_policy[1:], next_mask)
@@ -422,6 +497,18 @@ def transition_losses(
     policy_rows = acted_mask[:-1] & policy_mask[1:]
     loss_policy = average(
         (target_policy * (target_log - imagined_log)).sum(-1), policy_rows
+    )
+    # The copy baseline for the policy term: the target policy at t,
+    # renormalised over the cells legal at BOTH steps, against the target
+    # at t+1 over the same cells.
+    both_mask = next_mask & flat_action_mask[:-1]
+    copy_policy = masked_policy(target_log_policy[:-1], both_mask)
+    both_target = masked_policy(target_log_policy[1:], both_mask)
+    copy_log = jnp.log(jnp.maximum(copy_policy, 1e-8))
+    both_log = jnp.log(jnp.maximum(both_target, 1e-8))
+    logs["player_transition_policy_kl_copy"] = average(
+        (both_target * (both_log - copy_log)).sum(-1),
+        policy_rows & both_mask.any(-1),
     )
 
     mask_logits = pred.transition_mask_logits[:-1].astype(jnp.float32)
@@ -462,8 +549,10 @@ def transition_losses(
     )
     logs["player_transition_done_frac"] = average(done_labels, valid_step)
 
+    # `cons_coef` multiplies the gradient only; `player_loss_transition_cons`
+    # and the per-group gains keep reading the unscaled term.
     loss = (
-        loss_cons
+        config.player_transition_cons_coef * loss_cons
         + loss_kl
         + loss_value
         + loss_policy
@@ -872,6 +961,7 @@ def train_step(
             player_target_pred.action_head.log_policy,
             cat_vf_support,
             transition_splits,
+            axis,
             config,
         )
         loss_transition = loss_ground + loss_transition_rest

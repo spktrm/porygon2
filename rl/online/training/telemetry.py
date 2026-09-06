@@ -358,6 +358,12 @@ _TRANSITION_LEAVES = {
 # duplicated here.
 _GRAD_SUBTREES = {
     "player_action_head_grad_norm": ("action_head",),
+    # The TOTAL gradient into the deployable value head -- real-row CE plus,
+    # under cfg.transition.value_trains_v_head (2026-09-06, Step 3b), the
+    # imagined-row CE. The imagined share alone would cost a second
+    # backward; read this beside player_loss_v_win / player_value_head_r2
+    # (the matched control) instead.
+    "player_value_head_grad_norm": ("v_head",),
     "player_trunk_grad_norm": ("encoder", "trunk"),
     "player_opp_code_logits_grad_norm": ("encoder", "opp_code_logits"),
     "player_opp_code_embedding_grad_norm": ("encoder", "opp_code_embedding"),

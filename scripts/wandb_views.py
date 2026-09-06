@@ -695,6 +695,9 @@ def rl_sections():
                 lp(
                     # Consistency R^2 of the imagined post-trunk rows per
                     # row kind against the real next rows (copy = 0).
+                    # READS ONLY from Step 3b on (cons_coef 0.0): the raw-
+                    # row MSE was the conditional-mean force; a group's
+                    # gain falling is allowed and recorded, not an abort.
                     "Transition consistency gain by row kind",
                     [
                         "player_transition_cons_gain_cls",
@@ -713,13 +716,70 @@ def rl_sections():
                     # The calibration read search depends on: R^2 of the
                     # SHARED value head on the imagined CLS row against the
                     # t+1 win_returns, beside the same head on real rows.
-                    # Gate >= 0.85 (real 0.967). value_gap = |V(imagined)
-                    # - v_target(t+1)| in support units, lower is better.
-                    "Transition value calibration",
+                    # VACUOUS without the copy baseline (Step 3b correction
+                    # 1): value barely moves between requests, so V(h_t)
+                    # already scores ~0.9 here. Read the next two panels.
+                    # value_gap = |V(imagined) - v_target(t+1)| in support
+                    # units, lower is better; _prior is the rollout-side
+                    # decode, _switch/_move by the taken modality.
+                    "Transition value R2 / gap (raw)",
                     [
                         "player_transition_value_r2",
                         "player_value_head_r2",
                         "player_transition_value_gap",
+                        "player_transition_value_gap_prior",
+                        "player_transition_value_gap_switch",
+                        "player_transition_value_gap_move",
+                    ],
+                ),
+                lp(
+                    # Step 3b (2026-09-06): the honest calibration reads,
+                    # both scaled so the COPY predictor (imagined = root)
+                    # is exactly 0 and the real next state is 1. delta_r2
+                    # = uncentred R2 of the imagined CHANGE in V against
+                    # the real change; value_gain = (ce_copy - ce_imagined)
+                    # / (ce_copy - ce_real). _prior decodes from the
+                    # prior's MODE (what search samples from) -- the
+                    # number B must move (pre-fix offline: post 0.45 /
+                    # prior -0.24 on delta_r2). Gate: value_gain > 0 and
+                    # rising; delta_r2 >= gain_hp_moved; _prior >= 0.62 x
+                    # posterior. value_gain < 0 sustained 5k = off-manifold
+                    # abort (knob value_trains_v_head -> False).
+                    "Transition value calibration (copy = 0, real = 1)",
+                    [
+                        "player_transition_value_delta_r2",
+                        "player_transition_value_delta_r2_prior",
+                        "player_transition_value_delta_r2_switch",
+                        "player_transition_value_delta_r2_move",
+                        "player_transition_value_gain",
+                        "player_transition_value_gain_prior",
+                    ],
+                ),
+                lp(
+                    # The three CEs behind value_gain, all against the
+                    # t+1 label: the root's V (copy), the imagined V
+                    # (loss_transition_value), the prior-mode decode's V,
+                    # and the real next state's V (the floor). Lower is
+                    # better; imagined between copy and real = a gain.
+                    "Transition value CEs",
+                    [
+                        "player_transition_value_ce_copy",
+                        "player_loss_transition_value",
+                        "player_transition_value_ce_prior",
+                        "player_transition_value_ce_real",
+                    ],
+                ),
+                lp(
+                    # loss_transition_policy = KL(pi_target(t+1) || pi on
+                    # imagined rows through the FROZEN readout); kl_copy
+                    # = the same KL with pi_target(t) in its place, over
+                    # cells legal at both steps -- the copy baseline.
+                    # The loss under the copy baseline = g moves the
+                    # policy-readable rows the right way.
+                    "Transition policy KL vs copy",
+                    [
+                        "player_loss_transition_policy",
+                        "player_transition_policy_kl_copy",
                     ],
                 ),
                 lp(
@@ -784,25 +844,32 @@ def rl_sections():
                     # or the blocks and code paths behind it never train),
                     # action_proj ~0.044 / code_proj ~0.0625 lecun,
                     # code_table 0.088.
+                    # pred_rms = rms(imagined rows) / rms(real rows) over
+                    # valid rows -- the off-manifold watch now that raw-row
+                    # consistency is out of the gradient (cons_coef 0.0);
+                    # ~1 is on-manifold, > 2 is the abort.
                     "Transition model: drift",
                     [
                         "player_transition_out_proj_rms",
                         "player_transition_action_proj_rms",
                         "player_transition_code_proj_rms",
                         "player_transition_code_table_rms",
+                        "player_transition_pred_rms",
                     ],
                 ),
                 lp(
                     # Pre-clip grad norms of the model, its blocks and the
-                    # two code nets beside the value head's: the aux term
-                    # dwarfing the value head's is it stealing the trunk.
+                    # two code nets beside the value head's TOTAL gradient
+                    # (real-row CE + the imagined-row CE under
+                    # value_trains_v_head): the aux term dwarfing the
+                    # value head's is it stealing the trunk.
                     "Transition model: gradient",
                     [
                         "player_transition_grad_norm",
                         "player_transition_blocks_grad_norm",
                         "player_transition_prior_grad_norm",
                         "player_transition_posterior_grad_norm",
-                        "player_value_head_gradient_norm",
+                        "player_value_head_grad_norm",
                     ],
                 ),
             ],

@@ -48,6 +48,7 @@ from rl.model.constants import (
 )
 from rl.model.player_model import dynamics_alignment
 from rl.model.utils import open_zero_init_paths
+from rl.online.training.telemetry import action_axis_masks
 from rl.online.training.train_step import (
     DYNAMICS_SCALE_FLOOR,
     dynamics_losses,
@@ -608,9 +609,15 @@ def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None)
 
     if n_bins is None:
         n_bins = len(CAT_VF_SUPPORT)
-    logits = jnp.asarray(rng.normal(size=(num_steps, 1, n_bins)).astype(np.float32))
-    log_probs = jax.nn.log_softmax(logits)
     support = jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
+
+    def value_head():
+        logits = jnp.asarray(rng.normal(size=(num_steps, 1, n_bins)).astype(np.float32))
+        log_probs = jax.nn.log_softmax(logits)
+        return CategoricalValueHeadOutput(
+            logits=logits, log_probs=log_probs, expectation=jnp.exp(log_probs) @ support
+        )
+
     rows = len(POLICY_READABLE_ROWS)
     return PlayerActorOutput(
         transition_cons_err=jnp.asarray(rng.random((num_steps, 1, rows)), jnp.float32),
@@ -623,9 +630,10 @@ def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None)
         transition_post_logits=jnp.asarray(
             rng.normal(size=(num_steps, 1, code_groups, code_classes)), jnp.float32
         ),
-        transition_value_head=CategoricalValueHeadOutput(
-            logits=logits, log_probs=log_probs, expectation=jnp.exp(log_probs) @ support
-        ),
+        value_head=value_head(),
+        transition_value_head=value_head(),
+        transition_value_head_prior=value_head(),
+        transition_pred_rms=jnp.ones((1,), jnp.float32),
         transition_log_policy=jax.nn.log_softmax(
             jnp.asarray(rng.normal(size=(num_steps, 1, NUM_CELLS)), jnp.float32)
         ),
@@ -646,7 +654,15 @@ def _bracket_inputs(num_steps=4):
     rng = np.random.default_rng(5)
     pred = _synthetic_pred(rng, num_steps)
     orders = [np.arange(12, dtype=np.int32) for _ in range(num_steps)]
-    env = _batch_env(orders, np.arange(1, 7, dtype=np.int32), kinds=[0, 1, 0, 2])
+    kinds = ([0, 1, 0, 2] * num_steps)[:num_steps]
+    env = _batch_env(orders, np.arange(1, 7, dtype=np.int32), kinds=kinds)
+    # `_env` legalises the three switch cells only; one move cell (6, the
+    # first move x target cell) makes `has_move` live so a taken switch
+    # counts as VOLUNTARY, and the taken cell alternates switch / move.
+    env = dataclasses.replace(env, action_mask=env.action_mask.at[..., 6].set(True))
+    action_index = jnp.asarray(
+        [[0, 6][step % 2] for step in range(num_steps)], jnp.int32
+    )[:, None]
     acted = jnp.ones((num_steps, 1), bool)
     n_bins = len(CAT_VF_SUPPORT)
     win_returns = jax.nn.one_hot(
@@ -668,6 +684,7 @@ def _bracket_inputs(num_steps=4):
         target_log_policy=target_log_policy,
         cat_vf_support=jnp.asarray(CAT_VF_SUPPORT, jnp.float32),
         splits={},
+        axis=action_axis_masks(env.action_mask, action_index),
         config=Porygon2LearnerConfig(),
     )
 
@@ -699,7 +716,7 @@ def test_bracket_is_finite_on_an_all_masked_batch_and_reads_its_labels():
     )
     _, all_logs = transition_losses(**{**inputs, "pred": everything})
     assert float(all_logs["player_transition_mask_recall"]) == 1.0
-    assert float(all_logs["player_transition_mask_acc"]) == pytest.approx(3 / NUM_CELLS)
+    assert float(all_logs["player_transition_mask_acc"]) == pytest.approx(4 / NUM_CELLS)
     # All masked: every term 0 and finite, no NaN from an empty average.
     empty = jnp.zeros_like(inputs["acted_mask"])
     loss, logs = transition_losses(**{**inputs, "acted_mask": empty})
@@ -775,6 +792,172 @@ def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
 # ---- the real model --------------------------------------------------
 
 
+def _network_with_frozen_transition_value_head():
+    from rl.model.config import get_player_model_config
+    from rl.model.player_model import get_player_model
+
+    cfg = get_player_model_config(generation=9, train=True)
+    cfg.transition.value_trains_v_head = False
+    return get_player_model(cfg)
+
+
+def _value_head_from_logits(logits):
+    from rl.environment.data import CAT_VF_SUPPORT
+    from rl.environment.interfaces import CategoricalValueHeadOutput
+
+    log_probs = jax.nn.log_softmax(logits)
+    support = jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
+    return CategoricalValueHeadOutput(
+        logits=logits, log_probs=log_probs, expectation=jnp.exp(log_probs) @ support
+    )
+
+
+def test_value_delta_r2_and_value_gain_bracket_copy_and_real():
+    """The calibration panels (Step 3b A) read the imagined value against
+    the COPY predictor: an imagined head equal to the real head at t scores
+    exactly 0 on the delta-R2 and on the gain, one equal to the real head
+    at t+1 scores exactly 1 on both -- the posterior and the prior-mode
+    variants each pinned at both ends, the switch / move splits with them,
+    and a half-way head strictly between."""
+    num_steps = 6
+    inputs = _bracket_inputs(num_steps=num_steps)
+    n_bins = int(inputs["win_returns"].shape[-1])
+    # Real logits that FIT labels which differ between consecutive steps,
+    # so the real next state beats the copy on the CE by more than the
+    # gain's 1e-3 denominator floor.
+    labels = jnp.asarray([[0], [1], [2], [0], [2], [1]], jnp.int32)
+    win_returns = jax.nn.one_hot(labels, n_bins)
+    real_logits = 4.0 * win_returns + jnp.asarray(
+        np.random.default_rng(3).normal(scale=0.3, size=(num_steps, 1, n_bins)),
+        jnp.float32,
+    )
+    real = _value_head_from_logits(real_logits)
+    shifted = jax.tree.map(lambda leaf: jnp.concatenate([leaf[1:], leaf[-1:]]), real)
+    inputs = {**inputs, "win_returns": win_returns}
+
+    def read(imagined, prior):
+        pred = dataclasses.replace(
+            inputs["pred"],
+            value_head=real,
+            transition_value_head=imagined,
+            transition_value_head_prior=prior,
+        )
+        _, logs = transition_losses(**{**inputs, "pred": pred})
+        return {key: float(value) for key, value in logs.items()}
+
+    copy_logs = read(imagined=real, prior=shifted)
+    for name in ("", "_switch", "_move"):
+        assert copy_logs[f"player_transition_value_delta_r2{name}"] == 0.0, name
+    assert copy_logs["player_transition_value_gain"] == 0.0
+    assert copy_logs["player_transition_value_delta_r2_prior"] == pytest.approx(
+        1.0, abs=1e-5
+    )
+    assert copy_logs["player_transition_value_gain_prior"] == pytest.approx(
+        1.0, abs=1e-5
+    )
+    assert copy_logs["player_transition_value_ce_copy"] > (
+        copy_logs["player_transition_value_ce_real"] + 1e-3
+    )
+
+    real_logs = read(imagined=shifted, prior=real)
+    for name in ("", "_switch", "_move"):
+        assert real_logs[f"player_transition_value_delta_r2{name}"] == pytest.approx(
+            1.0, abs=1e-5
+        ), name
+    assert real_logs["player_transition_value_gain"] == pytest.approx(1.0, abs=1e-5)
+    assert real_logs["player_transition_value_delta_r2_prior"] == 0.0
+    assert real_logs["player_transition_value_gain_prior"] == 0.0
+
+    halfway = _value_head_from_logits(0.5 * (real.logits + shifted.logits))
+    half_logs = read(imagined=halfway, prior=halfway)
+    assert 0.0 < half_logs["player_transition_value_delta_r2"] < 1.0
+    assert 0.0 < half_logs["player_transition_value_gain"] < 1.0
+
+    # The split rows are the ones the axis names: the fixture legalises a
+    # move on every step, so its taken switches are all VOLUNTARY.
+    axis = inputs["axis"]
+    assert bool(axis.has_move.all())
+    assert [int(value) for value in axis.taken_switch[:, 0]] == [1, 0, 1, 0, 1, 0]
+
+
+def test_cons_coef_zero_keeps_the_panels_and_drops_the_gradient():
+    """`player_transition_cons_coef` multiplies the consistency loss in the
+    SUM only: the logged loss and the per-group gains are identical at 0
+    and 1, and the loss's gradient into the consistency error is exactly 0
+    at coef 0 -- with coef 1 as the control that the path is live."""
+    inputs = _bracket_inputs()
+    logs_by_coef = {}
+    grad_by_coef = {}
+    for coef in (0.0, 1.0):
+        config = dataclasses.replace(inputs["config"], player_transition_cons_coef=coef)
+
+        def loss_of(cons_err, config=config):
+            pred = dataclasses.replace(inputs["pred"], transition_cons_err=cons_err)
+            loss, _ = transition_losses(**{**inputs, "pred": pred, "config": config})
+            return loss
+
+        _, logs = transition_losses(**{**inputs, "config": config})
+        logs_by_coef[coef] = {key: float(value) for key, value in logs.items()}
+        grad_by_coef[coef] = jax.grad(loss_of)(inputs["pred"].transition_cons_err)
+
+    cons_keys = [
+        key
+        for key in logs_by_coef[1.0]
+        if key.startswith("player_transition_cons_gain_")
+        or key == "player_loss_transition_cons"
+    ]
+    assert "player_loss_transition_cons" in cons_keys
+    for key in cons_keys:
+        assert logs_by_coef[0.0][key] == logs_by_coef[1.0][key], key
+    assert logs_by_coef[1.0]["player_loss_transition_cons"] > 0.0
+    assert float(jnp.abs(grad_by_coef[0.0]).max()) == 0.0
+    assert float(jnp.abs(grad_by_coef[1.0]).max()) > 0.0
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_trains_v_head_off_is_bit_identical_to_the_frozen_clone(
+    real_model_and_trajectory,
+):
+    """The knob's off is the frozen clone of 2026-09-05: the same params
+    through `value_trains_v_head` True and False give the same forward,
+    every leaf of the imagined value head included -- WITH the control
+    that the imagined head does read `v_head`'s params (perturbing them
+    moves it), so the equality is not two heads ignoring the same
+    parameters."""
+    from rl.model.heads import HeadParams
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    frozen_network = _network_with_frozen_transition_value_head()
+    opened = open_zero_init_paths(params, ["action_head", "out_proj"])
+
+    live = jax.jit(network.apply)(opened, actor_input, actor_output, HeadParams())
+    frozen = jax.jit(frozen_network.apply)(
+        opened, actor_input, actor_output, HeadParams()
+    )
+    for (path, live_leaf), frozen_leaf in zip(
+        jax.tree_util.tree_leaves_with_path(live), jax.tree.leaves(frozen)
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(live_leaf),
+            np.asarray(frozen_leaf),
+            err_msg=jax.tree_util.keystr(path),
+        )
+
+    perturbed = dict(opened)
+    perturbed["params"] = dict(opened["params"])
+    perturbed["params"]["v_head"] = jax.tree.map(
+        lambda leaf: leaf + 0.1, opened["params"]["v_head"]
+    )
+    moved = jax.jit(frozen_network.apply)(
+        perturbed, actor_input, actor_output, HeadParams()
+    )
+    assert not np.array_equal(
+        np.asarray(live.transition_value_head.logits),
+        np.asarray(moved.transition_value_head.logits),
+    )
+
+
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
@@ -795,7 +978,7 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
         n_bins,
     )
 
-    def transition_only(params):
+    def transition_only(params, network=network):
         out = network.apply(params, actor_input, actor_output, HeadParams())
         batched = jax.tree.map(lambda leaf: leaf[:, None], out)
         target = jax.lax.stop_gradient(batched.dynamics_target)
@@ -819,6 +1002,7 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
             jax.lax.stop_gradient(batched.action_head.log_policy),
             jnp.asarray(CAT_VF_SUPPORT, jnp.float32),
             splits,
+            action_axis_masks(env.action_mask, batched.action_head.action_index),
             config,
         )
         return loss_ground + loss_rest
@@ -842,15 +1026,26 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
     # real trunk -- the anti-switch smoothing force of 2026-09-05 -- so
     # the transition term must reach its OWN subtree and nothing it reads:
     # not the encoder (g's input and the consistency target are both under
-    # stop_gradient) and not the shared heads (frozen params on imagined
-    # rows).
+    # stop_gradient) and not the action readout (frozen params on imagined
+    # rows). The one amendment (2026-09-06, Step 3b): the shared `v_head`
+    # trains on the imagined CLS row under `value_trains_v_head`, so the
+    # pin is {transition, v_head} with the knob on and exactly {transition}
+    # with it off -- the on/off pair is the control for both halves.
     opened = open_zero_init_paths(params, ["action_head"])
     reached = reached_by(grad_fn(opened))
     assert (
         float(jnp.abs(opened["params"]["transition"]["out_proj"]["kernel"]).max())
         == 0.0
     )
-    assert reached == {"transition"}, reached
+    assert reached == {"transition", "v_head"}, reached
+
+    frozen_network = _network_with_frozen_transition_value_head()
+    reached_frozen = reached_by(
+        jax.jit(jax.grad(lambda params: transition_only(params, frozen_network)))(
+            opened
+        )
+    )
+    assert reached_frozen == {"transition"}, reached_frozen
 
     # Positive control for the negative half: the same params, the same
     # `reached_by`, the REAL value CE and the real log-policy -- the shared

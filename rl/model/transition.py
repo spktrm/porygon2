@@ -62,11 +62,13 @@ UNIMIX = 0.01
 
 class TransitionOutput(NamedTuple):
     """Per-step outputs, all leading (T, ...). `pred` is the imagined
-    next sequence decoded from the POSTERIOR sample; `ground_prior` is the
-    grounding read of a no-gradient decode from the prior MODE, the honest
-    rollout-side number. Logits are f32; the code arrays are (T, G, K)."""
+    next sequence decoded from the POSTERIOR sample; `pred_prior` is the
+    no-gradient decode from the prior MODE and `ground_prior` its grounding
+    read, the honest rollout-side numbers. Logits are f32; the code arrays are (T, G, K).
+    """
 
     pred: jax.Array
+    pred_prior: jax.Array
     prior_logits: jax.Array
     post_logits: jax.Array
     post_one_hot: jax.Array
@@ -265,6 +267,7 @@ class TransitionModel(nn.Module):
         cls_logits = self.cls_head(pred[CLS_ROW]).astype(jnp.float32)
         return TransitionOutput(
             pred=pred,
+            pred_prior=pred_prior,
             prior_logits=prior_logits,
             post_logits=post_logits,
             post_one_hot=post_one_hot,

@@ -448,6 +448,32 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_transition_dyn_coef: float = 0.5
     player_transition_rep_coef: float = 0.1
     player_transition_free_nats: float = 0.0625
+    # Raw-row consistency (per-row normalised MSE of the imagined rows
+    # against the real next rows) inside the dynamics bracket. 2026-09-06,
+    # Step 3b: OFF. That loss is minimised by the conditional MEAN of
+    # h_{t+1}, exactly what a sampleable model must not produce, and it
+    # was the largest term the blocks saw -- out_proj_rms 0.0156 (a
+    # quarter of lecun scale) and a prior-mode grounding of 0.336 against
+    # the deleted mean head's 0.528 were its signature. The observed
+    # labels (grounding, mask, kind, done, value) carry the model, as in
+    # MuZero (no consistency term); EfficientZero's PROJECTED consistency
+    # is the fallback if the value bars fail, never 0.5 here (a cut that
+    # delays onset is falsified). The loss is still computed and logged
+    # (`player_loss_transition_cons`, `cons_gain_<group>`) as a read;
+    # 1.0 is bit-for-bit the pre-3b gradient.
+    player_transition_cons_coef: float = 0.0
+    # 2026-09-06, Step 3b: the shared v_head TRAINS on the imagined CLS
+    # row (MuZero's value target: the real t+1 win_returns through the
+    # imagined state -- the same labels the head already fits, on a wider
+    # input distribution). The trunk stays unreachable (g's input is
+    # sg'd) and the action readout stays FROZEN on imagined rows (launch
+    # check 2's anti-switch smoothing lived in that term). False = the
+    # frozen clone, bit-identical to the 2026-09-05 observer form -- the
+    # abort switch if `player_value_head_r2` leaves 0.90 +- 0.02 while
+    # the imagined-side bars pass. Read into the model config at the
+    # learner's construction sites (the model forward branches on it
+    # statically).
+    player_transition_value_trains_v_head: bool = True
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio

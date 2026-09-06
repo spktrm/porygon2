@@ -637,17 +637,23 @@ class Porygon2PlayerModel(nn.Module):
         step is paired with its POSITIONAL successor (the last step with
         itself; train_step masks it). Only the policy-readable rows enter
         -- the rollout's information set -- and BOTH ends are under
-        stop_gradient: the model is a learner-side observer of the trunk
-        and never trains it, at either t or t+1. The shared value head and
-        action readout are applied to the imagined rows through FROZEN
-        copies of their params (`clone().apply` on a stop_gradient'd
-        variable tree), so g learns to write rows the real heads already
-        read and the heads never learn from imagined rows -- with g near
-        the copy predictor the next-policy KL through a LIVE readout was
-        KL(pi_{t+1} || pi_t) on the real trunk, an unregularised
+        stop_gradient: the model never trains the trunk, at either t or
+        t+1. The action readout is applied to the imagined rows through a
+        FROZEN copy of its params (`clone().apply` on a stop_gradient'd
+        variable tree), so g learns to write rows the real readout already
+        reads and the readout never learns from imagined rows -- with g
+        near the copy predictor the next-policy KL through a LIVE readout
+        was KL(pi_{t+1} || pi_t) on the real trunk, an unregularised
         temporal-smoothing force that read anti-switch on every voluntary
         switch row (irqeetfg 1294k-1310k: prob_switch 0.04 -> 0.014). The
-        policy is masked by the REAL next legal set."""
+        shared value head is LIVE on the imagined CLS row under
+        `cfg.transition.value_trains_v_head` (2026-09-06, Step 3b: MuZero's
+        value target -- the same real t+1 win_returns the head fits on
+        real rows, through the imagined state; a head that never saw an
+        imagined row cannot be value-equivalent on one) and frozen the
+        same way as the readout otherwise. The prior-mode decode is read
+        by the frozen head either way (a no-gradient panel). The policy
+        is masked by the REAL next legal set."""
         rows = jax.lax.stop_gradient(sequence[:, POLICY_READABLE_ROWS])
         valid = row_valid[:, POLICY_READABLE_ROWS]
         # The successor written once, as a GATHER rather than slice+concat:
@@ -682,8 +688,24 @@ class Porygon2PlayerModel(nn.Module):
                 imagined[TARGET_ROWS],
             )
         )(pred)
+        if self.cfg.transition.value_trains_v_head:
+            transition_value_head = self.v_head(pred[:, CLS_ROW])
+        else:
+            transition_value_head = self.v_head.clone().apply(
+                frozen_v_head, pred[:, CLS_ROW]
+            )
+        transition_value_head_prior = self.v_head.clone().apply(
+            frozen_v_head, transition.pred_prior[:, CLS_ROW]
+        )
         error = (pred.astype(jnp.float32) - next_rows.astype(jnp.float32)) ** 2
         movement = (next_rows.astype(jnp.float32) - rows.astype(jnp.float32)) ** 2
+        # The off-manifold watch: the imagined rows' rms against the real
+        # rows' over the valid rows, per step (T,), sg'd (a read, never a
+        # force).
+        row_weight = valid.astype(jnp.float32)[..., None]
+        pred_energy = (row_weight * pred.astype(jnp.float32) ** 2).sum(axis=(-2, -1))
+        rows_energy = (row_weight * rows.astype(jnp.float32) ** 2).sum(axis=(-2, -1))
+        pred_rms = jax.lax.stop_gradient(jnp.sqrt(pred_energy / (rows_energy + 1e-6)))
         return {
             "transition_cons_err": error.sum(axis=-1),
             "transition_cons_scale": jax.lax.stop_gradient(movement.sum(axis=-1)),
@@ -691,9 +713,9 @@ class Porygon2PlayerModel(nn.Module):
             "transition_post_logits": transition.post_logits,
             "transition_ground": transition.ground,
             "transition_ground_prior": transition.ground_prior,
-            "transition_value_head": self.v_head.clone().apply(
-                frozen_v_head, pred[:, CLS_ROW]
-            ),
+            "transition_value_head": transition_value_head,
+            "transition_value_head_prior": transition_value_head_prior,
+            "transition_pred_rms": pred_rms,
             "transition_log_policy": legal_log_policy(logits, next_mask),
             "transition_mask_logits": transition.mask_logits,
             "transition_kind_logits": transition.kind_logits,

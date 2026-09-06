@@ -224,6 +224,10 @@ def get_player_model_config(
     cfg.transition.cls_head.mlp = ConfigDict()
     cfg.transition.cls_head.mlp.layer_sizes = (entity_size, NUM_REQUEST_TYPES + 1)
     cfg.transition.action_head = cfg.action_head
+    # Whether the shared v_head trains through the imagined CLS row
+    # (learner-only; set from `player_transition_value_trains_v_head` at
+    # the learner's construction sites). False applies a frozen copy.
+    cfg.transition.value_trains_v_head = True
     # Search over the transition model (2026-09-06, rl/model/search.py),
     # rung 1: depth-1 expectimax. ACTOR-side only and off by default -- an
     # eval slot in rl/online/main.py builds its own config with `enabled`

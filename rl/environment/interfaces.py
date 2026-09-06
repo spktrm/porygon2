@@ -160,7 +160,11 @@ class PlayerActorOutput:
     # prior / post logits (T, G, K) f32; ground (T, NUM_DYNAMICS_ROWS, D)
     # the grounding head on the posterior-decoded rows and ground_prior
     # the same read of a no-gradient prior-mode decode; value_head the
-    # shared critic on the imagined CLS row; log_policy (T, 295) the
+    # shared critic on the imagined CLS row (LIVE under
+    # `transition.value_trains_v_head`, else a frozen clone) and
+    # value_head_prior its frozen clone on the prior-mode decode;
+    # pred_rms (T,) rms(pred) / rms(rows) over the valid rows, the
+    # off-manifold watch; log_policy (T, 295) the
     # shared readout on the imagined rows under the REAL next mask;
     # mask_logits (T, 295) the next-mask head; kind_logits (T, 4) and
     # done_logit (T,) the imagined CLS row's request kind and done.
@@ -173,6 +177,10 @@ class PlayerActorOutput:
     transition_value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
+    transition_value_head_prior: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
+    )
+    transition_pred_rms: ArrayLike = ()
     transition_log_policy: ArrayLike = ()
     transition_mask_logits: ArrayLike = ()
     transition_kind_logits: ArrayLike = ()
