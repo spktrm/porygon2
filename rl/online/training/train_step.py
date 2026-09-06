@@ -1024,7 +1024,7 @@ def train_step(
         # legal NON-switch, which also admitted WILDCARD / OTHER / TARGET
         # cells — so a row offering {switch, pass} counted as a stay/switch
         # decision here while the identically-described `has_both` in the Q
-        # panels excluded it, and CLAUDE.md 3's rule reads the two families
+        # panels excluded it, and LESSONS.md 3's rule reads the two families
         # against each other. A stay/switch decision only means something
         # when staying and attacking is actually on offer.
         switch_actions = axis.switch_cells

@@ -255,7 +255,7 @@ def test_untruncated_tail_window_forward_matches_within_bf16(
     asserts the model's output is stable to within the precision it is
     computed in.
 
-    Tolerance is deliberately looser than CLAUDE.md 2's ~3e-3 bf16 rule:
+    Tolerance is deliberately looser than LESSONS.md 2's ~3e-3 bf16 rule:
     that figure is for a single log_softmax, not for one carried through a
     177-step recurrent scan.
     """

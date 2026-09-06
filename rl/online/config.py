@@ -359,12 +359,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # lambda=1.0 MC-anchor row of the aux spectrum used to keep a live
     # bootstrap-bias readout (player_bootstrap_gap) on this
     # bootstrap-heavy target; the aux heads went 2026-08-21, so that
-    # instrument is gone with them (CLAUDE.md ledger).
+    # instrument is gone with them (LESSONS.md ledger).
     player_lambda: float = 0.8
 
     # No adaptivity/entropy controller fields anymore. The
     # AdaptivityController was removed entirely 2026-08-13 (hard to tune,
-    # harder to predict — see CLAUDE.md 10
+    # harder to predict — see LESSONS.md 10
     # for the bug history). Its entropy sensors are still logged from
     # train_step (player_action_normalized_entropy,
     # player_normalized_modality_entropy); modality collapse (1330 died
@@ -540,7 +540,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # SAC-style dual temperatures holding each at a normalised target
     # (2026-08-28) are removed with the forward-KL-to-uniform term — the
     # per-level entropies survive as OBSERVER panels only
-    # (loss.factorised_entropies). Revert handles in the CLAUDE.md
+    # (loss.factorised_entropies). Revert handles in the LESSONS.md
     # ledgers.
     player_ent_coef: float = 0.01
     # The ZERO-AVOIDING term (loss.uniform_kl_modalities): forward KL from
@@ -584,7 +584,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # switch's losing value. Replaced by the per-level ENTROPY terms above
     # (the PPO surrogate was split per-level in the same pass and
     # re-joined 2026-08-28 — see that revert commit) — see train_step's
-    # policy bracket and the CLAUDE.md ledgers for history and handles.
+    # policy bracket and the LESSONS.md ledgers for history and handles.
     # Snap period of the reference: reg_params <- target_params, in
     # place, every N steps (NashPG's K inner updates; their paper runs
     # re-clone every 10k for 25 outer rounds). Frozen between snaps —

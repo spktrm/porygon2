@@ -260,7 +260,7 @@ def _has(tree, path) -> bool:
 # kernel 0.0058 -> 0.105 -- and was invisible on wandb; diagnosing it needed
 # checkpoint forensics. The head that grew those numbers is gone, but the
 # flat readout has its own way to fail and it is the same shape: the bilinear
-# is a two-factor product with ONE zero-init factor, and CLAUDE.md 13 records
+# is a two-factor product with ONE zero-init factor, and LESSONS.md 13 records
 # a learned grid behind a zero-init scale sitting at lecun init for 60k steps.
 #
 # Expected at init and what to watch:
@@ -463,7 +463,7 @@ class ActionAxisMasks(NamedTuple):
     which also admits WILDCARD / OTHER / TARGET cells. Both called
     themselves "a switch and a non-switch are both legal", so the
     `player_policy_*` and `player_q_*` families were scoped to different row
-    populations while CLAUDE.md 3's decision rule reads one against the
+    populations while LESSONS.md 3's decision rule reads one against the
     other (`absadv_ratio` against `player_q_switch_target_frac`).
 
     Unified 2026-08-25 on the STRICT reading: a stay/switch decision only

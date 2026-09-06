@@ -91,7 +91,7 @@ def test_every_logit_is_exactly_zero_at_init():
 
 
 def test_zero_init_query_gets_live_gradient_and_the_key_unfreezes():
-    """The two-factor stall guard (CLAUDE.md 13: a learned grid behind a
+    """The two-factor stall guard (LESSONS.md 13: a learned grid behind a
     zero-init scale sat at lecun init for 60k steps).
 
     `query` is the zero factor, but its gradient is a rank-1 outer product

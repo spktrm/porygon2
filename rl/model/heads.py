@@ -219,7 +219,7 @@ class FlatActionReadout(nn.Module):
     magnet and for the zero-avoiding KL. `calculate_hierarchical_prior` was
     that anchor while the head was hierarchical and retires with it.
 
-    Getting to exact zero WITHOUT re-creating the two-factor stall (CLAUDE.md
+    Getting to exact zero WITHOUT re-creating the two-factor stall (LESSONS.md
     13: a learned grid behind a zero-init scale sat at lecun init for 60k
     steps) is the whole subtlety here:
 

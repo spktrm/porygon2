@@ -22,7 +22,7 @@ is a standalone research program.
 > (overfit-one-batch + martingale audit) and `baseline.py` (hand-rule
 > lower bound) — were deleted in the feature-bloat pass. None was
 > imported by anything; each was a standalone `__main__`. The verdict
-> rules they encoded are preserved in `CLAUDE.md` 12, and the code is
+> rules they encoded are preserved in `LESSONS.md` 12, and the code is
 > one command away: `git checkout pre-cleanup-2026-08-21 -- rl/offline/`.
 > The trainer, model, dataset, config and artifact boundary are untouched.
 
@@ -113,7 +113,7 @@ recurrent state, `announced_states_at_requests`, `announced_loss_weight`,
 the manifest's `announced_states` flag) was deleted with the history
 encoder restructure: it had been broken since the 2026-09-01 GRU hoist
 and never shipped a validated critic. The skill/luck decomposition and
-dice-excised PBRS it was built for are recorded in the CLAUDE.md ledger;
+dice-excised PBRS it was built for are recorded in the LESSONS.md ledger;
 `announced_leak.py`, its one-sided invariance check, went 2026-08-21.
 
 ## Stage 4 — consumption by the RL pipeline
