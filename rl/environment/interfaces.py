@@ -172,6 +172,7 @@ class PlayerActorOutput:
     transition_cons_scale: ArrayLike = ()
     transition_prior_logits: ArrayLike = ()
     transition_post_logits: ArrayLike = ()
+    transition_post_one_hot: ArrayLike = ()
     transition_ground: ArrayLike = ()
     transition_ground_prior: ArrayLike = ()
     transition_value_head: CategoricalValueHeadOutput = field(

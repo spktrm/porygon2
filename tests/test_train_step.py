@@ -232,6 +232,12 @@ def test_train_step_smoke():
     ):
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
 
+    # The learner forward carries its "sampling" rng: the decoded posterior
+    # code is a draw, so on fresh (near-flat) posterior logits it is the
+    # mode on a small fraction of transitions. Exactly 1.0 here is the
+    # silent fallback to the argmax decode.
+    assert 0.0 <= float(logs["player_transition_post_sample_is_mode"]) < 0.5
+
     # The gradient actually reaches both halves of the model.
     assert float(logs["player_action_head_grad_norm"]) > 0.0
     assert float(logs["player_trunk_grad_norm"]) > 0.0

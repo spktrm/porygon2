@@ -575,6 +575,78 @@ def test_out_proj_is_the_single_zero_factor(module_and_params):
         assert rms(grads[behind]) > 0.0, behind
 
 
+def test_straight_through_sample_draws_from_the_posterior_with_a_key():
+    """With a key the forward one-hot is a categorical DRAW from `probs`
+    (every class the unimix floor reaches is decoded at its own rate);
+    without one it is the argmax -- the old mode decode. Either way the
+    backward is the probabilities' own gradient."""
+    from rl.model.transition import straight_through_sample
+
+    probs = jnp.asarray([[0.6, 0.3, 0.1, 0.0]] * 4000, jnp.float32).reshape(4000, 1, 4)
+    mode = straight_through_sample(probs, None)
+    np.testing.assert_array_equal(np.asarray(mode), np.asarray(probs > 0.5))
+    key = jax.random.PRNGKey(3)
+    drawn = straight_through_sample(probs, key)
+    np.testing.assert_allclose(np.asarray(drawn).sum(-1), 1.0, atol=1e-6)
+    # The mode decode is the CONTROL: its frequencies are one-hot on the
+    # leading class; the draw's match the probabilities.
+    np.testing.assert_array_equal(np.asarray(mode).mean(0)[0], [1.0, 0.0, 0.0, 0.0])
+    np.testing.assert_allclose(
+        np.asarray(drawn).mean(0)[0], [0.6, 0.3, 0.1, 0.0], atol=0.03
+    )
+    # A class at exactly zero mass is never drawn.
+    assert float(np.asarray(drawn)[..., 3].sum()) == 0.0
+    # Different keys give different draws; the same key the same draw.
+    again = straight_through_sample(probs, jax.random.PRNGKey(4))
+    assert not np.array_equal(np.asarray(drawn), np.asarray(again))
+    np.testing.assert_array_equal(
+        np.asarray(drawn), np.asarray(straight_through_sample(probs, key))
+    )
+    # Straight-through: d(out)/d(probs) is the identity in both forms.
+    cotangent = jnp.asarray(
+        np.random.default_rng(0).normal(size=probs.shape), jnp.float32
+    )
+    for rng in (None, key):
+        _, vjp = jax.vjp(lambda p: straight_through_sample(p, rng), probs)
+        np.testing.assert_allclose(np.asarray(vjp(cotangent)[0]), np.asarray(cotangent))
+
+
+def test_module_samples_the_posterior_only_under_a_sampling_rng(module_and_params):
+    """`apply` without a "sampling" rng decodes the posterior's mode
+    (init, probes, the offline harness); with one it draws, so the
+    decoded code is not always the mode and the key is split per step."""
+    module, cfg, params, apply, inputs = module_and_params
+    mode = apply(params, *inputs)
+    np.testing.assert_array_equal(
+        np.asarray(mode.post_one_hot.argmax(-1)),
+        np.asarray(mode.post_logits.argmax(-1)),
+    )
+    # Flat posterior logits (fresh params) make the draw a near-uniform
+    # categorical over 16 classes: across many keys the drawn class is
+    # the mode a small fraction of the time, never always.
+    # The rng'd trace is a different executable from the fixture's, so the
+    # logits agree to kernel-selection precision, never bitwise.
+    is_mode = []
+    for seed in range(64):
+        drawn = apply(params, *inputs, rngs={"sampling": jax.random.PRNGKey(seed)})
+        np.testing.assert_allclose(
+            np.asarray(drawn.post_logits),
+            np.asarray(mode.post_logits),
+            rtol=1e-4,
+            atol=1e-5,
+        )
+        assert drawn.pred.shape == mode.pred.shape
+        is_mode.append(
+            np.asarray(drawn.post_one_hot.argmax(-1) == mode.post_logits.argmax(-1))
+        )
+    is_mode = np.stack(is_mode)
+    assert 0.0 < is_mode.mean() < 0.5
+    # Per-step keys: the three steps do not all draw the same class.
+    drawn = apply(params, *inputs, rngs={"sampling": jax.random.PRNGKey(0)})
+    classes = np.asarray(drawn.post_one_hot.argmax(-1))
+    assert len({tuple(row) for row in classes}) > 1
+
+
 def test_code_groups_zero_drops_the_code_path_only():
     module, cfg = _module(code_groups=0)
     rng = np.random.default_rng(0)
@@ -598,6 +670,17 @@ def test_code_groups_zero_drops_the_code_path_only():
     out = jax.jit(module.apply)(params, rows, valid, cells, next_rows, next_valid)
     assert out.prior_logits.shape == (2, 0, cfg.code_classes)
     np.testing.assert_array_equal(np.asarray(out.pred), np.asarray(rows))
+    # No code, no draw: a "sampling" rng is accepted and unused.
+    with_rng = module.apply(
+        params,
+        rows,
+        valid,
+        cells,
+        next_rows,
+        next_valid,
+        rngs={"sampling": jax.random.PRNGKey(0)},
+    )
+    np.testing.assert_array_equal(np.asarray(with_rng.pred), np.asarray(out.pred))
 
 
 # ---- the loss bracket ------------------------------------------------
@@ -619,6 +702,9 @@ def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None)
         )
 
     rows = len(POLICY_READABLE_ROWS)
+    post_logits = jnp.asarray(
+        rng.normal(size=(num_steps, 1, code_groups, code_classes)), jnp.float32
+    )
     return PlayerActorOutput(
         transition_cons_err=jnp.asarray(rng.random((num_steps, 1, rows)), jnp.float32),
         transition_cons_scale=jnp.asarray(
@@ -627,9 +713,8 @@ def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None)
         transition_prior_logits=jnp.asarray(
             rng.normal(size=(num_steps, 1, code_groups, code_classes)), jnp.float32
         ),
-        transition_post_logits=jnp.asarray(
-            rng.normal(size=(num_steps, 1, code_groups, code_classes)), jnp.float32
-        ),
+        transition_post_logits=post_logits,
+        transition_post_one_hot=jax.nn.one_hot(post_logits.argmax(-1), code_classes),
         value_head=value_head(),
         transition_value_head=value_head(),
         transition_value_head_prior=value_head(),

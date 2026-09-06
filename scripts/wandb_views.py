@@ -643,7 +643,10 @@ def rl_sections():
                     # Code usage from the batch marginals, per group (mean
                     # and the worst group). 1 = a dead group; 16 = uniform.
                     # Gate: post min >= 1.5, prior min >= 1.3. agree = the
-                    # prior's argmax matches the posterior's.
+                    # prior's argmax matches the posterior's. sample_is_mode
+                    # = share of transitions where the DRAWN posterior code
+                    # is its argmax in every group: exactly 1.0 means the
+                    # learner ran without its sampling rng (argmax decode).
                     "Transition code perplexity",
                     [
                         "player_transition_post_perplexity_mean",
@@ -651,6 +654,7 @@ def rl_sections():
                         "player_transition_prior_perplexity_mean",
                         "player_transition_prior_perplexity_min",
                         "player_transition_prior_post_agree",
+                        "player_transition_post_sample_is_mode",
                     ],
                 ),
                 lp(

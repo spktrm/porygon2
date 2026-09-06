@@ -186,6 +186,7 @@ def test_opp_private_team_cannot_reach_the_policy(
     for leaf in (
         "transition_prior_logits",
         "transition_post_logits",
+        "transition_post_one_hot",
         "transition_ground",
         "transition_ground_prior",
         "transition_mask_logits",

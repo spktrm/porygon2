@@ -85,11 +85,19 @@ def unimix_probs(logits: jax.Array) -> jax.Array:
     return (1.0 - UNIMIX) * probs + UNIMIX / logits.shape[-1]
 
 
-def straight_through_sample(probs: jax.Array) -> jax.Array:
-    """Argmax one-hot forward, the probabilities' gradient backward."""
-    hard = jax.nn.one_hot(
-        jnp.argmax(probs, axis=-1), probs.shape[-1], dtype=probs.dtype
-    )
+def straight_through_sample(probs: jax.Array, rng: jax.Array | None) -> jax.Array:
+    """One-hot forward, the probabilities' gradient backward. With a key the
+    forward is a categorical DRAW from `probs` (the unimix floor is what
+    makes every class reachable), so every class the posterior gives mass
+    to is decoded and trained through the decode; without one it is the
+    argmax -- the mode decode, which under straight-through only ever
+    decodes each group's leading class and lets the rest die (usage
+    perplexity pinned ~2.6 of 16 for 400k steps)."""
+    if rng is None:
+        index = jnp.argmax(probs, axis=-1)
+    else:
+        index = jax.random.categorical(rng, jnp.log(probs), axis=-1)
+    hard = jax.nn.one_hot(index, probs.shape[-1], dtype=probs.dtype)
     return hard + probs - jax.lax.stop_gradient(probs)
 
 
@@ -225,6 +233,7 @@ class TransitionModel(nn.Module):
         action_cell: jax.Array,
         next_rows: jax.Array,
         next_valid: jax.Array,
+        rng: jax.Array | None,
     ) -> TransitionOutput:
         src_row, tgt_row = self.action_rows(rows, action_cell)
         code_shape = (self.cfg.code_groups, self.cfg.code_classes)
@@ -243,7 +252,7 @@ class TransitionModel(nn.Module):
                 axis=-1,
             )
             post_logits = self.code_logits(self.posterior_read_net, post_features)
-            post_one_hot = straight_through_sample(unimix_probs(post_logits))
+            post_one_hot = straight_through_sample(unimix_probs(post_logits), rng)
             prior_mode = jax.nn.one_hot(
                 jnp.argmax(prior_logits, axis=-1), code_shape[1], dtype=jnp.float32
             )
@@ -289,5 +298,12 @@ class TransitionModel(nn.Module):
         """Leading axis T on every input: rows (T, 73, D), row_valid (T,
         73), action_cell (T,), next_rows / next_valid the same rows one
         step on (the caller pairs them; the last step is self-paired and
-        masked by the loss)."""
-        return jax.vmap(self._step)(rows, row_valid, action_cell, next_rows, next_valid)
+        masked by the loss). A "sampling" rng, when the caller supplies
+        one, draws the posterior code per step; without it (init, probes,
+        the offline harness) the posterior decodes its mode."""
+        keys = None
+        if self.has_code and self.has_rng("sampling"):
+            keys = jax.random.split(self.make_rng("sampling"), rows.shape[0])
+        return jax.vmap(self._step)(
+            rows, row_valid, action_cell, next_rows, next_valid, keys
+        )

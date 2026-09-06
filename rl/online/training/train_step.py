@@ -419,6 +419,17 @@ def transition_losses(
             (prior.argmax(-1) == post.argmax(-1)).all(-1).astype(jnp.float32),
             valid_step,
         )
+        # Liveness of the posterior's sampling rng: the share of decoded
+        # codes that are the posterior's mode. Exactly 1.0 means the
+        # learner forward ran WITHOUT its "sampling" rng and the decode
+        # silently fell back to the argmax (the dead-class regime).
+        post_one_hot = pred.transition_post_one_hot[:-1]
+        logs["player_transition_post_sample_is_mode"] = average(
+            (post_one_hot.argmax(-1) == post_logits.argmax(-1))
+            .all(-1)
+            .astype(jnp.float32),
+            valid_step,
+        )
     else:
         loss_kl = jnp.zeros((), jnp.float32)
 
@@ -838,11 +849,20 @@ def train_step(
 
     def player_loss_fn(params: Params):
 
+        # The transition posterior draws its code per step; one key per
+        # batch element, derived from the step count so the draw is
+        # deterministic per update and needs no checkpoint leaf. The
+        # target and reg forwards read no transition output and get none.
+        sampling_keys = jax.random.split(
+            jax.random.fold_in(jax.random.key(0), player_state.step_count),
+            player_transitions.env_output.done.shape[1],
+        )
         learner_player_pred = player_state.apply_fn(
             params,
             player_actor_input,
             player_transitions.agent_output.actor_output,
             HeadParams(),
+            rngs={"sampling": sampling_keys},
         )
 
         learner_value_head = learner_player_pred.value_head
