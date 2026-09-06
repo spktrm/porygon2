@@ -1155,6 +1155,66 @@ predictability under its factorised prior (arxiv.org/abs/2301.04104); this
 run has rep coefficient 0 and is not the reference objective. Stochastic
 MuZero also differs through its afterstate model and VQ chance encoder.
 
+## Probe ledger — 2026-09-07 Step 1: the calibration rescored on the gate's own instrument
+
+The 2026-09-06 expectation-form read (−0.057, "the decode path is the
+falsified piece") was scored with `search_samples_probe._r2`, the CENTRED
+R² (copy = −n·mean(Δ)²/SST), per-transition means, no interval, 32 prior
+draws. Rescored with the probe rewritten to the learner's UNCENTRED
+`delta_gain` (copy = 0 exactly), sums pooled over transitions before
+dividing, the prior expectation taken EXACTLY over all 256 joint codes
+weighted by the product prior, a 1000-replicate bootstrap over whole
+GAMES (both self-play sides together), and splits by taken modality,
+newly-valid rows at t+1 and the (t, t+1) request-kind pair. 40 self-play
+games / 80 sides / 2343 decisions / 1199 transitions, the SAME games for
+both checkpoints (`--games-pkl`, played by ckpt_01800000, seed 1).
+
+| read (`value_delta_r2`, copy 0 / real 1) | ckpt_01800000 | ckpt_01835216 |
+|---|---|---|
+| all: posterior | +0.333 [+0.215, +0.447] | +0.341 [+0.271, +0.410] |
+| all: prior MODE | −0.208 [−0.420, −0.007] | −0.196 [−0.380, −0.054] |
+| all: prior EXPECTATION (exact 256) | **−0.073 [−0.186, +0.040]** | **−0.056 [−0.151, +0.020]** |
+| all: one prior sample | −0.242 [−0.419, −0.085] | — |
+| move taken (n 924): expectation | −0.106 [−0.220, +0.005] | −0.114 [−0.217, −0.031] |
+| switch taken (n 275): expectation | +0.124 [−0.150, +0.395] | +0.178 [+0.072, +0.242] |
+| newly-valid rows at t+1 (n 417): posterior / expectation | +0.153 / −0.067 | +0.200 / −0.017 |
+| no newly-valid row (n 782): posterior / expectation | +0.403 / −0.075 | — |
+| request switch → move (n 139): posterior / expectation | +0.263 / −0.014 | +0.164 / −0.034 |
+| copy under the centred R² (the 2026-09-06 offset) | −0.001 all, −0.274 on move → switch | — |
+
+`expect_sigma_z` (std of V over the exact code mixture) 0.061;
+`prior_mode_mass` (the joint mode's prior probability) 0.48;
+`abs_real_delta_v` 0.125.
+
+**Verdict, on the pre-registered clause (docs/latent-world-model-plan.md
+§5 Step 1).** The all-rows interval STRADDLES 0 on both checkpoints: the
+block on C (the two-step unroll) and rung 2 (the pUCT tree) stays, and
+Steps 3–4 (the clean consistency control, the prior-family control)
+decide. The centred-vs-uncentred offset the audit raised is real but
+numerically negligible on all rows (−0.001) — the 2026-09-06 number was
+not wrong for that reason; it was unpooled, sampled and interval-free.
+What the splits add: on MOVE rows (77% of transitions) the prior
+expectation is below copy with the interval clear of 0 at 1.835M; on
+SWITCH rows it is above copy, clear of 0. The prior's mixture is
+mis-calibrated where the opponent's move choice is the chance content,
+and useful where the branch is which Pokémon comes in. The posterior
+decode reads 0.15–0.20 where a row becomes valid at t+1 against 0.40
+where none does — the validity defect (Step 2) reaches the CLS read
+through the blocks even though CLS itself is never masked. The mode
+decode is worse than the expectation everywhere (−0.20 vs −0.06), so the
+learner's `_prior` panels remain the pessimistic instrument; the
+expectation is the number search consumes.
+
+| mechanism | what | why |
+|---|---|---|
+| `search_samples_probe.py`: `delta_gain` (uncentred, primary) + `r2_centred` (+ `copy_delta_r2_centred`), `code_grid` + `--calibration-enumerate`, `resample_games` + `--bootstrap N`, `calibration_splits`, `--calibration-only`, `Transition.{game,kind,next_kind,newly_valid}`, `prior_mode_mass`; `tests/test_search_samples_probe.py` (copy 0 / real 1 on the uncentred read, the centred copy offset as the positive control, the code grid + product weights against the exact mixture, sides kept together by the bootstrap) | the accounting fix; `value_delta_r2_*` now means the SAME formula on the learner and the probe | `train_step.delta_gain_terms` + `player_transition_value_delta_{sse,energy}{,_switch,_move}` and `_sse_prior` panels (logs only, bit-identical): the switch split's per-batch ratio is dominated by tiny denominators, the window read is 1 − mean(sse)/mean(energy) — wandb view "Transition delta sums" |
+
+Reproduce: `PS_SERVICE_URI=ws://localhost:8081 env/bin/python -m
+rl.offline.search_samples_probe --ckpt ckpts/gen9/ckpt_01800000 --games 40
+--pairs 4 --roots 1200 --calibration-only --calibration-enumerate
+--bootstrap 1000 --games-pkl <pkl> --seed 1` (second service from
+`service/`: `PORT=8081 MAX_WORKERS=2 node dist/server/index.js`).
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

@@ -760,6 +760,24 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # The two sums behind every delta_r2 panel (2026-09-07
+                    # audit): a split with few rows per batch (switch)
+                    # logs per-batch ratios of magnitude > 100, so the
+                    # pooled read over a window is 1 - mean(sse) /
+                    # mean(energy) from THESE, never the mean of the
+                    # ratio panel.
+                    "Transition delta sums (pool: 1 - mean sse / mean energy)",
+                    [
+                        "player_transition_value_delta_sse",
+                        "player_transition_value_delta_energy",
+                        "player_transition_value_delta_sse_prior",
+                        "player_transition_value_delta_sse_switch",
+                        "player_transition_value_delta_energy_switch",
+                        "player_transition_value_delta_sse_move",
+                        "player_transition_value_delta_energy_move",
+                    ],
+                ),
+                lp(
                     # The three CEs behind value_gain, all against the
                     # t+1 label: the root's V (copy), the imagined V
                     # (loss_transition_value), the prior-mode decode's V,

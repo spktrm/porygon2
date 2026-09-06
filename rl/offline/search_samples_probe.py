@@ -22,12 +22,24 @@ estimates the live search would act on. Reported per root:
 
 `--calibration` (Step 3b's pre-fix baseline) adds, per root that has a
 real next request: the imagined CHANGE in value against the real change
-(`value_delta_r2`, R^2 -- the copy predictor scores exactly 0), and the
-value CE improvement over the copy baseline scaled so copy = 0 and the
-real next state = 1 (`value_gain`). Both from the POSTERIOR decode (the
-learner's read) and from the prior MODE (the rollout's). The offline
-label is the game's Monte Carlo OUTCOME one-hot over CAT_VF_SUPPORT, not
-the learner's v-trace two-hot -- more variance, same sign.
+(`value_delta_r2` -- the learner panel's UNCENTRED form, 1 - SSE /
+sum(delta^2), so the copy predictor scores exactly 0 and the real next
+state 1; the centred R^2 is reported beside it as `_centred`, where copy
+scores -n * mean(delta)^2 / SST -- the 2026-09-06 read was centred and
+mis-documented as copy = 0), and the value CE improvement over the copy
+baseline scaled so copy = 0 and the real next state = 1 (`value_gain`).
+From the POSTERIOR decode (the learner's read), the prior MODE (the
+rollout's), the prior EXPECTATION (the number search consumes) and a
+single prior SAMPLE. Sums are pooled over transitions BEFORE any
+division; `--bootstrap N` resamples whole GAMES (both self-play sides
+together) for a 95% interval on every delta read; `--calibration-enumerate`
+takes the expectation over every joint code exactly (K^G decodes per
+transition, no Monte Carlo term) instead of `--calibration-samples`
+draws. Splits: switch / move taken, any row newly valid at t+1 (the rows
+`imagine` zeroes by construction), and the (t, t+1) request-kind pair.
+The offline label is the game's Monte Carlo OUTCOME one-hot over
+CAT_VF_SUPPORT, not the learner's v-trace two-hot -- more variance, same
+sign.
 
     PS_SERVICE_URI=ws://localhost:8081 env/bin/python \\
         rl/offline/search_samples_probe.py --ckpt ckpts/gen9/ckpt_01560000
@@ -49,6 +61,7 @@ import numpy as np  # noqa: E402
 from scipy.stats import kendalltau  # noqa: E402
 
 from rl.environment.data import CAT_VF_SUPPORT, CELL_MODALITY_MASK  # noqa: E402
+from rl.environment.protos.features_pb2 import InfoFeature, RequestType  # noqa: E402
 from rl.environment.protos.service_pb2 import ModalityEnum  # noqa: E402
 from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.constants import (  # noqa: E402
@@ -71,6 +84,11 @@ SWITCH = ModalityEnum.MODALITY_ENUM__SWITCH
 IS_SWITCH_CELL = np.asarray(CELL_MODALITY_MASK) == SWITCH
 LIVE_TEMP = 0.1
 SAMPLE_COUNTS = (1, 8, 32, 64)
+KIND_NAMES = {
+    RequestType.REQUEST_TYPE__MOVE: "move",
+    RequestType.REQUEST_TYPE__SWITCH: "switch",
+    RequestType.REQUEST_TYPE__TEAM: "team",
+}
 
 
 def _encode(module, actor_input, actor_output):
@@ -142,24 +160,52 @@ class Root:
     root_value: float
 
 
+def code_grid(code_groups: int, code_classes: int) -> jax.Array:
+    """Every joint code as one-hots, (K^G, G, K) -- the exact support the
+    prior's expectation is taken over under `--calibration-enumerate`."""
+    axes = np.meshgrid(*[np.arange(code_classes)] * code_groups, indexing="ij")
+    index = np.stack(axes, -1).reshape(-1, code_groups)
+    return jax.nn.one_hot(index, code_classes, dtype=jnp.float32)
+
+
 def _calibration(
-    module, rows, row_valid, action, next_rows, next_valid, rng, num_samples
+    module,
+    rows,
+    row_valid,
+    action,
+    next_rows,
+    next_valid,
+    rng,
+    num_samples,
+    enumerate_codes,
 ):
     """V on the real root, the real next request, the posterior decode, the
     prior-MODE decode (the learner's `_prior` panels) and the prior
-    EXPECTATION decode: `num_samples` codes drawn from the transition prior
-    at the TAKEN action, each decoded with `imagine`, V averaged over z --
-    the number search reads (`Q(a) = E_z[V(g(h, a, z))]`). `sample` is the
-    first draw alone (one rollout branch); `expect_sigma_z` the std of V
-    over the draws. Expectations and f32 logits, one transition."""
+    EXPECTATION decode: codes from the transition prior at the TAKEN
+    action, each decoded with `imagine`, V averaged over z -- the number
+    search reads (`Q(a) = E_z[V(g(h, a, z))]`). With `enumerate_codes`
+    every joint code is decoded and weighted by its prior probability
+    (exact); otherwise `num_samples` draws weighted equally. `sample` is
+    one prior draw alone (one rollout branch); `expect_sigma_z` the std of
+    V over z; `prior_mode_mass` the joint mode's prior probability.
+    Expectations and f32 logits, one transition."""
     transition = module.transition
     out = transition._step(rows, row_valid, action, next_rows, next_valid, None)
     prior_logits = transition.prior(rows, row_valid, action)
     code_probs = unimix_probs(prior_logits)
-    samples = jax.random.categorical(
-        rng, jnp.log(code_probs), axis=-1, shape=(num_samples, *code_probs.shape[:-1])
-    )
-    code_one_hot = jax.nn.one_hot(samples, code_probs.shape[-1], dtype=jnp.float32)
+    if enumerate_codes:
+        code_one_hot = code_grid(*code_probs.shape)
+        weights = jnp.prod(jnp.sum(code_one_hot * code_probs[None], -1), -1)
+    else:
+        samples = jax.random.categorical(
+            rng,
+            jnp.log(code_probs),
+            axis=-1,
+            shape=(num_samples, *code_probs.shape[:-1]),
+        )
+        code_one_hot = jax.nn.one_hot(samples, code_probs.shape[-1], dtype=jnp.float32)
+        weights = jnp.full((num_samples,), 1.0 / num_samples, jnp.float32)
+    pick = jax.random.categorical(rng, jnp.log(weights))
     src_row, tgt_row = transition.action_rows(rows, action)
     imagined = jax.vmap(transition.imagine, (None, None, None, None, 0))(
         rows, row_valid, src_row, tgt_row, code_one_hot
@@ -178,11 +224,13 @@ def _calibration(
         head = module.v_head(cls)
         values[f"{name}_v"] = head.expectation
         values[f"{name}_logits"] = head.logits
-    values["expect_v"] = sampled_v.mean(0)
-    values["expect_logits"] = jnp.log(sampled_probs.mean(0) + 1e-8)
-    values["expect_sigma_z"] = sampled_v.std(0)
-    values["sample_v"] = sampled_v[0]
-    values["sample_logits"] = sampled.logits[0]
+    expect_v = weights @ sampled_v
+    values["expect_v"] = expect_v
+    values["expect_logits"] = jnp.log(weights @ sampled_probs + 1e-8)
+    values["expect_sigma_z"] = jnp.sqrt(weights @ (sampled_v - expect_v) ** 2)
+    values["prior_mode_mass"] = jnp.prod(code_probs.max(-1))
+    values["sample_v"] = sampled_v[pick]
+    values["sample_logits"] = sampled.logits[pick]
     return values
 
 
@@ -191,6 +239,10 @@ class Transition:
     values: dict[str, np.ndarray]
     outcome: float
     is_switch: bool
+    game: int
+    kind: int
+    next_kind: int
+    newly_valid: bool
 
 
 def _searched(log_pi, estimate, temp):
@@ -281,9 +333,20 @@ def collect(net, variables, chunks, roots, num_samples, samples_per_call, seed):
     return out
 
 
-def collect_calibration(net, variables, chunks, outcomes, roots, num_samples, seed):
-    """One record per root whose next request is real: `outcomes[i]` is
-    the terminal result of the side chunk i belongs to."""
+def collect_calibration(
+    net,
+    variables,
+    chunks,
+    outcomes,
+    games,
+    roots,
+    num_samples,
+    seed,
+    enumerate_codes=False,
+):
+    """One record per root whose next request is real: `outcomes[i]` /
+    `games[i]` are the terminal result and the game of the side chunk i
+    belongs to."""
     encode = jax.jit(
         jax.vmap(
             lambda params, actor_input, actor_output: net.apply(
@@ -294,7 +357,9 @@ def collect_calibration(net, variables, chunks, outcomes, roots, num_samples, se
         )
     )
     calibrate = jax.jit(
-        lambda params, *args: net.apply(params, *args, num_samples, method=_calibration)
+        lambda params, *args: net.apply(
+            params, *args, num_samples, enumerate_codes, method=_calibration
+        )
     )
     dev_variables = jax.device_put(variables)
     rng = jax.random.PRNGKey(seed)
@@ -311,6 +376,12 @@ def collect_calibration(net, variables, chunks, outcomes, roots, num_samples, se
         actor_output = batch.player_transitions.agent_output.actor_output
         rows, row_valid = encode(dev_variables, actor_input, actor_output)
         actions = np.asarray(actor_output.action_head.action_index)
+        kinds = np.asarray(
+            batch.player_transitions.env_output.info[
+                :, 0, InfoFeature.INFO_FEATURE__REQUEST_TYPE
+            ]
+        )
+        valid_np = np.asarray(row_valid[:, 0], bool)
         for step in steps:
             if step + 1 >= usable.shape[0] or not usable[step + 1]:
                 continue
@@ -330,6 +401,10 @@ def collect_calibration(net, variables, chunks, outcomes, roots, num_samples, se
                     values=jax.tree.map(np.asarray, read),
                     outcome=outcomes[chunk_index],
                     is_switch=bool(IS_SWITCH_CELL[action]),
+                    game=games[chunk_index],
+                    kind=int(kinds[step]),
+                    next_kind=int(kinds[step + 1]),
+                    newly_valid=bool(np.any(valid_np[step + 1] & ~valid_np[step])),
                 )
             )
         if len(out) % 100 < len(steps):
@@ -337,10 +412,72 @@ def collect_calibration(net, variables, chunks, outcomes, roots, num_samples, se
     return out
 
 
-def _r2(prediction, target):
+def delta_gain(prediction, target):
+    """The learner's `delta_gain`: 1 - SSE / sum(target^2), pooled over the
+    transitions. Copy (prediction 0) scores exactly 0, the target 1."""
+    residual = float(np.sum((target - prediction) ** 2))
+    energy = float(np.sum(target**2))
+    return 1.0 - residual / (energy + 1e-8)
+
+
+def r2_centred(prediction, target):
+    """Centred R^2. Copy scores -n * mean(target)^2 / SST, NOT 0 -- read
+    `copy_delta_r2_centred` beside it."""
     residual = float(np.sum((target - prediction) ** 2))
     total = float(np.sum((target - target.mean()) ** 2))
     return 1.0 - residual / (total + 1e-8)
+
+
+DECODES = ("post", "prior", "expect", "sample")
+
+
+def _delta_stats(stack) -> dict[str, float]:
+    """The pooled delta reads over one stack of transitions."""
+    target_delta = stack["real_v"] - stack["root_v"]
+    stats = {"copy_delta_r2_centred": r2_centred(0.0, target_delta)}
+    for name in DECODES:
+        predicted_delta = stack[f"{name}_v"] - stack["root_v"]
+        stats[f"value_delta_r2_{name}"] = delta_gain(predicted_delta, target_delta)
+        stats[f"value_delta_r2_centred_{name}"] = r2_centred(
+            predicted_delta, target_delta
+        )
+    return stats
+
+
+def _stack(transitions: list[Transition]) -> dict[str, np.ndarray]:
+    return {
+        key: np.stack([t.values[key] for t in transitions])
+        for key in transitions[0].values
+    }
+
+
+def resample_games(transitions: list[Transition], rng) -> list[Transition]:
+    """One bootstrap replicate: games drawn with replacement, every
+    transition of a drawn game kept together (both self-play sides)."""
+    by_game = {}
+    for transition in transitions:
+        by_game.setdefault(transition.game, []).append(transition)
+    games = list(by_game)
+    drawn = rng.choice(len(games), len(games), replace=True)
+    return [t for index in drawn for t in by_game[games[index]]]
+
+
+def bootstrap_delta_stats(transitions, replicates, seed) -> dict[str, float]:
+    """2.5 / 97.5 percentiles of every `_delta_stats` read over
+    `replicates` game-level resamples, keyed `<read>_lo` / `<read>_hi`."""
+    rng = np.random.default_rng(seed)
+    draws = {}
+    for _ in range(replicates):
+        for key, value in _delta_stats(
+            _stack(resample_games(transitions, rng))
+        ).items():
+            draws.setdefault(key, []).append(value)
+    out = {}
+    for key, values in draws.items():
+        low, high = np.percentile(values, (2.5, 97.5))
+        out[f"{key}_lo"] = float(low)
+        out[f"{key}_hi"] = float(high)
+    return out
 
 
 def _cross_entropy(logits, label):
@@ -349,14 +486,14 @@ def _cross_entropy(logits, label):
     return float(-np.mean(np.sum(label * log_probs, -1)))
 
 
-def summarise_calibration(transitions: list[Transition]) -> dict[str, float]:
-    """copy predictor = 0 on both reads, the real next state = 1."""
+def summarise_calibration(
+    transitions: list[Transition], bootstrap: int = 0, seed: int = 0
+) -> dict[str, float]:
+    """copy predictor = 0 on the uncentred delta read and the gain, the
+    real next state = 1; every sum pooled over the transitions first."""
     if not transitions:
         return {}
-    stack = {
-        key: np.stack([t.values[key] for t in transitions])
-        for key in transitions[0].values
-    }
+    stack = _stack(transitions)
     support = np.asarray(CAT_VF_SUPPORT, np.float32)
     outcomes = np.asarray([t.outcome for t in transitions], np.float32)
     label = (outcomes[:, None] == support[None]).astype(np.float32)
@@ -371,7 +508,9 @@ def summarise_calibration(transitions: list[Transition]) -> dict[str, float]:
     mse_real = float(np.mean((stack["real_v"] - outcomes) ** 2))
     stats = {
         "n": len(transitions),
+        "games": len({t.game for t in transitions}),
         "abs_real_delta_v": float(np.abs(target_delta).mean()),
+        "delta_energy": float(np.sum(target_delta**2)),
         "sign_acc_root": float(np.mean(np.sign(stack["root_v"]) == outcomes)),
         "sign_acc_real": float(np.mean(np.sign(stack["real_v"]) == outcomes)),
         "ce_copy": ce_copy,
@@ -379,14 +518,15 @@ def summarise_calibration(transitions: list[Transition]) -> dict[str, float]:
         "mse_copy": mse_copy,
         "mse_real": mse_real,
         "expect_sigma_z": float(stack["expect_sigma_z"].mean()),
+        "prior_mode_mass": float(stack["prior_mode_mass"].mean()),
     }
-    for name in ("post", "prior", "expect", "sample"):
+    stats.update(_delta_stats(stack))
+    if bootstrap:
+        stats.update(bootstrap_delta_stats(transitions, bootstrap, seed))
+    for name in DECODES:
         mse_imagined = float(np.mean((stack[f"{name}_v"] - outcomes) ** 2))
         stats[f"value_gain_mse_{name}"] = (mse_copy - mse_imagined) / max(
             mse_copy - mse_real, 1e-3
-        )
-        stats[f"value_delta_r2_{name}"] = _r2(
-            stack[f"{name}_v"] - stack["root_v"], target_delta
         )
         stats[f"value_gap_{name}"] = float(
             np.abs(stack[f"{name}_v"] - stack["real_v"]).mean()
@@ -400,10 +540,40 @@ def summarise_calibration(transitions: list[Transition]) -> dict[str, float]:
 
 
 def print_calibration(title, stats):
-    print(f"\n== calibration: {title} (n={stats.get('n', 0)}) ==")
+    print(
+        f"\n== calibration: {title} (n={stats.get('n', 0)}, "
+        f"games={stats.get('games', 0)}) =="
+    )
     for name, value in stats.items():
-        if name != "n":
-            print(f"  {name:24s} {value:+.4f}")
+        if name in ("n", "games") or name.endswith(("_lo", "_hi")):
+            continue
+        line = f"  {name:30s} {value:+.4f}"
+        if f"{name}_lo" in stats:
+            line += f"   [{stats[f'{name}_lo']:+.4f}, {stats[f'{name}_hi']:+.4f}]"
+        print(line)
+
+
+def calibration_splits(transitions: list[Transition], min_n: int = 20):
+    """(title, subset) for every split worth a table: all, switch / move
+    taken, newly-valid rows at t+1 or not, and each (t, t+1) request-kind
+    pair with at least `min_n` transitions."""
+    splits = [
+        ("all transitions", transitions),
+        ("switch taken", [t for t in transitions if t.is_switch]),
+        ("move taken", [t for t in transitions if not t.is_switch]),
+        ("rows newly valid at t+1", [t for t in transitions if t.newly_valid]),
+        ("no newly valid row", [t for t in transitions if not t.newly_valid]),
+    ]
+    pairs = sorted({(t.kind, t.next_kind) for t in transitions})
+    for kind, next_kind in pairs:
+        subset = [t for t in transitions if (t.kind, t.next_kind) == (kind, next_kind)]
+        if len(subset) >= min_n:
+            title = (
+                f"request {KIND_NAMES.get(kind, kind)} -> "
+                f"{KIND_NAMES.get(next_kind, next_kind)}"
+            )
+            splits.append((title, subset))
+    return splits
 
 
 def summarise(roots: list[Root]) -> dict[str, list[float]]:
@@ -500,6 +670,22 @@ def main(argv=None):
         default=32,
         help="prior draws per transition for the expectation decode",
     )
+    parser.add_argument(
+        "--calibration-enumerate",
+        action="store_true",
+        help="exact expectation over every joint code instead of draws",
+    )
+    parser.add_argument(
+        "--calibration-only",
+        action="store_true",
+        help="skip the search-sample sweep; every root goes to calibration",
+    )
+    parser.add_argument(
+        "--bootstrap",
+        type=int,
+        default=0,
+        help="game-level bootstrap replicates for the delta reads' 95%% interval",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
@@ -513,6 +699,9 @@ def main(argv=None):
         if args.games_pkl:
             harness.dump(sides, args.games_pkl)
     outcomes = [harness.outcome(side) for side in sides for _ in side]
+    # Self-play returns both sides of a game together, so consecutive
+    # sides are one game; the bootstrap resamples at that level.
+    games = [side_index // 2 for side_index, side in enumerate(sides) for _ in side]
     chunks = harness.flatten(sides)
     candidates = candidate_steps(chunks)
     picker = np.random.default_rng(args.seed)
@@ -527,31 +716,41 @@ def main(argv=None):
         flush=True,
     )
     net = get_player_model(get_player_model_config(9, train=True))
-    data = collect(
-        net, variables, chunks, roots, args.samples, args.samples_per_call, args.seed
-    )
-    print_stats("all roots", summarise(data))
-    both = [root for root in data if root.is_switch.any() and (~root.is_switch).any()]
-    print_stats("roots offering both a move and a switch", summarise(both))
-    moves_only = [root for root in data if not root.is_switch.any()]
-    print_stats("moves only", summarise(moves_only))
-    switches_only = [root for root in data if root.is_switch.all()]
-    print_stats("switches only (force-switch / preview)", summarise(switches_only))
-    if args.calibration:
+    if not args.calibration_only:
+        data = collect(
+            net,
+            variables,
+            chunks,
+            roots,
+            args.samples,
+            args.samples_per_call,
+            args.seed,
+        )
+        print_stats("all roots", summarise(data))
+        both = [
+            root for root in data if root.is_switch.any() and (~root.is_switch).any()
+        ]
+        print_stats("roots offering both a move and a switch", summarise(both))
+        moves_only = [root for root in data if not root.is_switch.any()]
+        print_stats("moves only", summarise(moves_only))
+        switches_only = [root for root in data if root.is_switch.all()]
+        print_stats("switches only (force-switch / preview)", summarise(switches_only))
+    if args.calibration or args.calibration_only:
         transitions = collect_calibration(
             net,
             variables,
             chunks,
             outcomes,
+            games,
             roots,
             args.calibration_samples,
             args.seed,
+            args.calibration_enumerate,
         )
-        print_calibration("all transitions", summarise_calibration(transitions))
-        switch_taken = [t for t in transitions if t.is_switch]
-        print_calibration("switch taken", summarise_calibration(switch_taken))
-        move_taken = [t for t in transitions if not t.is_switch]
-        print_calibration("move taken", summarise_calibration(move_taken))
+        for title, subset in calibration_splits(transitions):
+            print_calibration(
+                title, summarise_calibration(subset, args.bootstrap, args.seed)
+            )
 
 
 if __name__ == "__main__":

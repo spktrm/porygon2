@@ -290,14 +290,26 @@ def dynamics_losses(
     return loss, logs, splits
 
 
+def delta_gain_terms(
+    prediction: jax.Array, target: jax.Array, mask: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """The two sums behind `delta_gain`, (residual, energy), logged on
+    their own so a split with few rows per batch (switch rows) can be
+    pooled over a window as the ratio of the summed terms -- the per-batch
+    ratio alone is dominated by tiny denominators (rows of magnitude > 100
+    on the switch split, 2026-09-07 audit)."""
+    residual = jnp.sum((target - prediction) ** 2, where=mask)
+    energy = jnp.sum(target**2, where=mask)
+    return residual, energy
+
+
 def delta_gain(prediction: jax.Array, target: jax.Array, mask: jax.Array) -> jax.Array:
     """Share of the target's energy the prediction explains, 1 - |t - p|^2 /
     |t|^2 over the masked rows -- the UNCENTRED R2. A zero prediction (the
     copy predictor on a delta target) scores exactly 0 whatever the target's
     mean, where the centred form scores -n * mean^2 / var; the exact target
     scores 1. An empty mask reads 1 (0 / eps), finite by construction."""
-    residual = jnp.sum((target - prediction) ** 2, where=mask)
-    energy = jnp.sum(target**2, where=mask)
+    residual, energy = delta_gain_terms(prediction, target, mask)
     return 1.0 - residual / (energy + 1e-8)
 
 
@@ -469,9 +481,18 @@ def transition_losses(
         logs[f"player_transition_value_delta_r2{name}"] = delta_gain(
             expectation - real_v[:-1], target_delta, rows
         )
+        residual, energy = delta_gain_terms(
+            expectation - real_v[:-1], target_delta, rows
+        )
+        logs[f"player_transition_value_delta_sse{name}"] = residual
+        logs[f"player_transition_value_delta_energy{name}"] = energy
     logs["player_transition_value_delta_r2_prior"] = delta_gain(
         prior_expectation - real_v[:-1], target_delta, valid_step
     )
+    residual, energy = delta_gain_terms(
+        prior_expectation - real_v[:-1], target_delta, valid_step
+    )
+    logs["player_transition_value_delta_sse_prior"] = residual
     logs["player_transition_value_gap_prior"] = average(
         jnp.abs(prior_expectation - next_v_target), valid_step
     )
