@@ -47,6 +47,7 @@ import functools
 import queue
 import threading
 import time
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -125,6 +126,7 @@ class InferenceServer:
         max_batch: int = 16,
         params_cache_size: int = 16,
         stats: ActorStats | None = None,
+        player_params_view: Callable | None = None,
     ):
         self._queue: "queue.SimpleQueue[_InferenceRequest]" = queue.SimpleQueue()
         # Per-phase timing sink for _run_group (rl/environment/actor_stats.py).
@@ -141,7 +143,7 @@ class InferenceServer:
         self._max_batch = max_batch
         # Device-resident params per version — see module docstring.
         self._params_cache = DeviceParamsCache(
-            jax.devices()[0], "player_params", params_cache_size
+            jax.devices()[0], "player_params", params_cache_size, player_params_view
         )
 
         apply_with_heads = functools.partial(player_apply_fn, head_params=head_params)

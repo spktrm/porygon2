@@ -60,6 +60,23 @@ from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params
 
 
+def actor_params_view(variables, *, search: bool = False):
+    """Project checkpoint variables onto the actor's required modules.
+
+    Historical league snapshots carry different unused learner branches.
+    Strip those before JIT dispatch, retaining the complete encoder (including
+    setup-time parameters), value output and, for search, transition tree.
+    Indexing required modules deliberately fails on incompatible snapshots.
+    """
+    required = ["encoder", "action_head", "v_head"]
+    # The optional doubles readout is an actor consumer too.
+    if "slot_conditioning" in variables["params"]:
+        required.append("slot_conditioning")
+    if search:
+        required.append("transition")
+    return {"params": {name: variables["params"][name] for name in required}}
+
+
 def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
     """log pi with illegal cells at the dtype's min, for sample_categorical."""
     return jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min)

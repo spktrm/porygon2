@@ -28,7 +28,7 @@ from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
-from rl.model.player_model import get_player_model
+from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.utils import ParamsContainer, get_num_params
 from rl.online.agent import Agent, resolve_actor_device
 from rl.online.artifact import (
@@ -556,11 +556,13 @@ def main(args: argparse.Namespace):
     learning_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
+        player_params_view=actor_params_view,
         device=actor_device,
     )
     eval_agent = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
+        player_params_view=actor_params_view,
         player_head_params=HeadParams(temp=0.5),
         builder_head_params=HeadParams(temp=1.0),
         device=actor_device,
@@ -578,6 +580,7 @@ def main(args: argparse.Namespace):
     eval_agent_untempered = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
+        player_params_view=actor_params_view,
         player_head_params=HeadParams(temp=1.0),
         builder_head_params=HeadParams(temp=1.0),
         device=actor_device,
@@ -602,6 +605,7 @@ def main(args: argparse.Namespace):
         return Agent(
             search_player_network.apply,
             actor_builder_network.apply,
+            player_params_view=functools.partial(actor_params_view, search=True),
             player_head_params=HeadParams(temp=1.0),
             builder_head_params=HeadParams(temp=1.0),
             device=actor_device,
@@ -629,7 +633,9 @@ def main(args: argparse.Namespace):
     inference_server = None
     if learner_config.player_actor_device == "gpu":
         inference_server = InferenceServer(
-            actor_player_network.apply, stats=actor_stats
+            actor_player_network.apply,
+            stats=actor_stats,
+            player_params_view=actor_params_view,
         )
         inference_server.start()
 

@@ -152,3 +152,109 @@ def test_params_cache_evicts_least_recently_used():
     assert len(cache) == 2
     assert float(second_again["w"][0]) == 2.0
     assert cache.get(second) is second_again
+
+
+def test_actor_parameter_view_preserves_required_branches():
+    from rl.model.player_model import actor_params_view
+
+    branches = {
+        name: {"weight": np.ones(2)}
+        for name in (
+            "encoder",
+            "action_head",
+            "v_head",
+            "transition",
+            "dynamics_delta_head",
+        )
+    }
+    variables = {"params": branches}
+    plain = actor_params_view(variables)
+    search = actor_params_view(variables, search=True)
+    assert set(plain["params"]) == {"encoder", "action_head", "v_head"}
+    assert search["params"]["transition"] is branches["transition"]
+    assert plain["params"]["encoder"] is branches["encoder"]
+    assert "dynamics_delta_head" in variables["params"]
+    branches["slot_conditioning"] = {"weight": np.ones(2)}
+    assert (
+        actor_params_view(variables)["params"]["slot_conditioning"]
+        is branches["slot_conditioning"]
+    )
+    with pytest.raises(KeyError):
+        actor_params_view({"params": {"encoder": {}}})
+    with pytest.raises(KeyError):
+        actor_params_view(plain, search=True)
+
+
+def test_actor_jit_shared_across_agents_and_historical_params(full_window):
+    from rl.model.heads import HeadParams
+    from rl.model.player_model import actor_params_view
+    from rl.online.agent import Agent
+
+    traces = []
+
+    def apply_probe(params, actor_input, placeholder, head_params, rngs):
+        traces.append(1)
+        return (params["params"]["v_head"]["weight"] * head_params.temp)[None]
+
+    request = _raw_lengths(full_window, 5, 9)
+    agents = [
+        Agent(
+            apply_probe,
+            device=jax.devices("cpu")[0],
+            player_params_view=actor_params_view,
+            player_head_params=HeadParams(temp=temperature),
+        )
+        for temperature in (1.0, 0.5)
+    ]
+    for index, agent in enumerate(agents):
+        variables = {
+            "params": {
+                name: {"weight": np.ones(2, np.float32)}
+                for name in ("encoder", "action_head", "v_head")
+            }
+        }
+        variables["params"]["v_head"]["weight"] *= index + 2
+        variables["params"][f"retired_{index}"] = {"unused": np.ones(index + 1)}
+        result = agent.step_player(jax.random.key(0), _container(variables), request)
+        np.testing.assert_array_equal(
+            result.actor_output, (index + 2) * agent.player_head_params.temp
+        )
+    assert len(traces) == 1
+    # Positive control: a genuinely different required parameter shape retraces.
+    variables["params"]["v_head"]["weight"] = np.ones(3, np.float32)
+    agents[0].step_player(jax.random.key(0), _container(variables), request)
+    assert len(traces) == 2
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+@pytest.mark.parametrize("search", [False, True])
+def test_real_actor_parameter_view_is_bit_identical(real_model_and_trajectory, search):
+    from rl.model.config import get_player_model_config
+    from rl.model.heads import HeadParams
+    from rl.model.player_model import actor_params_view, get_player_model
+    from rl.model.utils import open_zero_init_paths
+
+    _, variables, actor_input, actor_output = real_model_and_trajectory
+    variables = open_zero_init_paths(variables, ["action_head", "dynamics_out_proj"])
+    actor_input = actor_input.replace(
+        env=jax.tree.map(lambda leaf: leaf[:1], actor_input.env)
+    )
+    actor_output = jax.tree.map(lambda leaf: leaf[:1], actor_output)
+    config = get_player_model_config(9, train=False)
+    config.search.enabled = search
+    config.search.depth = 1
+    apply_model = jax.jit(get_player_model(config).apply)
+    arguments = (actor_input, actor_output, HeadParams())
+    rngs = {"sampling": jax.random.key(9)}
+    full = apply_model(variables, *arguments, rngs=rngs)
+    projected = apply_model(
+        actor_params_view(variables, search=search), *arguments, rngs=rngs
+    )
+    for expected, actual in zip(
+        jax.tree.leaves(full), jax.tree.leaves(projected), strict=True
+    ):
+        np.testing.assert_array_equal(expected, actual)
+    assert np.any(np.asarray(full.action_head.entropy) > 0)
+    if search:
+        assert np.any(np.asarray(full.search.root_kl) > 0)

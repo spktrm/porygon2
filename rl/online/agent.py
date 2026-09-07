@@ -1,8 +1,9 @@
 import functools
+import hashlib
+import logging
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import overload
 
 import jax
 import jax.numpy as jnp
@@ -25,6 +26,8 @@ from rl.environment.utils import (
 from rl.model.config import DEFAULT_DTYPE
 from rl.model.heads import HeadParams
 from rl.model.utils import Params, ParamsContainer
+
+logger = logging.getLogger(__name__)
 
 
 def _no_apply(*args, **kwargs):
@@ -55,7 +58,14 @@ class DeviceParamsCache:
     transferred under the lock so a new version is copied once, not once
     per actor that sees it first."""
 
-    def __init__(self, device: jax.Device, field: str, size: int = 16):
+    def __init__(
+        self,
+        device: jax.Device,
+        field: str,
+        size: int = 16,
+        params_view: Callable[[Params], Params] | None = None,
+    ):
+        self._params_view = params_view
         self._device = device
         self._field = field
         self._size = size
@@ -69,7 +79,10 @@ class DeviceParamsCache:
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
-                params = jax.device_put(getattr(container, self._field), self._device)
+                params = getattr(container, self._field)
+                if self._params_view is not None:
+                    params = self._params_view(params)
+                params = jax.device_put(params, self._device)
                 self._entries[key] = (container, params)
                 while len(self._entries) > self._size:
                     self._entries.popitem(last=False)
@@ -101,6 +114,7 @@ class Agent:
         builder_head_params: HeadParams = HeadParams(),
         device: jax.Device | None = None,
         params_cache_size: int = 16,
+        player_params_view: Callable[[Params], Params] | None = None,
     ):
         """Constructs an Agent object."""
         if player_apply_fn is None and builder_apply_fn is None:
@@ -111,7 +125,7 @@ class Agent:
             device = jax.devices()[0]
         self.device = device
         self._player_params = DeviceParamsCache(
-            device, "player_params", params_cache_size
+            device, "player_params", params_cache_size, player_params_view
         )
         self._builder_params = DeviceParamsCache(
             device, "builder_params", params_cache_size
@@ -166,80 +180,85 @@ class Agent:
             jax.block_until_ready(output)
         return output
 
-    @overload
-    def _step_builder(
-        self,
-        rng_key,
-        params: Params,
-        actor_input: BuilderEnvOutput,
-        head_params: HeadParams = ...,
-    ) -> BuilderAgentOutput: ...
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _step_builder(
-        self,
-        rng_key: jax.Array,
-        params: Params,
-        actor_input: BuilderActorInput,
-        head_params: HeadParams = HeadParams(),
-    ) -> BuilderAgentOutput:
-
-        actor_input: BuilderActorInput = BuilderActorInput(
-            env=jax.tree.map(lambda x: x[None, ...], actor_input.env),
-            history=jax.tree.map(lambda x: x[:, ...], actor_input.history),
+    def _step_builder(self, rng_key, params, actor_input, head_params=HeadParams()):
+        return _step_builder(
+            self._builder_apply_fn, rng_key, params, actor_input, head_params
         )
 
-        actor_output = self._builder_apply_fn(
-            params,
-            actor_input,
-            BuilderActorOutput(),
-            head_params=head_params,
-            rngs={"sampling": rng_key},
-        )
-        # Remove the padding from above.
-        actor_output: BuilderActorOutput = jax.tree.map(
-            lambda t: jnp.squeeze(t, axis=0), actor_output
+    def _step_player(self, rng_key, params, actor_input, head_params=HeadParams()):
+        return _step_player(
+            self._player_apply_fn, rng_key, params, actor_input, head_params
         )
 
-        return BuilderAgentOutput(actor_output=actor_output)
 
-    @overload
-    def _step_player(
-        self,
-        rng_key: jax.Array,
-        params: Params,
-        actor_input: PlayerActorInput,
-        head_params: HeadParams = ...,
-    ) -> PlayerAgentOutput: ...
-    @functools.partial(jax.jit, static_argnums=(0,))
-    def _step_player(
-        self,
-        rng_key: jax.Array,
-        params: Params,
-        actor_input: PlayerActorInput,
-        head_params: HeadParams = HeadParams(),
-    ) -> PlayerAgentOutput:
-        """For a given single-step, unbatched timestep, output the chosen action."""
-        # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
+@functools.partial(jax.jit, static_argnums=(0,))
+def _step_builder(
+    apply_fn,
+    rng_key: jax.Array,
+    params: Params,
+    actor_input: BuilderActorInput,
+    head_params: HeadParams = HeadParams(),
+) -> BuilderAgentOutput:
 
-        actor_input = PlayerActorInput(
-            env=jax.tree.map(lambda t: t[None, ...], actor_input.env),
-            packed_history=jax.tree.map(
-                lambda t: t[:, ...], actor_input.packed_history
-            ),
-            history=jax.tree.map(lambda t: t[:, ...], actor_input.history),
-            history_carry=actor_input.history_carry,
-        )
+    actor_input: BuilderActorInput = BuilderActorInput(
+        env=jax.tree.map(lambda x: x[None, ...], actor_input.env),
+        history=jax.tree.map(lambda x: x[:, ...], actor_input.history),
+    )
 
-        actor_output = self._player_apply_fn(
-            params,
-            actor_input,
-            PlayerActorOutput(),
-            head_params=head_params,
-            rngs={"sampling": rng_key},
-        )
-        # Remove the padding from above.
-        actor_output: PlayerActorOutput = jax.tree.map(
-            lambda t: jnp.squeeze(t, axis=0), actor_output
-        )
+    actor_output = apply_fn(
+        params,
+        actor_input,
+        BuilderActorOutput(),
+        head_params=head_params,
+        rngs={"sampling": rng_key},
+    )
+    # Remove the padding from above.
+    actor_output: BuilderActorOutput = jax.tree.map(
+        lambda t: jnp.squeeze(t, axis=0), actor_output
+    )
 
-        return PlayerAgentOutput(actor_output=actor_output)
+    return BuilderAgentOutput(actor_output=actor_output)
+
+
+@functools.partial(jax.jit, static_argnums=(0,))
+def _step_player(
+    apply_fn,
+    rng_key: jax.Array,
+    params: Params,
+    actor_input: PlayerActorInput,
+    head_params: HeadParams = HeadParams(),
+) -> PlayerAgentOutput:
+    """For a given single-step, unbatched timestep, output the chosen action."""
+    # Executes during tracing only, once per new abstract input signature.
+    leaves, structure = jax.tree.flatten(params)
+    signature = repr((structure, [(leaf.shape, str(leaf.dtype)) for leaf in leaves]))
+    fingerprint = hashlib.sha256(signature.encode()).hexdigest()[:12]
+    logger.info(
+        "Actor trace: params=%s history=%s packed=%s carry=%s",
+        fingerprint,
+        actor_input.history.field.shape,
+        actor_input.packed_history.revealed_cache.shape,
+        jax.tree.structure(actor_input.history_carry),
+    )
+    # Pad timestep, state to be [T, B, ...] and [B, ...] respectively.
+
+    actor_input = PlayerActorInput(
+        env=jax.tree.map(lambda t: t[None, ...], actor_input.env),
+        packed_history=jax.tree.map(lambda t: t[:, ...], actor_input.packed_history),
+        history=jax.tree.map(lambda t: t[:, ...], actor_input.history),
+        history_carry=actor_input.history_carry,
+    )
+
+    actor_output = apply_fn(
+        params,
+        actor_input,
+        PlayerActorOutput(),
+        head_params=head_params,
+        rngs={"sampling": rng_key},
+    )
+    # Remove the padding from above.
+    actor_output: PlayerActorOutput = jax.tree.map(
+        lambda t: jnp.squeeze(t, axis=0), actor_output
+    )
+
+    return PlayerAgentOutput(actor_output=actor_output)
