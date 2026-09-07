@@ -1303,6 +1303,46 @@ non-inferiority margins (critic R² drop ≤ 0.02, base win-rate drop ≤ 2 pts,
 throughput loss ≤ 20%) are in the plan; depth-2 reads stay diagnostic until
 the calibration checks pass.
 
+## Actor compilation correction — 2026-09-07 irqeetfg
+
+The 17:06 restart's actor cache misses named historical unused parameter
+branches (`transition` with different children, retired `dynamics_delta_head`)
+and static `Agent` identities. At the diagnostic snapshot there were 423
+nested/outer tracing warnings but only 21 at the outer actor call; three
+learner executable writes matched the fixed lattice. Do not count nested
+Flax tracing warnings as independent XLA builds or infer learner recompilation
+from this actor-side evidence.
+
+`player_model.actor_params_view` now supplies actor-required variables before
+`DeviceParamsCache` transfer: encoder, action head, deployable value head,
+optional doubles conditioning, and transition for search. Stored snapshots
+are untouched; required branches fail visibly when absent. `Agent` dispatches
+to module-level JITs keyed by the apply callable, with parameters, RNG and
+head scalars dynamic, so equivalent Agent instances share traces. The GPU
+inference server receives the same projection. First-trace logs record a
+parameter shape/tree fingerprint and history/carry signatures. Revert handles:
+`actor_params_view`, its main/inference wiring and the module-level
+`_step_player`/`_step_builder` move (parent revision `aaed1a3`).
+
+Focused actor/device, search and carry-loop fast checks passed. Two GPU tests
+compare full versus projected trees with live action/dynamics paths: plain
+and depth-one searched output pytrees are bit-identical. A stub trace-count
+test checks reuse across Agent identities, temperatures, parameter values and
+retired branches, with a required-shape change as the positive retrace control.
+Ruff and diff whitespace checks passed. This removes demonstrated sources of
+specialisation; it does not yet establish the steady-state RAM/throughput gain.
+
+User authorised stop/fix/restart. The first interrupt landed inside a JAX GC
+callback and was ignored; a second graceful interrupt saved checkpoint
+`01846215` and the learner exited cleanly at 17:49:59. Relaunched at 17:53:29
+with explicit checkpoint mode/path in the existing train pane, retaining the
+service and learning/search configuration. W&B confirmed `irqeetfg` resumed;
+verified progress through 1,846,386, no skipped update and a recent 5.34
+steps/sec. Initial plain actor traces share one parameter fingerprint across
+32/64/128 history buckets; the longer performance hold is not yet measured.
+Local plan and measurements:
+`docs/irqeetfg-restart-diagnosis-2026-09-07.md`.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by
@@ -2062,6 +2102,22 @@ dashboard, not auto-corrected.
 
 ## 6. Replay, staleness, exploration
 
+- **2026-09-07 per-chunk protection built, not activated.**
+  `player_replay_trajectory_mode` defaults to `off`; `observe` logs detached
+  per-chunk taken-action k3 mismatch with unchanged uniform sampling, and
+  `protect` retires chunks above the existing KL threshold from FUTURE draws.
+  This changes retention, not a corrected priority sampler or an estimate of
+  learning utility. Slot/monotonic-ID/visit feedback rejects replaced occupants
+  and stale visits; prefetch still counts against the global cap. Batch-level
+  0.045 has not been calibrated as a noisy per-chunk decision threshold: observe
+  before enabling protection. Revert handles: `training/replay.py`, buffer
+  feedback/eligibility, `Trajectory.replay_{slot,id}`, batching/train-step/worker
+  wiring and the config mode. Detailed maths/limits: local
+  `docs/adaptive-trajectory-replay.md` §10. No live replay change or strength
+  result is claimed. Validation: 36 focused buffer/chunking/replay checks
+  passed; all 14 replay checks passed after the final telemetry change.
+  GPU train-step activation checks await a learner-free window.
+
 - **Buffer capacity, not ratio, drove a strength plateau** (2048→256 chunks).
   The reuse controller is deliberately one-sided: it may cut reuse below
   nominal, never raise it. The KL target (0.045) is a pathology threshold, not
@@ -2353,3 +2409,160 @@ value cannot work.
 - **The JAX persistent cache works.** Startup miss spam is sub-2s compiles
   (never persisted, by design) plus model-commit HLO invalidation; a no-edit
   restart is fully warm.
+
+## MCTS evaluation pilot parked — 2026-09-07
+
+At user request, irqeetfg stopped gracefully at checkpoint `ckpt_01861967`
+(step 1,861,967; 26,751 updates after latent-model rewrite). Training remains
+stopped. Local report: `docs/mcts-ablation-2026-09-07.md` (gitignored).
+Optional MCTS now works through `sh eval.sh --search mcts`; plain stays default.
+Five independent 100-game arms completed against SimpleHeuristic: plain 45 wins,
+MCTS depth 1 48, MCTS depth 2 50. These small differences do not establish a
+search gain. Fixed-checkpoint 500-transition prior-expectation delta gain was
+-0.0817 (95% game bootstrap [-0.1579,-0.0251]); doubling chance draws gave -0.0818.
+
+Performance audit found a concrete issue: the model's outer head-output vmap
+turns conditional MCTS expansion into masked evaluation. A two-expansion toy
+executed imagine twice without vmap and 64 times under vmap. The current
+`mcts_model_calls` field counts logical expansions, not physical calls.
+Warmed single-root GPU medians: plain 1.65 ms, expectimax depth 1 3.67 ms,
+expectimax depth 2 31.84 ms, MCTS depth 1 118.43 ms, MCTS depth 2 175.83 ms.
+
+mctx commit b53073fd5035618228a717e29254e36ceb6f0645 separates cheap traversal
+from one batched expansion per simulation. The user parked work before applying
+that layout fix. Next: separate traversal/expansion, preserve scalar guards in
+single-root search, compare bit-identical outputs and remeasure. Original source,
+full outputs, timing logs and a GPU trace are preserved in runtime/; exact paths
+and remaining steps are in the local report. No performance fix or promotion
+should be inferred from the functional pilot. No commit was made.
+
+## MCTS GPU layout correction — 2026-09-07 resumed
+
+Implemented mctx-style read-only traversal followed by expansion and backup in
+`rl/model/mcts.py`; statically omit candidate generation at depth 1. Preserve
+chance-bank keys, PUCT, terminal backup and visit policy. On the parked benchmark
+(checkpoint 01861967, EMA, 13 legal actions, history bucket 4, 30 warmed keys),
+median GPU latency falls 118.43 → 27.21 ms at depth 1 (4.35×) and 175.83 →
+124.06 ms at depth 2 (1.42×). All arrays in 60 full actor outputs match the saved
+originals bit-for-bit. This changes runtime cost, not evidence of search strength.
+
+Declined scalar head lax.map: 18.90/74.35 ms, but changes bf16 computations and
+some visits (274 differing returned leaves across 30 shallow outputs). Reverted
+that trial and retained the vectorised heads to honour structural equivalence.
+Original code/outputs remain in runtime/; local report has exact paths.
+
+vmap still executes masked expansions, so mcts_model_calls means accepted cache
+entries rather than physical evaluations. Expansion is now outside traversal,
+bounding executed dynamics calls to one per simulation per root. Six new callback
+counter tests cover scalar/map/vmap at depths 1/2 and prove the physical bound;
+depth-one candidate generation never runs. The GPU measurements and numerical
+comparisons used no live learner. Training remains stopped, no commit made.
+
+## MCTS singleton batching guards — 2026-09-07 second performance pass
+
+Retained vectorised heads and added inference-only `_guarded_cond` in mcts.py:
+choose the branch with a scalar predicate for singleton vmap, but execute the
+chosen branch using the original batched arithmetic. This avoids the bf16 changes
+of the rejected scalar-head trial. All captured arrays must be explicit: ordinary
+jax.closure_convert omits some constant-valued, batched support arrays; the helper
+uses make_jaxpr + jax.extend.core and custom_vmap. No reverse-mode rule is supplied.
+Mixed multi-root predicates keep the ordinary masked rule.
+
+On the same 30-key GPU benchmark, depth 1 improves 27.21 → 19.77 ms and depth 2
+124.06 → 77.51 ms (5.99× / 2.27× versus the original prototype). All returned
+arrays in all 60 actor outputs are still bit-identical to the original. A profiled
+depth-two decision drops 65,058 → 40,163 GPU events. Sixteen MCTS tests pass,
+including singleton physical-call counts, multi-root positive controls, captured
+integer/float values, and nested batching. Original and first-fix artefacts remain
+in runtime/; local report records exact paths. Training remains stopped; no commit.
+
+## Replay comparison at 01861967 — 2026-09-07
+
+Read-only model/training audit; no human matches. Frozen EMA, plain GPU actor,
+Gen9 random battles: 400 games vs SimpleHeuristic at T=1 (198 wins, 49.5%,
+Wilson 95% 44.6–54.4), 400 at T=.5 (247 wins, 152 losses, one zero result;
+61.75% wins, 56.9–66.4), plus 100 self-play games. Simulator seeds unpaired.
+Compared protocol logs with 2,000 seeded-sample human replays, both ratings
+>=1900; 1,196 uploads from 2026. No human-relative Elo inference is possible.
+
+Tera by turn 3: 81.8% T=1, 83.0% T=.5, 83.0% self-play, 3.1% humans.
+Median use turn: 2/1/1 vs human 18 (conditional on use). Voluntary switches
+per observed move-or-switch: 12.8%/4.5%/14.3% vs human 20.2%; 18.9% in
+974 human games with one side actually losing six. These are not mask-conditioned
+choice rates. SimpleHeuristic itself switched 1.5% and never used Tera.
+One T=.5 protocol log ended without an outcome marker (turn 75, zero reward);
+exclude it from completed-game behaviour (399), retain in 400 outcomes.
+
+Manual cases distinguish demonstrated setup/finishing and Leech Seed/Protect
+wins from repeated ineffective attacks with demonstrated alternatives, and a
+failure to leave an immune matchup. Encore and passive winning lines make raw
+repeated-action counts unsafe as blunder labels. Lower temperature improves
+baseline results but preserves both early Tera and some tactical failures.
+
+New objective hypothesis, NOT tested or implemented: `CELL_MODALITY_MASK`
+separates MOVE/WILDCARD, so `uniform_kl_modalities` pressures the one-use Tera
+category towards equal marginal mass on every eligible decision. Investigate
+regulariser grouping while retaining stay/switch support before widening the
+architecture or reducing all exploration. Timing differences do not prove early
+Tera loses games. Current-state policy/attribute probes must discriminate rare
+samples from confidently wrong rankings before proposing an input-row skip or
+self-play action-effect auxiliary. Human frequencies are diagnostic, never rewards.
+
+Local report: `docs/replay-audit-01861967-2026-09-07.md` (gitignored); raw logs,
+results, selected human paths, analysis scripts and aggregates:
+`runtime/replay-audit-01861967/`. No model/configuration changes or commit;
+training remained stopped, task service stopped. Built service must run with
+`service/` cwd here (`../constants/data.json` is cwd-relative); initial root-cwd
+launch failed before any game and was replaced. No removal/restoration involved.
+
+## Priority investigation at 01861967 — 2026-09-08
+
+Follow-up to the replay audit; no model/configuration change, training launch or
+human match. Local report `docs/priority-investigation-01861967-2026-09-08.md`;
+reproducible scripts/raw data in `runtime/priority-audit-01861967/` (gitignored).
+
+Four fresh EMA/T=.5/GPU arms of 400 SimpleHeuristic games: unchanged 255 wins,
+hold Tera until turn5 236, until turn10 232, never Tera 236. Independent simulator
+seeds; all differences' 95% intervals cross zero. **No evidence that forcing later
+Tera helps.** This weakens the first audit's priority, not proof that a differently
+trained resource policy cannot improve. On 816 visited eligible requests, mean
+P(Tera|move)=.496. The current modality loss's conditional derivative is
+`.025/M*(2q-1)`, pulling towards .5; its average is only −.0000687. The derivative
+shifting all Tera logits with others fixed averages +.00272 (less Tera); distinguish
+conditional resource choice from move/switch allocation. Finite difference error
+<2.4e−12. No regulariser change or scripted delay justified yet.
+
+New 400-game full trajectories confirm **confident tactical misranking**: Hypno
+into revealed Soundproof at turns 14–16 has stored actor Psychic Noise probabilities
+.99783/.99550/.99222, with Focus Blast legal and Soundproof present in observations.
+The side ultimately wins; terminal success can coexist with locally ineffective
+play. Basic type awareness is nevertheless real: 876 requests with an immune and
+nonimmune regular damaging choice carry immune mass .166 T1/.129 T.5 versus .410
+uniform (game bootstrap T1−uniform [−.279,−.211]). These labels are diagnostic and
+exclude selected dynamic type/ability cases; not a complete mechanic oracle.
+
+Three held-GAME representation splits on 200 games: move type pre 100%, post 81–83%;
+opp type on target row pre 84%, post 54–59%; matchup class on move row pre 52–54%,
+post 65% (majority 54–57%). The trunk computes useful relations while weakening raw
+attribute accessibility. A projected bilinear probe is not an architecture ceiling.
+Prioritise a matched self-play action-effect auxiliary versus small input-row
+readout connection experiment; do not combine them or infer width is the lever.
+No auxiliary or architecture experiment implemented in this investigation.
+
+Posterior-expectation gap closed on the same 500 transitions/24 self-play games:
+exact 256 chance codes, top 8 action mass .9912. Posterior mode delta gain +.0441;
+posterior expectation +.0429, 95%[−.0100,+.0891]; prior expectation −.0818,
+[−.1570,−.0248]. Original reference reads reproduced. Posterior mode selection was
+not hiding a strong expectation. Moves drive weakness; switch posterior expectation
++.1156[+.0015,+.1943], prior −.0022[−.0912,+.0529] (exploratory splits).
+Initial batched diagnostic OOM resolved by sequential actions/chance batches 16;
+production code unchanged. This metric tests taken-action prediction, not action
+ranking. Existing transition stop-grad boundary does not directly train policy rows.
+
+Existing depth 1 expectimax, 16 seeds per case, leaves Psychic Noise first at .99786
+and immune Spirit Shackle first at .95764 in all seeds. Focus Blast's mean predicted
+Q advantage .00282 versus .773 required to reverse the policy with Q/.1; U-turn
+.00119 versus .333 in the second case. No root truncation. Do not amplify this
+uncalibrated signal or promote deeper search; fix tactical discrimination first.
+No full tests or commit; diagnostic forwards/syntax, game bootstrap, stored actor
+probabilities and raw per-seed checks performed. Task service stopped.
