@@ -135,6 +135,8 @@ def stack_batch(
             if isinstance(stacked_trajectory.reuse_count, tuple)
             else stacked_trajectory.reuse_count
         ),
+        replay_slot=_or_empty(stacked_trajectory.replay_slot),
+        replay_id=_or_empty(stacked_trajectory.replay_id),
         game_outcome=_or_empty(stacked_trajectory.game_outcome),
         game_length=_or_empty(stacked_trajectory.game_length),
         game_step_offset=_or_empty(stacked_trajectory.game_step_offset),

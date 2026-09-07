@@ -125,6 +125,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # works in velocity form on log(cap) — clamping the output is then
     # inherently anti-windup. Buffer capacity independently bounds sample
     # age (state-distribution staleness), which no ratio control fixes.
+    # Per-chunk retention experiment: off preserves the existing sampler;
+    # observe measures threshold crossings; protect retires stale chunks.
+    # Uses player_replay_kl_target, not an additional tuned threshold.
+    player_replay_trajectory_mode: str = "off"
     player_replay_ctrl_enabled: bool = True
     # Ceiling: the actor-KL level the buffer-capacity plateau diagnosis
     # identified as the healthy/stale boundary. This is a pathology

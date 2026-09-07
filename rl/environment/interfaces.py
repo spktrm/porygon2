@@ -403,6 +403,10 @@ class Trajectory:
     # fresh-vs-replayed value-error plasticity diagnostic. () outside the
     # learner's sampling path.
     reuse_count: ArrayLike = ()
+    # Replay feedback identity, (1,) per chunk / (1, B) in the learner.
+    # IDs never repeat within a store, including across clear().
+    replay_slot: ArrayLike = ()
+    replay_id: ArrayLike = ()
 
     # Completed-game side data (2026-08-23), shape (1,) per chunk — (1, B)
     # batched. game_outcome: the game's terminal reward in CAT_VF_SUPPORT

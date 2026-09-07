@@ -19,6 +19,7 @@ from rl.environment.utils import close_tqdm_bar
 from rl.online.artifact import write_checkpoint_components
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.batching import stack_batch
+from rl.online.training.replay import consume_replay_feedback
 from rl.online.training.run_state import RunState
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ def wandb_log_worker(run_state: RunState, config: Porygon2LearnerConfig):
             break
         try:
             host_logs = jax.device_get(logs)
+            consume_replay_feedback(run_state.player_replay, host_logs)
             update_replay_controller(run_state, config, host_logs)
             run_state.wandb_run.log(host_logs)
         except Exception:

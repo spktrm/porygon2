@@ -50,6 +50,7 @@ from rl.online.training.loss import (
     policy_gradient_loss,
     uniform_kl_modalities,
 )
+from rl.online.training.replay import chunk_policy_mismatch
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
@@ -1362,6 +1363,20 @@ def train_step(
             # replay-staleness guard alongside the PPO clip.
             + config.player_kl_loss_coef * loss_actor_backward_kl
         )
+
+        if config.player_replay_trajectory_mode != "off" and not isinstance(
+            batch.replay_id, tuple
+        ):
+            kl_sums, row_counts = chunk_policy_mismatch(
+                learner_actor_ratio, learner_actor_log_ratio, policy_mask
+            )
+            pg_logs["_player_replay_feedback"] = (
+                batch.replay_slot[0],
+                batch.replay_id[0],
+                batch.reuse_count[0] + 1,
+                kl_sums,
+                row_counts,
+            )
 
         return loss, dict(
             **pg_logs,

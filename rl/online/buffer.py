@@ -142,9 +142,9 @@ def calculate_tracking(old: np.ndarray, new: np.ndarray, tau: float, minlength: 
 class PlayerTrajectoryStore:
     """Stores player trajectories for later use by the learner.
 
-    Mirrors the structure of BuilderTrajectoryStore: trajectories are kept
-    until they have been sampled at least max_reuses times, after which they
-    become eligible for replacement.
+    Uniform unique-chunk sampling under the global reuse cap. Optional
+    learner feedback can retire an individual chunk earlier; retired and
+    cap-exhausted chunks become eligible for replacement.
     """
 
     def __init__(
@@ -153,7 +153,26 @@ class PlayerTrajectoryStore:
         max_reuses: int = 5,
         need_tracking: bool = False,
         name: str = "",
+        trajectory_mode: str = "off",
+        kl_threshold: float = 0.045,
     ):
+        if trajectory_mode not in ("off", "observe", "protect"):
+            raise ValueError("trajectory_mode must be off, observe or protect")
+        if not np.isfinite(kl_threshold) or kl_threshold <= 0:
+            raise ValueError("kl_threshold must be finite and positive")
+        self.trajectory_mode = trajectory_mode
+        self.kl_threshold = kl_threshold
+        self._next_id = 1
+        self._ids = np.zeros(max_size, dtype=np.uint32)
+        self._retired = np.zeros(max_size, dtype=bool)
+        self._last_feedback_visit = np.zeros(max_size, dtype=np.int32)
+        self._last_kl = np.full(max_size, np.nan)
+        self._feedback_applied = 0
+        self._feedback_ignored = 0
+        self._threshold_crossings = 0
+        self._retired_total = 0
+        self._evicted_reuses = 0
+        self._evicted_count = 0
         self._trajectories: dict[int, Trajectory] = {}
         self._reuses = np.zeros(max_size, dtype=int)
         self._valid = np.zeros(max_size, dtype=bool)
@@ -209,18 +228,89 @@ class PlayerTrajectoryStore:
             raise ValueError(f"fraction must be in [0.0, 1.0], got {fraction}")
         return len(self._trajectories) >= int(self._max_size * fraction)
 
+    def _eligible(self):
+        return self._valid & ~self._retired & (self._reuses < self._max_reuses)
+
+    def _replaceable(self):
+        return self._valid & (self._retired | (self._reuses >= self._max_reuses))
+
+    def apply_feedback(self, slots, identities, visits, kl_sums, row_counts):
+        """Apply learner feedback only to the sampled occupant and newest visit.
+
+        Protect mode ends future sampling after a measured KL threshold crossing.
+        Already-prefetched visits still train and count against the global cap.
+        Retirement is irreversible for an occupant, including when the global
+        controller raises its cap. This is retention, not priority sampling.
+        """
+        arrays = [
+            np.asarray(value).reshape(-1)
+            for value in (slots, identities, visits, kl_sums, row_counts)
+        ]
+        if len({len(value) for value in arrays}) != 1:
+            raise ValueError("replay feedback arrays must have matching lengths")
+        if self.trajectory_mode == "off":
+            return
+        with self._add_cv:
+            for slot, identity, visit, kl_sum, count in zip(*arrays, strict=True):
+                slot = int(slot)
+                if (
+                    slot < 0
+                    or slot >= self._max_size
+                    or not self._valid[slot]
+                    or identity != self._ids[slot]
+                    or visit <= self._last_feedback_visit[slot]
+                    or visit > self._reuses[slot]
+                    or not np.isfinite(kl_sum)
+                    or kl_sum < 0
+                    or not np.isfinite(count)
+                    or count <= 0
+                ):
+                    self._feedback_ignored += 1
+                    continue
+                measured_kl = float(kl_sum / count)
+                self._last_feedback_visit[slot] = visit
+                self._last_kl[slot] = measured_kl
+                self._feedback_applied += 1
+                if measured_kl > self.kl_threshold:
+                    self._threshold_crossings += 1
+                    if self.trajectory_mode == "protect" and not self._retired[slot]:
+                        self._retired[slot] = True
+                        self._retired_total += 1
+            self._add_cv.notify_all()
+            self._sample_cv.notify_all()
+
+    def feedback_logs(self):
+        with self._sample_cv:
+            observed = self._valid & np.isfinite(self._last_kl)
+            logs = {
+                "player_replay_feedback_applied": self._feedback_applied,
+                "player_replay_feedback_ignored": self._feedback_ignored,
+                "player_replay_trajectory_threshold_crossings": self._threshold_crossings,
+                "player_replay_trajectory_retired_total": self._retired_total,
+                "player_replay_trajectory_retired_resident": int(self._retired.sum()),
+                "player_replay_trajectory_observed_resident": int(observed.sum()),
+                "player_replay_trajectory_eligible": int(self._eligible().sum()),
+            }
+            if observed.any():
+                logs["player_replay_trajectory_last_kl_mean"] = float(
+                    self._last_kl[observed].mean()
+                )
+            if self._evicted_count:
+                logs["player_replay_evicted_mean_reuses"] = (
+                    self._evicted_reuses / self._evicted_count
+                )
+            return logs
+
     def ready_to_sample(self, n: int = None) -> bool:
         """Returns True if there is at least one trajectory that can be sampled."""
         if n is None:
-            return np.any((self._reuses < self._max_reuses) & self._valid)
+            return np.any(self._eligible())
         else:
-            return np.sum((self._reuses < self._max_reuses) & self._valid) >= n
+            return np.sum(self._eligible()) >= n
 
     def ready_to_add(self) -> bool:
         """True when there is a free slot OR an over-reused one to evict."""
-        return len(self._trajectories) < self._max_size or np.any(
-            self._reuses >= self._max_reuses
-        )
+        return len(self._trajectories) < self._max_size or np.any(self._replaceable())
 
     @property
     def max_reuses(self) -> int:
@@ -243,6 +333,16 @@ class PlayerTrajectoryStore:
             self._trajectories = {}
             self._reuses = np.zeros(self._max_size, dtype=int)
             self._valid = np.zeros(self._max_size, dtype=bool)
+            self._ids.fill(0)
+            self._retired.fill(False)
+            self._last_feedback_visit.fill(0)
+            self._last_kl.fill(np.nan)
+            self._feedback_applied = 0
+            self._feedback_ignored = 0
+            self._threshold_crossings = 0
+            self._retired_total = 0
+            self._evicted_reuses = 0
+            self._evicted_count = 0
             self.total_adds = 0
             self.total_samples = 0
             if self.need_tracking:
@@ -294,6 +394,8 @@ class PlayerTrajectoryStore:
 
     def add(self, traj: Trajectory):
         """Adds a trajectory, replacing a RANDOM over-used entry (reuses >= max_reuses) if the store is full."""
+        if self._next_id > np.iinfo(np.uint32).max:
+            raise OverflowError("replay feedback IDs exhausted; create a new store")
         if self.need_tracking:
             self._update_usage_counts(traj.builder_history.packed_team_member_tokens)
 
@@ -303,16 +405,24 @@ class PlayerTrajectoryStore:
             self._reuses[current_index] = 0
             self._valid[current_index] = True
         else:
-            available_indices = np.where(self._reuses >= self._max_reuses)[0]
+            available_indices = np.where(self._replaceable())[0]
             if len(available_indices) == 0:
                 tqdm.write(
                     "Trajectory store is full and no trajectories are available for replacement."
                 )
                 return
             replace_index = np.random.choice(available_indices)
+            self._evicted_count += 1
+            self._evicted_reuses += int(self._reuses[replace_index])
+            current_index = replace_index
             self._trajectories[replace_index] = traj
             self._reuses[replace_index] = 0
 
+        self._ids[current_index] = self._next_id
+        self._next_id += 1
+        self._retired[current_index] = False
+        self._last_feedback_visit[current_index] = 0
+        self._last_kl[current_index] = np.nan
         self.total_adds += 1
         self._progress.update(1)
 
@@ -322,7 +432,7 @@ class PlayerTrajectoryStore:
         Each returned trajectory carries its pre-increment reuse count
         (0 = first visit) for the fresh-vs-replayed staleness diagnostics.
         """
-        valid_indices = (self._reuses < self._max_reuses) & self._valid
+        valid_indices = self._eligible()
         available_indices = np.where(valid_indices)[0]
 
         sample_indices = np.random.choice(available_indices, size=n, replace=False)
@@ -332,6 +442,14 @@ class PlayerTrajectoryStore:
             )
             for i in sample_indices
         ]
+        if self.trajectory_mode != "off":
+            sampled = [
+                trajectory.replace(
+                    replay_slot=np.array([slot], dtype=np.int32),
+                    replay_id=np.array([self._ids[slot]], dtype=np.uint32),
+                )
+                for slot, trajectory in zip(sample_indices, sampled, strict=True)
+            ]
         if increment:
             # replace=False above guarantees unique indices.
             self._reuses[sample_indices] += 1

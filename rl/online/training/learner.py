@@ -144,6 +144,8 @@ class Learner:
                 max_size=config.player_replay_buffer_capacity,
                 max_reuses=config.player_replay_ratio,
                 need_tracking=is_not_randoms,
+                trajectory_mode=config.player_replay_trajectory_mode,
+                kl_threshold=config.player_replay_kl_target,
                 name="player",
             ),
             builder_replay=BuilderTrajectoryStore(
