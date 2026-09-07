@@ -513,7 +513,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # generator's candidates expanded at every depth-1 node) beside the
     # depth-1 slot; 0 = no such slot. Search runs on these eval actors
     # ONLY -- never on the self-play actors, never in the learner.
-    eval_search_depth: int = 2
+    # 0 since the 2026-09-07 relaunch: with the slot at 2 the host-RAM
+    # guard tripped 784 steps in (available 0.135 < 0.15 at 1,836,000 --
+    # the static depth-2 tree, 16 cells x 8 chance x 8 candidates x 2
+    # inner = 2176 transitions per decision plus the generator's
+    # sequential draws, compiled and run on a CPU actor thread inside the
+    # learner process). Re-enable only after the arm's host memory and
+    # latency are profiled and provisioned (plan §7 "Static budget and
+    # controls"); the depth-2 read stays offline until then.
+    eval_search_depth: int = 0
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
