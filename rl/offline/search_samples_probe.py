@@ -28,15 +28,20 @@ state 1; the centred R^2 is reported beside it as `_centred`, where copy
 scores -n * mean(delta)^2 / SST -- the 2026-09-06 read was centred and
 mis-documented as copy = 0), and the value CE improvement over the copy
 baseline scaled so copy = 0 and the real next state = 1 (`value_gain`).
-From the POSTERIOR decode (the learner's read), the prior MODE (the
-rollout's), the prior EXPECTATION (the number search consumes) and a
-single prior SAMPLE. Sums are pooled over transitions BEFORE any
-division; `--bootstrap N` resamples whole GAMES (both self-play sides
-together) for a 95% interval on every delta read; `--calibration-enumerate`
-takes the expectation over every joint code exactly (K^G decodes per
-transition, no Monte Carlo term) instead of `--calibration-samples`
-draws. Splits: switch / move taken, any row newly valid at t+1 (the rows
-`imagine` zeroes by construction), and the (t, t+1) request-kind pair.
+From the POSTERIOR-mode decode (the learner's read) and the prior MODE
+(the rollout's) at the taken action's mode code, the DEPLOYED
+expectation E_u E_z V(g(h, u, z)) over the action's `--calibration-actions`
+most probable latent codes (weights renormalised; the retained mass is
+reported) and the chance prior under each (`expect`), the same
+integration at the mode code alone (`expect_mode`, the conditional read
+under its own label), and a single joint (u, z) SAMPLE. Sums are pooled
+over transitions BEFORE any division; `--bootstrap N` resamples whole
+GAMES (both self-play sides together) for a 95% interval on every delta
+read; `--calibration-enumerate` takes the chance expectation over every
+joint chance code exactly (K^G decodes per action code, no Monte Carlo
+term in z) instead of `--calibration-samples` draws. Splits: switch /
+move taken, any row newly valid at t+1, and the (t, t+1) request-kind
+pair.
 The offline label is the game's Monte Carlo OUTCOME one-hot over
 CAT_VF_SUPPORT, not the learner's v-trace two-hot -- more variance, same
 sign.
@@ -74,7 +79,7 @@ from rl.model.constants import (  # noqa: E402
 )
 from rl.model.encoder import Encoder  # noqa: E402
 from rl.model.player_model import get_player_model  # noqa: E402
-from rl.model.transition import unimix_probs  # noqa: E402
+from rl.model.transition import support_set, unimix_probs  # noqa: E402
 from rl.offline import harness  # noqa: E402
 from rl.offline.separation_probe import actor_input_of  # noqa: E402
 from rl.offline.trunk_homogeneity import valid_steps  # noqa: E402
@@ -177,74 +182,126 @@ def code_grid(code_groups: int, code_classes: int) -> jax.Array:
     return jax.nn.one_hot(index, code_classes, dtype=jnp.float32)
 
 
-def _calibration(module, rows, action, next_rows, rng, num_samples, enumerate_codes):
-    """V on the real root, the real next request, the posterior decode, the
-    prior-MODE decode (the learner's `_prior` panels) and the prior
-    EXPECTATION decode: the taken action's latent code at its MODE (the
-    encoder without an rng; `action_mode_mass` is that mode's mass),
-    chance codes from the transition prior at it, each decoded with
-    `imagine`, V averaged over z -- the number search reads (`Q(a) =
-    E_z[V(g(h, u, z))]`). With `enumerate_codes` every joint chance code
-    is decoded and weighted by its prior probability (exact over z at
-    the fixed mode action); otherwise `num_samples` draws weighted
-    equally. `sample` is one prior draw alone (one rollout branch);
-    `expect_sigma_z` the std of V over z; `prior_mode_mass` the joint
-    mode's prior probability. Expectations and f32 logits, one
-    transition."""
+def top_action_codes(action_probs: jax.Array, num_actions: int):
+    """The `num_actions` most probable latent codes of q(u | h, a) with
+    their masses renormalised over the set (descending, ties by index)
+    and the mass the set retains -- the bounded, exact-over-the-set
+    integration of the ACTION side of the deployed expectation."""
+    codes = jax.lax.top_k(action_probs, num_actions)[1]
+    mass = action_probs[codes]
+    retained = mass.sum()
+    return codes, mass / retained, retained
+
+
+def _chance_set(code_probs, rng, num_samples, enumerate_codes):
+    """The chance codes one action is integrated over: every joint code
+    with its prior probability (exact) or `num_samples` draws weighted
+    equally."""
+    if enumerate_codes:
+        code_one_hot = code_grid(*code_probs.shape)
+        weights = jnp.prod(jnp.sum(code_one_hot * code_probs[None], -1), -1)
+        return code_one_hot, weights
+    samples = jax.random.categorical(
+        rng, jnp.log(code_probs), axis=-1, shape=(num_samples, *code_probs.shape[:-1])
+    )
+    code_one_hot = jax.nn.one_hot(samples, code_probs.shape[-1], dtype=jnp.float32)
+    return code_one_hot, jnp.full((num_samples,), 1.0 / num_samples, jnp.float32)
+
+
+def _calibration(
+    module, rows, action, next_rows, rng, num_samples, enumerate_codes, num_actions
+):
+    """V on the real root, the real next request, and the decodes:
+
+    - `expect`: the DEPLOYED expectation E_u E_z V(g(h, u, z)) -- the
+      taken action's latent code integrated over its `num_actions` most
+      probable codes (weights renormalised; `action_retained_mass` is the
+      mass they hold, `action_support` the 0.99-mass support size) and,
+      under each, the chance code from the transition prior: every joint
+      chance code weighted by its prior probability (`enumerate_codes`,
+      exact over z) or `num_samples` draws. `expect_sigma_z` is the std
+      of V over the joint (u, z) draws, `expect_sigma_u` the std over the
+      codes of their per-code expectations;
+    - `expect_mode`: the same integration over z at the MODE action code
+      only -- the conditional read, kept under its own label
+      (`action_mode_mass` is that mode's mass);
+    - `post` / `prior`: the posterior-mode and prior-mode decodes at the
+      mode action code (the learner's `_prior` panel form), diagnostics;
+    - `sample`: one joint (u, z) draw, one rollout branch.
+
+    `prior_mode_mass` is the joint chance mode's prior probability at the
+    mode action. Expectations and f32 logits, one transition."""
     transition = module.transition
     action_probs = unimix_probs(transition.action_logits(rows, action))
-    action_one_hot = jax.nn.one_hot(
-        action_probs.argmax(-1), action_probs.shape[-1], dtype=jnp.float32
-    )
-    prior_logits = transition.prior(rows, action_one_hot)
-    post_logits = transition.posterior(rows, action_one_hot, next_rows)
+    num_codes = action_probs.shape[-1]
+    codes, action_weights, retained = top_action_codes(action_probs, num_actions)
+    action_one_hots = jax.nn.one_hot(codes, num_codes, dtype=jnp.float32)
+    mode_one_hot = action_one_hots[0]
+    chance_key, pick_key = jax.random.split(rng)
+    chance_keys = jax.random.split(chance_key, num_actions)
+
+    def decode_action(action_one_hot, key):
+        prior_logits = transition.prior(rows, action_one_hot)
+        code_probs = unimix_probs(prior_logits)
+        code_one_hot, weights = _chance_set(
+            code_probs, key, num_samples, enumerate_codes
+        )
+        imagined = jax.vmap(transition.imagine, (None, None, 0))(
+            rows, action_one_hot, code_one_hot
+        )
+        head = module.v_head(imagined[:, CLS_ROW])
+        return (
+            head.expectation.astype(jnp.float32),
+            head.logits.astype(jnp.float32),
+            weights,
+            jnp.prod(code_probs.max(-1)),
+        )
+
+    sampled_v, sampled_logits, chance_weights, prior_mode_mass = jax.vmap(
+        decode_action
+    )(action_one_hots, chance_keys)
+    sampled_probs = jax.nn.softmax(sampled_logits, axis=-1)
+    joint_weights = action_weights[:, None] * chance_weights
+    per_action_v = jnp.sum(chance_weights * sampled_v, axis=-1)
+    expect_v = jnp.sum(joint_weights * sampled_v)
+    expect_probs = jnp.einsum("kz,kzb->b", joint_weights, sampled_probs)
+    mode_probs = chance_weights[0] @ sampled_probs[0]
+    flat_pick = jax.random.categorical(pick_key, jnp.log(joint_weights).reshape(-1))
+    prior_logits = transition.prior(rows, mode_one_hot)
+    post_logits = transition.posterior(rows, mode_one_hot, next_rows)
     post_mode = jax.nn.one_hot(
         post_logits.argmax(-1), post_logits.shape[-1], dtype=jnp.float32
     )
     prior_mode = jax.nn.one_hot(
         prior_logits.argmax(-1), prior_logits.shape[-1], dtype=jnp.float32
     )
-    pred_post = transition.imagine(rows, action_one_hot, post_mode)
-    pred_prior = transition.imagine(rows, action_one_hot, prior_mode)
-    code_probs = unimix_probs(prior_logits)
-    if enumerate_codes:
-        code_one_hot = code_grid(*code_probs.shape)
-        weights = jnp.prod(jnp.sum(code_one_hot * code_probs[None], -1), -1)
-    else:
-        samples = jax.random.categorical(
-            rng,
-            jnp.log(code_probs),
-            axis=-1,
-            shape=(num_samples, *code_probs.shape[:-1]),
-        )
-        code_one_hot = jax.nn.one_hot(samples, code_probs.shape[-1], dtype=jnp.float32)
-        weights = jnp.full((num_samples,), 1.0 / num_samples, jnp.float32)
-    pick = jax.random.categorical(rng, jnp.log(weights))
-    imagined = jax.vmap(transition.imagine, (None, None, 0))(
-        rows, action_one_hot, code_one_hot
-    )
-    sampled = module.v_head(imagined[:, CLS_ROW])
-    sampled_v = sampled.expectation.astype(jnp.float32)
-    sampled_probs = jax.nn.softmax(sampled.logits.astype(jnp.float32), axis=-1)
     reads = {
         "root": rows[CLS_ROW],
         "real": next_rows[CLS_ROW],
-        "post": pred_post[CLS_ROW],
-        "prior": pred_prior[CLS_ROW],
+        "post": transition.imagine(rows, mode_one_hot, post_mode)[CLS_ROW],
+        "prior": transition.imagine(rows, mode_one_hot, prior_mode)[CLS_ROW],
     }
     values = {}
     for name, cls in reads.items():
         head = module.v_head(cls)
         values[f"{name}_v"] = head.expectation
         values[f"{name}_logits"] = head.logits
-    expect_v = weights @ sampled_v
     values["expect_v"] = expect_v
-    values["expect_logits"] = jnp.log(weights @ sampled_probs + 1e-8)
-    values["expect_sigma_z"] = jnp.sqrt(weights @ (sampled_v - expect_v) ** 2)
-    values["prior_mode_mass"] = jnp.prod(code_probs.max(-1))
+    values["expect_logits"] = jnp.log(expect_probs + 1e-8)
+    values["expect_sigma_z"] = jnp.sqrt(
+        jnp.sum(joint_weights * (sampled_v - expect_v) ** 2)
+    )
+    values["expect_sigma_u"] = jnp.sqrt(action_weights @ (per_action_v - expect_v) ** 2)
+    values["expect_mode_v"] = per_action_v[0]
+    values["expect_mode_logits"] = jnp.log(mode_probs + 1e-8)
+    values["prior_mode_mass"] = prior_mode_mass[0]
     values["action_mode_mass"] = action_probs.max(-1)
-    values["sample_v"] = sampled_v[pick]
-    values["sample_logits"] = sampled.logits[pick]
+    values["action_retained_mass"] = retained
+    values["action_support"] = support_set(action_probs, 0.99).sum().astype(jnp.float32)
+    values["sample_v"] = sampled_v.reshape(-1)[flat_pick]
+    values["sample_logits"] = sampled_logits.reshape(-1, sampled_logits.shape[-1])[
+        flat_pick
+    ]
     return values
 
 
@@ -352,6 +409,7 @@ def collect_calibration(
     num_samples,
     seed,
     enumerate_codes=False,
+    num_actions=8,
 ):
     """One record per root whose next request is real: `outcomes[i]` /
     `games[i]` are the terminal result and the game of the side chunk i
@@ -367,7 +425,12 @@ def collect_calibration(
     )
     calibrate = jax.jit(
         lambda params, *args: net.apply(
-            params, *args, num_samples, enumerate_codes, method=_calibration
+            params,
+            *args,
+            num_samples,
+            enumerate_codes,
+            num_actions,
+            method=_calibration,
         )
     )
     dev_variables = jax.device_put(variables)
@@ -435,7 +498,7 @@ def r2_centred(prediction, target):
     return 1.0 - residual / (total + 1e-8)
 
 
-DECODES = ("post", "prior", "expect", "sample")
+DECODES = ("post", "prior", "expect", "expect_mode", "sample")
 
 
 def _delta_stats(stack) -> dict[str, float]:
@@ -525,7 +588,11 @@ def summarise_calibration(
         "mse_copy": mse_copy,
         "mse_real": mse_real,
         "expect_sigma_z": float(stack["expect_sigma_z"].mean()),
+        "expect_sigma_u": float(stack["expect_sigma_u"].mean()),
         "prior_mode_mass": float(stack["prior_mode_mass"].mean()),
+        "action_mode_mass": float(stack["action_mode_mass"].mean()),
+        "action_retained_mass": float(stack["action_retained_mass"].mean()),
+        "action_support": float(stack["action_support"].mean()),
     }
     stats.update(_delta_stats(stack))
     if bootstrap:
@@ -680,7 +747,13 @@ def main(argv=None):
     parser.add_argument(
         "--calibration-enumerate",
         action="store_true",
-        help="exact expectation over every joint code instead of draws",
+        help="exact chance expectation over every joint code instead of draws",
+    )
+    parser.add_argument(
+        "--calibration-actions",
+        type=int,
+        default=8,
+        help="most probable latent action codes integrated per transition",
     )
     parser.add_argument(
         "--calibration-only",
@@ -753,6 +826,7 @@ def main(argv=None):
             args.calibration_samples,
             args.seed,
             args.calibration_enumerate,
+            args.calibration_actions,
         )
         for title, subset in calibration_splits(transitions):
             print_calibration(

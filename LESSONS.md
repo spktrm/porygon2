@@ -1267,6 +1267,17 @@ mask_head, out_proj, posterior_read_net, prior_read_net}`; RESUMED
 `transition/{cls_head, code_table, ground_delta_head, row_read (kernel)}` —
 exactly the plan's Appendix A.1 table.
 
+**Probe (docs/pre-mcts-validation-2026-09-07.md, fixed the same day).** The
+calibration read had fixed the action code at its argmax and integrated
+chance under it — a read conditional on one code, not the deployed
+expectation E_u E_z V(g(h, u, z)). `search_samples_probe._calibration` now
+integrates the taken action's `--calibration-actions` (8) most probable
+codes with renormalised weights (`action_retained_mass` reported) and the
+chance prior under each (`expect`), keeps the conditional read under its
+own label (`expect_mode`), draws `sample` from the joint, and reports
+`expect_sigma_u` beside `expect_sigma_z`. The hold's calibration study
+reads `expect`.
+
 **Pre-registered (plan §8).** 2k launch check: `out_proj_rms` leaving 0,
 `decode_acc` above 1/num_legal and rising, `action_mi` > 0 and rising,
 `generator_kl_first` falling, `transition_value_r2` tracking

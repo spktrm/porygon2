@@ -4,6 +4,7 @@ centred read does not (the 2026-09-06 mis-read), the exact code
 enumeration weights are a distribution whose expectation is the exact
 mixture, and the bootstrap keeps a game's sides together."""
 
+import jax.numpy as jnp
 import numpy as np
 
 from rl.offline.search_samples_probe import (
@@ -62,7 +63,9 @@ def test_enumeration_weights_are_the_product_prior_and_give_the_exact_mixture():
 
 def _transition(game, value):
     values = {"root_v": np.float32(0.0), "real_v": np.float32(value)}
-    for name in ("post", "prior", "expect", "sample"):
+    from rl.offline.search_samples_probe import DECODES
+
+    for name in DECODES:
         values[f"{name}_v"] = np.float32(value)
     return Transition(
         values=values,
@@ -93,3 +96,18 @@ def test_bootstrap_interval_brackets_an_exact_read():
     assert stats["value_delta_r2_post_lo"] == 1.0
     assert stats["value_delta_r2_post_hi"] == 1.0
     assert stats["copy_delta_r2_centred_hi"] < 0.0
+
+
+def test_top_action_codes_orders_by_mass_and_renormalises_over_the_set():
+    from rl.offline.search_samples_probe import top_action_codes
+
+    probs = jnp.asarray([0.05, 0.5, 0.05, 0.3, 0.1])
+    codes, weights, retained = top_action_codes(probs, 3)
+    assert codes.tolist() == [1, 3, 4]
+    np.testing.assert_allclose(np.asarray(weights), [0.5, 0.3, 0.1] / np.float32(0.9))
+    np.testing.assert_allclose(float(retained), 0.9, rtol=1e-6)
+    # The whole alphabet retains everything, in mass order.
+    codes, weights, retained = top_action_codes(probs, 5)
+    assert codes.tolist() == [1, 3, 4, 0, 2]
+    np.testing.assert_allclose(float(retained), 1.0, rtol=1e-6)
+    np.testing.assert_allclose(float(weights.sum()), 1.0, rtol=1e-6)

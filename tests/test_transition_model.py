@@ -486,8 +486,10 @@ def test_exact_decode_loss_is_conditional_entropy_and_matches_finite_differences
     read = exact_decode_loss(distinct, cell_valid)
     assert float(read.loss) < 0.05 and float(read.accuracy) > 0.98
     assert float(read.mutual_information) > np.log(num_valid) - 0.05
+    # f32 on purpose: the suite runs with x64 off, so a float64 request
+    # would silently become f32 anyway.
     random = jnp.asarray(
-        np.random.default_rng(1).normal(size=(6, num_codes)), jnp.float64
+        np.random.default_rng(1).normal(size=(6, num_codes)), jnp.float32
     )
 
     def loss_of(logits):
