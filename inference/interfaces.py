@@ -3,7 +3,6 @@ from pydantic import BaseModel
 
 class ResetResponse(BaseModel):
     packed_team: list[int]
-    v: float
 
 
 class StepResponse(BaseModel):

@@ -24,6 +24,10 @@ tmux send-keys  -t "$SESSION":evalclient.0 "npm run start-evaluation-client" C-m
 tmux split-window -h -t "$SESSION":evalclient.0
 tmux select-pane -t "$SESSION":evalclient.1 -T "evalserver"
 tmux send-keys  -t "$SESSION":evalclient.1 "source env/bin/activate" C-m
-tmux send-keys  -t "$SESSION":evalclient.1 "python inference/server.py" C-m
+# .env carries the eval client's Showdown login and RL_SERVER_URL as well as
+# the python-side flags; sourced in the pane shell for the same reason as
+# start.sh. -m so the repo root is on sys.path regardless of cwd tricks.
+tmux send-keys  -t "$SESSION":evalclient.1 'set -a; [ -f .env ] && source .env; set +a' C-m
+tmux send-keys  -t "$SESSION":evalclient.1 "python -m inference.server" C-m
 
 tmux attach -t "$SESSION"

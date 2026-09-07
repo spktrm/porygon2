@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 
-from constants import NUM_HISTORY
+from constants import NUM_HISTORY  # noqa: E402
 
 load_dotenv()
 import secrets

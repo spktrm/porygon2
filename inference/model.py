@@ -5,28 +5,30 @@ import numpy as np
 from inference.interfaces import ResetResponse, StepResponse
 from rl import checkpoint
 from rl.environment.env import TeamBuilderEnvironment
-from rl.environment.interfaces import BuilderTransition, PlayerActorInput
-from rl.environment.utils import get_ex_player_step
+from rl.environment.interfaces import PlayerActorInput
+from rl.environment.utils import (
+    ACTOR_HISTORY_MIN_LENGTH,
+    clip_history,
+    clip_packed_history,
+    get_ex_player_step,
+)
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
-from rl.online.agent import Agent
+from rl.model.utils import ParamsContainer
+from rl.online.agent import Agent, resolve_actor_device
 from rl.online.config import get_learner_config
 
 np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
-def restrict_values(arr: np.ndarray):
-    if arr.dtype.name == "bfloat16":
-        finfo = jnp.finfo(arr.dtype)
-        return np.clip(arr, a_min=finfo.min, a_max=finfo.max)
-    else:
-        return np.nan_to_num(arr)
-
-
 class InferenceModel:
+    """One checkpoint behind the HTTP eval server: the EMA `target_params`
+    (what the actors and the league play) through the same actor networks
+    and Agent main.py builds, on config.player_actor_device."""
+
     def __init__(
         self,
         generation: int,
@@ -36,11 +38,14 @@ class InferenceModel:
         builder_head_params: HeadParams = HeadParams(),
     ):
         self._learner_config = get_learner_config()
+        actor_device, actor_dtype = resolve_actor_device(
+            self._learner_config.player_actor_device
+        )
         self._player_model_config = get_player_model_config(
-            self._learner_config.generation, train=False
+            self._learner_config.generation, train=False, dtype=actor_dtype
         )
         self._builder_model_config = get_builder_model_config(
-            self._learner_config.generation, train=False
+            self._learner_config.generation, train=False, dtype=actor_dtype
         )
 
         self._player_network = get_player_model(self._player_model_config)
@@ -51,14 +56,22 @@ class InferenceModel:
             builder_apply_fn=self._builder_network.apply,
             player_head_params=player_head_params,
             builder_head_params=builder_head_params,
+            device=actor_device,
         )
         self._rng_key = jax.random.key(seed)
 
         if not fpath:
             fpath = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
         print(f"loading checkpoint from {fpath}")
-        self._player_params = checkpoint.load_component(fpath, "player", "params")
-        self._builder_params = checkpoint.load_component(fpath, "builder", "params")
+        # The Agent keys its device cache by container identity, so ONE
+        # container for the process: both heads' params are committed once.
+        self._params = ParamsContainer(
+            step_count=0,
+            player_frame_count=0,
+            builder_frame_count=0,
+            player_params=checkpoint.load_component(fpath, "player", "target_params"),
+            builder_params=checkpoint.load_component(fpath, "builder", "target_params"),
+        )
 
         print("initializing...")
         self._builder_env = TeamBuilderEnvironment(
@@ -83,39 +96,39 @@ class InferenceModel:
         return tuple(subkeys)
 
     def reset(self):
-
+        """Builds a team the way BuilderActor.unroll does, one agent step
+        per packed-set feature until the environment reports done."""
         rng_key = self.split_rng()
 
-        builder_subkeys = jax.random.split(rng_key, self._builder_env.length)
-        build_traj = []
-
+        builder_subkeys = jax.random.split(rng_key, self._builder_env.length + 1)
         builder_actor_input = self._builder_env.reset(builder_subkeys[0])
-        for builder_step_index in range(1, builder_subkeys.shape[0] + 2):
+        for builder_step_index in range(1, builder_subkeys.shape[0]):
             builder_agent_output = self._agent.step_builder(
                 builder_subkeys[builder_step_index],
-                self._builder_params,
+                self._params,
                 builder_actor_input,
             )
-            builder_transition = BuilderTransition(
-                env_output=builder_actor_input.env,
-                agent_output=builder_agent_output,
-            )
-            build_traj.append(builder_transition)
             if builder_actor_input.env.done.item():
                 break
             builder_actor_input = self._builder_env.step(builder_agent_output)
 
-        # Send set tokens to the player environment.
         team_tokens = builder_actor_input.history.packed_team_member_tokens
-        return ResetResponse(
-            packed_team=team_tokens.reshape(-1).tolist(),
-            v=builder_agent_output.actor_output.value_head.expectation.item(),
-        )
+        return ResetResponse(packed_team=team_tokens.reshape(-1).tolist())
 
     def step(self, timestep: PlayerActorInput):
+        """One request. The history is tail-windowed exactly as
+        PlayerActor.clip_actor_history does before the Agent pads it to
+        its joint bucket level."""
         rng_key = self.split_rng()
+        timestep = PlayerActorInput(
+            env=timestep.env,
+            packed_history=clip_packed_history(
+                timestep.packed_history, min_length=ACTOR_HISTORY_MIN_LENGTH
+            ),
+            history=clip_history(timestep.history, min_length=ACTOR_HISTORY_MIN_LENGTH),
+        )
 
-        agent_output = self._agent.step_player(rng_key, self._player_params, timestep)
+        agent_output = self._agent.step_player(rng_key, self._params, timestep)
         actor_output = agent_output.actor_output
 
         floats = dict(
@@ -123,9 +136,9 @@ class InferenceModel:
             log_prob=actor_output.action_head.log_prob.item(),
             entropy=actor_output.action_head.entropy.item(),
         )
-        floats = {k: round(v, 3) for k, v in floats.items()}
+        floats = {name: round(value, 3) for name, value in floats.items()}
 
         return StepResponse(
             **floats,
-            cell=agent_output.actor_output.action_head.action_index.item(),
+            cell=actor_output.action_head.action_index.item(),
         )
