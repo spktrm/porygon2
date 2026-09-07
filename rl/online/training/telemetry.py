@@ -341,17 +341,21 @@ _HISTORY_LEAVES = {
         ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
     ),
 }
-# The latent transition model (2026-09-05, rl/model/transition.py).
-# out_proj is THE zero factor: the imagined rows are `rows + out_proj(...)`
-# so the model starts as the copy predictor, and its rms still 0.0 past
-# ~200 steps is the stall. code_proj / action_proj are lecun over D
-# (~0.0625 at fan-in 256) and 2D (~0.0442); code_table is
-# variance_scaling(1, fan_in) over D/G per class (0.0884 at G=2). The code
-# leaves exist only with code_groups > 0 -- a missing path is skipped.
+# The latent transition model (2026-09-05; latent actions 2026-09-07,
+# rl/model/transition.py). dynamics_out_proj is THE zero factor: the
+# imagined rows are `rows + out_proj(...)` so the model starts as the copy
+# predictor, and its rms still 0.0 past ~200 steps is the stall. The
+# tables are variance_scaling(1, fan_in) (0.0625 over D=256 for the
+# action table and the slot embedding; 0.0884 over D/G per chance class);
+# chance_token_proj is lecun over D. The chance leaves exist only with
+# code_groups > 0 -- a missing path is skipped.
 _TRANSITION_LEAVES = {
-    "player_transition_out_proj_rms": (("transition", "out_proj", "kernel"),),
-    "player_transition_action_proj_rms": (("transition", "action_proj", "kernel"),),
-    "player_transition_code_proj_rms": (("transition", "code_proj", "kernel"),),
+    "player_transition_out_proj_rms": (("transition", "dynamics_out_proj", "kernel"),),
+    "player_transition_action_table_rms": (("transition", "action_table"),),
+    "player_transition_slot_embedding_rms": (("transition", "slot_embedding"),),
+    "player_transition_chance_token_proj_rms": (
+        ("transition", "chance_token_proj", "kernel"),
+    ),
     "player_transition_code_table_rms": (("transition", "code_table"),),
 }
 # player_belief_head_gradient_norm already exists in train_step; not
@@ -373,9 +377,15 @@ _GRAD_SUBTREES = {
         "step_attention",
     ),
     "player_transition_grad_norm": ("transition",),
-    "player_transition_blocks_grad_norm": ("transition", "blocks"),
-    "player_transition_prior_grad_norm": ("transition", "prior_read_net"),
-    "player_transition_posterior_grad_norm": ("transition", "posterior_read_net"),
+    "player_transition_blocks_grad_norm": ("transition", "dynamics_blocks"),
+    "player_transition_prior_grad_norm": ("transition", "prior_latent_net"),
+    "player_transition_posterior_grad_norm": ("transition", "posterior_latent_net"),
+    "player_transition_action_encoder_grad_norm": ("transition", "action_encoder"),
+    "player_transition_generator_grad_norm": ("transition", "candidate_generator"),
+    "player_transition_terminal_head_grad_norm": (
+        "transition",
+        "terminal_outcome_head",
+    ),
 }
 
 

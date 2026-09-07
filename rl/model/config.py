@@ -184,28 +184,47 @@ def get_player_model_config(
     cfg.revealed_belief = ConfigDict()
     cfg.revealed_belief.mlp = ConfigDict()
     cfg.revealed_belief.mlp.layer_sizes = cfg.belief_head.mlp.layer_sizes
-    # The latent transition model (2026-09-05, rl/model/transition.py):
-    # g(h_t, a, z) -> h_{t+1} over the 73 policy-readable post-trunk rows,
-    # `block.num_blocks` TrunkBlocks of the trunk's own shape, conditioned
-    # on the taken cell's readout rows and a chance code z of
-    # `code_groups` categoricals over `code_classes` (prior from h_t and
-    # a; posterior also reads the real t+1 rows, learner-only). Heads on
-    # the imagined rows: grounding (per row -> the t -> t+1 CHANGE in the
-    # DYNAMICS_TARGET_ROWS' pre-trunk content), the next action mask (the action readout's
-    # own form, instantiated a second time), and one cls head for the next
-    # request kind + done. `code_groups = 0` is the mean latent model
-    # (no code path at all). The shared v_head / action_head are applied
-    # to the imagined rows in the parent model.
+    # The latent transition model (2026-09-05; latent actions 2026-09-07,
+    # rl/model/transition.py): g(h_t, u, z) -> h_{t+1} over the 73
+    # policy-readable post-trunk rows, `block.num_blocks` TrunkBlocks of
+    # the trunk's own shape over [rows + slot embedding ; action token ;
+    # chance token] under an all-True mask -- nothing is masked past the
+    # root encoding. u is ONE categorical of `action_classes` latent
+    # actions (the action encoder q(u | h, a) reads the taken cell's rows
+    # against the sequence through one cross-attention; the candidate
+    # generator rho(u | h) draws `num_candidates` distinct codes without
+    # replacement inside the smallest rho prefix holding `mass_threshold`);
+    # z the chance code of `code_groups` categoricals over `code_classes`
+    # (prior from (h, u); posterior also reads the real t+1 rows,
+    # learner-only). Readers on an imagined node: grounding (per row ->
+    # the t -> t+1 CHANGE in the DYNAMICS_TARGET_ROWS' pre-trunk content),
+    # one cls head for the next request kind + done, and the conditional
+    # terminal-outcome head (loss / draw / win GIVEN the node ends the
+    # game -- the quantity the fractional-continuation backup needs, which
+    # the unconditional V cannot supply). `unroll_steps` = K: the learner
+    # unrolls every start step K transitions along the recorded actions
+    # (MuZero), recomputing the encoder and the posterior at the imagined
+    # state; 1 is the single-step model. `max_cells` is the ONE static
+    # width of a legal set, shared with the search (singles legalises at
+    # most 13 cells: up to 8 move cells with tera wildcards + 5 switches;
+    # team preview 6); a wider set is counted as overflow and masked,
+    # never silently truncated and renormalised. `code_groups = 0` is the
+    # chance-free control. The shared v_head is applied to the imagined
+    # rows in the parent model.
     cfg.transition = ConfigDict()
     cfg.transition.block = ConfigDict(cfg.encoder.trunk.to_dict())
     cfg.transition.block.num_blocks = 2
     cfg.transition.code_groups = 2
     cfg.transition.code_classes = 16
-    # The prior and posterior read the rows through ONE shared
+    cfg.transition.action_classes = 64
+    cfg.transition.num_candidates = 8
+    cfg.transition.max_cells = 16
+    cfg.transition.mass_threshold = 0.99
+    cfg.transition.unroll_steps = 2
+    # The prior and posterior read the rows through ONE shared bias-free
     # Dense(D -> row_read_width) per row, flattened in row order (73 x
     # width), so which row changed is legible by position; the mean pool
     # it replaced cancelled row identity (2026-09-05, kl_long < kl_short).
-    # Width 16: ~0.86M prior / ~1.46M posterior first-layer params.
     cfg.transition.row_read_width = 16
     cfg.transition.prior = ConfigDict()
     cfg.transition.prior.mlp = ConfigDict()
@@ -217,36 +236,67 @@ def get_player_model_config(
     cfg.transition.posterior = ConfigDict()
     cfg.transition.posterior.mlp = ConfigDict()
     cfg.transition.posterior.mlp.layer_sizes = cfg.transition.prior.mlp.layer_sizes
+    # The action encoder: one multi-head read of the sequence by the
+    # taken cell's rows (the trunk's head shape), then an MLP to the
+    # alphabet.
+    cfg.transition.action_encoder = ConfigDict()
+    cfg.transition.action_encoder.num_heads = num_heads
+    cfg.transition.action_encoder.qk_size = encoder_qkv_size
+    cfg.transition.action_encoder.v_size = encoder_qkv_size
+    cfg.transition.action_encoder.use_bias = encoder_use_bias
+    cfg.transition.action_encoder.qk_layer_norm = encoder_qk_layer_norm
+    cfg.transition.action_encoder.mlp = ConfigDict()
+    cfg.transition.action_encoder.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        cfg.transition.action_classes,
+    )
+    # The candidate generator's decoder blocks: the trunk's block shape
+    # (causal self-attention over the candidate tokens + cross-attention
+    # over the rows + SwiGLU), `num_blocks` deep.
+    cfg.transition.generator = ConfigDict(cfg.encoder.trunk.to_dict())
+    cfg.transition.generator.num_blocks = 2
     cfg.transition.ground = ConfigDict()
     cfg.transition.ground.mlp = ConfigDict()
     cfg.transition.ground.mlp.layer_sizes = (2 * entity_size, entity_size)
     cfg.transition.cls_head = ConfigDict()
     cfg.transition.cls_head.mlp = ConfigDict()
     cfg.transition.cls_head.mlp.layer_sizes = (entity_size, NUM_REQUEST_TYPES + 1)
-    cfg.transition.action_head = cfg.action_head
+    cfg.transition.terminal_outcome = ConfigDict()
+    cfg.transition.terminal_outcome.mlp = ConfigDict()
+    cfg.transition.terminal_outcome.mlp.layer_sizes = (
+        entity_size,
+        len(CAT_VF_SUPPORT),
+    )
     # Whether the shared v_head trains through the imagined CLS row
     # (learner-only; set from `player_transition_value_trains_v_head` at
     # the learner's construction sites). False applies a frozen copy.
     cfg.transition.value_trains_v_head = True
-    # Search over the transition model (2026-09-06, rl/model/search.py),
-    # rung 1: depth-1 expectimax. ACTOR-side only and off by default -- an
-    # eval slot in rl/online/main.py builds its own config with `enabled`
-    # True; the learner's forward (cfg.train) never searches. For every
-    # legal root cell, `num_samples` chance codes drawn from the prior are
-    # imagined through g and valued by the shared V; the per-cell mean is
-    # added to the readout's logits as Q(a) / temp (Gumbel-MuZero's
-    # additive form -- Q and Q - V are the same policy under the softmax).
-    # temp 0.1: a 0.1 edge in win probability is one e-fold of policy
-    # mass; judged by `root_kl` (0.05-0.5 is the band), never retuned as a
-    # ladder. `max_cells` bounds the static shape: singles legalises at
-    # most 13 cells (up to 8 move cells with tera wildcards + 5 switches;
-    # team preview 6); any excess is dropped from the search and counted
-    # (`legal_truncated`), never silently.
+    # Search over the transition model (2026-09-06, rl/model/search.py;
+    # recursive 2026-09-07). ACTOR-side only and off by default -- the
+    # baseline search eval slots in rl/online/main.py build their own
+    # configs with `enabled` True (search runs NOWHERE else: not on the
+    # self-play actors, not in the learner). The root expands the exact
+    # legal cells, each through the action encoder, with `num_samples`
+    # chance codes from the prior per cell; every deeper node (`depth`
+    # 2) draws its own latent candidates from the generator and
+    # `num_samples_inner` chance codes per candidate, backed up as the
+    # explicit decision / chance recursion (candidates improved by the
+    # KL-regularised softmax at `temp`, chance averaged, the terminal
+    # payoff through the conditional outcome reader). The root's per-cell
+    # value is added to the readout's logits as Q(a) / temp
+    # (Gumbel-MuZero's additive form). temp 0.1: a 0.1 edge in win
+    # probability is one e-fold of policy mass; judged by `root_kl`
+    # (0.05-0.5 is the band), never retuned as a ladder. `max_cells`
+    # aliases the transition's static width; a root with more legal cells
+    # returns the base policy untouched and is counted (`legal_truncated`).
     cfg.search = ConfigDict()
     cfg.search.enabled = False
+    cfg.search.depth = 1
     cfg.search.num_samples = 8
+    cfg.search.num_samples_inner = 2
     cfg.search.temp = 0.1
-    cfg.search.max_cells = 16
+    cfg.search.max_cells = cfg.transition.max_cells
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step

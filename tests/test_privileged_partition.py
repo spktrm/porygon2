@@ -177,24 +177,39 @@ def test_opp_private_team_cannot_reach_the_policy(
         np.asarray(base.value_head.log_probs, dtype=np.float32),
         np.asarray(moved.value_head.log_probs, dtype=np.float32),
     )
-    # The transition model (2026-09-05) runs from the policy's information
-    # set: the prior, g and every head on the imagined rows read the
-    # policy-readable rows at t, and the posterior reads the policy-
-    # readable rows at t+1 -- leak-free by the trunk's read mask -- so
-    # every transition leaf is pinned, the posterior included. The
-    # grounding label is pre-trunk content of the same rows.
+    # The transition model (2026-09-05; latent actions 2026-09-07) runs
+    # from the policy's information set: the action encoder, the
+    # generator, the prior, g and every reader on the imagined rows read
+    # the policy-readable rows at t (and the unroll's imagined states),
+    # the posterior the policy-readable rows at t+k+1 -- leak-free by
+    # the trunk's read mask -- so every transition leaf is pinned, the
+    # posterior included. The grounding label is pre-trunk content of the
+    # same rows.
     for leaf in (
         "transition_prior_logits",
         "transition_post_logits",
         "transition_post_one_hot",
         "transition_ground",
         "transition_ground_prior",
-        "transition_mask_logits",
-        "transition_log_policy",
         "transition_kind_logits",
         "transition_done_logit",
+        "transition_terminal_logits",
         "transition_cons_err",
         "transition_pred_rms",
+        "transition_newly_valid",
+        "transition_action_logits",
+        "transition_action_cells",
+        "transition_action_cell_valid",
+        "transition_action_taken_index",
+        "transition_action_overflow",
+        "transition_action_one_hot",
+        "transition_generator_logits",
+        "transition_teacher_codes",
+        "transition_generator_target",
+        "transition_support_mask",
+        "transition_node_overflow",
+        "transition_align_logits",
+        "transition_align_target",
     ):
         np.testing.assert_array_equal(
             np.asarray(getattr(base, leaf), dtype=np.float32),

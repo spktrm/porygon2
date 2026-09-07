@@ -1215,6 +1215,67 @@ rl.offline.search_samples_probe --ckpt ckpts/gen9/ckpt_01800000 --games 40
 --bootstrap 1000 --games-pkl <pkl> --seed 1` (second service from
 `service/`: `PORT=8081 MAX_WORKERS=2 node dist/server/index.js`).
 
+## Addition + removal ledger — 2026-09-07 latent actions: the world model in MuZero/Dreamer form, nothing masked past the root
+
+**The change.** `rl/model/transition.py` rewritten (plan
+`~/.claude/plans/modular-knitting-petal.md`, approved 2026-09-07 after three
+review passes). g(h_t, u, z) over the 73 policy-readable rows with the
+action and the chance code entering as TOKENS beside the rows (plus a learned
+slot embedding on the rows), through `dynamics_blocks` under an all-True
+mask: `imagine(rows, action_one_hot, code_one_hot)` takes no validity, no
+legal mask and no future input. u is ONE 64-class LATENT ACTION: the action
+encoder q(u | h, a) (one cross-attention read of the sequence by the taken
+cell's rows) at observed states, the candidate generator rho(u | h) (two
+decoder blocks, causal over the candidate tokens, cross-attention over the
+rows) at imagined nodes, drawing J = 8 distinct codes WITHOUT replacement
+inside the smallest rho prefix holding 0.99 mass. The learner unrolls K = 2
+transitions from every start step along the recorded actions, recomputing
+the encoder (the alignment loss) and the chance posterior at the imagined
+state, with every reader (value, kind, done, the conditional terminal
+outcome, the generator) trained at every predicted state; 0.5 gradient scale
+into the unrolled state (MuZero's heuristic). Search (`rl/model/search.py`)
+is the explicit decision / chance recursion B_d(h) = (1 − c) T + c Σ mu Q_d,
+mu the KL-regularised softmax over the occupied candidates, chance averaged;
+depth 1 at the root over the exact legal cells is the operational control,
+depth 2 a second baseline search eval slot (`eval_search_depth`); search runs
+NOWHERE else. Config: `action_classes` 64, `num_candidates` 8,
+`max_cells` 16 (shared with search), `mass_threshold` 0.99, `unroll_steps` 2,
+`player_transition_decode_coef` 1.0, `player_transition_align_coef` 1.0,
+`cons_coef` stays 0.0 (a read), `eval_search_depth` 2.
+
+| mechanism | added / removed | why | revert handle |
+|---|---|---|---|
+| `imagine` masked by the CURRENT `row_valid` (blocks + output zeroing) and the posterior's `row_valid & next_valid` delta read | REMOVED | a row that appears at t+1 was identically 0 with no gradient (LESSONS 2026-09-07 audit; posterior value read 0.40 without vs 0.15–0.20 with an appearing row). Validity is content the rows carry: the real target rows are zero where the trunk zeroed them, so the losses teach absent → 0 and appearing → content | `git show e6a50d7:rl/model/transition.py` |
+| `mask_head` (a second `FlatActionReadout` predicting the next legal set) + its BCE | REMOVED | legality at an imagined node is the generator's mass, and a rollout never enumerates concrete cells past the root; last readings irqeetfg 1.815–1.835M: `mask_acc` 0.9953 / `mask_recall` 0.8265 / `mask_exact_frac` 0.5322 (high per-cell accuracy is not a solved legal set: half the masks were inexact) | same |
+| the frozen action readout on imagined rows under the REAL next legal set (`transition_log_policy`, `player_loss_transition_policy`, `policy_kl_copy`) | REMOVED | the imagined node's policy is the generator over the latent alphabet; last readings `loss_transition_policy` 0.30–0.37 vs `policy_kl_copy` 0.64–0.87 (the imagined rows beat the copy on the real-cell policy, banked) | same |
+| `action_proj` (broadcast add of the cell's two rows), `code_proj`, `blocks` / `out_proj`, `prior_read_net` / `posterior_read_net`, `row_read` bias | REMOVED / RENAMED | tokens route the condition per row and per head instead of a constant offset every row must subtract; the renamed leaves init fresh on the by-path merge (input width or meaning changed); `RowRead` bias-free so a zero row reads exactly 0 | same |
+| `slot_embedding`, `action_table`, `condition_type_embedding`, `chance_token_proj`, `dynamics_blocks`, `dynamics_out_proj`, `action_encoder`, `candidate_generator`, `prior_latent_net`, `posterior_latent_net`, `terminal_outcome_head` | ADDED | the plan's module table (Appendix A.1); the transition subtree ≈ 8M params at D = 256 | this commit |
+| exact decode objective H_w(A \| U, h) summed over every code (uniform reference weights over the legal cells) | ADDED (`player_transition_decode_coef`) | a sampled straight-through CE drops the derivative of the sampling distribution; the symmetric collapsed encoding is a STATIONARY point of this objective (exactly zero gradient, pinned by test), not a repelled one — collapse is diagnosed, never escalated by coefficient | coef 0 = the control |
+| conditional terminal-outcome head (3 logits, trained only on actual terminal successors inside the joint termination NLL) | ADDED | V is unconditional: at a node with continuation c the blend (1 − c)V + c E[Q] counts the continuation branch twice (a 50% terminal win aliased with a 50% continuation at −1 reads −0.5 instead of 0); the backup needs E[outcome \| terminal] | `git show` this commit |
+| the K = 2 unroll with the alignment loss | ADDED | depth-2 search reads the generator, the prior, V and done on IMAGINED rows; nothing trained those readers on imagined input (cons is 0). The alignment loss is a hypothesis with its own panels (`align_kl_k1/k2`) | `unroll_steps` 1 = the single-step model; `align_coef` 0 |
+
+**Resume.** Checkpoint-mode from `ckpts/gen9/ckpt_01835216` (irqeetfg,
+1,835,216). The manifest is silent on the transition architecture by design
+(the by-path merge handles it). Merge audit (2026-09-07, `merge_params` of
+the checkpoint onto the new init, 17.42M loaded → 20.46M fresh, transition
+subtree 8.49M): KEPT FRESH `transition/{action_encoder, action_table,
+candidate_generator, chance_token_proj, condition_type_embedding,
+dynamics_blocks, dynamics_out_proj, posterior_latent_net, prior_latent_net,
+slot_embedding, terminal_outcome_head}` and NOTHING outside the transition;
+DROPPED `transition/{row_read/read/bias, action_proj, blocks, code_proj,
+mask_head, out_proj, posterior_read_net, prior_read_net}`; RESUMED
+`transition/{cls_head, code_table, ground_delta_head, row_read (kernel)}` —
+exactly the plan's Appendix A.1 table.
+
+**Pre-registered (plan §8).** 2k launch check: `out_proj_rms` leaving 0,
+`decode_acc` above 1/num_legal and rising, `action_mi` > 0 and rising,
+`generator_kl_first` falling, `transition_value_r2` tracking
+`player_value_head_r2`, `prob_switch` 0.040 ± 0.004, trunk grad norm
+3.5–5.5, steps/s within 20% of 5.5. The 20k hold's acceptance table and the
+non-inferiority margins (critic R² drop ≤ 0.02, base win-rate drop ≤ 2 pts,
+throughput loss ≤ 20%) are in the plan; depth-2 reads stay diagnostic until
+the calibration checks pass.
+
 ## Removal ledger — 2026-09-02 entity_index_tag: measured dead, deleted
 
 The 2026-08-31 alignment key — one (13, 256) table added to a sheet row by

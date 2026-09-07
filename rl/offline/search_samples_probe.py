@@ -115,38 +115,47 @@ def _encode(module, actor_input, actor_output):
     return trunk_out[:, POLICY_READABLE_ROWS], row_valid[:, POLICY_READABLE_ROWS]
 
 
-def _root_values(module, rows, row_valid, legal, rng, num_samples, max_cells):
-    """`depth_one_expectimax`'s body with the per-sample values kept:
-    values (N, C) over the first `max_cells` legal cells, plus pi over
-    those cells, the prior's mode mass per cell and V at the root."""
+def _root_values(module, rows, legal, rng, num_samples, max_cells):
+    """The depth-1 root of `search_root` with the per-sample values kept:
+    values (N, C) over the first `max_cells` legal cells -- each draw a
+    latent action from the encoder and a chance code from the prior at
+    it -- plus pi over those cells, the encoder's mode mass and the
+    prior's joint mode mass (at the mode action) per cell, and V at the
+    root."""
     transition = module.transition
     cells = jnp.nonzero(legal, size=max_cells, fill_value=0)[0]
     cell_valid = jnp.arange(max_cells) < legal.sum()
-    prior_logits = jax.vmap(transition.prior, (None, None, 0))(rows, row_valid, cells)
+    action_key, chance_key = jax.random.split(rng)
+    action_probs = unimix_probs(
+        jax.vmap(transition.action_logits, (None, 0))(rows, cells)
+    )
+    num_codes = action_probs.shape[-1]
+    actions = jax.random.categorical(
+        action_key, jnp.log(action_probs), axis=-1, shape=(num_samples, max_cells)
+    )
+    action_one_hot = jax.nn.one_hot(actions, num_codes, dtype=jnp.float32)
+    prior_logits = jax.vmap(jax.vmap(transition.prior, (None, 0)), (None, 0))(
+        rows, action_one_hot
+    )
     code_probs = unimix_probs(prior_logits)
-    samples = jax.random.categorical(
-        rng,
-        jnp.log(code_probs),
-        axis=-1,
-        shape=(num_samples, *code_probs.shape[:-1]),
-    )
+    samples = jax.random.categorical(chance_key, jnp.log(code_probs), axis=-1)
     code_one_hot = jax.nn.one_hot(samples, code_probs.shape[-1], dtype=jnp.float32)
-    src_rows, tgt_rows = jax.vmap(transition.action_rows, (None, 0))(rows, cells)
-    imagine_cells = jax.vmap(transition.imagine, (None, None, 0, 0, 0))
-    imagined = jax.vmap(imagine_cells, (None, None, None, None, 0))(
-        rows, row_valid, src_rows, tgt_rows, code_one_hot
-    )
+    imagine_cells = jax.vmap(transition.imagine, (None, 0, 0))
+    imagined = jax.vmap(imagine_cells, (None, 0, 0))(rows, action_one_hot, code_one_hot)
     values = module.v_head(imagined[:, :, CLS_ROW]).expectation
     base_logits = module._legal_logits(
         (rows[PRIVATE_ROWS], rows[MOVE_ROWS], rows[TARGET_ROWS]), legal, 1.0
     )
     log_pi = jax.nn.log_softmax(base_logits.astype(jnp.float32))[cells]
+    mode_action = jax.nn.one_hot(action_probs.argmax(-1), num_codes, dtype=jnp.float32)
+    mode_prior = unimix_probs(jax.vmap(transition.prior, (None, 0))(rows, mode_action))
     return {
         "values": values.astype(jnp.float32),
         "cell_valid": cell_valid,
         "cells": cells,
         "log_pi": log_pi,
-        "mode_mass": jnp.prod(code_probs.max(-1), axis=-1),
+        "mode_mass": jnp.prod(mode_prior.max(-1), axis=-1),
+        "action_mode_mass": action_probs.max(-1),
         "root_value": module.v_head(rows[CLS_ROW]).expectation.astype(jnp.float32),
     }
 
@@ -168,30 +177,35 @@ def code_grid(code_groups: int, code_classes: int) -> jax.Array:
     return jax.nn.one_hot(index, code_classes, dtype=jnp.float32)
 
 
-def _calibration(
-    module,
-    rows,
-    row_valid,
-    action,
-    next_rows,
-    next_valid,
-    rng,
-    num_samples,
-    enumerate_codes,
-):
+def _calibration(module, rows, action, next_rows, rng, num_samples, enumerate_codes):
     """V on the real root, the real next request, the posterior decode, the
     prior-MODE decode (the learner's `_prior` panels) and the prior
-    EXPECTATION decode: codes from the transition prior at the TAKEN
-    action, each decoded with `imagine`, V averaged over z -- the number
-    search reads (`Q(a) = E_z[V(g(h, a, z))]`). With `enumerate_codes`
-    every joint code is decoded and weighted by its prior probability
-    (exact); otherwise `num_samples` draws weighted equally. `sample` is
-    one prior draw alone (one rollout branch); `expect_sigma_z` the std of
-    V over z; `prior_mode_mass` the joint mode's prior probability.
-    Expectations and f32 logits, one transition."""
+    EXPECTATION decode: the taken action's latent code at its MODE (the
+    encoder without an rng; `action_mode_mass` is that mode's mass),
+    chance codes from the transition prior at it, each decoded with
+    `imagine`, V averaged over z -- the number search reads (`Q(a) =
+    E_z[V(g(h, u, z))]`). With `enumerate_codes` every joint chance code
+    is decoded and weighted by its prior probability (exact over z at
+    the fixed mode action); otherwise `num_samples` draws weighted
+    equally. `sample` is one prior draw alone (one rollout branch);
+    `expect_sigma_z` the std of V over z; `prior_mode_mass` the joint
+    mode's prior probability. Expectations and f32 logits, one
+    transition."""
     transition = module.transition
-    out = transition._step(rows, row_valid, action, next_rows, next_valid, None)
-    prior_logits = transition.prior(rows, row_valid, action)
+    action_probs = unimix_probs(transition.action_logits(rows, action))
+    action_one_hot = jax.nn.one_hot(
+        action_probs.argmax(-1), action_probs.shape[-1], dtype=jnp.float32
+    )
+    prior_logits = transition.prior(rows, action_one_hot)
+    post_logits = transition.posterior(rows, action_one_hot, next_rows)
+    post_mode = jax.nn.one_hot(
+        post_logits.argmax(-1), post_logits.shape[-1], dtype=jnp.float32
+    )
+    prior_mode = jax.nn.one_hot(
+        prior_logits.argmax(-1), prior_logits.shape[-1], dtype=jnp.float32
+    )
+    pred_post = transition.imagine(rows, action_one_hot, post_mode)
+    pred_prior = transition.imagine(rows, action_one_hot, prior_mode)
     code_probs = unimix_probs(prior_logits)
     if enumerate_codes:
         code_one_hot = code_grid(*code_probs.shape)
@@ -206,9 +220,8 @@ def _calibration(
         code_one_hot = jax.nn.one_hot(samples, code_probs.shape[-1], dtype=jnp.float32)
         weights = jnp.full((num_samples,), 1.0 / num_samples, jnp.float32)
     pick = jax.random.categorical(rng, jnp.log(weights))
-    src_row, tgt_row = transition.action_rows(rows, action)
-    imagined = jax.vmap(transition.imagine, (None, None, None, None, 0))(
-        rows, row_valid, src_row, tgt_row, code_one_hot
+    imagined = jax.vmap(transition.imagine, (None, None, 0))(
+        rows, action_one_hot, code_one_hot
     )
     sampled = module.v_head(imagined[:, CLS_ROW])
     sampled_v = sampled.expectation.astype(jnp.float32)
@@ -216,8 +229,8 @@ def _calibration(
     reads = {
         "root": rows[CLS_ROW],
         "real": next_rows[CLS_ROW],
-        "post": out.pred[CLS_ROW],
-        "prior": out.pred_prior[CLS_ROW],
+        "post": pred_post[CLS_ROW],
+        "prior": pred_prior[CLS_ROW],
     }
     values = {}
     for name, cls in reads.items():
@@ -229,6 +242,7 @@ def _calibration(
     values["expect_logits"] = jnp.log(weights @ sampled_probs + 1e-8)
     values["expect_sigma_z"] = jnp.sqrt(weights @ (sampled_v - expect_v) ** 2)
     values["prior_mode_mass"] = jnp.prod(code_probs.max(-1))
+    values["action_mode_mass"] = action_probs.max(-1)
     values["sample_v"] = sampled_v[pick]
     values["sample_logits"] = sampled.logits[pick]
     return values
@@ -281,10 +295,9 @@ def collect(net, variables, chunks, roots, num_samples, samples_per_call, seed):
         )
     )
     root_values = jax.jit(
-        lambda params, rows, row_valid, legal, rng: net.apply(
+        lambda params, rows, legal, rng: net.apply(
             params,
             rows,
-            row_valid,
             legal,
             rng,
             samples_per_call,
@@ -309,11 +322,7 @@ def collect(net, variables, chunks, roots, num_samples, samples_per_call, seed):
             for call in range(num_samples // samples_per_call):
                 rng, call_rng = jax.random.split(rng)
                 read = root_values(
-                    dev_variables,
-                    rows[step, 0],
-                    row_valid[step, 0],
-                    legal_all[step, 0],
-                    call_rng,
+                    dev_variables, rows[step, 0], legal_all[step, 0], call_rng
                 )
                 draws.append(np.asarray(read["values"]))
             read = jax.tree.map(np.asarray, read)
@@ -390,10 +399,8 @@ def collect_calibration(
             read = calibrate(
                 dev_variables,
                 rows[step, 0],
-                row_valid[step, 0],
                 jnp.asarray(action),
                 rows[step + 1, 0],
-                row_valid[step + 1, 0],
                 draw,
             )
             out.append(

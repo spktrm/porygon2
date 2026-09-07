@@ -236,6 +236,22 @@ def eval_game_logs(
         logs[f"search-legal-truncated-{session_id}"] = float(
             np.asarray(search.legal_truncated)[acted].mean()
         )
+        if not isinstance(search.deep_gain, tuple):
+            # The depth-2 arm's reads of its depth-1 nodes: the backup's
+            # gain over V, the predicted continuation, and the generator's
+            # retained prior mass / occupied candidate count.
+            logs[f"search-deep-gain-{session_id}"] = float(
+                np.asarray(search.deep_gain)[acted].mean()
+            )
+            logs[f"search-deep-continue-{session_id}"] = float(
+                np.asarray(search.deep_continue)[acted].mean()
+            )
+            logs[f"search-candidate-retained-mass-{session_id}"] = float(
+                np.asarray(search.candidate_retained_mass)[acted].mean()
+            )
+            logs[f"search-candidate-occupied-{session_id}"] = float(
+                np.asarray(search.candidate_occupied)[acted].mean()
+            )
     return logs
 
 
@@ -566,26 +582,38 @@ def main(args: argparse.Namespace):
         builder_head_params=HeadParams(temp=1.0),
         device=actor_device,
     )
-    # The SEARCH eval arm (2026-09-06): the same params through an actor
-    # network whose config enables cfg.search -- depth-1 expectimax over
-    # the transition model's prior samples, added to the logits before
-    # sampling (rl/model/search.py). A separate network object because
-    # search is a static config branch; the param tree is the learner's,
-    # unchanged. temp 1.0 so the `-t1` slot is its matched control.
-    eval_agent_search = None
-    if learner_config.eval_search_slots > 0:
+
+    # The SEARCH eval arms (2026-09-06; depth 2 2026-09-07): the same
+    # params through an actor network whose config enables cfg.search --
+    # the root's legal cells through the transition model, added to the
+    # logits before sampling (rl/model/search.py). Separate network
+    # objects because search is a static config branch; the param tree
+    # is the learner's, unchanged. temp 1.0 so the `-t1` slot is the
+    # matched control of both. These baseline eval actors are the ONLY
+    # place search runs: the self-play actors and the learner never
+    # build a search-enabled network.
+    def search_agent(depth: int) -> Agent:
         search_player_model_config = get_player_model_config(
             learner_config.generation, train=False, dtype=actor_dtype
         )
         search_player_model_config.search.enabled = True
+        search_player_model_config.search.depth = depth
         search_player_network = get_player_model(search_player_model_config)
-        eval_agent_search = Agent(
+        return Agent(
             search_player_network.apply,
             actor_builder_network.apply,
             player_head_params=HeadParams(temp=1.0),
             builder_head_params=HeadParams(temp=1.0),
             device=actor_device,
         )
+
+    eval_agent_search = None
+    if learner_config.eval_search_slots > 0:
+        eval_agent_search = search_agent(1)
+    eval_agent_search_deep = None
+    if learner_config.eval_search_depth > 0:
+        assert learner_config.eval_search_depth >= 2, "depth 1 is the -search slot"
+        eval_agent_search_deep = search_agent(learner_config.eval_search_depth)
     # One timing sink shared by every training actor, its env and the
     # server; the learner drains it (actor_stats_log_steps).
     actor_stats = ActorStats()
@@ -804,6 +832,14 @@ def main(args: argparse.Namespace):
         for _ in range(learner_config.eval_search_slots):
             eval_slots.append(
                 (learner_config.eval_baselines[-1], eval_agent_search, "-search")
+            )
+        if eval_agent_search_deep is not None:
+            eval_slots.append(
+                (
+                    learner_config.eval_baselines[-1],
+                    eval_agent_search_deep,
+                    f"-search-d{learner_config.eval_search_depth}",
+                )
             )
         for eval_id, (baseline_index, slot_agent, slot_suffix) in enumerate(eval_slots):
             baseline_name = EVAL_BASELINE_NAMES[baseline_index]

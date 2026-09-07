@@ -67,11 +67,19 @@ TypeScript game service speaking protobuf over websockets.
   for the standalone actions; `query` zero-init and `key` not, so the zero
   factor's gradient is a rank-1 outer product of live rows rather than the
   two-factor stall. The critic reads the CLS row and nothing else.
-  `transition.py`: `TransitionModel` — g(h_t, a, z) over the 73 post-trunk
-  policy-readable rows (2 `TrunkBlock`s + one zero-init `out_proj`), a
-  2x16 chance code with prior/posterior MLPs, and the grounding / next-mask
-  / kind+done heads on the imagined rows; the shared `v_head` and
-  `action_head` are applied to them in `player_model._forward_transition`.
+  `transition.py`: `TransitionModel` — g(h_t, u, z) over the 73 post-trunk
+  policy-readable rows (2 `TrunkBlock`s over [rows + slot embedding ;
+  action token ; chance token] under an all-True mask + one zero-init
+  `dynamics_out_proj`; nothing is masked past the root encoding), u ONE
+  64-class LATENT ACTION (the action encoder q(u|h,a) at observed states;
+  the candidate generator rho(u|h) draws J distinct codes without
+  replacement inside its support at imagined nodes), z the 2x16 chance
+  code with prior/posterior MLPs; the K-step unroll (`unroll_steps`)
+  recomputes the encoder and posterior at every imagined state; readers
+  on the imagined rows: grounding, kind+done, the conditional
+  terminal-outcome head. The shared `v_head` is applied to them in
+  `player_model._forward_transition`. `search.py`: the recursive
+  decision/chance backup, on the baseline search eval actors ONLY.
   `modules.py`: generic primitives only — architecture lives next to its wiring.
 - `rl/online/training/` — the learner, split by what each piece needs to
   run. `train_step.py`: the jitted update (losses, EMA target, non-finite

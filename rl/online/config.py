@@ -489,6 +489,31 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # learner's construction sites (the model forward branches on it
     # statically).
     player_transition_value_trains_v_head: bool = True
+    # Latent actions (2026-09-07). The action encoder q(u | h, a) is held
+    # to the EXACT action-discrimination objective at observed states:
+    # H_w(A | U, h) under uniform reference weights over the legal cells,
+    # summed over all 64 codes (a sampled straight-through CE drops the
+    # derivative of the sampling distribution). The loss is bounded by
+    # log(n) in expectation and invariant to a common logit shift (no
+    # restoring force along that direction -- the mean logit is on a
+    # panel); it reaches the encoder only. 1.0 is the initial weight, 0
+    # the matched control (does the alphabet collapse without it? the
+    # symmetric collapsed encoding is a stationary point of the objective,
+    # not a repelled one). A persistent collapse is diagnosed, never
+    # escalated by coefficient.
+    player_transition_decode_coef: float = 1.0
+    # The recorded action's code at an IMAGINED node (the encoder on
+    # hhat_k with the recorded cell) held to its real-state distribution
+    # (CE to sg q(u | h_{t+k}, a)): a state-local code is not guaranteed
+    # to keep its meaning after model error, so the unroll trains it to.
+    # A hypothesis with its own panels (the teacher-vs-imagined KL); 0 is
+    # the control.
+    player_transition_align_coef: float = 1.0
+    # A second baseline search eval slot playing `cfg.search.depth` 2 (the
+    # generator's candidates expanded at every depth-1 node) beside the
+    # depth-1 slot; 0 = no such slot. Search runs on these eval actors
+    # ONLY -- never on the self-play actors, never in the learner.
+    eval_search_depth: int = 2
 
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio

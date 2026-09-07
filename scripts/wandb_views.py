@@ -607,10 +607,12 @@ def rl_sections():
                         "player_loss_transition_cons",
                         "player_loss_transition_kl",
                         "player_loss_transition_value",
-                        "player_loss_transition_policy",
-                        "player_loss_transition_mask",
+                        "player_loss_transition_value_k1",
                         "player_loss_transition_kind",
-                        "player_loss_transition_done",
+                        "player_loss_transition_termination",
+                        "player_loss_transition_decode",
+                        "player_loss_transition_generator",
+                        "player_loss_transition_align",
                     ],
                 ),
                 lp(
@@ -622,7 +624,11 @@ def rl_sections():
                     # the posterior copying t+1. free_frac = share of
                     # transitions under the 1-nat floor (no gradient).
                     "Transition KL (nats)",
-                    ["player_transition_kl", "player_transition_kl_free_frac"],
+                    [
+                        "player_transition_kl",
+                        "player_transition_kl_k1",
+                        "player_transition_kl_free_frac",
+                    ],
                 ),
                 lp(
                     # KL split by the transition's shape: spanned edges
@@ -760,6 +766,23 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # The 2026-09-07 splits: delta_r2 on transitions where
+                    # a row the trunk zeroed at t EXISTS at t+1 (the rows
+                    # the 2026-09-05 imagine could never write; the
+                    # pre-registered prediction is that this split closes
+                    # toward the other) and the second unroll offset (the
+                    # change over TWO steps against copy, through an
+                    # imagined intermediate).
+                    "Transition value calibration by newly-valid rows / offset",
+                    [
+                        "player_transition_value_delta_r2_newly_valid",
+                        "player_transition_value_delta_r2_no_newly_valid",
+                        "player_transition_value_delta_r2_k1",
+                        "player_transition_newly_valid_frac",
+                        "player_transition_cons_gain_newly_valid",
+                    ],
+                ),
+                lp(
                     # The two sums behind every delta_r2 panel (2026-09-07
                     # audit): a split with few rows per batch (switch)
                     # logs per-batch ratios of magnitude > 100, so the
@@ -792,31 +815,88 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # loss_transition_policy = KL(pi_target(t+1) || pi on
-                    # imagined rows through the FROZEN readout); kl_copy
-                    # = the same KL with pi_target(t) in its place, over
-                    # cells legal at both steps -- the copy baseline.
-                    # The loss under the copy baseline = g moves the
-                    # policy-readable rows the right way.
-                    "Transition policy KL vs copy",
+                    # The latent action (2026-09-07): the action encoder
+                    # under the EXACT decode objective at the root.
+                    # decode_acc = expected top-1 decode of the taken cell
+                    # among the legal ones (1/num_legal is chance);
+                    # action_mi = log(n) - H(A | U) in nats (0 = the
+                    # collapsed symmetric encoding, log(n) = every legal
+                    # cell its own code); action_entropy = H(q(u | h, a))
+                    # per taken cell; perplexity = usage of the DRAWN
+                    # codes over the batch (1 = one code for everything,
+                    # 64 = uniform); sample_is_mode exactly 1.0 = the
+                    # learner ran without its sampling rng; logit_mean
+                    # is the shift-invariant direction the objective
+                    # leaves free (drifting = the optimiser, not the loss).
+                    "Transition latent action (decode)",
                     [
-                        "player_loss_transition_policy",
-                        "player_transition_policy_kl_copy",
+                        "player_transition_decode_acc",
+                        "player_transition_action_mi",
+                        "player_transition_action_entropy",
+                        "player_transition_action_perplexity_mean",
+                        "player_transition_action_sample_is_mode",
+                        "player_transition_action_num_legal",
+                        "player_transition_action_overflow_frac",
+                        "player_transition_action_logit_mean",
+                        "player_transition_action_logit_std",
                     ],
                 ),
                 lp(
-                    # The next decision's legal set: per-cell accuracy over
-                    # 295 cells (gate >= 0.98 -- legal cells are ~3% so
-                    # read recall beside it), the share of transitions
-                    # whose whole mask is exact, the next request kind
-                    # (gate >= 0.95) and done.
-                    "Transition mask / kind / done accuracy",
+                    # The candidate generator: KL of its first conditional
+                    # to the base policy's latent target (the 64-way
+                    # prior; CE - H, so 0 is exact) and of the later
+                    # slots to the without-replacement conditionals, at
+                    # the real root and at the imagined nodes (_k1, _k2:
+                    # the deployed reader on the states search will hand
+                    # it); target entropy / perplexity = how many
+                    # consequence classes the policy spreads over;
+                    # coverage = the target mass the J teacher codes hold
+                    # (gate >= 0.9); occupied / support = the teacher's
+                    # support size at 0.99 mass.
+                    "Transition candidate generator",
                     [
-                        "player_transition_mask_acc",
-                        "player_transition_mask_recall",
-                        "player_transition_mask_exact_frac",
+                        "player_transition_generator_kl_first",
+                        "player_transition_generator_kl_later",
+                        "player_transition_generator_kl_first_k1",
+                        "player_transition_generator_kl_first_k2",
+                        "player_transition_generator_target_entropy",
+                        "player_transition_generator_target_perplexity",
+                        "player_transition_generator_coverage",
+                        "player_transition_generator_occupied",
+                        "player_transition_generator_support",
+                    ],
+                ),
+                lp(
+                    # Alignment: the encoder on the IMAGINED state with the
+                    # recorded cell against its real-state distribution,
+                    # KL per node (0 = the code keeps its meaning after
+                    # one / two imagined steps).
+                    "Transition action-code alignment on imagined nodes",
+                    [
+                        "player_transition_align_kl_k1",
+                        "player_transition_align_kl_k2",
+                        "player_loss_transition_align",
+                    ],
+                ),
+                lp(
+                    # The next request kind (gate >= 0.95), done, and the
+                    # conditional terminal outcome: terminal_ce / _acc on
+                    # the actual terminal successors only (the reader the
+                    # fractional-continuation backup needs),
+                    # terminal_payoff_err = |(1 - c) T - recorded reward|
+                    # over every eligible row (0 on non-terminal rows is
+                    # the recorded reward there), terminal_rows the supply.
+                    "Transition kind / done / terminal outcome",
+                    [
                         "player_transition_kind_acc",
+                        "player_transition_kind_acc_k1",
                         "player_transition_done_acc",
+                        "player_transition_done_acc_k1",
+                        "player_transition_terminal_ce",
+                        "player_transition_terminal_acc",
+                        "player_transition_terminal_payoff_err",
+                        "player_transition_terminal_rows",
+                        "player_transition_done_frac",
                     ],
                 ),
                 lp(
@@ -861,99 +941,150 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Drift against init: out_proj is the ONE zero factor
-                    # (exactly 0 at init; must leave it within ~200 steps
-                    # or the blocks and code paths behind it never train),
-                    # action_proj ~0.044 / code_proj ~0.0625 lecun,
-                    # code_table 0.088.
-                    # pred_rms = rms(imagined rows) / rms(real rows) over
-                    # valid rows -- the off-manifold watch now that raw-row
-                    # consistency is out of the gradient (cons_coef 0.0);
-                    # ~1 is on-manifold, > 2 is the abort.
+                    # Drift against init: dynamics_out_proj is the ONE
+                    # zero factor (exactly 0 at init; must leave it within
+                    # ~200 steps or everything behind it never trains);
+                    # the action table and the slot embedding start at
+                    # 0.0625, chance_token_proj ~0.0625 lecun, code_table
+                    # 0.088. pred_rms = rms(imagined rows) / rms(real
+                    # rows) over the rows valid at t -- the off-manifold
+                    # watch with raw-row consistency out of the gradient
+                    # (cons_coef 0.0); ~1 is on-manifold, > 2 is the abort.
                     "Transition model: drift",
                     [
                         "player_transition_out_proj_rms",
-                        "player_transition_action_proj_rms",
-                        "player_transition_code_proj_rms",
+                        "player_transition_action_table_rms",
+                        "player_transition_slot_embedding_rms",
+                        "player_transition_chance_token_proj_rms",
                         "player_transition_code_table_rms",
                         "player_transition_pred_rms",
                     ],
                 ),
                 lp(
-                    # Pre-clip grad norms of the model, its blocks and the
-                    # two code nets beside the value head's TOTAL gradient
-                    # (real-row CE + the imagined-row CE under
-                    # value_trains_v_head): the aux term dwarfing the
-                    # value head's is it stealing the trunk.
+                    # Pre-clip grad norms of the model and its parts beside
+                    # the value head's TOTAL gradient (real-row CE + the
+                    # imagined-row CEs under value_trains_v_head): the aux
+                    # term dwarfing the value head's is it stealing the
+                    # trunk.
                     "Transition model: gradient",
                     [
                         "player_transition_grad_norm",
                         "player_transition_blocks_grad_norm",
                         "player_transition_prior_grad_norm",
                         "player_transition_posterior_grad_norm",
+                        "player_transition_action_encoder_grad_norm",
+                        "player_transition_generator_grad_norm",
+                        "player_transition_terminal_head_grad_norm",
                         "player_value_head_grad_norm",
                     ],
                 ),
             ],
         ),
         ws.Section(
-            # Search on an eval actor (2026-09-06, stochastic-transition
-            # Step 3): the `-search` slot plays the SAME EMA params as the
-            # `-t1` slot through a search-enabled actor -- depth-1
-            # expectimax over the transition model's prior samples, the
-            # root Q added to the logits as a bonus -- at temp 1.0. The
-            # headline is wr(search) - wr(t1) on the same checkpoint:
-            # the model's worth in play. root-kl is KL(pi_search || pi)
-            # per decision (0 = inert, > 0.5 = search replaced the
-            # policy; the pre-registered band is 0.05-0.5); value-gap is
-            # the search value minus V at the root (positive = search
-            # expects to do better than the policy, must agree in sign
-            # with the wr delta or the model is confidently wrong);
+            # Search on the baseline eval actors (2026-09-06, stochastic-
+            # transition Step 3; depth 2 2026-09-07): the `-search` slot
+            # plays the SAME EMA params as the `-t1` slot through a
+            # search-enabled actor -- the root's legal cells through the
+            # latent transition model, the root Q added to the logits as
+            # a bonus -- at temp 1.0, and the `-search-d2` slot expands
+            # the generator's candidates at every depth-1 node. The
+            # headline is wr(search) - wr(t1) on the same checkpoint: the
+            # model's worth in play; wr(d2) - wr(search) the deeper
+            # read (diagnostic until the calibration gates pass). root-kl
+            # is KL(pi_search || pi) per decision (0 = inert, > 0.5 =
+            # search replaced the policy; the pre-registered band is
+            # 0.05-0.5); value-gap is the search value minus V at the
+            # root; deep-gain the depth-2 backup minus V at the depth-1
+            # nodes (uniform and positive with no wr gain = optimism);
+            # deep-continue the predicted continuation there;
+            # candidate-retained-mass / -occupied the generator's support;
             # switch-frac is voluntary switches per decision that
-            # offered one, read beside the plain arm's; ms-per-step
-            # prices the search on the CPU actor path.
+            # offered one; ms-per-step prices each arm on the CPU actor.
             name="3c · Search eval",
             is_open=True,
             panels=[
                 lp(
                     "wr vs SimpleHeuristic at temp 1: search vs plain",
-                    [f"ema-wr-{SH}-t1-2", f"ema-wr-{SH}-search-3"],
+                    [
+                        f"ema-wr-{SH}-t1-2",
+                        f"ema-wr-{SH}-search-3",
+                        f"ema-wr-{SH}-search-d2-4",
+                    ],
                     x="lifetime_step",
                     smooth=0.98,
                 ),
                 lp(
                     "Smoothed wr at temp 1: search vs plain",
-                    [f"smoothed-wr-{SH}-t1-2", f"smoothed-wr-{SH}-search-3"],
+                    [
+                        f"smoothed-wr-{SH}-t1-2",
+                        f"smoothed-wr-{SH}-search-3",
+                        f"smoothed-wr-{SH}-search-d2-4",
+                    ],
                     x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
                     "Search root KL(pi_search || pi) per decision",
-                    [f"search-root-kl-{SH}-search-3"],
+                    [
+                        f"search-root-kl-{SH}-search-3",
+                        f"search-root-kl-{SH}-search-d2-4",
+                    ],
                     x="lifetime_step",
                     smooth=0.95,
                 ),
                 lp(
                     "Search value minus V at the root",
-                    [f"search-value-gap-{SH}-search-3"],
+                    [
+                        f"search-value-gap-{SH}-search-3",
+                        f"search-value-gap-{SH}-search-d2-4",
+                    ],
+                    x="lifetime_step",
+                    smooth=0.95,
+                ),
+                lp(
+                    "Depth 2: backup gain over V and continuation at the depth-1 nodes",
+                    [
+                        f"search-deep-gain-{SH}-search-d2-4",
+                        f"search-deep-continue-{SH}-search-d2-4",
+                    ],
+                    x="lifetime_step",
+                    smooth=0.95,
+                ),
+                lp(
+                    "Depth 2: the generator's retained mass and occupied candidates",
+                    [
+                        f"search-candidate-retained-mass-{SH}-search-d2-4",
+                        f"search-candidate-occupied-{SH}-search-d2-4",
+                    ],
                     x="lifetime_step",
                     smooth=0.95,
                 ),
                 lp(
                     "Voluntary switch frac per offered decision",
-                    [f"switch-frac-{SH}-t1-2", f"switch-frac-{SH}-search-3"],
+                    [
+                        f"switch-frac-{SH}-t1-2",
+                        f"switch-frac-{SH}-search-3",
+                        f"switch-frac-{SH}-search-d2-4",
+                    ],
                     x="lifetime_step",
                     smooth=0.95,
                 ),
                 lp(
                     "Eval ms per step (search cost on the CPU actor)",
-                    [f"ms-per-step-{SH}-t1-2", f"ms-per-step-{SH}-search-3"],
+                    [
+                        f"ms-per-step-{SH}-t1-2",
+                        f"ms-per-step-{SH}-search-3",
+                        f"ms-per-step-{SH}-search-d2-4",
+                    ],
                     x="lifetime_step",
                     smooth=0.9,
                 ),
                 lp(
                     "Decisions with more legal cells than max_cells",
-                    [f"search-legal-truncated-{SH}-search-3"],
+                    [
+                        f"search-legal-truncated-{SH}-search-3",
+                        f"search-legal-truncated-{SH}-search-d2-4",
+                    ],
                     x="lifetime_step",
                     smooth=0.95,
                 ),

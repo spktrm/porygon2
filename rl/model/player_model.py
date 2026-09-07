@@ -54,10 +54,10 @@ from rl.model.heads import (
     sample_categorical,
 )
 from rl.model.modules import MLP
-from rl.model.search import depth_one_expectimax, search_diagnostics
-from rl.model.transition import TransitionModel
+from rl.model.search import SearchBudget, SearchFns, search_diagnostics, search_root
+from rl.model.transition import TransitionModel, unimix_probs
 from rl.model.trunk import row_homogeneity
-from rl.model.utils import get_num_params, legal_log_policy
+from rl.model.utils import get_num_params
 
 
 def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
@@ -449,24 +449,41 @@ class Porygon2PlayerModel(nn.Module):
         self, sequence: jax.Array, row_valid: jax.Array, legal: jax.Array, temp: float
     ):
         """The search eval arm's read of one decision (rl/model/search.py):
-        depth-1 expectimax over the transition model with codes sampled
-        from its PRIOR -- against the empirical opponent the data was
-        played against -- valued by the shared V. Returns the logit bonus
-        and the `SearchOutput` panels."""
+        the exact legal cells at the root, each through the action
+        encoder, chance sampled from the PRIOR -- against the empirical
+        opponent the data was played against -- valued by the shared V
+        (depth 1) or by the generator's candidates one level down (depth
+        2). Returns the logit bonus and the `SearchOutput` panels."""
         search_cfg = self.cfg.search
-        root = depth_one_expectimax(
-            sequence,
-            row_valid,
-            legal,
-            self.make_rng("sampling"),
-            prior_fn=self.transition.prior,
-            action_rows_fn=self.transition.action_rows,
-            imagine_fn=self.transition.imagine,
-            value_fn=self.v_head,
+        transition = self.transition
+        mass_threshold = self.cfg.transition.mass_threshold
+
+        def value_fn(cls_row):
+            return self.v_head(cls_row).expectation
+
+        def generate_fn(rows, rng):
+            return transition.generate(rows, rng, mass_threshold)
+
+        def encoder_fn(rows, cell):
+            return unimix_probs(transition.action_logits(rows, cell))
+
+        fns = SearchFns(
+            encoder_fn=encoder_fn,
+            prior_fn=transition.prior,
+            imagine_fn=transition.imagine,
+            value_fn=value_fn,
+            generate_fn=generate_fn,
+            continue_fn=transition.continue_prob,
+            terminal_fn=transition.expected_terminal_outcome,
+        )
+        budget = SearchBudget(
+            depth=search_cfg.depth,
             num_samples=search_cfg.num_samples,
+            num_samples_inner=search_cfg.num_samples_inner,
             max_cells=search_cfg.max_cells,
             temp=search_cfg.temp,
         )
+        root = search_root(sequence, legal, self.make_rng("sampling"), fns, budget)
         base_logits = self._legal_logits(
             (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             legal,
@@ -475,13 +492,21 @@ class Porygon2PlayerModel(nn.Module):
         diagnostics = search_diagnostics(
             base_logits, root, legal, self.v_head(sequence[CLS_ROW]).expectation
         )
-        return root.bonus, SearchOutput(
+        output = SearchOutput(
             root_kl=diagnostics.root_kl,
             search_value=diagnostics.search_value,
             root_value_gap=diagnostics.root_value_gap,
             num_legal=root.num_legal,
             legal_truncated=root.legal_truncated,
         )
+        if search_cfg.depth >= 2:
+            output = output.replace(
+                deep_gain=root.deep_gain,
+                deep_continue=root.deep_continue,
+                candidate_retained_mass=root.candidate_retained_mass,
+                candidate_occupied=root.candidate_occupied,
+            )
+        return root.bonus, output
 
     def get_head_outputs(
         self,
@@ -633,79 +658,70 @@ class Porygon2PlayerModel(nn.Module):
         output: PlayerActorOutput,
         action_mask: jax.Array,
     ) -> dict[str, jax.Array]:
-        """The transition model over the trajectory (T, rows, D): every
-        step is paired with its POSITIONAL successor (the last step with
-        itself; train_step masks it). Only the policy-readable rows enter
-        -- the rollout's information set -- and BOTH ends are under
-        stop_gradient: the model never trains the trunk, at either t or
-        t+1. The action readout is applied to the imagined rows through a
-        FROZEN copy of its params (`clone().apply` on a stop_gradient'd
-        variable tree), so g learns to write rows the real readout already
-        reads and the readout never learns from imagined rows -- with g
-        near the copy predictor the next-policy KL through a LIVE readout
-        was KL(pi_{t+1} || pi_t) on the real trunk, an unregularised
-        temporal-smoothing force that read anti-switch on every voluntary
-        switch row (irqeetfg 1294k-1310k: prob_switch 0.04 -> 0.014). The
-        shared value head is LIVE on the imagined CLS row under
-        `cfg.transition.value_trains_v_head` (2026-09-06, Step 3b: MuZero's
-        value target -- the same real t+1 win_returns the head fits on
-        real rows, through the imagined state; a head that never saw an
-        imagined row cannot be value-equivalent on one) and frozen the
-        same way as the readout otherwise. The prior-mode decode is read
-        by the frozen head either way (a no-gradient panel). The policy
-        is masked by the REAL next legal set."""
+        """The transition model over the trajectory (T, rows, D), unrolled
+        `cfg.transition.unroll_steps` transitions from every start step
+        along the recorded actions (the real steps gathered by their
+        POSITIONAL successors, the last to itself; train_step masks the
+        out-of-range offsets). Only the policy-readable rows enter -- the
+        rollout's information set -- and every real input is under
+        stop_gradient: the rows at every offset, and the base policy the
+        latent target is built from (an EXPLICIT stop_gradient on the
+        live readout's log_policy: without it the generator and decode
+        losses would reach the readout and the trunk, launch check 2's
+        collapse shape). The shared value head is LIVE on every imagined
+        CLS row under `cfg.transition.value_trains_v_head` (2026-09-06,
+        Step 3b: MuZero's value target -- the same real t+k+1 win_returns
+        the head fits on real rows, through the imagined state) and a
+        FROZEN clone (`clone().apply` on a stop_gradient'd variable tree)
+        otherwise; the prior-mode decode is read by the frozen clone
+        either way (a no-gradient panel). No readout is applied under a
+        real next legal set: legality at an imagined node is the
+        generator's mass (2026-09-07)."""
         rows = jax.lax.stop_gradient(sequence[:, POLICY_READABLE_ROWS])
         valid = row_valid[:, POLICY_READABLE_ROWS]
+        log_policy = jax.lax.stop_gradient(output.action_head.log_policy)
+        transition = self.transition(
+            rows, output.action_head.action_index, action_mask, log_policy
+        )
+        # (K, T, rows, D): the imagined state after each unroll step.
+        pred = transition.pred
         # The successor written once, as a GATHER rather than slice+concat:
         # XLA's fusion emitter mis-typed the concatenated bool mask inside
-        # the policy-consistency KL fusion at the live lattice shapes
-        # ('scf.if' 1x1x1xi1 vs 1x4x512xi1 at (64, 192) x B=4, 2026-09-05;
-        # the ex.bin shape compiled), and the gather does not fuse into
-        # that pattern. Same values: t -> t+1, the last step to itself.
+        # a KL fusion at the live lattice shapes ('scf.if' 1x1x1xi1 vs
+        # 1x4x512xi1 at (64, 192) x B=4, 2026-09-05; the ex.bin shape
+        # compiled), and the gather does not fuse into that pattern.
         num_steps = rows.shape[0]
         successor = jnp.minimum(jnp.arange(num_steps) + 1, num_steps - 1)
         next_rows = jax.lax.stop_gradient(jnp.take(rows, successor, axis=0))
         next_valid = jnp.take(valid, successor, axis=0)
-        next_mask = jnp.take(action_mask, successor, axis=0)
-        transition = self.transition(
-            rows, valid, output.action_head.action_index, next_rows, next_valid
-        )
-        pred = transition.pred
         # The params collection ALONE: `.variables` also carries whatever
         # `capture_intermediates` recorded on the real-row call, which are
         # tracers of the head-output vmap above and leak from this scope.
-        frozen_action_head = jax.lax.stop_gradient(
-            {"params": self.action_head.variables["params"]}
-        )
         frozen_v_head = jax.lax.stop_gradient(
             {"params": self.v_head.variables["params"]}
         )
-        logits = jax.vmap(
-            lambda imagined: self.action_head.clone().apply(
-                frozen_action_head,
-                imagined[PRIVATE_ROWS],
-                imagined[MOVE_ROWS],
-                imagined[TARGET_ROWS],
-            )
-        )(pred)
         if self.cfg.transition.value_trains_v_head:
-            transition_value_head = self.v_head(pred[:, CLS_ROW])
+            transition_value_head = self.v_head(pred[:, :, CLS_ROW])
         else:
             transition_value_head = self.v_head.clone().apply(
-                frozen_v_head, pred[:, CLS_ROW]
+                frozen_v_head, pred[:, :, CLS_ROW]
             )
         transition_value_head_prior = self.v_head.clone().apply(
             frozen_v_head, transition.pred_prior[:, CLS_ROW]
         )
-        error = (pred.astype(jnp.float32) - next_rows.astype(jnp.float32)) ** 2
+        first = pred[0].astype(jnp.float32)
+        error = (first - next_rows.astype(jnp.float32)) ** 2
         movement = (next_rows.astype(jnp.float32) - rows.astype(jnp.float32)) ** 2
         # The off-manifold watch: the imagined rows' rms against the real
-        # rows' over the valid rows, per step (T,), sg'd (a read, never a
-        # force).
+        # rows' over the rows valid at t, per step (T,), sg'd (a read,
+        # never a force).
         row_weight = valid.astype(jnp.float32)[..., None]
-        pred_energy = (row_weight * pred.astype(jnp.float32) ** 2).sum(axis=(-2, -1))
+        pred_energy = (row_weight * first**2).sum(axis=(-2, -1))
         rows_energy = (row_weight * rows.astype(jnp.float32) ** 2).sum(axis=(-2, -1))
         pred_rms = jax.lax.stop_gradient(jnp.sqrt(pred_energy / (rows_energy + 1e-6)))
+        # A LABEL-side panel mask (never a model input): the transition
+        # brings a row that the trunk zeroed at t into existence at t+1.
+        newly_valid = (jnp.logical_not(valid) & next_valid).any(axis=-1)
         return {
             "transition_cons_err": error.sum(axis=-1),
             "transition_cons_scale": jax.lax.stop_gradient(movement.sum(axis=-1)),
@@ -717,10 +733,23 @@ class Porygon2PlayerModel(nn.Module):
             "transition_value_head": transition_value_head,
             "transition_value_head_prior": transition_value_head_prior,
             "transition_pred_rms": pred_rms,
-            "transition_log_policy": legal_log_policy(logits, next_mask),
-            "transition_mask_logits": transition.mask_logits,
+            "transition_newly_valid": newly_valid,
             "transition_kind_logits": transition.kind_logits,
             "transition_done_logit": transition.done_logit,
+            "transition_terminal_logits": transition.terminal_logits,
+            "transition_action_logits": transition.action_logits,
+            "transition_action_cells": transition.action_cells,
+            "transition_action_cell_valid": transition.action_cell_valid,
+            "transition_action_taken_index": transition.action_taken_index,
+            "transition_action_overflow": transition.action_overflow,
+            "transition_action_one_hot": transition.action_one_hot,
+            "transition_generator_logits": transition.generator_logits,
+            "transition_teacher_codes": transition.teacher_codes,
+            "transition_generator_target": transition.generator_target,
+            "transition_support_mask": transition.support_mask,
+            "transition_node_overflow": transition.node_overflow,
+            "transition_align_logits": transition.align_logits,
+            "transition_align_target": transition.align_target,
         }
 
 

@@ -1,37 +1,51 @@
-"""The latent transition model (2026-09-05): g(h_t, a, z) -> h_{t+1}.
+"""The latent transition model (2026-09-05; latent actions 2026-09-07):
+g(h_t, u, z) -> h_{t+1}, unrolled K steps, with nothing masked past the
+root encoding.
 
 `h_t` is the trunk's post-trunk POLICY-READABLE sequence (73 rows), exactly
-what the heads read, so the imagined `h_{t+1}` keeps the sequence layout and
-`V`, the action readout, this model itself and the heads below apply to it
-unchanged. Between two of my requests the opponent decides, the engine
-rolls and information is revealed, none of it observed as a choice
-(memory: the opponent's action is NEVER a label); the chance code `z` --
-`code_groups` categoricals of `code_classes` -- is the one latent that
-covers all three, inferred through a bottleneck (LAPO/Genie's shape) from
-the real next rows by the posterior and predicted from `h_t` and my
-action by the prior. Every head here is trained on an OBSERVED label:
+what the heads read, so the imagined `h_{t+1}` keeps the sequence layout
+and `V`, this model itself and the heads below apply to it unchanged. Two
+latents condition one step:
 
-- grounding: per imagined row -> the CHANGE in the DYNAMICS_TARGET_ROWS'
-  pre-trunk content, t -> t+1, in the next step's layout (the old delta
-  head's label and its zero-init output: the head starts AT the copy
-  predictor, gain 0, and its loss is on the delta's own scale -- a
-  content target was tried first and started at loss ~18, the static
-  tokens' reconstruction error against a delta-sized normaliser, with
-  the head's gradient alone at 2x the global clip);
-- the next action mask: the action readout's own form instantiated a
-  second time (`mask_head`), so a rollout knows its next legal set;
-- one cls head off the imagined CLS row: the next request kind (a
-  force-switch node is MY decision again with no opponent move inside
-  it) and done.
+- `u`, the LATENT ACTION: one categorical of `action_classes` codes. At an
+  observed state the action encoder q(u | h, a) reads the taken cell's
+  readout rows against the whole sequence (one cross-attention) -- my
+  action IS observed, so unlike LAPO/Genie there is no inverse-dynamics
+  inference. At an imagined node the candidate generator rho(u | h) is
+  the policy over the latent alphabet: an autoregressive decoder that
+  draws J distinct codes WITHOUT replacement inside its own support set,
+  so a rollout never enumerates concrete cells past the root and never
+  reads a future request. The generator is distilled from the base policy
+  at observed states (an imitation proposal, not search distillation).
+- `z`, the chance code (`code_groups` categoricals of `code_classes`):
+  the opponent decides, the engine rolls and information is revealed,
+  none of it observed as a choice (memory: the opponent's action is
+  NEVER a label); inferred from the real next rows by the posterior and
+  predicted from (h, u) by the prior.
 
-Init contract: `out_proj` is the ONE zero factor -- g is exactly the copy
-predictor at step 0 (consistency loss 1.0 = gain 0, the old head's own
-contract) and its gradient is the outer product of the live block output
-with the residual, so it moves at step 1 and `code_proj` / `action_proj`
-unfreeze at step 2 (the readout's query/key rule, not the two-factor
-stall). Only the policy-readable rows exist here, so nothing a rollout
-sees is privileged (`tests/test_transition_model.py` pins it with the
-posterior as the positive control).
+Both enter g as TOKENS beside the 73 rows (a learned slot embedding on
+the rows so a row the trunk zeroed is still addressable), through
+`dynamics_blocks` under an all-True mask: validity is content the rows
+carry, legality is the generator's mass. The real target rows (zero
+where the trunk zeroed them at t+1) teach absent rows -> zero and
+appearing rows -> content; the 2026-09-05 form masked g with the CURRENT
+validity and could never write a row that appears (LESSONS 2026-09-07).
+
+Readers on an imagined node: grounding (per row, the CHANGE in the
+DYNAMICS_TARGET_ROWS' pre-trunk content, zero-init at the copy
+predictor), the request kind + done, and the conditional TERMINAL
+OUTCOME (loss / draw / win given that the node ends the game -- V is
+unconditional, so the fractional-continuation backup in rl/model/search.py
+needs this reader, not V, at a node that may be terminal). The shared
+`v_head` is applied in the parent model.
+
+Init contract: `dynamics_out_proj` is the ONE zero factor -- g is exactly
+the copy predictor at step 0 and its gradient is the outer product of the
+live block output with the residual, so it moves at step 1 and everything
+behind it unfreezes at step 2 (the readout's query/key rule, not the
+two-factor stall). Only the policy-readable rows exist here, so nothing a
+rollout sees is privileged (`tests/test_transition_model.py` pins it with
+the posterior as the positive control).
 """
 
 from typing import NamedTuple
@@ -39,44 +53,108 @@ from typing import NamedTuple
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import numpy as np
 from ml_collections import ConfigDict
 
+from rl.environment.data import CAT_VF_SUPPORT
 from rl.model.constants import (
     CLS_ROW,
     DYNAMICS_TARGET_ROWS,
     MOVE_ROWS,
-    POLICY_READABLE_ROWS,
+    NUM_POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
-    SEQUENCE_READ_MASK,
     TARGET_ROWS,
 )
-from rl.model.heads import FlatActionReadout, chosen_bank_rows
-from rl.model.modules import MLP
+from rl.model.heads import chosen_bank_rows
+from rl.model.modules import FFWMLP, MLP, MultiHeadAttention, RMSNorm
 from rl.model.trunk import Trunk
 
 # The 1% unimix floor DreamerV3 puts under every categorical: the KL can
 # never see a zero, and the straight-through sample keeps a gradient.
 UNIMIX = 0.01
+NEGATIVE_INFINITY_LOGIT = -1e9
+
+
+class RealState(NamedTuple):
+    """One observed state's legal set through the action encoder: the
+    static enumeration of its legal cells (`cells` padded with cell 0,
+    `cell_valid` the occupancy, `taken_index` the taken cell's slot,
+    `overflow` when the enumeration cannot represent the step -- more
+    legal cells than the width, or the taken cell not among them),
+    the encoder's logits per enumerated cell (live), the base policy's
+    latent-action distribution p(u | h) = sum_a pi(a) q(u | h, a) (sg),
+    its teacher support set and the Gumbel-top-J teacher order, and the
+    taken cell's own code distribution (sg, the alignment target)."""
+
+    taken_cell: jax.Array
+    cells: jax.Array
+    cell_valid: jax.Array
+    taken_index: jax.Array
+    overflow: jax.Array
+    logits: jax.Array
+    code_target: jax.Array
+    support_mask: jax.Array
+    teacher_codes: jax.Array
+    taken_code_probs: jax.Array
+
+
+class Candidates(NamedTuple):
+    """The generator's draw at one node: J code indices, which slots are
+    occupied (inside the node's support set), the log of each draw's
+    conditional (over the support minus the prefix -- NOT a marginal
+    prior and NOT an inclusion probability), the first-conditional prior
+    rho at each code, the support mask and the prior mass the occupied
+    draws retain."""
+
+    codes: jax.Array
+    occupied: jax.Array
+    log_draw_conditionals: jax.Array
+    rho_at_codes: jax.Array
+    support_mask: jax.Array
+    retained_mass: jax.Array
 
 
 class TransitionOutput(NamedTuple):
-    """Per-step outputs, all leading (T, ...). `pred` is the imagined
-    next sequence decoded from the POSTERIOR sample; `pred_prior` is the
-    no-gradient decode from the prior MODE and `ground_prior` its grounding
-    read, the honest rollout-side numbers. Logits are f32; the code arrays are (T, G, K).
-    """
+    """The K-step unroll's outputs. `nodes` have a leading (K + 1) axis
+    over the states hhat_0 = h_t (real) .. hhat_K; `transitions` a leading
+    K axis over the steps hhat_k -> hhat_{k+1}, each paired with the real
+    step t + k + 1; the real-state leaves (`action_*`) describe h_t's
+    legal set through the encoder. After the parent's vmap every leaf
+    also carries the trajectory axis T after the offset axis."""
 
+    # Observed root state (h_t).
+    action_logits: jax.Array
+    action_cells: jax.Array
+    action_cell_valid: jax.Array
+    action_taken_index: jax.Array
+    action_overflow: jax.Array
+    # Nodes hhat_0 .. hhat_K.
+    generator_logits: jax.Array
+    teacher_codes: jax.Array
+    generator_target: jax.Array
+    support_mask: jax.Array
+    node_overflow: jax.Array
+    align_logits: jax.Array
+    align_target: jax.Array
+    # Transitions hhat_k -> hhat_{k+1}.
+    action_one_hot: jax.Array
     pred: jax.Array
-    pred_prior: jax.Array
     prior_logits: jax.Array
     post_logits: jax.Array
     post_one_hot: jax.Array
-    ground: jax.Array
-    ground_prior: jax.Array
-    mask_logits: jax.Array
     kind_logits: jax.Array
     done_logit: jax.Array
+    terminal_logits: jax.Array
+    # The first transition only: the prior-MODE decode (no gradient) and
+    # the grounding reads.
+    pred_prior: jax.Array
+    ground: jax.Array
+    ground_prior: jax.Array
+
+
+class NodeReadout(NamedTuple):
+    kind_logits: jax.Array
+    done_logit: jax.Array
+    terminal_logits: jax.Array
 
 
 def unimix_probs(logits: jax.Array) -> jax.Array:
@@ -101,23 +179,282 @@ def straight_through_sample(probs: jax.Array, rng: jax.Array | None) -> jax.Arra
     return hard + probs - jax.lax.stop_gradient(probs)
 
 
+def masked_log_softmax(logits: jax.Array, allowed: jax.Array) -> jax.Array:
+    """log-softmax over the allowed entries (f32); the others read the
+    floor logit's log-probability, which a zero target multiplies to 0."""
+    masked = jnp.where(allowed, logits.astype(jnp.float32), NEGATIVE_INFINITY_LOGIT)
+    return jax.nn.log_softmax(masked, axis=-1)
+
+
+def legal_enumeration(legal: jax.Array, taken_cell: jax.Array, max_cells: int):
+    """The static enumeration of one legal set: `cells` the first
+    `max_cells` legal cell indices (padded with 0), `cell_valid` their
+    occupancy, `taken_index` the taken cell's slot (0 when absent) and
+    `overflow` -- the enumeration cannot represent this step: more legal
+    cells than the width, or the taken cell not among the enumerated ones
+    (a padded row's empty legal set included). Overflow is counted and
+    masks every action-set loss, never silently renormalised."""
+    cells = jnp.nonzero(legal, size=max_cells, fill_value=0)[0]
+    num_legal = legal.sum()
+    cell_valid = jnp.arange(max_cells) < num_legal
+    is_taken = (cells == taken_cell) & cell_valid
+    taken_index = jnp.argmax(is_taken)
+    overflow = (num_legal > max_cells) | jnp.logical_not(is_taken.any())
+    return cells, cell_valid, taken_index, overflow
+
+
+class DecodeRead(NamedTuple):
+    """The exact action-discrimination objective (plan §4) at one state:
+    `loss` = H_w(A | U, h) under uniform reference weights over the legal
+    cells, `mutual_information` = log(n) - loss, `accuracy` the expected
+    top-1 decode of the taken cell over u ~ q(. | h, a), `num_valid` n."""
+
+    loss: jax.Array
+    mutual_information: jax.Array
+    accuracy: jax.Array
+    num_valid: jax.Array
+
+
+def exact_decode_loss(encoder_logits: jax.Array, cell_valid: jax.Array) -> DecodeRead:
+    """L(h) = -sum_a w(a) sum_u q_a(u) log D_w(a | u), D_w(a | u) =
+    w(a) q_a(u) / sum_a' w(a') q_a'(u), w uniform over the valid cells,
+    q the unimix'd encoder distribution -- summed EXACTLY over every code
+    (no sampled straight-through term: that drops the derivative of the
+    sampling distribution). Stable log-space throughout; an empty legal
+    set reads 0 on every field."""
+    num_valid = cell_valid.sum()
+    log_q = jnp.log(unimix_probs(encoder_logits))
+    log_weight = jnp.where(
+        cell_valid,
+        -jnp.log(jnp.maximum(num_valid, 1).astype(jnp.float32)),
+        NEGATIVE_INFINITY_LOGIT,
+    )
+    joint = log_weight[:, None] + log_q
+    log_mixture = jax.nn.logsumexp(joint, axis=0)
+    log_decode = joint - log_mixture[None]
+    weight = jnp.exp(log_weight)
+    probs = jnp.exp(log_q)
+    loss = -jnp.sum(weight[:, None] * probs * log_decode, where=cell_valid[:, None])
+    decoded = jnp.argmax(jnp.where(cell_valid[:, None], joint, -jnp.inf), axis=0)
+    hit = decoded[None, :] == jnp.arange(cell_valid.shape[0])[:, None]
+    accuracy = jnp.sum(weight[:, None] * probs * hit, where=cell_valid[:, None])
+    log_num = jnp.log(jnp.maximum(num_valid, 1).astype(jnp.float32))
+    nonempty = num_valid > 0
+    return DecodeRead(
+        loss=jnp.where(nonempty, loss, 0.0),
+        mutual_information=jnp.where(nonempty, log_num - loss, 0.0),
+        accuracy=jnp.where(nonempty, accuracy, 0.0),
+        num_valid=num_valid,
+    )
+
+
+def support_set(probs: jax.Array, mass_threshold: float) -> jax.Array:
+    """The smallest descending-probability prefix whose cumulative mass
+    reaches `mass_threshold`, as a boolean mask over the alphabet; ties
+    resolve by index (stable sort)."""
+    order = jnp.argsort(-probs, stable=True)
+    sorted_probs = probs[order]
+    exclusive = jnp.cumsum(sorted_probs) - sorted_probs
+    keep_sorted = exclusive < mass_threshold
+    return jnp.zeros_like(probs, dtype=bool).at[order].set(keep_sorted)
+
+
+def gumbel_top_k(log_probs: jax.Array, num_draws: int, rng: jax.Array | None):
+    """Kool et al. 2019: the top-k of log p + Gumbel noise is k sequential
+    draws without replacement from p (the Plackett-Luce ordering);
+    without a key it is the deterministic top-k. -inf entries are never
+    drawn ahead of finite ones."""
+    perturbed = log_probs
+    if rng is not None:
+        perturbed = log_probs + jax.random.gumbel(rng, log_probs.shape)
+    return jax.lax.top_k(perturbed, num_draws)[1]
+
+
+class CandidateTargets(NamedTuple):
+    allowed: jax.Array
+    targets: jax.Array
+    occupied: jax.Array
+
+
+def candidate_targets(
+    p_target: jax.Array, teacher_codes: jax.Array, support_mask: jax.Array
+) -> CandidateTargets:
+    """Teacher-forced targets for the J candidate slots: slot 0 is trained
+    on the FULL p_target so the first conditional stays a calibrated
+    prior; slot j > 0 on p_target renormalised over the support minus the
+    prefix drawn before it (exact Plackett-Luce conditionals). A slot is
+    occupied when its teacher code lies in the support (slot 0 always)."""
+    num_draws, num_codes = teacher_codes.shape[0], p_target.shape[0]
+    one_hot = jax.nn.one_hot(teacher_codes, num_codes, dtype=jnp.float32)
+    drawn_before = (jnp.cumsum(one_hot, axis=0) - one_hot) > 0.5
+    first = jnp.arange(num_draws)[:, None] == 0
+    allowed = first | (support_mask[None] & jnp.logical_not(drawn_before))
+    targets = p_target[None] * allowed
+    targets = targets / jnp.maximum(targets.sum(-1, keepdims=True), 1e-8)
+    occupied = support_mask[teacher_codes].at[0].set(True)
+    return CandidateTargets(allowed=allowed, targets=targets, occupied=occupied)
+
+
+class CandidateLoss(NamedTuple):
+    loss: jax.Array
+    cross_entropy: jax.Array
+    target_entropy: jax.Array
+
+
+def candidate_loss(logits: jax.Array, targets: CandidateTargets) -> CandidateLoss:
+    """Per node: the first slot's CE weighted once and the mean of the
+    later occupied slots' CEs weighted once, averaged; one occupied slot
+    reads the first CE alone. `cross_entropy - target_entropy` per slot
+    is the KL, the read (CE < log C says nothing)."""
+    log_probs = masked_log_softmax(logits, targets.allowed)
+    cross_entropy = -(targets.targets * log_probs).sum(-1)
+    safe_log = jnp.log(jnp.maximum(targets.targets, 1e-8))
+    target_entropy = -(targets.targets * safe_log).sum(-1)
+    later = targets.occupied & (jnp.arange(logits.shape[0]) > 0)
+    later_count = later.sum()
+    later_mean = jnp.sum(cross_entropy, where=later) / jnp.maximum(later_count, 1)
+    loss = jnp.where(
+        later_count > 0, 0.5 * (cross_entropy[0] + later_mean), cross_entropy[0]
+    )
+    return CandidateLoss(
+        loss=loss, cross_entropy=cross_entropy, target_entropy=target_entropy
+    )
+
+
 class RowRead(nn.Module):
-    """ONE Dense(D -> width) applied to every row, masked by validity and
-    flattened in row order, so a reader sees WHICH row carries what. The
-    mean pool it replaces cancelled a row's identity (an additive bias
-    present at t and t+1 alike) and diluted a one-row change by the row
-    count -- "my active lost 40%" and "theirs did" pooled to the same
-    vector, and the posterior could not see the branch it was meant to
-    code (irqeetfg 1266k-1312k: kl_long < kl_short, reveal margin 0.04).
-    Position is the identity: the layout is named rows."""
+    """ONE bias-free Dense(D -> width) applied to every row and flattened in
+    row order, so a reader sees WHICH row carries what. The mean pool it
+    replaced cancelled a row's identity and diluted a one-row change by
+    the row count (irqeetfg 1266k-1312k: kl_long < kl_short). No validity
+    argument and no bias: a row the trunk zeroed reads exactly 0, and an
+    imagined node -- which has no validity to hand it -- reads whatever
+    content its rows carry."""
 
     width: int
     dtype: jnp.dtype
 
     @nn.compact
-    def __call__(self, rows: jax.Array, row_valid: jax.Array) -> jax.Array:
-        read = nn.Dense(self.width, dtype=self.dtype, name="read")(rows)
-        return jnp.where(row_valid[:, None], read, 0).reshape(-1)
+    def __call__(self, rows: jax.Array) -> jax.Array:
+        read = nn.Dense(self.width, use_bias=False, dtype=self.dtype, name="read")(rows)
+        return read.reshape(-1)
+
+
+class ActionEncoder(nn.Module):
+    """q(u | h, a): the taken cell's readout rows form ONE query that
+    attends over the whole sequence (the cell's consequence lives in the
+    opponent's active row, my boosts and the field, not in its own two
+    rows), then an MLP to the `action_classes` logits. Applied at observed
+    states and at the root only -- the one place a concrete legal set is
+    legitimate."""
+
+    cfg: ConfigDict
+    dtype: jnp.dtype
+
+    @nn.compact
+    def __call__(self, rows: jax.Array, src_row: jax.Array, tgt_row: jax.Array):
+        model_size = rows.shape[-1]
+        query = nn.Dense(model_size, dtype=self.dtype, name="query_proj")(
+            jnp.concatenate((src_row, tgt_row), axis=-1)
+        )
+        attended = MultiHeadAttention(
+            name="read",
+            num_heads=self.cfg.num_heads,
+            qk_size=self.cfg.qk_size,
+            v_size=self.cfg.v_size,
+            model_size=model_size,
+            qk_layer_norm=self.cfg.qk_layer_norm,
+            use_bias=self.cfg.use_bias,
+            dtype=self.dtype,
+        )(
+            q=RMSNorm()(query)[None],
+            kv=RMSNorm()(rows),
+            mask=jnp.ones((1, rows.shape[0]), bool),
+        )[
+            0
+        ]
+        return MLP(**self.cfg.mlp.to_dict())(
+            jnp.concatenate((query, attended), axis=-1)
+        )
+
+
+class CandidateDecoderBlock(nn.Module):
+    """One decoder block over the candidate tokens: causal self-attention
+    over the tokens, cross-attention over the state rows, SwiGLU FFW, all
+    pre-RMSNorm with plain residuals. A `TrunkBlock` over [rows ; tokens]
+    with a block mask would compute the same function while re-encoding
+    73 state rows on every one of the J sequential draws (5-9x the
+    search-time FLOPs) -- this block's queries are the tokens only."""
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(self, carry, masks):
+        tokens, rows = carry
+        causal_mask, cross_mask = masks
+        attention = dict(
+            num_heads=self.cfg.num_heads,
+            qk_size=self.cfg.qk_size,
+            v_size=self.cfg.v_size,
+            model_size=self.cfg.model_size,
+            qk_layer_norm=self.cfg.qk_layer_norm,
+            use_bias=self.cfg.use_bias,
+            dtype=tokens.dtype,
+        )
+        normed = RMSNorm()(tokens)
+        tokens = tokens + MultiHeadAttention(name="self_attention", **attention)(
+            q=normed, kv=normed, mask=causal_mask
+        )
+        tokens = tokens + MultiHeadAttention(name="cross_attention", **attention)(
+            q=RMSNorm()(tokens), kv=RMSNorm()(rows), mask=cross_mask
+        )
+        tokens = tokens + FFWMLP(
+            hidden_size=self.cfg.hidden_size, use_bias=self.cfg.use_bias, name="ffw"
+        )(RMSNorm()(tokens))
+        return (tokens, rows), None
+
+
+class CandidateGenerator(nn.Module):
+    """rho(u | h) and the ordered conditionals: token j carries the code
+    drawn at slot j - 1 (slot 0 a learned start token) plus a slot
+    embedding; `num_blocks` decoder blocks scanned as the trunk is; one
+    Dense head to the alphabet. Teacher-forced: all J conditionals in one
+    pass through the causal mask."""
+
+    cfg: ConfigDict
+    num_candidates: int
+    num_classes: int
+    dtype: jnp.dtype
+
+    @nn.compact
+    def __call__(self, rows: jax.Array, code_embeddings: jax.Array) -> jax.Array:
+        """`code_embeddings` (J - 1, D): the embeddings of the codes drawn
+        at slots 0 .. J - 2, in order. Returns (J, C) logits."""
+        model_size = rows.shape[-1]
+        init = nn.initializers.variance_scaling(1.0, "fan_in", "normal")
+        start = self.param("start_embedding", init, (1, model_size))
+        positions = self.param(
+            "position_embedding", init, (self.num_candidates, model_size)
+        )
+        tokens = jnp.concatenate(
+            (start.astype(self.dtype), code_embeddings.astype(self.dtype)), axis=0
+        )
+        tokens = tokens + positions.astype(self.dtype)
+        num_tokens = self.num_candidates
+        causal_mask = jnp.tril(jnp.ones((num_tokens, num_tokens), bool))
+        cross_mask = jnp.ones((num_tokens, rows.shape[0]), bool)
+        block = nn.remat(
+            CandidateDecoderBlock, policy=jax.checkpoint_policies.nothing_saveable
+        )
+        (tokens, _), _ = nn.scan(
+            block,
+            variable_axes={"params": 0},
+            split_rngs={"params": True},
+            in_axes=nn.broadcast,
+            length=self.cfg.num_blocks,
+        )(self.cfg, name="blocks")((tokens, rows), (causal_mask, cross_mask))
+        return nn.Dense(self.num_classes, dtype=self.dtype, name="head")(
+            RMSNorm()(tokens)
+        )
 
 
 class TransitionModel(nn.Module):
@@ -128,16 +465,29 @@ class TransitionModel(nn.Module):
     def has_code(self) -> bool:
         return self.cfg.code_groups > 0
 
+    @property
+    def unroll_steps(self) -> int:
+        return self.cfg.unroll_steps
+
     def setup(self):
         model_size = self.cfg.block.model_size
-        self.blocks = Trunk(self.cfg.block)
-        self.action_proj = nn.Dense(model_size, dtype=self.dtype, name="action_proj")
-        self.out_proj = nn.Dense(
+        init = nn.initializers.variance_scaling(1.0, "fan_in", "normal")
+        self.slot_embedding = self.param(
+            "slot_embedding", init, (NUM_POLICY_READABLE_ROWS, model_size)
+        )
+        self.action_table = self.param(
+            "action_table", init, (self.cfg.action_classes, model_size)
+        )
+        self.condition_type_embedding = self.param(
+            "condition_type_embedding", nn.initializers.zeros_init(), (2, model_size)
+        )
+        self.dynamics_blocks = Trunk(self.cfg.block, name="dynamics_blocks")
+        self.dynamics_out_proj = nn.Dense(
             model_size,
             kernel_init=nn.initializers.zeros_init(),
             use_bias=False,
             dtype=self.dtype,
-            name="out_proj",
+            name="dynamics_out_proj",
         )
         if self.has_code:
             code_groups = self.cfg.code_groups
@@ -147,21 +497,35 @@ class TransitionModel(nn.Module):
                 nn.initializers.variance_scaling(1.0, "fan_in", "normal", out_axis=0),
                 (code_groups, self.cfg.code_classes, model_size // code_groups),
             )
-            self.code_proj = nn.Dense(model_size, dtype=self.dtype, name="code_proj")
+            self.chance_token_proj = nn.Dense(
+                model_size, dtype=self.dtype, name="chance_token_proj"
+            )
             self.row_read = RowRead(
                 self.cfg.row_read_width, self.dtype, name="row_read"
             )
-            # `_read_net`, not `_net`: the nets that read the mean pool were
-            # renamed so the by-path checkpoint merge inits them fresh --
-            # the later layers' shapes are unchanged and would otherwise
-            # resume weights trained on features that no longer exist.
-            self.prior_read_net = MLP(**self.cfg.prior.mlp.to_dict())
-            self.posterior_read_net = MLP(**self.cfg.posterior.mlp.to_dict())
+            # `_latent_net`: the nets that read the cell rows were renamed
+            # so the by-path checkpoint merge inits them fresh -- their
+            # first kernel's width changed and the later layers would
+            # otherwise resume on features that no longer exist.
+            self.prior_latent_net = MLP(**self.cfg.prior.mlp.to_dict())
+            self.posterior_latent_net = MLP(**self.cfg.posterior.mlp.to_dict())
+        self.action_encoder = ActionEncoder(
+            self.cfg.action_encoder, self.dtype, name="action_encoder"
+        )
+        self.candidate_generator = CandidateGenerator(
+            self.cfg.generator,
+            self.cfg.num_candidates,
+            self.cfg.action_classes,
+            self.dtype,
+            name="candidate_generator",
+        )
         self.ground_delta_head = MLP(
             **self.cfg.ground.mlp.to_dict(), final_kernel_init=nn.initializers.zeros
         )
-        self.mask_head = FlatActionReadout(self.cfg.action_head, name="mask_head")
         self.cls_head = MLP(**self.cfg.cls_head.mlp.to_dict())
+        self.terminal_outcome_head = MLP(**self.cfg.terminal_outcome.mlp.to_dict())
+
+    # ---- embeddings ---------------------------------------------------
 
     def code_embedding(self, code_one_hot: jax.Array) -> jax.Array:
         """(G, K) one-hot -> the concatenated code-table vector (D,)."""
@@ -170,6 +534,9 @@ class TransitionModel(nn.Module):
             -1
         )
 
+    def action_embedding(self, action_one_hot: jax.Array) -> jax.Array:
+        return action_one_hot.astype(self.dtype) @ self.action_table.astype(self.dtype)
+
     def code_logits(self, net: MLP, features: jax.Array) -> jax.Array:
         return (
             net(features)
@@ -177,28 +544,35 @@ class TransitionModel(nn.Module):
             .reshape(self.cfg.code_groups, self.cfg.code_classes)
         )
 
+    # ---- the node interface (search, the probe and the tests bind here) --
+
     def imagine(
         self,
         rows: jax.Array,
-        row_valid: jax.Array,
-        src_row: jax.Array,
-        tgt_row: jax.Array,
+        action_one_hot: jax.Array,
         code_one_hot: jax.Array | None,
     ) -> jax.Array:
-        """One step of g over one (73, D) sequence. The conditioning -- the
-        taken cell's readout rows and the code -- is ONE vector added to
-        every row; the blocks route it. Rows the trunk zeroed stay zero."""
-        conditioning = self.action_proj(jnp.concatenate((src_row, tgt_row), axis=-1))
-        if code_one_hot is not None:
-            conditioning = conditioning + self.code_proj(
-                self.code_embedding(code_one_hot)
-            )
-        read_mask = SEQUENCE_READ_MASK[
-            np.ix_(POLICY_READABLE_ROWS, POLICY_READABLE_ROWS)
+        """One step of g over one (73, D) sequence: the rows plus their
+        slot embedding, an action token and (with a code) a chance token,
+        through the dynamics blocks under an all-True mask; the residual
+        uses the ORIGINAL rows, so with `dynamics_out_proj` at zero the
+        output IS the input. No validity, legality or future input."""
+        types = self.condition_type_embedding.astype(self.dtype)
+        tokens = [
+            rows + self.slot_embedding.astype(self.dtype),
+            (self.action_embedding(action_one_hot) + types[0])[None],
         ]
-        hidden = self.blocks(rows + conditioning[None], row_valid, read_mask)
-        pred = rows + self.out_proj(hidden)
-        return jnp.where(row_valid[:, None], pred, 0)
+        if code_one_hot is not None:
+            chance = self.chance_token_proj(self.code_embedding(code_one_hot))
+            tokens.append((chance + types[1])[None])
+        sequence = jnp.concatenate(tokens, axis=0)
+        num_tokens = sequence.shape[0]
+        hidden = self.dynamics_blocks(
+            sequence,
+            jnp.ones((num_tokens,), bool),
+            jnp.ones((num_tokens, num_tokens), bool),
+        )
+        return rows + self.dynamics_out_proj(hidden[: rows.shape[0]])
 
     def action_rows(self, rows: jax.Array, action_cell: jax.Array):
         return chosen_bank_rows(
@@ -208,102 +582,372 @@ class TransitionModel(nn.Module):
             action_cell.reshape(()),
         )
 
-    def prior_features(
-        self,
-        rows: jax.Array,
-        row_valid: jax.Array,
-        src_row: jax.Array,
-        tgt_row: jax.Array,
-    ) -> jax.Array:
+    def action_logits(self, rows: jax.Array, action_cell: jax.Array) -> jax.Array:
+        """q(u | h, a) as (C,) f32 logits."""
+        src_row, tgt_row = self.action_rows(rows, action_cell)
+        return self.action_encoder(rows, src_row, tgt_row).astype(jnp.float32)
+
+    def prior_features(self, rows: jax.Array, action_one_hot: jax.Array):
         return jnp.concatenate(
-            (self.row_read(rows, row_valid), src_row, tgt_row), axis=-1
+            (self.row_read(rows), self.action_embedding(action_one_hot)), axis=-1
         )
 
-    def prior(self, rows: jax.Array, row_valid: jax.Array, action_cell: jax.Array):
-        """The rollout-side code distribution, (G, K) f32 logits."""
-        src_row, tgt_row = self.action_rows(rows, action_cell)
+    def prior(self, rows: jax.Array, action_one_hot: jax.Array) -> jax.Array:
+        """The rollout-side chance distribution, (G, K) f32 logits."""
         return self.code_logits(
-            self.prior_read_net, self.prior_features(rows, row_valid, src_row, tgt_row)
+            self.prior_latent_net, self.prior_features(rows, action_one_hot)
         )
 
-    def _step(
+    def posterior(
+        self, rows: jax.Array, action_one_hot: jax.Array, next_rows: jax.Array
+    ) -> jax.Array:
+        """LEARNER-ONLY: reads the real next rows (stop-gradient at the
+        call site) as the per-row CHANGE from `rows` -- an appearing row
+        is a change like any other -- through the read the prior applies
+        to the state."""
+        features = jnp.concatenate(
+            (
+                self.prior_features(rows, action_one_hot),
+                self.row_read(next_rows - rows),
+            ),
+            axis=-1,
+        )
+        return self.code_logits(self.posterior_latent_net, features)
+
+    def candidate_logits(self, rows: jax.Array, codes: jax.Array) -> jax.Array:
+        """Teacher-forced generator logits (J, C) f32 given the codes at
+        slots 0 .. J - 1 (slot j reads the codes before it)."""
+        embeddings = self.action_table.astype(self.dtype)[codes[:-1]]
+        return self.candidate_generator(rows, embeddings).astype(jnp.float32)
+
+    def generate(
+        self, rows: jax.Array, rng: jax.Array | None, mass_threshold: float
+    ) -> Candidates:
+        """J distinct codes drawn autoregressively without replacement
+        inside the node's own support set (the smallest rho prefix
+        holding `mass_threshold`); with a key each draw is a categorical
+        over the support minus the prefix, without one the argmax. Slots
+        past the support count are unoccupied (and still distinct)."""
+        num_draws = self.cfg.num_candidates
+        num_codes = self.cfg.action_classes
+        codes = jnp.zeros((num_draws,), jnp.int32)
+        drawn = jnp.zeros((num_codes,), bool)
+        rho = jax.nn.softmax(self.candidate_logits(rows, codes)[0], axis=-1)
+        support = support_set(rho, mass_threshold)
+        keys = [None] * num_draws
+        if rng is not None:
+            keys = list(jax.random.split(rng, num_draws))
+        log_draws = []
+        for slot in range(num_draws):
+            logits = self.candidate_logits(rows, codes)[slot]
+            allowed = support & jnp.logical_not(drawn)
+            allowed = jnp.where(allowed.any(), allowed, jnp.logical_not(drawn))
+            log_conditional = masked_log_softmax(logits, allowed)
+            if keys[slot] is None:
+                index = jnp.argmax(log_conditional)
+            else:
+                index = jax.random.categorical(keys[slot], log_conditional)
+            codes = codes.at[slot].set(index)
+            drawn = drawn.at[index].set(True)
+            log_draws.append(log_conditional[index])
+        occupied = jnp.arange(num_draws) < support.sum()
+        rho_at_codes = rho[codes]
+        return Candidates(
+            codes=codes,
+            occupied=occupied,
+            log_draw_conditionals=jnp.stack(log_draws),
+            rho_at_codes=rho_at_codes,
+            support_mask=support,
+            retained_mass=jnp.sum(rho_at_codes, where=occupied),
+        )
+
+    def node_readout(self, rows: jax.Array) -> NodeReadout:
+        """The imagined node's own readers off its CLS row: request kind
+        + done logits, and the conditional terminal-outcome logits."""
+        cls_logits = self.cls_head(rows[CLS_ROW]).astype(jnp.float32)
+        terminal = self.terminal_outcome_head(rows[CLS_ROW]).astype(jnp.float32)
+        return NodeReadout(
+            kind_logits=cls_logits[:-1],
+            done_logit=cls_logits[-1],
+            terminal_logits=terminal,
+        )
+
+    def continue_prob(self, rows: jax.Array) -> jax.Array:
+        """P(the game continues past this node), from the done reader."""
+        return jax.nn.sigmoid(-self.node_readout(rows).done_logit)
+
+    def expected_terminal_outcome(self, rows: jax.Array) -> jax.Array:
+        """E[outcome | this node ends the game] on the value support."""
+        probs = jax.nn.softmax(self.node_readout(rows).terminal_logits, axis=-1)
+        return probs @ jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
+
+    # ---- the training unroll --------------------------------------------
+
+    def real_state(
         self,
         rows: jax.Array,
-        row_valid: jax.Array,
-        action_cell: jax.Array,
-        next_rows: jax.Array,
-        next_valid: jax.Array,
+        taken_cell: jax.Array,
+        legal: jax.Array,
+        log_policy: jax.Array,
         rng: jax.Array | None,
-    ) -> TransitionOutput:
-        src_row, tgt_row = self.action_rows(rows, action_cell)
+    ) -> RealState:
+        """One observed state's legal set through the encoder (the only
+        place a concrete legal set enters), the base policy's latent
+        target and its teacher order."""
+        cells, cell_valid, taken_index, overflow = legal_enumeration(
+            legal, taken_cell, self.cfg.max_cells
+        )
+        logits = jax.vmap(self.action_logits, in_axes=(None, 0))(rows, cells)
+        probs = unimix_probs(logits)
+        log_pi = jnp.where(
+            cell_valid, log_policy[cells].astype(jnp.float32), NEGATIVE_INFINITY_LOGIT
+        )
+        pi = jnp.exp(jax.nn.log_softmax(log_pi))
+        target = jax.lax.stop_gradient(pi @ probs)
+        uniform = jnp.full_like(target, 1.0 / target.shape[0])
+        target = jnp.where(cell_valid.any(), target, uniform)
+        support = support_set(target, self.cfg.mass_threshold)
+        teacher_log = jnp.where(support, jnp.log(target), -jnp.inf)
+        teacher_codes = gumbel_top_k(teacher_log, self.cfg.num_candidates, rng)
+        return RealState(
+            taken_cell=taken_cell,
+            cells=cells,
+            cell_valid=cell_valid,
+            taken_index=taken_index,
+            overflow=overflow,
+            logits=logits,
+            code_target=target,
+            support_mask=support,
+            teacher_codes=teacher_codes,
+            taken_code_probs=jax.lax.stop_gradient(probs[taken_index]),
+        )
+
+    def _node(self, state: jax.Array, real: RealState, rng, is_root: bool):
+        """The readers at one node that need the real step's action set:
+        the generator teacher-forced on the real teacher order, the
+        encoder on the taken cell (the root reuses the real-state logits;
+        an imagined node recomputes them -- the alignment read) and the
+        latent action drawn from it for the next transition."""
+        generator_logits = self.candidate_logits(state, real.teacher_codes)
+        if is_root:
+            taken_logits = real.logits[real.taken_index]
+        else:
+            taken_logits = self.action_logits(state, real.taken_cell)
+        action_one_hot = straight_through_sample(unimix_probs(taken_logits), rng)
+        return generator_logits, taken_logits, action_one_hot
+
+    def _transition(
+        self,
+        state: jax.Array,
+        action_one_hot: jax.Array,
+        next_rows: jax.Array,
+        rng: jax.Array | None,
+        with_prior_decode: bool,
+    ):
         code_shape = (self.cfg.code_groups, self.cfg.code_classes)
+        pred_prior = None
         if self.has_code:
-            features = self.prior_features(rows, row_valid, src_row, tgt_row)
-            prior_logits = self.code_logits(self.prior_read_net, features)
-            # The posterior is LEARNER-ONLY: it reads the real next rows
-            # (stop-gradient at the call site), which no rollout has -- as
-            # the per-row CHANGE, the thing the code must explain, through
-            # the same read the prior applies to the state.
-            post_features = jnp.concatenate(
-                (
-                    features,
-                    self.row_read(next_rows - rows, row_valid & next_valid),
-                ),
-                axis=-1,
-            )
-            post_logits = self.code_logits(self.posterior_read_net, post_features)
+            prior_logits = self.prior(state, action_one_hot)
+            post_logits = self.posterior(state, action_one_hot, next_rows)
             post_one_hot = straight_through_sample(unimix_probs(post_logits), rng)
-            prior_mode = jax.nn.one_hot(
-                jnp.argmax(prior_logits, axis=-1), code_shape[1], dtype=jnp.float32
-            )
-            pred = self.imagine(rows, row_valid, src_row, tgt_row, post_one_hot)
-            pred_prior = jax.lax.stop_gradient(
-                self.imagine(rows, row_valid, src_row, tgt_row, prior_mode)
-            )
+            pred = self.imagine(state, action_one_hot, post_one_hot)
+            if with_prior_decode:
+                prior_mode = jax.nn.one_hot(
+                    jnp.argmax(prior_logits, axis=-1), code_shape[1], dtype=jnp.float32
+                )
+                pred_prior = jax.lax.stop_gradient(
+                    self.imagine(
+                        state, jax.lax.stop_gradient(action_one_hot), prior_mode
+                    )
+                )
         else:
             prior_logits = jnp.zeros(code_shape, jnp.float32)
             post_logits = jnp.zeros(code_shape, jnp.float32)
             post_one_hot = jnp.zeros(code_shape, jnp.float32)
-            pred = self.imagine(rows, row_valid, src_row, tgt_row, None)
-            pred_prior = jax.lax.stop_gradient(pred)
-        ground = self.ground_delta_head(pred[DYNAMICS_TARGET_ROWS])
-        ground_prior = jax.lax.stop_gradient(
-            self.ground_delta_head(pred_prior[DYNAMICS_TARGET_ROWS])
+            pred = self.imagine(state, action_one_hot, None)
+            if with_prior_decode:
+                pred_prior = jax.lax.stop_gradient(pred)
+        return pred, pred_prior, prior_logits, post_logits, post_one_hot
+
+    def _unroll(self, real_rows, reals: RealState, node_keys, transition_keys):
+        """One start step: hhat_0 = h_t, K transitions along the recorded
+        actions, the readers at every node. Leading axis K + 1 on the real
+        inputs (the real steps t .. t + K), gathered by the caller."""
+        num_steps = self.unroll_steps
+        nodes = []
+        transitions = []
+        state = real_rows[0]
+        for offset in range(num_steps + 1):
+            real = jax.tree.map(lambda leaf: leaf[offset], reals)
+            generator_logits, align_logits, action_one_hot = self._node(
+                state, real, node_keys[offset], is_root=offset == 0
+            )
+            nodes.append(
+                (
+                    generator_logits,
+                    real.teacher_codes,
+                    real.code_target,
+                    real.support_mask,
+                    real.overflow,
+                    align_logits,
+                    real.taken_code_probs,
+                )
+            )
+            if offset == num_steps:
+                break
+            # MuZero's 0.5 scale on the gradient into the unrolled state;
+            # the forward value is unchanged.
+            state_in = state
+            if offset > 0:
+                state_in = 0.5 * state + 0.5 * jax.lax.stop_gradient(state)
+            pred, pred_prior, prior_logits, post_logits, post_one_hot = (
+                self._transition(
+                    state_in,
+                    action_one_hot,
+                    real_rows[offset + 1],
+                    transition_keys[offset],
+                    with_prior_decode=offset == 0,
+                )
+            )
+            readout = self.node_readout(pred)
+            if offset == 0:
+                first_prior = pred_prior
+                ground = self.ground_delta_head(pred[DYNAMICS_TARGET_ROWS])
+                ground_prior = jax.lax.stop_gradient(
+                    self.ground_delta_head(pred_prior[DYNAMICS_TARGET_ROWS])
+                )
+            transitions.append(
+                (
+                    action_one_hot,
+                    pred,
+                    prior_logits,
+                    post_logits,
+                    post_one_hot,
+                    readout.kind_logits,
+                    readout.done_logit,
+                    readout.terminal_logits,
+                )
+            )
+            state = pred
+        root = jax.tree.map(lambda leaf: leaf[0], reals)
+        stacked_nodes = jax.tree.map(lambda *leaves: jnp.stack(leaves), *nodes)
+        stacked_transitions = jax.tree.map(
+            lambda *leaves: jnp.stack(leaves), *transitions
         )
-        mask_logits = self.mask_head(
-            pred[PRIVATE_ROWS], pred[MOVE_ROWS], pred[TARGET_ROWS]
-        )
-        cls_logits = self.cls_head(pred[CLS_ROW]).astype(jnp.float32)
+        (
+            generator_logits,
+            teacher_codes,
+            generator_target,
+            support_mask,
+            node_overflow,
+            align_logits,
+            align_target,
+        ) = stacked_nodes
+        (
+            action_one_hot,
+            pred,
+            prior_logits,
+            post_logits,
+            post_one_hot,
+            kind_logits,
+            done_logit,
+            terminal_logits,
+        ) = stacked_transitions
         return TransitionOutput(
+            action_logits=root.logits,
+            action_cells=root.cells,
+            action_cell_valid=root.cell_valid,
+            action_taken_index=root.taken_index,
+            action_overflow=root.overflow,
+            generator_logits=generator_logits,
+            teacher_codes=teacher_codes,
+            generator_target=generator_target,
+            support_mask=support_mask,
+            node_overflow=node_overflow,
+            align_logits=align_logits,
+            align_target=align_target,
+            action_one_hot=action_one_hot,
             pred=pred,
-            pred_prior=pred_prior,
             prior_logits=prior_logits,
             post_logits=post_logits,
             post_one_hot=post_one_hot,
+            kind_logits=kind_logits,
+            done_logit=done_logit,
+            terminal_logits=terminal_logits,
+            pred_prior=first_prior,
             ground=ground,
             ground_prior=ground_prior,
-            mask_logits=mask_logits,
-            kind_logits=cls_logits[:-1],
-            done_logit=cls_logits[-1],
         )
 
     def __call__(
         self,
         rows: jax.Array,
-        row_valid: jax.Array,
         action_cell: jax.Array,
-        next_rows: jax.Array,
-        next_valid: jax.Array,
+        legal: jax.Array,
+        log_policy: jax.Array,
     ) -> TransitionOutput:
-        """Leading axis T on every input: rows (T, 73, D), row_valid (T,
-        73), action_cell (T,), next_rows / next_valid the same rows one
-        step on (the caller pairs them; the last step is self-paired and
-        masked by the loss). A "sampling" rng, when the caller supplies
-        one, draws the posterior code per step; without it (init, probes,
-        the offline harness) the posterior decodes its mode."""
-        keys = None
-        if self.has_code and self.has_rng("sampling"):
-            keys = jax.random.split(self.make_rng("sampling"), rows.shape[0])
-        return jax.vmap(self._step)(
-            rows, row_valid, action_cell, next_rows, next_valid, keys
+        """Leading axis T on every input: rows (T, 73, D), action_cell
+        (T,), legal (T, 295) bool, log_policy (T, 295) (the base policy,
+        sg'd by the caller). Each start step is unrolled `unroll_steps`
+        transitions along the recorded actions, with the real steps
+        gathered by their POSITIONAL successors (the last step to itself;
+        the loss masks the out-of-range offsets). A "sampling" rng, when
+        supplied, draws the teacher orders, the action codes and the
+        posterior codes; without it (init, probes, the offline harness)
+        every draw is its mode / top-J."""
+        num_rows = rows.shape[0]
+        num_steps = self.unroll_steps
+        assert num_steps >= 1, "unroll_steps: 1 is the single-step model"
+        # Without keys the pytrees carry no leaves, so the vmaps pass them
+        # through unchanged and every draw below sees `None`.
+        teacher_keys = None
+        node_keys = [None] * (num_steps + 1)
+        transition_keys = [None] * num_steps
+        if self.has_rng("sampling"):
+            key = self.make_rng("sampling")
+            teacher_key, node_key, transition_key = jax.random.split(key, 3)
+            teacher_keys = jax.random.split(teacher_key, num_rows)
+            node_keys = jax.random.split(node_key, (num_rows, num_steps + 1))
+            transition_keys = jax.random.split(transition_key, (num_rows, num_steps))
+        reals = jax.vmap(self.real_state)(
+            rows, action_cell, legal, log_policy, teacher_keys
+        )
+        offsets = [
+            jnp.minimum(jnp.arange(num_rows) + offset, num_rows - 1)
+            for offset in range(num_steps + 1)
+        ]
+        gathered_rows = jnp.stack([jnp.take(rows, index, axis=0) for index in offsets])
+        gathered_reals = jax.tree.map(
+            lambda leaf: jnp.stack(
+                [jnp.take(leaf, index, axis=0) for index in offsets]
+            ),
+            reals,
+        )
+        node_axes = TransitionOutput(
+            action_logits=0,
+            action_cells=0,
+            action_cell_valid=0,
+            action_taken_index=0,
+            action_overflow=0,
+            generator_logits=1,
+            teacher_codes=1,
+            generator_target=1,
+            support_mask=1,
+            node_overflow=1,
+            align_logits=1,
+            align_target=1,
+            action_one_hot=1,
+            pred=1,
+            prior_logits=1,
+            post_logits=1,
+            post_one_hot=1,
+            kind_logits=1,
+            done_logit=1,
+            terminal_logits=1,
+            pred_prior=0,
+            ground=0,
+            ground_prior=0,
+        )
+        return jax.vmap(self._unroll, in_axes=(1, 1, 0, 0), out_axes=node_axes)(
+            gathered_rows, gathered_reals, node_keys, transition_keys
         )
