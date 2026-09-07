@@ -272,7 +272,13 @@ def forward(
     decode_log_policy(pred, flat_action_mask) and V as
     pred.value_head.expectation.""" ""
     net = get_player_model(get_player_model_config(generation, train=True))
-    apply = jax.jit(jax.vmap(net.apply, in_axes=(None, 1, 1, None), out_axes=1))
+    apply = jax.jit(
+        jax.vmap(
+            net.apply,
+            in_axes=(None, 1, 1, None),
+            out_axes=PlayerActorOutput.batch_out_axes(),
+        )
+    )
     dev_params = jax.device_put(params)
     for i in range(0, len(chunks), batch):
         b = stack_batch(chunks[i : i + batch])

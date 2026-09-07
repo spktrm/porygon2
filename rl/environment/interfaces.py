@@ -1,4 +1,4 @@
-from dataclasses import field
+from dataclasses import field, fields
 
 from chex import dataclass
 from jaxtyping import ArrayLike
@@ -244,6 +244,38 @@ class PlayerActorOutput:
 
     def without_history_carry(self) -> "PlayerActorOutput":
         return self.replace(history_carry=HistoryCarry())
+
+    # The transition leaves whose FIRST axis is the unroll offset (K
+    # transitions or K+1 nodes) ahead of the trajectory axis T: the
+    # learner's batch vmap must place B after T on these, at axis 2.
+    OFFSET_LEADING_LEAVES = (
+        "transition_prior_logits",
+        "transition_post_logits",
+        "transition_post_one_hot",
+        "transition_value_head",
+        "transition_kind_logits",
+        "transition_done_logit",
+        "transition_terminal_logits",
+        "transition_action_one_hot",
+        "transition_generator_logits",
+        "transition_teacher_codes",
+        "transition_generator_target",
+        "transition_support_mask",
+        "transition_node_overflow",
+        "transition_align_logits",
+        "transition_align_target",
+    )
+
+    @classmethod
+    def batch_out_axes(cls) -> "PlayerActorOutput":
+        """`out_axes` for a vmap of the player forward over the batch: B at
+        axis 1 (after T) on every leaf, at axis 2 on the offset-leading
+        transition leaves (after K and T). ONE definition, so a leaf added
+        with a leading offset axis is registered here and nowhere else."""
+        axes = {leaf.name: 1 for leaf in fields(cls)}
+        for name in cls.OFFSET_LEADING_LEAVES:
+            axes[name] = 2
+        return cls(**axes)
 
     # `advantage` and `q` lived here until 2026-08-29: the learner-only
     # Q = V + A decomposition over the flat src x tgt grid, composed in the

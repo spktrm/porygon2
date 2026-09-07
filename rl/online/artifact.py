@@ -191,7 +191,11 @@ def create_train_state(
         ),
     )
     player_train_state = Porygon2PlayerTrainState.create(
-        apply_fn=jax.vmap(player_network.apply, in_axes=(None, 1, 1, None), out_axes=1),
+        apply_fn=jax.vmap(
+            player_network.apply,
+            in_axes=(None, 1, 1, None),
+            out_axes=PlayerActorOutput.batch_out_axes(),
+        ),
         init_fn=player_params_init_fn,
         params=initial_player_params,
         # Deep-copied: params and target_params must not share buffers, or
