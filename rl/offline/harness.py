@@ -31,6 +31,7 @@ not waited on, and the count is logged.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import functools
 import logging
 import os
 import pickle
@@ -50,7 +51,8 @@ from rl.environment.protos.features_pb2 import InfoFeature
 from rl.model.config import get_player_model_config
 from rl.model.constants import IS_WILDCARD_CELL
 from rl.model.heads import HeadParams
-from rl.model.player_model import get_player_model
+from rl.model.player_model import actor_params_view, get_player_model
+from rl.model.search import configure_search
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent, resolve_actor_device
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
@@ -130,6 +132,12 @@ def play_games(
     seed: int = 0,
     opponent: str = "self",
     side_filters: dict[int, ActorInputFilter] | None = None,
+    search_mode: str = "plain",
+    search_depth: int = 2,
+    simulations: int = 64,
+    chance_samples: int = 4,
+    temperature: float = 1.0,
+    device: str | None = None,
 ) -> list[list[Trajectory]]:
     """Plays n_games games, `pairs` at a time, and returns one chunk list
     per PARAMS-DRIVEN side in completion order: `opponent="self"` is
@@ -143,11 +151,26 @@ def play_games(
         raise ValueError(f"opponent must be 'self' or 'heuristic', got {opponent!r}")
     ctx = OfflineContext()
     ctx.config = get_learner_config()
-    actor_device, actor_dtype = resolve_actor_device(ctx.config.player_actor_device)
-    actor_net = get_player_model(
-        get_player_model_config(generation, train=False, dtype=actor_dtype)
+    if device is None:
+        device = ctx.config.player_actor_device
+    actor_device, actor_dtype = resolve_actor_device(device)
+    actor_config = get_player_model_config(generation, train=False, dtype=actor_dtype)
+    configure_search(
+        actor_config,
+        mode=search_mode,
+        depth=search_depth,
+        simulations=simulations,
+        chance_samples=chance_samples,
     )
-    agent = Agent(actor_net.apply, device=actor_device)
+    actor_net = get_player_model(actor_config)
+    agent = Agent(
+        actor_net.apply,
+        device=actor_device,
+        player_head_params=HeadParams(temp=temperature),
+        player_params_view=functools.partial(
+            actor_params_view, search=search_mode != "plain"
+        ),
+    )
     container = ParamsContainer(
         step_count=0,
         player_frame_count=0,

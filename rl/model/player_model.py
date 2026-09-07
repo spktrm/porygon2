@@ -53,6 +53,7 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
+from rl.model.mcts import mcts_root
 from rl.model.modules import MLP
 from rl.model.search import SearchBudget, SearchFns, search_diagnostics, search_root
 from rl.model.transition import TransitionModel, unimix_probs
@@ -500,12 +501,29 @@ class Porygon2PlayerModel(nn.Module):
             max_cells=search_cfg.max_cells,
             temp=search_cfg.temp,
         )
-        root = search_root(sequence, legal, self.make_rng("sampling"), fns, budget)
         base_logits = self._legal_logits(
             (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             legal,
             temp,
         )
+        mcts = None
+        if search_cfg.method == "mcts":
+            mcts = mcts_root(
+                sequence,
+                legal,
+                base_logits,
+                self.make_rng("sampling"),
+                fns,
+                simulations=search_cfg.mcts_simulations,
+                depth=search_cfg.depth,
+                chance_samples=search_cfg.mcts_chance_samples,
+                max_actions=search_cfg.max_cells,
+            )
+            root = mcts.root
+        elif search_cfg.method == "expectimax":
+            root = search_root(sequence, legal, self.make_rng("sampling"), fns, budget)
+        else:
+            raise ValueError(f"Unknown search method: {search_cfg.method}")
         diagnostics = search_diagnostics(
             base_logits, root, legal, self.v_head(sequence[CLS_ROW]).expectation
         )
@@ -516,7 +534,15 @@ class Porygon2PlayerModel(nn.Module):
             num_legal=root.num_legal,
             legal_truncated=root.legal_truncated,
         )
-        if search_cfg.depth >= 2:
+        if mcts is not None:
+            output = output.replace(
+                mcts_visits=mcts.visits,
+                mcts_model_calls=mcts.model_calls,
+                mcts_depth_reached=mcts.depth_reached,
+                candidate_retained_mass=root.candidate_retained_mass,
+                candidate_occupied=root.candidate_occupied,
+            )
+        elif search_cfg.depth >= 2:
             output = output.replace(
                 deep_gain=root.deep_gain,
                 deep_continue=root.deep_continue,

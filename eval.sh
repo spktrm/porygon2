@@ -1,5 +1,7 @@
 #!/bin/bash
-SESSION=train
+SESSION=eval
+# shlex quotes each argument for the command sent to the tmux pane.
+ARGS=$(env/bin/python -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' "$@")
 
 cd service
 cd ../
@@ -28,6 +30,6 @@ tmux send-keys  -t "$SESSION":evalclient.1 "source env/bin/activate" C-m
 # the python-side flags; sourced in the pane shell for the same reason as
 # start.sh. -m so the repo root is on sys.path regardless of cwd tricks.
 tmux send-keys  -t "$SESSION":evalclient.1 'set -a; [ -f .env ] && source .env; set +a' C-m
-tmux send-keys  -t "$SESSION":evalclient.1 "python -m inference.server" C-m
+tmux send-keys  -t "$SESSION":evalclient.1 "python -m inference.server $ARGS" C-m
 
 tmux attach -t "$SESSION"

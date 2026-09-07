@@ -124,6 +124,10 @@ class SearchOutput:
     deep_continue: ArrayLike = ()
     candidate_retained_mass: ArrayLike = ()
     candidate_occupied: ArrayLike = ()
+    mcts_visits: ArrayLike = ()
+    # Accepted cached expansions; vmap can also execute masked model work.
+    mcts_model_calls: ArrayLike = ()
+    mcts_depth_reached: ArrayLike = ()
 
 
 @dataclass

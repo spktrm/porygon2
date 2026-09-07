@@ -257,9 +257,13 @@ def _calibration(
             jnp.prod(code_probs.max(-1)),
         )
 
-    sampled_v, sampled_logits, chance_weights, prior_mode_mass = jax.vmap(
-        decode_action
-    )(action_one_hots, chance_keys)
+    # Keep full-alphabet sensitivity probes within the same activation budget
+    # as the usual eight-code read; all action weights still enter the sum.
+    sampled_v, sampled_logits, chance_weights, prior_mode_mass = jax.lax.map(
+        lambda inputs: decode_action(*inputs),
+        (action_one_hots, chance_keys),
+        batch_size=min(num_actions, 8),
+    )
     sampled_probs = jax.nn.softmax(sampled_logits, axis=-1)
     joint_weights = action_weights[:, None] * chance_weights
     per_action_v = jnp.sum(chance_weights * sampled_v, axis=-1)

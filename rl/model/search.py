@@ -273,3 +273,24 @@ def search_diagnostics(
         search_value=search_value,
         root_value_gap=search_value - root_value.astype(jnp.float32),
     )
+
+
+def configure_search(
+    config, *, mode="plain", depth=2, simulations=64, chance_samples=4
+):
+    """Shared offline/interactive search configuration; plain is an exact off mode."""
+    if mode not in ("plain", "expectimax", "mcts"):
+        raise ValueError("search mode must be plain, expectimax or mcts")
+    if depth < 1 or chance_samples < 1:
+        raise ValueError("search depth and chance samples must be positive")
+    if mode == "expectimax" and depth > 2:
+        raise ValueError("expectimax supports depth one or two")
+    if mode == "mcts" and simulations < config.search.max_cells:
+        raise ValueError("MCTS simulations must cover every root action slot")
+    config.search.enabled = mode != "plain"
+    if mode != "plain":
+        config.search.method = mode
+    config.search.depth = depth
+    config.search.mcts_simulations = simulations
+    config.search.mcts_chance_samples = chance_samples
+    return config

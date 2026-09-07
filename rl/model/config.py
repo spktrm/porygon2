@@ -292,6 +292,9 @@ def get_player_model_config(
     # returns the base policy untouched and is counted (`legal_truncated`).
     cfg.search = ConfigDict()
     cfg.search.enabled = False
+    cfg.search.method = "expectimax"
+    cfg.search.mcts_simulations = 64
+    cfg.search.mcts_chance_samples = 4
     cfg.search.depth = 1
     cfg.search.num_samples = 8
     cfg.search.num_samples_inner = 2

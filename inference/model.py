@@ -1,3 +1,5 @@
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,7 +17,8 @@ from rl.environment.utils import (
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
-from rl.model.player_model import get_player_model
+from rl.model.player_model import actor_params_view, get_player_model
+from rl.model.search import configure_search
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent, resolve_actor_device
 from rl.online.config import get_learner_config
@@ -36,13 +39,25 @@ class InferenceModel:
         seed: int = 42,
         player_head_params: HeadParams = HeadParams(),
         builder_head_params: HeadParams = HeadParams(),
+        search_mode: str = "plain",
+        search_depth: int = 2,
+        simulations: int = 64,
+        chance_samples: int = 4,
+        device: str | None = None,
     ):
         self._learner_config = get_learner_config()
-        actor_device, actor_dtype = resolve_actor_device(
-            self._learner_config.player_actor_device
-        )
+        if device is None:
+            device = self._learner_config.player_actor_device
+        actor_device, actor_dtype = resolve_actor_device(device)
         self._player_model_config = get_player_model_config(
             self._learner_config.generation, train=False, dtype=actor_dtype
+        )
+        configure_search(
+            self._player_model_config,
+            mode=search_mode,
+            depth=search_depth,
+            simulations=simulations,
+            chance_samples=chance_samples,
         )
         self._builder_model_config = get_builder_model_config(
             self._learner_config.generation, train=False, dtype=actor_dtype
@@ -57,12 +72,17 @@ class InferenceModel:
             player_head_params=player_head_params,
             builder_head_params=builder_head_params,
             device=actor_device,
+            player_params_view=functools.partial(
+                actor_params_view, search=search_mode != "plain"
+            ),
         )
-        self._rng_key = jax.random.key(seed)
+        self._rng_key = jax.device_put(jax.random.key(seed), actor_device)
 
         if not fpath:
             fpath = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
-        print(f"loading checkpoint from {fpath}")
+        print(
+            f"loading checkpoint from {fpath}; search={search_mode}, depth={search_depth}, simulations={simulations}"
+        )
         # The Agent keys its device cache by container identity, so ONE
         # container for the process: both heads' params are committed once.
         self._params = ParamsContainer(
