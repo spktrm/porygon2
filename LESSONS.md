@@ -1278,6 +1278,22 @@ own label (`expect_mode`), draws `sample` from the joint, and reports
 `expect_sigma_u` beside `expect_sigma_z`. The hold's calibration study
 reads `expect`.
 
+**Launch (2026-09-07).** Attempt 1 (16:23) failed at the first lattice
+compile: the offset-leading transition leaves came out of the learner's
+batch vmap as (K, B, T) — `PlayerActorOutput.batch_out_axes()` (59c3b16); the
+full-lattice train_step smoke, which the GPU-held pre-launch check could not
+run, would have caught it. Attempt 2 (16:38, wandb run irqeetfg resumed)
+tripped the host-RAM guard at 1,836,000, 784 steps in (available 0.135 <
+0.15; learner RSS 12.06 GB at the last diag against the 9.3–9.7 GB this
+era's checkpoint launched at, node 1.45 GB): the depth-2 eval arm cost 3930
+ms per step on its CPU thread against 362 (depth 1) and 141 (plain) — 11x
+depth 1 — so `eval_search_depth` 2 → 0 and attempt 3 resumes from
+ckpt_01836000. Readings at 784 steps: `out_proj_rms` 0.0034 (left 0),
+`decode_acc` 0.74, `action_mi` 1.25 nats, `action_perplexity` 4.2 of 64,
+`generator_kl_first` 0.23 against a target entropy of 0.93, imagined
+`value_r2` 0.971 vs real 0.985, `value_delta_r2` −0.21 (below copy this
+early), trunk grad norm 2.3, no skipped update.
+
 **Pre-registered (plan §8).** 2k launch check: `out_proj_rms` leaving 0,
 `decode_acc` above 1/num_legal and rising, `action_mi` > 0 and rising,
 `generator_kl_first` falling, `transition_value_r2` tracking
