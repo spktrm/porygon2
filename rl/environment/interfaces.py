@@ -195,6 +195,9 @@ class PlayerActorOutput:
     #   real-state distribution (align_target (K+1, T, C), sg).
     transition_cons_err: ArrayLike = ()
     transition_cons_scale: ArrayLike = ()
+    # Target-label mask (T, rows): present at either endpoint, never an
+    # input to imagination. Batched forwards insert B after T.
+    transition_cons_valid: ArrayLike = ()
     transition_prior_logits: ArrayLike = ()
     transition_post_logits: ArrayLike = ()
     transition_post_one_hot: ArrayLike = ()

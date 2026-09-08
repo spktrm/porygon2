@@ -405,7 +405,8 @@ def transition_losses(
 
     - consistency (first transition only; a read at `cons_coef` 0): per
       sequence group, the imagined rows' squared error against the real
-      next post-trunk rows normalised by the copy predictor's;
+      next post-trunk rows normalised by the copy predictor's, over rows
+      present at either endpoint and groups with eligible rows;
     - the KL halves (DreamerV3) at every transition: prior <- sg(posterior)
       at dyn_coef, posterior <- sg(prior) at rep_coef, each clipped below
       at free_nats, the posterior RECOMPUTED at the imagined state;
@@ -446,28 +447,43 @@ def transition_losses(
 
     err = pred.transition_cons_err.astype(jnp.float32)
     scale = pred.transition_cons_scale.astype(jnp.float32)
+    # Both-absent rows have zero real movement: scoring their imagined
+    # content against the floor can overwhelm every useful target. Keep
+    # appearing AND disappearing rows, including previous choices in doubles.
+    consistency_mask = first_step[..., None] & pred.transition_cons_valid
     group_ids = SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS]
     group_losses = []
+    group_present = []
     for group in SequenceGroup:
         if group in LEARNER_ONLY_GROUPS:
             continue
-        group_mask = first_step[..., None] & jnp.asarray(group_ids == group)
+        group_mask = consistency_mask & jnp.asarray(group_ids == group)
         num = average(err, group_mask)
         group_scale = jax.lax.stop_gradient(average(scale, group_mask))
         group_loss = num / jnp.maximum(group_scale, DYNAMICS_SCALE_FLOOR)
         group_losses.append(group_loss)
-        logs[f"player_transition_cons_gain_{group.name.lower()}"] = 1.0 - group_loss
-    loss_cons = jnp.mean(jnp.stack(group_losses))
+        present = group_mask.any()
+        group_present.append(present)
+        # An absent group is unscored, not a perfect reconstruction.
+        logs[f"player_transition_cons_gain_{group.name.lower()}"] = jnp.where(
+            present, 1.0 - group_loss, 0.0
+        )
+    loss_cons = average(jnp.stack(group_losses), jnp.stack(group_present))
     newly_valid = pred.transition_newly_valid
     appearing = first_step & newly_valid
     logs["player_transition_newly_valid_frac"] = average(
         newly_valid.astype(jnp.float32), first_step
     )
-    logs["player_transition_cons_gain_newly_valid"] = 1.0 - average(
-        err, appearing[..., None]
-    ) / jnp.maximum(
-        jax.lax.stop_gradient(average(scale, appearing[..., None])),
-        DYNAMICS_SCALE_FLOOR,
+    appearing_mask = appearing[..., None] & consistency_mask
+    logs["player_transition_cons_gain_newly_valid"] = jnp.where(
+        appearing_mask.any(),
+        1.0
+        - average(err, appearing_mask)
+        / jnp.maximum(
+            jax.lax.stop_gradient(average(scale, appearing_mask)),
+            DYNAMICS_SCALE_FLOOR,
+        ),
+        0.0,
     )
 
     # ---- the chance code, every transition ---------------------------

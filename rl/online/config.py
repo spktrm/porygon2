@@ -467,20 +467,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_transition_dyn_coef: float = 0.5
     player_transition_rep_coef: float = 0.0
     player_transition_free_nats: float = 0.0625
-    # Raw-row consistency (per-row normalised MSE of the imagined rows
-    # against the real next rows) inside the dynamics bracket. 2026-09-06,
-    # Step 3b: OFF. That loss is minimised by the conditional MEAN of
-    # h_{t+1}, exactly what a sampleable model must not produce, and it
-    # was the largest term the blocks saw -- out_proj_rms 0.0156 (a
-    # quarter of lecun scale) and a prior-mode grounding of 0.336 against
-    # the deleted mean head's 0.528 were its signature. The observed
-    # labels (grounding, mask, kind, done, value) carry the model, as in
-    # MuZero (no consistency term); EfficientZero's PROJECTED consistency
-    # is the fallback if the value bars fail, never 0.5 here (a cut that
-    # delays onset is falsified). The loss is still computed and logged
-    # (`player_loss_transition_cons`, `cons_gain_<group>`) as a read;
-    # 1.0 is bit-for-bit the pre-3b gradient.
-    player_transition_cons_coef: float = 0.0
+    # Latent consistency against the real next rows, over rows present at
+    # either endpoint. The copy-movement normaliser and nonempty-group mean
+    # are owned by transition_losses. Restored 2026-09-08 after fixing
+    # absent-row amplification; measurements and removal history: LESSONS.md.
+    # 0.0 retains the diagnostics while removing this gradient contribution.
+    player_transition_cons_coef: float = 1.0
     # 2026-09-06, Step 3b: the shared v_head TRAINS on the imagined CLS
     # row (MuZero's value target: the real t+1 win_returns through the
     # imagined state -- the same labels the head already fits, on a wider

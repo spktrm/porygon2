@@ -1076,6 +1076,7 @@ def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None)
         transition_cons_scale=jnp.asarray(
             rng.random((num_steps, 1, rows)), jnp.float32
         ),
+        transition_cons_valid=jnp.ones((num_steps, 1, rows), bool),
         transition_prior_logits=normal(
             NUM_OFFSETS, num_steps, 1, code_groups, code_classes
         ),
@@ -1361,6 +1362,105 @@ def test_cons_coef_zero_keeps_the_panels_and_drops_the_gradient():
         "player_transition_cons_coef",
         "transition_cons_err",
         "player_loss_transition_cons",
+    )
+
+
+def test_consistency_masks_absent_rows_but_scores_previous_choices_when_present():
+    """Singles' absent slots cannot dominate; doubles' present slots stay live.
+
+    The positive control enables the same previous-action rows, with the
+    same large error and zero movement: validity, not group identity or
+    movement magnitude, determines whether they receive a gradient.
+    """
+    from rl.model.constants import SEQUENCE_GROUP_IDS, SequenceGroup
+
+    inputs = _bracket_inputs()
+    pred = inputs["pred"]
+    group_ids = SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS]
+    previous = jnp.asarray(group_ids == SequenceGroup.PREV_ACTION)
+    cls_rows = jnp.asarray(group_ids == SequenceGroup.CLS)
+    errors = jnp.full_like(pred.transition_cons_err, 2.0)
+    scales = jnp.ones_like(errors)
+    scales = jnp.where(previous, 0.0, scales)
+    config = inputs["config"].replace(player_transition_cons_coef=1.0)
+
+    def read(error, valid):
+        changed = pred.replace(
+            transition_cons_err=error,
+            transition_cons_scale=scales,
+            transition_cons_valid=valid,
+        )
+        return transition_losses(**{**inputs, "pred": changed, "config": config})
+
+    absent = jnp.broadcast_to(cls_rows, errors.shape)
+    corrupted = jnp.where(previous, 4000.0, errors)
+    base_loss, base_logs = read(errors, absent)
+    loss, logs = read(corrupted, absent)
+    assert float(loss) == float(base_loss)
+    # Only CLS is eligible: empty groups must not dilute its loss.
+    assert float(logs["player_loss_transition_cons"]) == pytest.approx(2.0)
+    assert float(logs["player_transition_cons_gain_prev_action"]) == 0.0
+    assert float(logs["player_transition_cons_gain_newly_valid"]) == float(
+        base_logs["player_transition_cons_gain_newly_valid"]
+    )
+    absent_grad = jax.grad(lambda error: read(error, absent)[0])(corrupted)
+    np.testing.assert_array_equal(np.asarray(absent_grad[..., previous]), 0.0)
+    assert float(jnp.abs(absent_grad[..., cls_rows]).max()) > 0.0
+
+    present = jnp.broadcast_to(cls_rows | previous, errors.shape)
+    _, present_logs = read(corrupted, present)
+    assert float(present_logs["player_loss_transition_cons"]) > 1000.0
+    present_grad = jax.grad(lambda error: read(error, present)[0])(corrupted)
+    assert float(jnp.abs(present_grad[:-1, ..., previous]).max()) > 0.0
+    # The last stored row remains bootstrap-only even when its slots are valid.
+    np.testing.assert_array_equal(np.asarray(present_grad[-1]), 0.0)
+
+    empty = jnp.zeros_like(absent)
+    _, empty_logs = read(corrupted, empty)
+    assert float(empty_logs["player_loss_transition_cons"]) == 0.0
+    empty_grad = jax.grad(lambda error: read(error, empty)[0])(corrupted)
+    np.testing.assert_array_equal(np.asarray(empty_grad), 0.0)
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_previous_action_consistency_mask_retains_appearances_and_disappearances(
+    real_model_and_trajectory, real_model_apply
+):
+    """Exercise the actual encoder/label wiring for within-request choices.
+
+    This is the previous-choice feature seam used by doubles, not a claim
+    that the separately broken doubles battle alignment is supported.
+    """
+    from rl.model.constants import SEQUENCE_GROUP_IDS, SequenceGroup
+    from rl.model.heads import HeadParams
+
+    _, params, actor_input, actor_output = real_model_and_trajectory
+    info = jnp.asarray(actor_input.env.info)
+    num_steps = info.shape[0]
+    assert num_steps >= 4
+    previous = SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS] == SequenceGroup.PREV_ACTION
+
+    def forward(flags):
+        changed_info = info.at[:, InfoFeature.INFO_FEATURE__HAS_PREV_ACTION].set(flags)
+        changed_input = actor_input.replace(
+            env=actor_input.env.replace(info=changed_info)
+        )
+        return real_model_apply(params, changed_input, actor_output, HeadParams())
+
+    absent = forward(jnp.zeros(num_steps, jnp.int32))
+    np.testing.assert_array_equal(
+        np.asarray(absent.transition_cons_valid[:, previous]), False
+    )
+    positions = jnp.arange(num_steps) % 4
+    flags = (positions == 1) | (positions == 2)
+    present = forward(flags.astype(jnp.int32))
+    next_flags = np.concatenate((np.asarray(flags)[1:], np.asarray(flags)[-1:]))
+    expected = np.asarray(flags) | next_flags
+    np.testing.assert_array_equal(expected[:4], [True, True, True, False])
+    np.testing.assert_array_equal(
+        np.asarray(present.transition_cons_valid[:, previous]),
+        np.broadcast_to(expected[:, None], (num_steps, int(previous.sum()))),
     )
 
 

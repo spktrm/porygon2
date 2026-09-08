@@ -768,6 +768,7 @@ class Porygon2PlayerModel(nn.Module):
         return {
             "transition_cons_err": error.sum(axis=-1),
             "transition_cons_scale": jax.lax.stop_gradient(movement.sum(axis=-1)),
+            "transition_cons_valid": valid | next_valid,
             "transition_prior_logits": transition.prior_logits,
             "transition_post_logits": transition.post_logits,
             "transition_post_one_hot": transition.post_one_hot,
