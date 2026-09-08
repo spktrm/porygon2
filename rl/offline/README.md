@@ -133,3 +133,71 @@ recomputing it inside the train step would redo identical work
 replay_ratio × ensemble-size times. An ensemble gated the signal by
 member agreement (Φ = mean · exp(−scale · std)), so shaping spoke where
 members agreed and went quiet off the human data distribution.
+
+## Unilateral interval-model experiment
+
+`interval_data.py` audits adjacent own requests without joining opponent rows.
+`interval_features.py` collects explicitly research-training self-play and exports
+frozen policy-readable features. `train_interval.py` compares three isolated arms:
+legacy combined chance, conditional combined codes, and conditional codes whose
+first posterior reads only history-row movement. The two conditional arms have
+identical parameter shapes and initial parameters. History rows contain contextual
+information; this is not an identified opponent-action model or public-belief solver.
+
+With a separately started service on port 8081 (run the service from `service/`):
+
+```sh
+PS_SERVICE_URI=ws://localhost:8081 env/bin/python -m rl.offline.interval_features \
+  --checkpoint ckpts/gen9/ckpt_01889162 \
+  --directory runtime/interval-01889162 --collect-games 128
+
+env/bin/python -m rl.offline.train_interval \
+  --checkpoint ckpts/gen9/ckpt_01889162 \
+  --data runtime/interval-01889162/features.npz \
+  --output runtime/interval-hold-01889162 --steps 25000 --eval-every 5000
+```
+
+Use a fresh output directory; existing experiments are never overwritten. The
+collection manifest records eligibility, game grouping and the fixed held-out
+split. Historical evaluation archives cannot be imported as training. A smoke
+run can use `--steps 200 --eval-every 200 --prior-samples 8`; hold-period comparisons
+use 32 prior samples by default. Only collected generation-9 random-battle
+coverage is established by this exporter; doubles fixtures do not validate the
+known service alignment defect or supply missing format data.
+
+The policy, own-action encoder and critic remain frozen. Only the copied decoder
+and latent inference networks train, with new Adam state. The one-step objective
+is masked copy-relative consistency, distillation of the frozen next-state value
+distribution and the existing balanced-KL coefficients. It omits production
+multi-step, grounding, generator and terminal-outcome objectives; do not interpret
+it as a drop-in production ablation. Prior evaluation samples the two conditional
+codes ancestrally. Reports include whole-game bootstrap uncertainty and raw reads;
+critic agreement is not counterfactual ground truth. Checkpoints are isolated
+MessagePack files containing experiment parameters, optimiser state and step.
+
+For data/reuse controls, `--eval-steps 200 1000` adds early evaluations and
+`--train-eval-limit 1663` reads a fixed training subset through the same critic
+and prior sampler. Progress includes unique sampled games/intervals and sampled
+passes. Optional feature arrays `train_eligible` and `final_test` explicitly
+select the training pool and reserve final-test games; final-test rows must be
+held out, and all partitions are checked for whole-game separation. Validation
+runs on schedule; final-test evaluation runs only at the specified final update.
+Changing the training pool leaves the objective and optimiser unchanged.
+
+`direct_interval.py` provides bounded direct successor-value probes on the same
+frozen features. `DirectIntervalValue` starts at the current critic distribution
+and learns a centred logit residual; its state-only control has identical initial
+parameters with the action input zeroed. Training uses self-generated successor
+critic distributions, with exact latent-action marginalisation at evaluation.
+`select_checkpoint` uses validation reads only, choosing the earliest maximum
+copy-relative gain. Development selection is not an untouched-test result, and
+neither critic agreement nor an explicit-action increment proves counterfactual
+accuracy. No production model wiring consumes this diagnostic.
+
+For a root-only action-input control, `train_direct(...,
+action_representation="rows")` consumes aligned `taken_cell` records. It gathers
+the existing source/target rows and warm-starts a projection from the checkpoint's
+`action_encoder/query_proj`, bypassing categorical action sampling. The default
+`"latent"` path preserves the categorical control. This diagnostic changes the
+action-input parameter count and feature scale; it is not an imagined-node action
+representation or a production model change.
