@@ -13,7 +13,7 @@ deleted. Personal workspaces ("<user>'s workspace") and any differently
 named views are never touched. Pass --keep-old-views to skip pruning.
 
 Usage:
-    python scripts/wandb_views.py [--entity ENTITY]
+    python scripts/wandb_views.py [--entity ENTITY] [--project rl|offline|both]
         [--update-rl-url URL] [--update-offline-url URL]
         [--keep-old-views]
 
@@ -21,6 +21,7 @@ Requires `pip install wandb-workspaces` and a logged-in wandb credential.
 """
 
 import argparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import wandb.util
 
@@ -94,6 +95,26 @@ def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
 
 
 SH = "EvalActor-simpleheuristic"
+PLAIN_T05_ACTORS = (f"{SH}-0", f"{SH}-1")
+PLAIN_T1_ACTOR = f"{SH}-t1-2"
+SEARCH_T1_ACTOR = f"{SH}-search-3"
+T1_ACTORS = (PLAIN_T1_ACTOR, SEARCH_T1_ACTOR)
+EVAL_ACTORS = (*PLAIN_T05_ACTORS, *T1_ACTORS)
+
+
+def search_winrate_panel():
+    """One canonical comparison in the overview and search detail sections.
+
+    These are actor-side averages (200-game half-life, reset on restart),
+    with no additional UI smoothing. The active search method is expectimax.
+    """
+    return lp(
+        "EMA win rate · T=1 plain vs depth-1 expectimax (200-game half-life)",
+        [f"smoothed-wr-{actor}" for actor in T1_ACTORS],
+        x="lifetime_step",
+        smooth=0,
+        range_y=(0, 1),
+    )
 
 
 def rl_sections():
@@ -111,36 +132,29 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    "Smoothed winrate vs SimpleHeuristic",
-                    [f"smoothed-wr-{SH}-{i}" for i in range(3)],
+                    "EMA win rate · plain T=0.5, actors 0/1 (200-game half-life)",
+                    [f"smoothed-wr-{actor}" for actor in PLAIN_T05_ACTORS],
+                    x="lifetime_step",
+                    smooth=0,
+                    range_y=(0, 1),
+                ),
+                search_winrate_panel(),
+                lp(
+                    "EMA alive-mon margin · plain T=0.5 (200-game half-life)",
+                    [f"smoothed-margin-{actor}" for actor in PLAIN_T05_ACTORS],
                     x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
-                    "Smoothed margin (alive-mon diff)",
-                    [f"smoothed-margin-{SH}-{i}" for i in range(3)],
-                    x="lifetime_step",
-                    smooth=0,
-                ),
-                lp(
-                    # Payoff (-1/0/+1), not the wr keys: runs before Aug 2026
-                    # logged wr as booleans, which the wandb UI renders as
-                    # NaN. Smoothed payoff reads as 2*winrate - 1.
-                    "Raw payoff per actor (UI-smoothed)",
-                    [f"ema-payoff-{SH}-{i}" for i in range(3)],
-                    x="lifetime_step",
-                    smooth=0.95,
-                ),
-                lp(
-                    "Main-params sanity check",
-                    [f"main-payoff-{SH}-{i}" for i in range(3)]
-                    + [f"main-margin-{SH}-{i}" for i in range(3)],
+                    "Main-parameter payoff · T=0.5 (sparse games, UI-smoothed)",
+                    [f"main-payoff-{actor}" for actor in PLAIN_T05_ACTORS],
                     x="lifetime_step",
                     smooth=0.9,
+                    range_y=(-1, 1),
                 ),
                 lp(
-                    "Eval games played",
-                    [f"games-{SH}-{i}" for i in range(3)],
+                    "Eval games since restart · T=0.5, T=1 plain and search",
+                    [f"games-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
                 ),
@@ -314,13 +328,12 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    "Trunk & head gradient norms",
-                    [
-                        "player_trunk_attn_out_rms",
-                        "player_trunk_mlp_out_rms",
-                        "player_action_head_grad_norm",
-                        "player_trunk_grad_norm",
-                    ],
+                    "Trunk projection parameter RMS",
+                    ["player_trunk_attn_out_rms", "player_trunk_mlp_out_rms"],
+                ),
+                lp(
+                    "Trunk and action-head gradient norms",
+                    ["player_action_head_grad_norm", "player_trunk_grad_norm"],
                 ),
                 lp(
                     # Rows of the trunk's OUTPUT converging to one direction
@@ -329,8 +342,13 @@ def rl_sections():
                     # (> 0.9 / < 4 pre-registered); ckpt_00182000 read
                     # 0.173 / 10.9 offline, and the first live points
                     # after that restart must match.
-                    "Trunk row homogeneity",
-                    ["player_trunk_row_cosine", "player_trunk_row_participation"],
+                    "Trunk row cosine similarity",
+                    ["player_trunk_row_cosine"],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    "Trunk centred participation ratio",
+                    ["player_trunk_row_participation"],
                 ),
                 lp(
                     # The 2026-09-01 opponent-code leaves against their
@@ -705,9 +723,9 @@ def rl_sections():
                 lp(
                     # Consistency R^2 of the imagined post-trunk rows per
                     # row kind against the real next rows (copy = 0).
-                    # READS ONLY from Step 3b on (cons_coef 0.0): the raw-
-                    # row MSE was the conditional-mean force; a group's
-                    # gain falling is allowed and recorded, not an abort.
+                    # Active again at coefficient 1 after the 2026-09-08
+                    # validity fix. Both-absent rows are excluded; unscored
+                    # groups report 0. Earlier values use a different mask.
                     "Transition consistency gain by row kind",
                     [
                         "player_transition_cons_gain_cls",
@@ -948,8 +966,8 @@ def rl_sections():
                     # 0.0625, chance_token_proj ~0.0625 lecun, code_table
                     # 0.088. pred_rms = rms(imagined rows) / rms(real
                     # rows) over the rows valid at t -- the off-manifold
-                    # watch with raw-row consistency out of the gradient
-                    # (cons_coef 0.0); ~1 is on-manifold, > 2 is the abort.
+                    # magnitude diagnostic alongside the restored consistency
+                    # loss. A ratio near 1 alone does not establish alignment.
                     "Transition model: drift",
                     [
                         "player_transition_out_proj_rms",
@@ -981,112 +999,55 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # Search on the baseline eval actors (2026-09-06, stochastic-
-            # transition Step 3; depth 2 2026-09-07): the `-search` slot
-            # plays the SAME EMA params as the `-t1` slot through a
-            # search-enabled actor -- the root's legal cells through the
-            # latent transition model, the root Q added to the logits as
-            # a bonus -- at temp 1.0, and the `-search-d2` slot expands
-            # the generator's candidates at every depth-1 node. The
-            # headline is wr(search) - wr(t1) on the same checkpoint: the
-            # model's worth in play; wr(d2) - wr(search) the deeper
-            # read (diagnostic until the calibration gates pass). root-kl
-            # is KL(pi_search || pi) per decision (0 = inert, > 0.5 =
-            # search replaced the policy; the pre-registered band is
-            # 0.05-0.5); value-gap is the search value minus V at the
-            # root; deep-gain the depth-2 backup minus V at the depth-1
-            # nodes (uniform and positive with no wr gain = optimism);
-            # deep-continue the predicted continuation there;
-            # candidate-retained-mass / -occupied the generator's support;
-            # switch-frac is voluntary switches per decision that
-            # offered one; ms-per-step prices each arm on the CPU actor.
-            name="3c · Search eval",
+            # Current eval: depth-1 expectimax and its plain-policy control,
+            # both EMA at T=1. No depth-2 eval actor is currently enabled.
+            name="3c · Search eval · depth-1 expectimax, T=1",
             is_open=True,
             panels=[
+                search_winrate_panel(),
                 lp(
-                    "wr vs SimpleHeuristic at temp 1: search vs plain",
-                    [
-                        f"ema-wr-{SH}-t1-2",
-                        f"ema-wr-{SH}-search-3",
-                        f"ema-wr-{SH}-search-d2-4",
-                    ],
+                    "EMA alive-mon margin · T=1 plain vs expectimax (200-game half-life)",
+                    [f"smoothed-margin-{actor}" for actor in T1_ACTORS],
                     x="lifetime_step",
-                    smooth=0.98,
+                    smooth=0,
                 ),
                 lp(
-                    "Smoothed wr at temp 1: search vs plain",
-                    [
-                        f"smoothed-wr-{SH}-t1-2",
-                        f"smoothed-wr-{SH}-search-3",
-                        f"smoothed-wr-{SH}-search-d2-4",
-                    ],
+                    "Eval games since restart · T=1 plain vs expectimax",
+                    [f"games-{actor}" for actor in T1_ACTORS],
                     x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
                     "Search root KL(pi_search || pi) per decision",
-                    [
-                        f"search-root-kl-{SH}-search-3",
-                        f"search-root-kl-{SH}-search-d2-4",
-                    ],
+                    [f"search-root-kl-{SEARCH_T1_ACTOR}"],
                     x="lifetime_step",
                     smooth=0.95,
                 ),
                 lp(
                     "Search value minus V at the root",
-                    [
-                        f"search-value-gap-{SH}-search-3",
-                        f"search-value-gap-{SH}-search-d2-4",
-                    ],
+                    [f"search-value-gap-{SEARCH_T1_ACTOR}"],
                     x="lifetime_step",
                     smooth=0.95,
                 ),
                 lp(
-                    "Depth 2: backup gain over V and continuation at the depth-1 nodes",
-                    [
-                        f"search-deep-gain-{SH}-search-d2-4",
-                        f"search-deep-continue-{SH}-search-d2-4",
-                    ],
+                    "Voluntary switches per offered decision · T=1 plain vs expectimax",
+                    [f"switch-frac-{actor}" for actor in T1_ACTORS],
                     x="lifetime_step",
                     smooth=0.95,
+                    range_y=(0, 1),
                 ),
                 lp(
-                    "Depth 2: the generator's retained mass and occupied candidates",
-                    [
-                        f"search-candidate-retained-mass-{SH}-search-d2-4",
-                        f"search-candidate-occupied-{SH}-search-d2-4",
-                    ],
-                    x="lifetime_step",
-                    smooth=0.95,
-                ),
-                lp(
-                    "Voluntary switch frac per offered decision",
-                    [
-                        f"switch-frac-{SH}-t1-2",
-                        f"switch-frac-{SH}-search-3",
-                        f"switch-frac-{SH}-search-d2-4",
-                    ],
-                    x="lifetime_step",
-                    smooth=0.95,
-                ),
-                lp(
-                    "Eval ms per step (search cost on the CPU actor)",
-                    [
-                        f"ms-per-step-{SH}-t1-2",
-                        f"ms-per-step-{SH}-search-3",
-                        f"ms-per-step-{SH}-search-d2-4",
-                    ],
+                    "Eval ms per decision · T=1 plain vs expectimax (CPU)",
+                    [f"ms-per-step-{actor}" for actor in T1_ACTORS],
                     x="lifetime_step",
                     smooth=0.9,
                 ),
                 lp(
-                    "Decisions with more legal cells than max_cells",
-                    [
-                        f"search-legal-truncated-{SH}-search-3",
-                        f"search-legal-truncated-{SH}-search-d2-4",
-                    ],
+                    "Search legal-set overflow fraction",
+                    [f"search-legal-truncated-{SEARCH_T1_ACTOR}"],
                     x="lifetime_step",
                     smooth=0.95,
+                    range_y=(0, 1),
                 ),
             ],
         ),
@@ -1160,8 +1121,8 @@ def rl_sections():
                     # policy pathway's own gradient scale (the retired
                     # Q-head pair stayed calm through both dx65cpwp
                     # failures).
-                    "Policy head: grad norm by subtree",
-                    ["player_policy_head_gradient_norm"],
+                    "Action-head gradient norm",
+                    ["player_action_head_gradient_norm"],
                 ),
                 lp(
                     "Value expectation",
@@ -1185,16 +1146,13 @@ def rl_sections():
             is_open=True,
             panels=[
                 lp(
-                    # The de-averaged k3 actor KL. The _own variant is
-                    # the controller's set-point (target 0.045); if the
-                    # switch split runs far above it while the global
-                    # mean stays ~0.002, the controller is being held
-                    # quiet by dilution, not by health.
-                    "Actor KL by taken modality vs controller set-point",
+                    # Compare the taken-modality splits with the live global
+                    # forward KL. The retired _own key is not a set-point.
+                    "Actor forward KL · switches, moves and global",
                     [
                         "player_learner_actor_forward_kl_switch",
                         "player_learner_actor_forward_kl_move",
-                        "player_learner_actor_forward_kl_own",
+                        "player_learner_actor_forward_kl",
                     ],
                     log_y=True,
                 ),
@@ -1351,7 +1309,7 @@ def rl_sections():
                     [
                         "player_encoder_gradient_norm",
                         "player_history_encoder_gradient_norm",
-                        "player_policy_head_gradient_norm",
+                        "player_action_head_gradient_norm",
                         "player_v_head_gradient_norm",
                     ],
                     log_y=True,
@@ -1417,23 +1375,12 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # Inside step_player on the server: queue_wait is
-                    # enqueue -> group start; forward is dispatch +
-                    # block_until_ready, so the history share of the
-                    # actor forward is read here against the bucket level.
-                    "Inference server phases (ms)",
-                    [
-                        "actor_infer_queue_wait",
-                        "actor_infer_stack",
-                        "actor_infer_forward",
-                        "actor_infer_device_get",
-                    ],
+                    "CPU actor forward time (ms)",
+                    ["actor_infer_forward"],
                 ),
                 lp(
-                    # level 0 = the smallest history bucket; a carried
-                    # suffix request should sit there.
-                    "Inference batch size & history level",
-                    ["actor_infer_batch_size", "actor_infer_history_level"],
+                    "CPU actor history bucket level",
+                    ["actor_infer_history_level"],
                 ),
                 lp(
                     # actor = pool aggregate of env steps; learner = the
@@ -1613,6 +1560,16 @@ def save_view(entity, project, name, sections, update_url, settings=None, force_
                 if isinstance(panel, wr.LinePlot):
                     panel.x = force_x
     if update_url:
+        # The SDK wraps the URL token in nw-...-v when loading. Accept
+        # internal names too, without saving a doubly wrapped view name.
+        parsed_url = urlparse(update_url)
+        query = parse_qs(parsed_url.query)
+        view_name = query.get("nw", [""])[0]
+        if view_name.startswith("nw-") and view_name.endswith("-v"):
+            query["nw"] = [view_name[3:-2]]
+            update_url = urlunparse(
+                parsed_url._replace(query=urlencode(query, doseq=True))
+            )
         workspace = ws.Workspace.from_url(update_url)
         workspace.name = name
         workspace.sections = sections
@@ -1623,6 +1580,10 @@ def save_view(entity, project, name, sections, update_url, settings=None, force_
     if settings is not None:
         workspace.settings = settings
     workspace.save()
+    # Confirm the saved URL resolves before allowing stale-view pruning.
+    saved_workspace = ws.Workspace.from_url(workspace.url)
+    if saved_workspace._internal_id != workspace._internal_id:
+        raise RuntimeError("Saved workspace URL resolves to a different view")
     print(f"{project} view: {workspace.url}")
     return workspace
 
@@ -1630,6 +1591,12 @@ def save_view(entity, project, name, sections, update_url, settings=None, force_
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--entity", default="jtwin")
+    parser.add_argument(
+        "--project",
+        choices=("rl", "offline", "both"),
+        default="both",
+        help="Select saved views to refresh; defaults to both projects.",
+    )
     parser.add_argument("--update-rl-url", default=None)
     parser.add_argument("--update-offline-url", default=None)
     parser.add_argument(
@@ -1639,45 +1606,41 @@ def main():
     )
     args = parser.parse_args()
 
-    rl_workspace = save_view(
-        args.entity,
-        "pokemon-rl",
-        "Signal health",
-        rl_sections(),
-        args.update_rl_url,
-        # Learner-step x-axis for every panel: lifetime_step (not
-        # training_step = player_state.step_count) — the latter restarts
-        # on a params-mode reload, which would draw a sawtooth/overdraw.
-        # lifetime_step is carried across resumes by construction
-        # (rl/online/training/run_state.py's RunState) and is
-        # already the run's own default step metric (main.py's
-        # define_metric("*", step_metric="lifetime_step")) — logged on
-        # every row, including the eval-actor rows that only log
-        # training_step themselves (wandb fills forward the run's last
-        # logged lifetime_step for those). The offline project does not
-        # log this key, so it keeps the default. force_x pins it per panel
-        # — the workspace-level setting alone is overridden by the "Step"
-        # default materialised onto each panel on save.
-        settings=ws.WorkspaceSettings(x_axis="lifetime_step"),
-        force_x="lifetime_step",
-    )
-    offline_workspace = save_view(
-        args.entity,
-        "pokemon-rl-offline",
-        "Critic health",
-        offline_sections(),
-        args.update_offline_url,
-    )
-    if not args.keep_old_views:
-        prune_stale_views(
-            args.entity, "pokemon-rl", "Signal health", rl_workspace._internal_id
+    requests = []
+    if args.project in ("rl", "both"):
+        requests.append(
+            (
+                "pokemon-rl",
+                "Signal health",
+                rl_sections(),
+                args.update_rl_url,
+                ws.WorkspaceSettings(x_axis="lifetime_step"),
+                "lifetime_step",
+            )
         )
-        prune_stale_views(
+    if args.project in ("offline", "both"):
+        requests.append(
+            (
+                "pokemon-rl-offline",
+                "Critic health",
+                offline_sections(),
+                args.update_offline_url,
+                None,
+                None,
+            )
+        )
+    for project, name, sections, update_url, settings, force_x in requests:
+        workspace = save_view(
             args.entity,
-            "pokemon-rl-offline",
-            "Critic health",
-            offline_workspace._internal_id,
+            project,
+            name,
+            sections,
+            update_url,
+            settings=settings,
+            force_x=force_x,
         )
+        if not args.keep_old_views:
+            prune_stale_views(args.entity, project, name, workspace._internal_id)
 
 
 if __name__ == "__main__":

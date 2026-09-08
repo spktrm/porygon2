@@ -450,6 +450,10 @@ def test_search_moves_the_real_policy_and_the_plain_arm_carries_no_leaves(
         search_cfg = get_player_model_config(9, train=False)
         search_cfg.search.enabled = True
         search_cfg.search.depth = depth
+        # This checks integration, not search strength. Bound both chance
+        # axes so depth two fits alongside the shared full-model fixture.
+        search_cfg.search.num_samples = 2
+        search_cfg.search.num_samples_inner = 2
         searched = jax.jit(get_player_model(search_cfg).apply)(
             params, actor_input, actor_output, HeadParams(), rngs=rngs
         )

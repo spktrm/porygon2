@@ -2566,3 +2566,930 @@ Q advantage .00282 versus .773 required to reverse the policy with Q/.1; U-turn
 uncalibrated signal or promote deeper search; fix tactical discrimination first.
 No full tests or commit; diagnostic forwards/syntax, game bootstrap, stored actor
 probabilities and raw per-seed checks performed. Task service stopped.
+
+## Addition ledger — 2026-09-08 consistency restoration preflight, absent-row amplification
+
+**Offline gradient read at `ckpt_01861967`; no training updates applied.**
+The proposed consistency 0 → 1 continuation was preflighted using the exact
+`train_step` loss prefix, current full stored shape (T=64, B=4, H=256), saved
+learner parameters, target/reg parameters, and restored Adam moments. Both
+coefficients use identical batches and step-derived sampling keys; shared
+value-head training remains True. Eight batches from the saved 24 self-play
+games give total gradient norms **11.8–21.1 off versus 2476.8–8256.0 on**.
+Global clipping at 10 reduces the other objectives' incoming gradients to
+**0.143–0.547%** of their off-arm scale. This is NOT the parameter-step ratio:
+restored Adam's encoder update norm is 0.791–0.845 times control; action-head
+update norm is 0.846–0.968 times control. Optimiser history matters.
+
+**99.29–99.65% of the consistency loss comes from PREV_ACTION.** All 3072
+stored rows in these self-play chunks have HAS_PREV_ACTION=0 (includes stored
+padding). The real trunk hard-zeros these absent rows. Their copy-movement
+normaliser is exactly zero in all eight batches; imagined-versus-real squared
+error is 19.92–43.07, divided by the 0.01 floor, giving group losses
+1991.9–4306.5. The final objective averages ten policy-readable groups, then
+multiplies dynamics by 0.5. The service clears `actionEnumPairs` after assembling
+each request's choice; its previous-action features concern earlier choices
+within a request, so absence in singles is consistent with the current producer,
+not evidence of an outdated replay exporter. `imagine` deliberately produces
+all rows without a future-validity oracle, while consistency scores every group
+without a row-validity mask. Thus dormant coordinates can dominate restoration.
+
+An independent eight-batch stress read from 400 saved heuristic-opponent games
+also finds amplification (off norms 16.3–963.5, on 4249.8–8454.0); this is an
+off-policy stress sample, not a substitute for the self-play read. The structural
+stop-gradients still exclude the real encoder/trunk and policy from this loss;
+global clipping and saved optimiser moments are the indirect coupling. Tiny
+non-transition differences in subtraction of two bf16 total gradients are not
+by themselves evidence that the explicit stop-gradient boundary is broken.
+
+**Verdict:** supports a large restoration mismatch, not a causal claim that a
+late-trained trunk is trapped in bad parameter space. Drift while consistency
+is off and absent-row normalisation are concrete alternatives. Do not discard
+the lineage or treat a coefficient-1 hold as a clean test of useful latent
+prediction before addressing this distinction. Isolated full-state arm launchers
+were prepared but the long self-play forks were NOT launched after this
+preflight finding. No production configuration or gradient boundary changed.
+Local reproducibility: `runtime/consistency-ablation-01861967/gradient_audit.py`,
+`selfplay-gradient-audit.json`, `gradient-audit.json`; launcher preparation lives
+beside them. The script adds scalar numerator/normaliser reads to the extracted
+loss; forwards/gradients are jitted on GPU. These local artefacts are gitignored.
+
+## Addition ledger — 2026-09-08 latent matching, validity versus normalisation
+
+**Matched offline ablation, same eight self-play batches and full optimiser
+state as the restoration preflight.** Task-local `matching_audit.py` wraps the
+model only to expose detached target-label validity and real-state energy;
+the transition's inputs, attention and predictions are unchanged. The mask
+includes a row when valid at EITHER endpoint, retaining appearances and
+ disappearances. Group losses average only groups with eligible rows.
+
+| Consistency at coefficient 1 (outer dynamics coefficient still 0.5) | Raw consistency loss | Total gradient norm | Added-gradient norm |
+|---|---:|---:|---:|
+| Existing all-row, movement-normalised | 200.62–432.16 | 2476.84–8255.97 | 2476.99–8255.99 |
+| Endpoint-union validity, original movement normaliser | 1.4395–1.5591 | 11.8845–21.1643 | 0.9567–1.2175 |
+| Same validity, real-state energy normaliser | 0.5126–0.6674 | 11.8235–21.1444 | 0.2800–0.4980 |
+
+The consistency-off total gradient range is 11.8125–21.1406. Off losses for the
+mask-only variant equal the original exactly. With masking alone, global clip
+scales retain 99.394–99.888% of control; restored Adam encoder update norms
+retain 99.824–99.960%, action-head updates 99.828–99.993%. Added consistency
+versus other transition gradients has cosine -0.048 to +0.025, not a strong
+aligned or opposing force on these batches. All eligible group mean movement
+normalisers exceed 313, far above the 0.01 floor.
+
+The energy alternative divides by the detached group mean of
+(||h_current||² + ||h_next||²)/2. Its smaller gradient does not establish better
+learning: changing denominator also changes the effective coefficient. The
+mask-only result already resolves the measured spike. Prefer validity-aware
+matching as the first controlled continuation; retain copy-relative gains for
+diagnostics and do not conflate an alternative normaliser with a masking fix.
+A fixed movement floor remains susceptible to genuinely static VALID groups
+and is width-dependent because coordinate errors are summed; that is a residual
+possibility, not observed dominance in these eight batches. Pure cosine matching
+would discard magnitude information read by the shared heads, so it is not an
+equivalent replacement.
+
+The dominant excluded coordinates are the two PREV_ACTION rows, zero-based
+indices 58–59 in both the full and selected policy layout. `imagine` keeps all
+rows live deliberately so future-appearing rows can be predicted without an
+oracle. The missing mask is in the comparison loss, not a reason to restore
+current-validity masking inside the transition. Future validity is used only as
+a training label. Ignoring absent coordinates does not prove that their imagined
+activations are harmless in deeper unrolls; held-checkpoint prior-expectation
+calibration and play remain required. No production code/config or training run
+changed. Results: local `valid-movement.json`, `valid-energy.json`,
+`matching-summary.json` alongside the diagnostic script. GPU jitted forwards and
+gradients completed; script syntax checked. No new matches were run.
+
+## Addition ledger — 2026-09-08 production consistency validity fix
+
+Applied the measured mask-only change to production. `PlayerActorOutput` now
+carries `transition_cons_valid` (T, rows; T, B, rows after batching), produced as
+current OR next validity in `_forward_transition`. It is a loss-side label only.
+`transition_losses` intersects it with eligible first-step transitions, averages
+only nonempty groups, and uses the same mask on the newly-valid diagnostic.
+Empty groups/splits report gain 0 rather than an artificial perfect gain 1.
+The movement normaliser, its floor, coefficient 0, parameter tree and transition
+attention remain unchanged. No training restart, commit or push.
+
+The mask has no generation, format or PREV_ACTION special case. Present previous
+choices in doubles remain supervised, including appearance and disappearance
+between decisions. Tests prove a large error in absent previous-action slots
+has zero gradient, the same slots have a live gradient when valid (even with
+zero movement), empty groups do not dilute the average, all-absent labels give
+zero consistency gradient, and the bootstrap tail remains excluded. A real-model
+GPU test varies HAS_PREV_ACTION through absent/appearing/present/disappearing
+states and verifies both previous-action row masks through the actual encoder
+and output wiring. This validates the doubles previous-choice seam, not the
+separate known end-to-end doubles slot-alignment defect.
+
+Validation: all 34 fast tests in `tests/test_transition_model.py` passed; the
+new real-model mask test passed on GPU. Its initial test-only NumPy/JAX fixture
+conversion error was corrected before the passing rerun. Focused Ruff, Black
+check and `git diff --check` passed. The unrelated dirty `data/ps` submodule was
+preserved. Earlier offline results above remain the pre-fix experiment record.
+
+## Addition ledger — 2026-09-08 main-run consistency restoration
+
+User authorised resuming the main lineage with the corrected consistency loss.
+`player_transition_cons_coef` restored to 1.0; shared value-head training remains
+True, outer `player_dynamics_coef` remains 0.5, and other coefficients are
+unchanged. Replaced the stale config comment claiming posterior-conditioned MSE
+necessarily destroys stochastic branches; history and its falsification remain
+in the earlier ledgers. The two focused consistency coefficient/masking tests
+passed with the new default; focused Ruff/Black and diff checks passed.
+
+Launch: `bash start.sh --load-mode checkpoint --init-ckpt
+/home/joseph/Documents/porygon2/ckpts/gen9/ckpt_01861967`, tmux `train`, learner
+PID 168034, log `runtime/learner_20260908_100541.log`. Explicit checkpoint mode
+requests full optimiser/target/reference/league restoration at step 1,861,967;
+this is the main continuation, not the earlier prepared isolated forks.
+Initial startup config confirms consistency 1.0 and live shared value head.
+
+Review after approximately 20k additional updates (around step 1,882,000):
+compare consistency and posterior/prior value calibration against the recorded
+preflight checkpoint; rerun the saved-game prior-expectation probe at a held
+checkpoint before claiming better search. Check deployable value quality and
+same-temperature baseline play alongside gradient/clipping and update skips.
+The older architecture's posterior R² 0.40 threshold is not a measured baseline
+for this checkpoint. Initial startup success alone does not establish benefit.
+
+Startup verification: full checkpoint and 15-opponent league restored, W&B
+`irqeetfg` resumed, fixed shape precompilation completed and updates advanced.
+At lifetime step 1,862,046 the live summary reads total gradient norm 11.9266,
+transition gradient norm 3.1152, consistency loss 1.20953 and update-skipped 0.
+This confirms the restored coefficient is operating without the preflight's
+thousands-scale gradient in this observed update; it is not a strength verdict.
+A requested bounded W&B history scan failed with the API's "Step column '_step'
+not found in schema" error, so these are summary observations, not a verified
+zero-skip count over every startup update. No learner errors were found in the
+bounded startup log check. Run: https://wandb.ai/jtwin/pokemon-rl/runs/irqeetfg.
+
+## Addition ledger — 2026-09-08 consistency continuation, first 5.8k updates
+
+Read completed records from the current local W&B event file (avoids the API
+history scan failure above), through lifetime step 1,867,813: 5,846 learner
+records beginning at 1,861,968, all update-skipped values zero. First versus
+latest 1,000-update windows: consistency loss 1.0992 → 0.9746; CLS consistency
+gain -0.3181 → -0.06285 (substantially closer, still worse than copy on CLS);
+total gradient norm mean 7.701 → 7.780; deployable value-head R² mean
+0.9152 → 0.9278; throughput 4.775 → 4.734 steps/s. Across the first 5,627
+records, total gradient norm ranged 3.87–65.53 and transition norm 1.90–10.82:
+no recurrence of the thousands-scale restoration pathology.
+
+Pooled value-delta diagnostics (1 - sum residual / sum target energy), first
+versus latest 1,000: posterior 0.07593 → 0.08910, prior MODE 0.03758 → 0.04436.
+These are modest changes, not the held-checkpoint prior-expectation test.
+Grounding gains slightly declined (public posterior 0.2518 → 0.2406, prior
+0.1966 → 0.1881); policy switch-cell probability remained 0.04075 → 0.04149.
+No blanket downstream improvement claim is warranted.
+
+Completed live EMA evaluation games since restart: plain temp 0.5 131/218
+(60.1%); plain temp 1.0 38/109 (34.9%); depth-1 search temp 1.0 54/108 (50.0%).
+Search MUST be compared with temp 1.0, its configured control, not temp 0.5.
+The apparent +15.1pp search margin is encouraging but these are unpaired games
+across changing checkpoints, not a frozen-checkpoint causal ablation of the
+consistency change. Small main-parameter eval samples were excluded from these
+EMA totals. Continue the planned roughly 20k hold; alignment has recovered more
+clearly than value calibration so far. Local artefacts: `read_live.py`,
+`live-history.json`, `live-review.json` under
+`runtime/consistency-ablation-01861967/`. No extra matches, tests or training
+mutations were needed for this inspection.
+
+## Addition ledger — 2026-09-08 trunk homogeneity at 10.6k after restart
+
+Streamed the local W&B records retaining only three scalar fields (no model
+forward while training): 10,621 records through step 1,872,588. First 1,000
+versus latest 1,000 (1,871,589–1,872,588) mean trunk row cosine 0.11176 →
+0.10787; centred participation ratio 6.8939 → 6.9042. No progressive global
+row-homogeneity collapse is evident during this continuation. `row_homogeneity`
+reads the full valid learner sequence, including privileged rows, so this global
+mean does not isolate policy-readable rows or within-move/target similarity.
+Participation is spectral concentration, not an exact rank or count of encoded
+features. High-energy variation in about seven effective directions does not
+prove the other directions are absent or unusable.
+
+The pre-restart held-game representation probe remains evidence for selective
+loss of easy feature access (move type 100% → 81–83%; target-row opponent type
+84–85% → 54–59%), while matchup-class decoding from move rows improved to ~65%.
+This is not proof of erased information or of global row collapse. Do not add a
+row-diversity penalty or reset the trunk on these aggregate metrics alone;
+causal feature-access/readout tests would distinguish that concern. Local scalar
+report: `runtime/consistency-ablation-01861967/homogeneity-review.json`.
+
+## Addition ledger — 2026-09-08 belief review, last 10k at step 1,873,286
+
+Streamed completed local W&B records, retaining only belief/code scalars:
+10,000 updates spanning 1,863,287–1,873,286. Window means on the same masked
+hidden-code population: belief accuracy 0.84729, per-batch marginal-majority
+baseline 0.40482, species-only 0.55093, own-revealed-row control 0.80337.
+Above-marginal accuracies: belief 0.44247, species 0.14611, revealed 0.39855.
+Context margin 0.04393; species margin 0.29637. CE: belief 0.40438, revealed
+0.52006, species 1.31520 (belief versus revealed ~22.2% lower).
+
+First versus last 2,000 updates within that window: belief accuracy
+0.84629 → 0.84637; context margin 0.04377 → 0.04354; CE 0.40822 → 0.40584.
+Healthy, stable prediction above controls, not a fresh improvement trend.
+Hidden-label perplexity averages 4.73996; average weakest-group perplexity
+2.87527, minimum over recorded batches 1.30451: no group pinned at 1 evident
+on this instrument. Hidden fraction among matched mons 0.98574; matching
+coverage 0.63991, so the metrics do not score every opponent mon.
+
+The own-revealed-row control remains strong: most predictability is available
+locally, and the incremental context contribution is ~4.4pp. This does not
+fulfil the older B3 expectation that the revealed baseline would converge to
+the species baseline; beating both controls alone is not evidence for that
+stronger claim. These are replay-training accuracies/CE for a learned hidden
+code, not exact hidden-item/moveset accuracy, a held-out calibration assessment,
+or proof that the auxiliary improves wins. Local report and stream reader:
+`runtime/consistency-ablation-01861967/belief-review.json`, `belief_review.py`.
+No model forwards or live-run mutations were performed.
+
+## Addition ledger — 2026-09-08 saved dashboard eval-panel mismatch
+
+Read the live saved `Signal health` workspace (`nw-yqg7vvun701-v`) through
+Workspace.from_url, without saving it. Its definitions match the local script:
+At a glance's winrate/margin/payoff/count panels request simpleheuristic actor
+suffixes `-0`, `-1`, `-2`; live `-0`/`-1` use temp 0.5, while the third live
+actor is now `-t1-2` at temp 1.0. The requested `-2` series is stale and is not
+its replacement. Section 3c correctly compares `-t1-2` with `-search-3`, both
+temp 1.0, and includes the currently disabled historical `-search-d2-4` key.
+Thus these sections do not plot equivalent actor populations.
+
+Smoothing also differs: 3c's first panel applies UI time-weighted smoothing
+0.98 to raw per-game `ema-wr-*` observations; its second plots the learner's
+`smoothed-wr-*` values with no extra UI smoothing. At a glance's smoothed-winrate
+panel uses the latter estimator but different actors. Learner smoothing has a
+200-game half-life per actor and resets at process startup. At a glance's
+UI-smoothed payoff panel uses payoff (-1/0/+1), not binary wins, and UI factor
+0.95. Neither section's x-axis differs: both explicitly use lifetime_step.
+No dashboard or script was changed during this diagnostic. Correcting labels
+and replacing retired actor keys is warranted; published-view updates should
+stay scoped to the relevant saved training view.
+
+## Addition ledger — 2026-09-08 current-run dashboard refresh
+
+Updated and published `Signal health` in place, retaining view ID
+`VmlldzoxNzg4Mjk2OQ==` and URL
+`https://wandb.ai/jtwin/pokemon-rl?nw=yqg7vvun701`. Overview and section 3c
+now share one T=1 plain-versus-depth-1-expectimax win-rate panel definition:
+learner 200-game-half-life smoothing, no additional UI smoothing, lifetime
+steps and a 0–1 scale. T=0.5 controls are explicitly separate. Removed stale
+actor `-2` and inactive depth-2 search series, replaced retired policy-head
+and own-split forward-KL keys, and replaced GPU batching panels with the
+currently emitted CPU inference timing/history metrics. Separated trunk
+cosine/participation and parameter/gradient magnitudes onto distinct panels.
+Consistency comments now reflect the restored coefficient and masked loss.
+
+Read back the published view: 116 panels, 338 explicit metric references,
+all present in current run `irqeetfg` history; the two T=1 comparisons have
+identical metric, axis, smoothing and range settings. Black, focused Ruff,
+and `git diff --check` passed. Added `--project rl|offline|both` so publishing
+can remain scoped; this refresh did not touch the offline or personal view
+or the learner. Verification is recorded locally in
+`runtime/consistency-ablation-01861967/dashboard-published-verification.json`.
+
+SDK trap: passing an internal `nw-…-v` name directly as the URL's `nw` token
+to `Workspace.from_url` reads successfully but wraps the internal name again;
+saving then makes the view disappear from the ordinary saved-view listing.
+Restored the original name on the same ID, normalised update URLs before SDK
+loading, and added saved-URL/ID read-back before stale-view pruning. Final
+server listing contains the original Signal health and personal workspace.
+
+## Addition ledger — 2026-09-08 restart health at step 1,888,347
+
+Read completed local W&B records for the current irqeetfg restart, steps
+1,861,968–1,888,347 (26,380 updates). Compare first/latest 2,000 updates:
+mean global gradient 7.807→7.908, transition gradient 4.135→4.502; zero skipped
+updates throughout, full-window max gradient 119.812, latest-window max 24.468.
+Consistency loss 1.0624→0.86175; CLS gain -0.2298→-0.01486, private entity
+-0.08463→0.10897, move slot -0.00403→0.12923. PREV_ACTION remains absent/unscored
+in singles; its zero metric does not validate doubles. Decode CE 0.25964→0.20172,
+generator loss 0.98514→1.00371. Pooled logged SSE/energy delta gain rises
+0.08064→0.10295 for posterior and 0.04478→0.05494 for prior; switch gain barely
+moves 0.05533→0.05561. These replay-training diagnostics are not the historical
+frozen multi-sample prior calibration and must not be equated with it.
+
+Belief accuracy 84.343→85.252%, revealed 79.932→80.933%, context margin
+4.411→4.319pp. Hidden-code mean perplexity 4.754→4.643 and minimum-code
+perplexity mean 2.851→2.584 merit monitoring, not a collapse verdict. Trunk
+cosine 0.11034→0.11266, participation 6.8696→6.8809; normalised action entropy
+0.51061→0.51337. Value target-fit R² 0.9191→0.9238, but actual outcome R²
+0.1587→0.1524 and early-game outcome R² -0.0841→-0.1471 remain weaknesses.
+
+EMA eval since restart: T=.5 pooled 616/990 wins (62.22%); T=1 plain 235/495
+(47.47%), depth-one expectimax 240/486 (49.38%). Latest 200-game-half-life
+smoothed rates: T=.5 actors 63.77%/60.28%, T=1 plain 50.39%, search 47.32%.
+Latest 2k updates contain only 38 plain-T1 and 37 search games. No established
+search advantage or causal win-rate benefit from consistency restoration.
+Read-only review; no matches launched or learner changes. Local report/script:
+`runtime/consistency-ablation-01861967/latest-health.json`, `latest_health.py`.
+
+## MCTS rerun after consistency restoration — 2026-09-08
+
+At user request, gracefully stopped irqeetfg at full checkpoint `01889162`,
+27,195 updates after previous pilot `01861967`. Repeated all five 100-game
+SimpleHeuristic arms, frozen EMA, GPU, T=1, seed 123, unpaired simulator seeds.
+MCTS uses 64 simulations / four chance slots with depth caps 1 and 2; this is
+not a simulation-budget sweep. New W/D/L: plain 55/0/45, MCTS1 47/0/53,
+MCTS2 42/1/57, expectimax1 45/0/55, expectimax2 51/0/49. Old win counts were
+45/48/50/41/50 respectively. MCTS does not improve in this pilot; margins
+against plain change +3→-8pp and +5→-13pp. Small independent samples do not
+establish a causal regression or benefit from restored consistency.
+
+All 500 games completed, no failures/abandonments, finite saved diagnostics,
+zero legal overflow. MCTS root KL 0.02668/0.02910; expectimax 0.001256/0.001820.
+Depth-two candidate mass ~95.2%/95.4%; MCTS mean logical expansions 13.57/41.76.
+Elapsed incl. compilation: plain 26.9s, MCTS1 97.0s, MCTS2 225.4s, expectimax1
+38.8s, expectimax2 126.0s. Historical timing comparison is confounded by the
+intervening bit-identical MCTS optimisations and compilation cache state.
+Learner remains stopped; isolated service cleaned up. No production changes.
+Local report `docs/mcts-ablation-2026-09-08.md`; raw arm outputs/logs under
+`runtime/ablation-01889162-*`; comparison includes Wilson intervals and old/new
+search diagnostics in `runtime/ablation-01889162-comparison.json`.
+
+## World-model diagnosis at 01889162 — 2026-09-08
+
+After the MCTS rerun, recalibrated latest EMA on the SAME saved 500 transitions
+from 24 old-checkpoint self-play games (no new games). Existing
+`runtime/priority-audit-01861967/posterior_calibration.py`, latest checkpoint,
+top eight latent action codes (99.1246% mean retained mass), 64 prior draws per
+code, exact 256-code posterior expectation, 2,000 whole-game bootstraps.
+Prior-expectation value-delta gain -0.06393, 95% [-0.10488,-0.01227], compared
+with old -0.08184. Posterior expectation +0.04939 [-0.04293,+0.15730], old
++0.04289. Move subset (394) prior -0.07557 [-0.12871,-0.01171]; switches (106)
++0.00012 [-0.09465,+0.06498]. Latest prior still loses to copy; favourable old/new
+point movement is not a significant improvement claim, and real-state value
+labels change with each checkpoint. This evaluates taken actions on a fixed old
+state distribution, not counterfactual action ranking or current-policy rollout
+calibration. Raw results/log/pickle: `runtime/posterior-calibration-01889162.*`.
+
+Code confirms two gradient boundaries relevant to interpretation: real trunk
+rows and consistency targets stop-gradient; restoring consistency trains the
+transition decoder, not a predictability objective into the trunk. Main imagined
+losses decode posterior samples with next-state information; prior is matched by
+balanced KL, while the explicit prior-mode value path is stop-gradient telemetry.
+Thus good posterior reconstruction need not imply useful deployed expectations.
+This is an objective mismatch to investigate, not proof a prior-sample realised-
+next-state MSE would fix it (stochastic futures need distributional treatment).
+
+MCTS confound remains separate: forced one-visit coverage of every legal root
+cell and raw visit-count sampling with 64 simulations puts at least 1/64 mass
+on each legal action. Ten legal actions imply at least 9/64 probability away
+from any single preferred action, even before other visits. This may weaken a
+confident policy independently of model accuracy; no value-blind matched control
+was run, so do not attribute the complete gameplay deficit to the world model.
+
+## Research interpretation — hidden-information world models, 2026-09-08
+
+Research review after 01889162 ablation: Stochastic MuZero supports learned
+chance/afterstates (Go, 2048, backgammon), but does not establish sound hidden-
+information adversarial search. ReBeL and Student of Games reason over public
+beliefs and information-set-aware values/strategies using game models. DeepNash
+shows strong hidden-information play without search. LAMIR (arXiv 2510.05048,
+reviewed v1) is especially relevant to simulator-independent inference: learns
+both players' information-state abstractions, joint-action dynamics, legal
+masks, rewards/termination and uses CFR+ resolving. Its stated limitation is
+absence of explicit chance nodes; not a ready stochastic-Pokémon replacement.
+
+Inference for this project: reconsider the transition/search interface before
+width or token count. Current own-action dynamics marginalise opponent choices
+and environmental chance together; useful against a fixed opponent distribution,
+but not a model that supports separately changing the opponent strategy. Joint
+choices, persistent hidden-state uncertainty, public/private observation updates,
+and values appropriate to a changing strategy profile are candidate requirements
+for an adversarial-search prototype. This is a research direction, not an approved
+architecture replacement or proof these omissions caused the 100-game deficits.
+Keep policy-gradient baseline; test representation/action-effect calibration and
+value-blind search control before promoting search. Existing frozen-state value
+calibration measures agreement with the checkpoint critic, not true counterfactual
+outcomes. Stop-gradient alone is not a diagnosed bug; LAMIR also decouples parts
+of abstraction and dynamics learning.
+
+Sources: https://openreview.net/pdf?id=X6D9bAHhBQ1 ;
+https://arxiv.org/abs/2007.13544 ; https://arxiv.org/abs/2112.03178 ;
+https://arxiv.org/abs/2206.15378 ; https://arxiv.org/html/2510.05048v1 .
+No implementation, coefficients or learner state changed during this review.
+
+## Scoped joint latent/public-belief prototype — 2026-09-08
+
+User requested concrete scope after ruling out exact private-state enumeration.
+Wrote local `docs/public-belief-world-model-scope-2026-09-08.md` against current
+code and plan template. First deliverable is aligned joint-decision self-play data
+plus a capacity-matched joint-action prediction experiment with frozen policy.
+Later gates cover learned public/private abstraction, filtering, information-set
+solver/value contracts, then powered play. Existing per-mon belief codes are not
+joint public ranges; policy-readable rows are not strictly public. Explicitly
+record submitted actions (not merely executed events), asynchronous requests,
+visibility and doubles previous-choice sequencing. Paired actor choices are a
+new learner-only self-supervised target, replacing the former no-opponent-label
+convention only inside the proposed prototype. No exact team enumeration, simulator
+at search time, policy rewrite, coefficient change or training restart authorised
+by this scoping document. Learner remains stopped at 01889162.
+
+## Scope revision accepted — unpaired interval model, 2026-09-08
+
+User preferred avoiding joint training records because own requests need not align
+with opponent submissions. Revised the existing public-belief scope document in
+place: first audit current unilateral intervals, then compare inferred opponent-
+behaviour plus residual-chance latents against a capacity-matched combined-chance
+model. No paired action dataset, wire change or cross-player join prerequisite.
+Intervals can span zero/one/multiple opponent decisions; absent executed events
+are not absent submitted actions. Behaviour/chance disentanglement is unidentifiable
+without sufficient constraints/evidence: a predictive latent is not automatically
+an opponent-controlled action. Added explicit strategic interpretation gate before
+public-belief solving, including simultaneous-choice secrecy and feasible interval
+semantics. Paired collection is deferred only; if strategic semantics cannot be
+established from unpaired data, retain predictive planning rather than claiming an
+adversarial solver. This supersedes the preceding scope's A+B data requirement.
+No production changes or restart; learner remains stopped at 01889162.
+
+## Unilateral interval Stage A audit — 2026-09-08
+
+Added NumPy-only `rl/offline/interval_data.py`: adjacent own source/action/successor
+extraction preserves terminal successors, excludes padding and bootstrap-only
+sources, retains same-request previous-choice microsteps, and reports original
+history-window indices. Stable game splits require a caller-supplied identity
+shared by both perspectives; the trajectory schema itself has no game ID or
+training/evaluation provenance. No cross-player join or private-truth input.
+
+Historical `runtime/mcts-readiness-01861967-games.pkl`: 48 sides / 48 chunks,
+1,449 real intervals including 48 terminal successors, 1,234 move and 215 forced-
+switch requests, 3,798 observed history steps, two zero-new-history intervals,
+zero missing retained prefixes. All actions legal and per-side interval identities
+unique. No preview, doubles, previous-choice or same-request coverage. Keep this
+calibration corpus held out; new standalone research-training collection requires
+an explicit checkpoint/format/purpose/game-grouping manifest. Adjacent opposite
+player indices are compatible with harness grouping, not sufficient provenance.
+
+Service `getChoices()` only increments requestCount after collecting per-slot
+choices: doubles/preview microsteps can share a counter. HISTORY_STEP_COUNT is
+retained window length, not an absolute event count. Missing visible events are
+not absent opponent submissions, and post-trunk history deltas are not pure
+opponent behaviour. Ten focused extraction/visibility/split tests pass; Black and
+Ruff pass. No production changes, learner restart or real-model forward in this
+audit. Fixture coverage does not repair known doubles service alignment defects.
+Details are in local gitignored `docs/interval-data-audit-2026-09-08.md`.
+
+## Interval-model prototype and hold launched — 2026-09-08
+
+Implemented accepted A+B prototype in `rl/model/interval_transition.py`,
+`rl/offline/interval_data.py`, `interval_features.py`, `train_interval.py` and
+focused tests. No production transition/search/actor/replay protocol change.
+Historical calibration archives remain held out. Fresh explicitly research-training
+self-play at frozen EMA 01889162: 128 games, 256 sides, 7,413 intervals; 101 games /
+5,750 intervals train and 27 games /1,663 intervals held out by stable game hash.
+Collection provenance and features: `runtime/interval-01889162/`.
+
+Concrete first factorisation: two conditional categorical codes using the existing
+2x16 decoder alphabet. Combined posterior's first code sees full successor-row
+movement; history posterior's first code sees only HISTORY_ENTITY/HISTORY_FIELD
+movement. Residual posterior sees full movement and the first code. Prior samples
+ancestrally; the conditional residual prior in KL has stop-gradient on the posterior
+first-code input. Both conditional arms have exactly 6,975,808 parameters and
+identical initial values; trained legacy control has 4,628,384. Warm start strictly
+copies compatible decoder leaves; new networks receive identical seeded init.
+This is a testable predictive restriction, not identified opponent-action semantics:
+post-trunk history carries contextual changes and can include chance/own effects.
+
+All arms freeze policy, own-action encoder and critic. New isolated Adam at existing
+3e-5 LR; objective is one-step validity-aware consistency (coef1), frozen-next-critic
+categorical distillation (coef1), existing KL dyn .5 / rep0 / free .0625. This differs
+from production multi-step/grounding/generator/outcome training and is documented
+in each manifest. It evaluates critic agreement, not counterfactual ground truth.
+No representations or production coefficients are retuned in this experiment.
+
+200-update preflight with eight prior samples: prior delta gain legacy
+-0.06455→-0.05216, combined -0.07605→-0.03547, history -0.07605→-0.02739.
+Final 95% whole-game intervals respectively [-.0991,-.0090], [-.0877,.0054],
+[-.0705,.0090]. Final gradient norms 4.77/1.37/1.29; finite updates/evaluations,
+no established improvement over matched control. Logs, isolated optimizer/parameter
+checkpoints and raw held-out reads: `runtime/interval-preflight-01889162/`.
+18 focused tests passed (intervals, same-request/previous choices, terminal/bootstrap,
+posterior visibility with positive controls, live prior independence, KL gradient
+boundary, exact matched initialisation, strict warm start, masked loss, bootstrap).
+Black/focused Ruff/diff checks passed. Existing doubles service defect and missing
+preview/doubles/other-format corpus coverage remain explicit limitations.
+
+Started standalone `interval-model` tmux session: 25,000 updates per arm, legacy /
+combined / history sequentially, 32 prior samples, held-out evaluations every 5k
+including 15k/20k/25k. Run directory `runtime/interval-hold-01889162/`, progress
+`runtime/interval-hold.log`. Results pending; no promotion or semantic claim.
+Production learner remains STOPPED at 01889162. Task collection service cleaned up.
+No commit made. Exact commands and objective differences in rl/offline/README.md.
+
+## Interval hold completed — gate failed, 2026-09-08
+
+All three isolated arms completed 25k updates. Held-out prior delta gains
+(start→25k): legacy -.06323→-.34507, combined -.07473→-.29279,
+history -.07473→-.58858. Final 95% whole-game bootstrap intervals respectively
+[-.57781,-.16364], [-.47573,-.14073], [-.95633,-.31948]. Every arm remained
+below copy at 15k/20k/25k; none passed the pre-registered gate. Final history-minus-
+combined gain -.29579, paired 10k whole-game bootstrap [-.51785,-.09521] over
+27 held-out games, with identical interval IDs and copy-energy targets verified.
+This is conditional on this training seed/corpus, not multi-seed architecture proof.
+
+Training consistency decreases to ~.49–.50 while held-out value-change prediction
+worsens, including posterior reads (~-.16 to -.17). Final training KL .0026 legacy,
+.0125 combined, .0068 history is below the .0625 free-nats threshold; this alone
+does not prove code collapse. All reported metrics finite, every update checked
+for finite loss/gradient norm. No evidence of gradient explosion. Shared deterioration
+also implicates limited-data generalisation/objective alignment; do not attribute
+all degradation to the split. 25k*32/5750 = ~139 sampled passes over train intervals.
+
+Verdict: do not promote the history restriction, add public-belief solver stages,
+or change production based on this experiment. Next diagnostic should compare
+train/held-out prediction under the same evaluator and inspect latent usage before
+retuning or collecting more data. Results/checkpoints persist under
+runtime/interval-hold-01889162; paired summary comparison.json. tmux interval-model
+has exited normally; production learner remains stopped at 01889162.
+
+## Interval hold diagnosis — generalisation and coarse codes, 2026-09-08
+
+Saved-checkpoint evaluation on BOTH train and held-out games with the same frozen
+critic and 32-draw prior/posterior expectations completed. At 25k, train/held-out
+prior gain: legacy +.98830/-.34506, combined +.98939/-.29279, history
++.98906/-.58858. Posterior expectation train/held-out: +.98897/-.16352,
++.98983/-.16268, +.98974/-.18010. Legacy already +.94355/-.33526 at 5k.
+Thus the offline objective fits training value targets extremely well but fails
+to generalise; this is not evidence that the objective cannot fit value targets.
+Held-out reconstruction still improves (legacy .85903→.70931), while value KL
+worsens (.06846→.09522; train .06712→.00127). Prior/posterior KL is .00525
+train versus 1.398 held out in final legacy. No claim about production online
+training follows automatically from this frozen-feature, 101-game experiment.
+
+Legacy posterior BEFORE offline training selects only modal pairs (3,14) and
+(15,5), exactly separating successor forced-switch/terminal (1,392 intervals)
+from nonterminal normal-move requests (6,021). At 25k legacy retains two pairs
+and 100% held-out phase purity; combined/history purity 99.88%/98.56%. Group
+marginal perplexity ~1.7, conditional ~1.08–1.12. Two groups mostly repeat the
+same coarse phase distinction; soft probabilities may still contain finer detail.
+Code interventions change decoded rows and values, so the route is live rather
+than entirely ignored. Uniform interventions include improbable combinations;
+nonzero usage/intervention response does not identify opponent-behaviour semantics.
+
+Next controlled experiment: fix legacy architecture/objective and compare fixed-
+corpus reuse with fresh training data at matched update counts; track unique games,
+reuse and early train/held-out value gains. Keep a new untouched final split since
+existing held-out games now inform experiment selection. Data volume/reuse is a
+hypothesis to test, not a demonstrated causal fix. Do not promote history-only
+factorisation or prescribe code-entropy forcing from these results. No new games,
+training, or production change in this diagnostic; learner remains stopped.
+
+Artefacts: runtime/interval-diagnosis-01889162/{diagnose.py,report.json}, per-row
+reads/interventions and trajectory-derived successor labels. Prior held-out gain
+reproduction within 1.4e-5, single-posterior squared errors exact; minor prior
+rounding changes with fused diagnostics were measured. Diagnostic exited normally.
+Full local report: docs/interval-diagnosis-2026-09-08.md (gitignored).
+
+## Interval data/reuse control registered — 2026-09-08
+
+User authorised the recommended follow-up. Collecting 512 fresh self-play games
+at frozen EMA 01889162, T1, seeds 918–921 (four 128-game collections). Original
+101-game training pool is the fixed control; fresh arm adds new games except the
+stable-hash 20% reserved as a new final test. Both arms share old 27-game validation
+and new final test. Legacy architecture, one-step offline objectives, Adam 3e-5,
+clip10, batch32, seed42 and 25k update budget stay fixed. This tests increased
+corpus size/reduced reuse together, not streaming or opponent-policy diversity.
+
+Registered reads 0/200/1k/5k/15k/20k/25k with train diagnostics, unique sampled
+games/intervals and sampled passes. Final test only at fixed 25k; no checkpoint
+selection. Primary relative gate: paired whole-game 95% final-test interval for
+fresh-minus-fixed prior gain excludes zero positively; usefulness also requires
+fresh prior gain above copy with 95% interval excluding zero. No automatic
+production promotion. Local plan docs/interval-reuse-control-2026-09-08.md;
+commands, provenance and outputs runtime/interval-reuse-01889162/.
+
+Extended shared offline evaluator with optional training diagnostics, early
+checkpoints and explicit final-test/training-eligibility masks. Whole-game split
+validation rejects row leakage and shared-game leakage. Twelve focused NumPy
+interval tests pass; focused Black/Ruff and diff checks pass. No production
+training restarted. Results pending.
+
+## Interval data/reuse control completed — 2026-09-08
+
+Collected all 512 fresh self-play games without failures/abandonment. New final
+test: 100 games /5,856 intervals. Larger training pool: original101 + new412 =
+513 games /30,420 intervals, compared with fixed101 /5,750. Both original legacy
+models completed 25k updates with matched architecture/loss/optimiser/seed/batch;
+all finite. Fixed final validation reproduced historical -.345067 exactly.
+
+At 5k, deterministic train-subset/validation gains: fixed +.94609/-.33527;
+larger +.32869/-.04477. At 25k: fixed +.98758/-.34507; larger +.88890/-.25648.
+Reuse 139.13 versus 26.30 sampled passes. Larger pool reduces the development
+train/validation gap, but both deteriorate after early improvements. Best scheduled
+validation is around1k: fixed -.02489, larger -.01452, still below copy.
+
+Preselected 25k NEW final test, 10k whole-game bootstrap: fixed prior gain
+-.45713,95%[-.62146,-.32033]; larger -.37195,95%[-.51606,-.24735]. Paired
+larger-minus-fixed +.08518,95%[-.02546,+.20132], identical game/interval IDs and
+copy energies asserted. Relative improvement gate INCONCLUSIVE; above-copy gate
+FAILED. Do not call reduced reuse a proven fix, or infer data is irrelevant.
+This single-seed fivefold-corpus experiment still repeats data26times and uses
+one frozen policy. No automatic promotion, solver expansion, or further collection.
+Early stopping/reuse-limited training is a possible next controlled test, requiring
+a registered selection rule and new untouched test games; do not reuse this final
+test to claim selected-checkpoint performance. Offline findings do not directly
+prescribe production replay reuse because objectives/representation training differ.
+
+Artefacts: runtime/interval-reuse-01889162/{comparison.json,composition.json},
+{fixed,fresh}/legacy checkpoints and reads, exact partitions, collect.py/run.py.
+Full local result docs/interval-reuse-control-2026-09-08.md. Task service cleaned
+up, experiment exited normally, production learner still stopped at01889162.
+Twelve focused interval/partition tests and focused Black/Ruff/diff checks passed.
+No commit made.
+Final state verification: all control parameters, optimiser state leaves and step
+are bit-identical to the original hold; diagnostic additions preserved updates.
+
+## Direct interval-value probe registered — 2026-09-08
+
+User authorised the next bounded diagnostic. Direct current-state + latent-action
+predictor versus identical state-only control, with the existing legacy transition
+as reference. Frozen EMA01889162 actor/action encoder/critic and the same513-game
+training pool. Existing27 + previously examined100 held-out games are development
+validation only (127 games); no evaluation games become training. Stop at5k,
+read0/200/500/1k/2k/5k, select each arm by minimum development SSE, earliest tie.
+
+Direct probe copies width16 RowRead and action embedding; same hidden widths as
+prior, predicting centred categorical-logit residual from the frozen current critic
+log probabilities. Zero final kernel starts at copy; train with next-critic CE only.
+State-only zeroes action embedding input, retaining identical seeded parameters.
+Actor/action encoder/critic frozen; exact64-code own-action marginal at evaluation.
+Fewer parameters/no consistency or chance KL make this a path/objective diagnostic,
+not an architecture-only ablation. No simulator labels or opponent joins.
+
+Collect one new128-game final set only if selected action development gain and
+its advantage over selected state-only both exceed1e-6 (exclude numerical copy
+roundoff). Freeze selections first; final success needs above-copy and paired
+above-state-only whole-game95% intervals. No post-test checkpoint selection.
+Plan docs/direct-interval-probe-2026-09-08.md; runtime/direct-interval-01889162/.
+Fourteen focused tests pass: partition boundaries, copy-init/live output gradient,
+identical controls, positive action-dependence check and validation-only selection.
+Focused Black/Ruff/diff pass. Production remains stopped; results pending.
+
+## Direct interval-value probe completed — 2026-09-08
+
+All three arms completed5k finite updates on513 training games, with127 previously
+examined games for development. Both886,563-parameter direct controls select
+step0/copy; all nonzero scheduled checkpoints are below copy. At5k train-subset /
+development gain: action+.24827/-.08121, state-only+.24280/-.08264. Legacy selects
+1k with development gain+.002274,95%[-.014657,+.016714], then falls to-.05550 at5k.
+Selected-development intervals do not correct checkpoint selection and are not
+untouched-test evidence. Final-test collection gate FAILED; no new games collected.
+
+Conclusion: simplifying to direct next-critic distribution prediction did not fix
+generalisation; decoder-only blame is not established. Nor does this bounded small
+probe prove the trunk uninformative. Frozen action encoding, RowRead/input access
+and critic targets remain shared possible bottlenecks. No production replacement,
+extra hold, retuning or after-the-fact checkpoint selection. This is observational
+critic agreement, not counterfactual action advantage or outcome prediction.
+
+Full direct controls have bit-identical initial params/optimiser state. Legacy5k
+params/optimiser/step are bit-identical to prior larger-pool run. Direct output
+gradient paths live; final norm .622/.604, max centred residual1.450/1.417.
+Action encoder not universally collapsed:9 modal codes, marginal perplexity
+4.70train/4.41development. This does not verify within-state legal-action separation.
+Across36,657 multiple-legal-action intervals, recorded policy entropy mean.91069
+nats; only1.90% below.1, and1.17% taken probability>.99. Pervasive deterministic
+play is not supported as the explanation for this corpus.
+
+Artefacts: runtime/direct-interval-01889162/{selection.json,composition.json},
+{action,state,transition/legacy}/ reads/checkpoints, behaviour-variation.json,
+action-code-usage.json, code-sha256.json. Local report
+ docs/direct-interval-probe-2026-09-08.md. Fourteen focused tests and focused
+Black/Ruff/diff pass. Experiment exited normally; production remains stopped.
+
+## Latest action-code audit — 2026-09-08
+
+Read-only EMA01889162 audit,2,560 saved multi-legal-action roots across640 games,
+16,834 legal actions, no truncation. Exact uniform-reference action reconstruction
+87.213% vs chance18.295%, MI1.5872nats. Existing decode objective is implemented
+and configured coefficient1.0; do not propose adding/re-enabling it as missing.
+
+Strong pair alias (TV<.1; optimal binary decode<55%): ordinary versus Tera version
+of SAME move35.62% of817 pairs; ordinary/ordinary7.34% of12,009; switch/switch6.42%
+of11,354; ordinary/switch.31% of24,162. Same-move ordinary/Tera modal match39.17%.
+None of the strongly aliased pairs have identical source/target input rows. For
+ordinary/Tera aliases input RMS difference median.7842, relative RMS.4943. Specific
+action distinctions are lost despite distinct encoder inputs; not literal trunk-row
+identity. f32 rerun gives87.209% accuracy and35.86% same-move aliases, robust aggregate.
+
+Downstream128-root/128-game audit, all64 action codes exact, two32-draw chance groups
+with common randomness. Well-separated q pairs (TV>.9,n2,266): median embedding RMS
+.17656, fixed-chance decoded-row RMS.15165, prior expected-value gap.00200, predicted
+value-distribution TV.00190. Replicate action-difference correlation.9552/sign agreement
+94.53%. Per-root legal-action value spread median.00531/mean.00756. Decoder responds;
+value predictions remain tightly clustered. Strong aliases(n125) have median value
+gap8.8e-6 and distribution TV1.9e-5. No true unplayed-action outcomes were measured.
+
+Numerical caveats: cached taken-code guard initially failed (max difference.2739),
+median2.4e-7,p99 .03863,4/2,560 modal changes. Metadata/order verified; bf16/f32
+aggregates stable, but full fused-encoder rounding source not isolated. Do not claim
+bit identity. Initial Gram row-distance formula lost small differences; explicit
+pair subtraction recomputation in stable-row-rms.npz is authoritative. Final summary
+uses stable distances. NumPy confusion agrees with executable exact_decode_loss;
+finite outputs and mixture-TV contraction checks pass. No production tests needed
+for runtime-only audit; no games/training/production changes.
+
+Next supported diagnostic: root-only direct source/target action rows versus the
+categorical bottleneck, with other inputs/targets fixed. This does not establish
+that bypassing fixes value prediction or justify eliminating latent imagined actions,
+code-entropy forcing or a full architecture reset. Scope remains singles gen9random.
+Artefacts runtime/action-audit-01889162/, local report
+ docs/action-code-audit-2026-09-08.md. Production remains stopped at01889162.
+
+## Observed-root action bypass registered — 2026-09-08
+
+User authorised a bounded root-only bypass test after action-code collisions were
+measured. Direct-value probe now accepts recorded concrete cells, gathers existing
+source/target rows through chosen_bank_rows and projects them with a trainable copy
+of action_encoder/query_proj. This replaces categorical sampling/action-table input;
+state RowRead, shared MLP width/init, frozen critic targets, centred residual and
+CE loss remain fixed. This is an input-path comparison, not equal parameter count
+or equal feature-scale attribution. No imagined-node or production model change.
+
+Same513 train/127 development games, seed42, Adam3e-5, clip10, batch32,5k ceiling,
+reads0/200/500/1k/2k/5k, earliest maximum validation gain selection. Recover all own
+recorded cells in exact export order, checking game/request/terminal and legality.
+Rerun categorical control and require bit-identical5k parameters/optimiser state
+against previous direct probe. State-only reference is unchanged and reused.
+Final128-game collection only if selected bypass exceeds copy and both references
+by>1e-6; selected checkpoints frozen first. No extended hold or coefficient sweep.
+
+Fifteen focused tests pass, including shared initialisation, exact copy, live output
+and action-projection gradients, and action-specific row sensitivity. Focused Ruff
+passes; formatting applied. Plan docs/root-action-bypass-2026-09-08.md, runtime
+runtime/root-action-bypass-01889162/. Production remains stopped; results pending.
+
+## Observed-root action bypass completed — 2026-09-08
+
+Both direct-value arms completed5k finite updates on the same513 training/127
+development games. All37,939 concrete cells aligned with saved game/request/terminal
+records and passed legality checks. Shared RowRead/prediction-MLP initial parameters
+bit-identical;886,563 categorical versus1,001,507 bypass parameters. Categorical
+final params/optimiser/step bit-identical to prior direct probe.
+
+Bypass development gain at200/500/1k/2k/5k: -.01912/-.01838/-.02729/-.04840/-.07064.
+Categorical -.02051/-.02344/-.03315/-.06124/-.08121. BOTH select step0/copy under
+registered selection; state-only reference also copy. Final-test gate FAILED;
+no new games or after-the-fact extra training. At5k train-subset gains+.24827
+categorical/+.29496 bypass. Paired development bypass-minus-categorical+.010573,
+95%[-.007006,+.028677] over127 games (10k whole-game bootstrap), inconclusive.
+Bypass absolute gain-.070642,95%[-.112796,-.036794], clearly below copy.
+
+Conclusion: bypassing categorical action input has not demonstrated useful
+prediction; do not change production conditioning on this evidence. Action-code
+collisions are real but not established as a sufficient explanation. Shared frozen
+state inputs, critic targets, objective/metric alignment and generalisation remain
+unresolved. Bypass still uses a learned finite-width query projection; different
+parameter count/input scale preclude categorical-alias-only attribution.
+
+Fifteen focused tests and focused Black/Ruff/diff checks passed. Final bypass grad
+norm.5603, max centred residual1.7096; finite throughout. Runtime
+runtime/root-action-bypass-01889162/{selection.json,comparison.json,composition.json}
+plus reads/checkpoints/scripts. Local report docs/root-action-bypass-2026-09-08.md.
+Experiment exited normally, production remains stopped at01889162, no new service.
+
+## Interpretation reset after bypass controls — 2026-09-08
+
+The failed offline variants share frozen features, one behaviour-policy corpus,
+next-frozen-critic targets and mostly distribution CE. They are not independent
+falsifications of all world-model architectures. Train/held-out overfitting is
+measured; a specific shared root cause is not. Treat next-critic copy-relative gain
+as a diagnostic, not the sole acceptance test for a complete planning model.
+A Bellman-consistent value already predicts policy-averaged future return; under
+correct payoff/terminal conventions the policy-averaged TD residual has zero mean.
+An action-conditioned gain must exploit predictable action advantages/critic errors
+against stochastic residual variance. This does not prove the achievable gain is
+zero here or validate the current world model.
+
+Checked a possible terminal-accounting explanation using existing bypass5k reads:
+254 of7,519 development intervals end terminally and contribute24.77% of copy
+energy. Categorical terminal/nonterminal gains+.00706/-.11028; bypass+.04616/
+-.10909. Failure remains on nonterminal transitions. Production value targets
+include real terminal rows/payoffs; search's deeper backup separately uses predicted
+continuation and conditional terminal outcome. Do not claim a discovered terminal
+bug or that the offline critic-only objectives reproduce the full training/search
+backup. Next priority is shared-target/calibration/coverage audit against recorded
+returns and production conventions before further architectural variants. This
+entry is interpretation and read-only analysis, not authorisation to restart training.
+
+## Shared target/loss audit completed — 2026-09-08
+
+Read-only saved direct checkpoints at0/200/1k/5k, all127 development games/7,519
+intervals plus fixed1,663 training read; all640 games/37,939 intervals aligned with
+recorded final outcomes and opposite-perspective checks. Prediction reproduction
+within3e-7, finite. No new games/training/restart.
+
+At5k teacher-distribution KL improves from copy.075158 to categorical.070812,
+bypass.070417,state.070956; all CE improvements positive under10k whole-game
+bootstrap. Yet scalar successor MSE worsens8.12%/7.06%/8.26%. Bypass outcome-MSE
+improvement+.203%,95%[-.777%,+1.183%], inconclusive; other arms likewise inconclusive
+at5k. At1k all three significantly worsen outcome MSE about.86–.87%. Sampled-code
+versus mixture CE gap only~3e-6, and state-only reproduces mismatch.
+
+Production uses two-hot scalar V-trace/TD(lambda) return targets, including shifted
+win_returns for imagined values; offline probes distil frozen successor critic
+probabilities. These are different targets/training paths. Categorical outputs are
+not automatically calibrated outcome probabilities. Finite-sample CE improvement
+need not improve scalar mean SSE; do not diagnose all failed probes as inability
+to learn or as independent falsifications of the architecture. Previous measured
+overfitting and action collisions remain; this audit does not establish useful search.
+
+On-policy whole-game deployable lambda=.8 diagnostic is not exact privileged,
+importance-corrected, chunked production target. Bypass5k gain+.194%,95%[-2.512%,
++2.822%], no established benefit. Next proposed bounded control separates scalar
+loss alignment (same successor teacher) from return-target choice, retaining
+state-only/action-conditioned controls before any architecture change. Not launched.
+Local report docs/shared-target-audit-2026-09-08.md; reproducible reads/scripts in
+runtime/target-audit-01889162/, including report.json and uncertainty.json.
+
+## Base-policy sample accounting audit — 2026-09-08
+
+User prioritised base-policy learning efficiency relative to Jaxcalibur's reported
+almost 100M self-play games. Read-only W&B and current-code audit: irqeetfg is
+finished; checkpoint 01889162 records 1,889,162 updates and 385,205,336 frames.
+Current recorded batch size is 4, reuse cap 8. A 1,000-point sampled history has
+median realised replay ratio 8 and median chunk length 29.75; it is not a census.
+Assuming batch size 4 throughout, 7,556,648 chunk draws / eight uses gives about
+944,581 fresh chunks. This is NOT a unique-battle count: long games make multiple
+chunks; mirror self-play contributes both sides, historical opponents only main.
+Do not present the estimate as measured games or infer comparable ladder strength.
+Architecture changes and partial parameter migrations also prevent treating the
+lifetime update count as one fixed-architecture training experiment.
+
+New accounting finding: train_step increments frame_count by (~done).sum(),
+whereas actor terminal padding has done=False. Lattice trimming retains some such
+padding. A 48-row chunk with 29 decisions and terminal at index 29 counts 47 frames,
+not 29. Replay repeats these counts, and nonterminal bootstrap rows count too.
+The actual policy/value objectives use separate cumsum-done/chunk masks; this is
+not evidence those objectives train on padding. frame_count also paces league
+snapshots, so correcting it requires considering pacing and checkpoint continuity,
+not silently relabelling historical totals. No counter or scheduling change made.
+Saved accounting: runtime/base-policy-audit-2026-09-08/accounting.json.
+
+Architecture priorities remain hypotheses: the 09-08 held-game type-accessibility
+read supports testing a small input-row readout connection separately from an
+observed self-play action-effect auxiliary. The 09-02 private/public join finding
+is historical and needs current remeasurement; its gather was previously declined.
+Current transition inputs and base-policy targets stop-gradient; its shared value
+head can train, but transition losses do not directly shape the policy trunk.
+No learner restart, new games, model forward, architecture edit or experiment launch.
+
+## Input-to-readout connection implemented — 2026-09-08
+
+User authorised the connection after the base-policy audit. Encoder now returns
+only the three assembled policy banks beside its unchanged contextual sequence.
+FlatActionReadout.connect_inputs adds input_scale[bank] * original_row to each
+contextual bank: private sheet, move, target. The diagonal scale is f32, cast to
+the activation dtype, zero-initialised, 3 * 256 = 768 parameters under action_head.
+This preserves the existing head's feature coordinates without a new projection
+or loss. At a restored live head, all three banks receive scale gradients
+immediately; with a fresh all-zero head the readout must first leave zero, as
+with its existing bilinear key path. The input connection is policy-only:
+critics and transition dynamics still receive the original trunk output. Search
+root priors/diagnostics use the same connected policy rows as the plain actor.
+
+Config action_head.input_connection=False disables the route and its gradients.
+Old league parameter trees without input_scale retain the original policy;
+ordinary fresh-init/by-path restoration seeds the new leaf at zero. No checkpoint
+rewritten and no training restart. This is a sample-efficiency hypothesis based
+on the recorded held-game attribute-accessibility gap, not an established playing
+strength gain. No action-effect auxiliary, entity-join restoration or loss change.
+Implementation: rl/model/{heads,encoder,player_model,config}.py; focused contracts
+in tests/test_readout_input.py. The end-to-end privileged-partition test now opens
+the readout and input scale so its policy equality cannot rely on the zero gate.
+
+Validation: focused readout/dtype checks and GPU actor/learner equivalence and
+end-to-end privileged-partition checks passed, together with resume-merge tests.
+Zero-scale and legacy-tree tests preserve live logits exactly; all three banks
+have live scale gradients, and opened scales send gradients into input features.
+Focused Black/isort/Ruff and whitespace checks passed. All eight fast search
+tests passed. The real-model search integration initially exhausted GPU memory
+requesting another 4.14 GiB at its default rollout budget. The test now explicitly
+uses two root and two inner chance samples, retaining depth-one/depth-two checks;
+that bounded GPU rerun passed. Production search budgets are unchanged, and this
+does not establish that the full production depth-two budget fits the GPU.
+The final focused readout rerun also passed, including the disabled-gradient
+control. No training-performance claim is made.
+
+## Input-to-readout connection removed — 2026-09-08
+
+User requested removal after reviewing the existing transformer residual path.
+The trunk already returns input plus accumulated residual updates, without a
+final normalisation. The added diagonal connection only reweighted that input
+contribution for the policy; it did not supply an independently readable feature
+bank or repair a missing identity path. Its sample-efficiency benefit was never
+measured: no training run used the 768 new parameters. Removed the connection,
+configuration, encoder/head plumbing and dedicated tests; restored the previous
+privileged-partition test. Preserved pre-existing edits, including transition
+consistency validity, and the independently justified search-test memory bound.
+Local removal handle: runtime/readout-input-removal-2026-09-08/ contains the
+pre-removal tracked diff and dedicated test (the diff also includes the preserved
+transition_cons_valid edit, so do not apply it wholesale). No checkpoint or
+training-process change. This is a user-directed cancellation of an untested
+architecture hypothesis, not evidence that all input readout connections fail.
+Post-removal validation: flat-readout and fast actor-layout tests passed; dtype
+checks passed after completing the removal. Ruff and whitespace checks passed;
+no connection symbols remain in model code or tests. No expensive GPU rerun was
+needed for the restored architecture.
