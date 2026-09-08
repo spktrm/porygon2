@@ -30,6 +30,7 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
 )
 from rl.environment.utils import get_ex_player_step
+from rl.model.categoricals import unimix_probs
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
@@ -56,7 +57,7 @@ from rl.model.heads import (
 from rl.model.mcts import mcts_root
 from rl.model.modules import MLP
 from rl.model.search import SearchBudget, SearchFns, search_diagnostics, search_root
-from rl.model.transition import TransitionModel, unimix_probs
+from rl.model.transition import TransitionModel
 from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params
 
@@ -727,7 +728,7 @@ class Porygon2PlayerModel(nn.Module):
             rows, output.action_head.action_index, action_mask, log_policy
         )
         # (K, T, rows, D): the imagined state after each unroll step.
-        pred = transition.pred
+        pred = transition.steps.pred
         # The successor written once, as a GATHER rather than slice+concat:
         # XLA's fusion emitter mis-typed the concatenated bool mask inside
         # a KL fusion at the live lattice shapes ('scf.if' 1x1x1xi1 vs
@@ -750,7 +751,7 @@ class Porygon2PlayerModel(nn.Module):
                 frozen_v_head, pred[:, :, CLS_ROW]
             )
         transition_value_head_prior = self.v_head.clone().apply(
-            frozen_v_head, transition.pred_prior[:, CLS_ROW]
+            frozen_v_head, transition.first.pred_prior[:, CLS_ROW]
         )
         first = pred[0].astype(jnp.float32)
         error = (first - next_rows.astype(jnp.float32)) ** 2
@@ -765,35 +766,18 @@ class Porygon2PlayerModel(nn.Module):
         # A LABEL-side panel mask (never a model input): the transition
         # brings a row that the trunk zeroed at t into existence at t+1.
         newly_valid = (jnp.logical_not(valid) & next_valid).any(axis=-1)
+        # Every pass-through leaf carries its own name out of the model
+        # (TransitionOutput.exported); only what this method DERIVES is
+        # named here.
         return {
+            **transition.exported(),
             "transition_cons_err": error.sum(axis=-1),
             "transition_cons_scale": jax.lax.stop_gradient(movement.sum(axis=-1)),
             "transition_cons_valid": valid | next_valid,
-            "transition_prior_logits": transition.prior_logits,
-            "transition_post_logits": transition.post_logits,
-            "transition_post_one_hot": transition.post_one_hot,
-            "transition_ground": transition.ground,
-            "transition_ground_prior": transition.ground_prior,
             "transition_value_head": transition_value_head,
             "transition_value_head_prior": transition_value_head_prior,
             "transition_pred_rms": pred_rms,
             "transition_newly_valid": newly_valid,
-            "transition_kind_logits": transition.kind_logits,
-            "transition_done_logit": transition.done_logit,
-            "transition_terminal_logits": transition.terminal_logits,
-            "transition_action_logits": transition.action_logits,
-            "transition_action_cells": transition.action_cells,
-            "transition_action_cell_valid": transition.action_cell_valid,
-            "transition_action_taken_index": transition.action_taken_index,
-            "transition_action_overflow": transition.action_overflow,
-            "transition_action_one_hot": transition.action_one_hot,
-            "transition_generator_logits": transition.generator_logits,
-            "transition_teacher_codes": transition.teacher_codes,
-            "transition_generator_target": transition.generator_target,
-            "transition_support_mask": transition.support_mask,
-            "transition_node_overflow": transition.node_overflow,
-            "transition_align_logits": transition.align_logits,
-            "transition_align_target": transition.align_target,
         }
 
 

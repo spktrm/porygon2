@@ -68,6 +68,7 @@ from scipy.stats import kendalltau  # noqa: E402
 from rl.environment.data import CAT_VF_SUPPORT, CELL_MODALITY_MASK  # noqa: E402
 from rl.environment.protos.features_pb2 import InfoFeature, RequestType  # noqa: E402
 from rl.environment.protos.service_pb2 import ModalityEnum  # noqa: E402
+from rl.model.categoricals import support_set, unimix_probs  # noqa: E402
 from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.constants import (  # noqa: E402
     CLS_ROW,
@@ -79,7 +80,6 @@ from rl.model.constants import (  # noqa: E402
 )
 from rl.model.encoder import Encoder  # noqa: E402
 from rl.model.player_model import get_player_model  # noqa: E402
-from rl.model.transition import support_set, unimix_probs  # noqa: E402
 from rl.offline import harness  # noqa: E402
 from rl.offline.separation_probe import actor_input_of  # noqa: E402
 from rl.offline.trunk_homogeneity import valid_steps  # noqa: E402

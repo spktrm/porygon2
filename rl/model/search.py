@@ -39,8 +39,9 @@ from typing import Callable, NamedTuple
 import jax
 import jax.numpy as jnp
 
+from rl.model.categoricals import unimix_probs
 from rl.model.constants import CLS_ROW
-from rl.model.transition import Candidates, unimix_probs
+from rl.model.transition import Candidates
 from rl.model.utils import legal_log_policy
 
 

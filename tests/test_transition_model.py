@@ -469,7 +469,7 @@ def test_exact_decode_loss_is_conditional_entropy_and_matches_finite_differences
     collapsed stationary point); a distinct one-hot per cell reads near
     0 / log(n) with accuracy ~1 (the unimix floor is the gap); the
     analytic gradient of a random encoder matches central differences."""
-    from rl.model.transition import exact_decode_loss
+    from rl.model.transition_objectives import exact_decode_loss
 
     num_valid, num_codes = 4, 8
     cell_valid = jnp.arange(6) < num_valid
@@ -517,7 +517,7 @@ def test_exact_decode_loss_is_conditional_entropy_and_matches_finite_differences
 
 
 def test_gumbel_top_k_matches_sequential_draws_without_replacement():
-    from rl.model.transition import gumbel_top_k
+    from rl.model.categoricals import gumbel_top_k
 
     probs = np.array([0.5, 0.3, 0.15, 0.05])
     log_probs = jnp.log(jnp.asarray(probs))
@@ -541,7 +541,7 @@ def test_gumbel_top_k_matches_sequential_draws_without_replacement():
 
 
 def test_support_set_is_the_smallest_prefix_holding_the_mass():
-    from rl.model.transition import support_set
+    from rl.model.categoricals import support_set
 
     probs = jnp.asarray([0.05, 0.5, 0.3, 0.1, 0.05])
     assert support_set(probs, 0.79).tolist() == [False, True, True, False, False]
@@ -553,7 +553,7 @@ def test_support_set_is_the_smallest_prefix_holding_the_mass():
 
 
 def test_candidate_targets_exclude_the_prefix_and_the_loss_reads_the_exact_conditional():
-    from rl.model.transition import candidate_loss, candidate_targets
+    from rl.model.transition_objectives import candidate_loss, candidate_targets
 
     p_target = jnp.asarray([0.4, 0.3, 0.2, 0.1, 0.0, 0.0])
     support = jnp.asarray([True, True, True, True, False, False])
@@ -583,7 +583,7 @@ def test_candidate_targets_exclude_the_prefix_and_the_loss_reads_the_exact_condi
     )
     perturbed = candidate_loss(exact_logits.at[1, 2].add(1.0), targets)
     assert float(perturbed.loss) > float(read.loss) + 1e-3
-    from rl.model.transition import masked_log_softmax
+    from rl.model.categoricals import masked_log_softmax
 
     assert (
         float(jnp.exp(masked_log_softmax(exact_logits[1], targets.allowed[1]))[1])
@@ -660,34 +660,48 @@ def test_module_init_is_the_copy_predictor_with_token_conditioning(module_and_pa
     # the prior decode too. The zero row stays zero because the copy
     # holds, not because anything masked it.
     for offset in range(cfg.unroll_steps):
-        np.testing.assert_array_equal(np.asarray(out.pred[offset]), np.asarray(rows))
-    np.testing.assert_array_equal(np.asarray(out.pred_prior), np.asarray(rows))
+        np.testing.assert_array_equal(
+            np.asarray(out.steps.pred[offset]), np.asarray(rows)
+        )
+    np.testing.assert_array_equal(np.asarray(out.first.pred_prior), np.asarray(rows))
     # The grounding head starts AT the copy predictor: zero change.
-    np.testing.assert_array_equal(np.asarray(out.ground), 0.0)
+    np.testing.assert_array_equal(np.asarray(out.first.ground), 0.0)
     num_steps = rows.shape[0]
-    assert out.prior_logits.shape == (
+    assert out.steps.prior_logits.shape == (
         cfg.unroll_steps,
         num_steps,
         cfg.code_groups,
         cfg.code_classes,
     )
-    assert out.prior_logits.dtype == jnp.float32
-    assert out.generator_logits.shape == (
+    assert out.steps.prior_logits.dtype == jnp.float32
+    assert out.nodes.generator_logits.shape == (
         cfg.unroll_steps + 1,
         num_steps,
         cfg.num_candidates,
         cfg.action_classes,
     )
-    assert out.action_logits.shape == (num_steps, cfg.max_cells, cfg.action_classes)
+    assert out.root.action_logits.shape == (
+        num_steps,
+        cfg.max_cells,
+        cfg.action_classes,
+    )
     # One-hot codes, straight-through; the enumeration found every taken
     # cell without overflow.
-    np.testing.assert_allclose(np.asarray(out.post_one_hot).sum(-1), 1.0, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(out.action_one_hot).sum(-1), 1.0, atol=1e-6)
-    assert not bool(out.action_overflow.any()) and not bool(out.node_overflow.any())
-    assert out.action_taken_index.tolist() == [0, 2, 4]
+    np.testing.assert_allclose(
+        np.asarray(out.steps.post_one_hot).sum(-1), 1.0, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        np.asarray(out.steps.action_one_hot).sum(-1), 1.0, atol=1e-6
+    )
+    assert not bool(out.root.action_overflow.any()) and not bool(
+        out.nodes.node_overflow.any()
+    )
+    assert out.root.action_taken_index.tolist() == [0, 2, 4]
     # The latent target is a distribution; the teacher order is distinct.
-    np.testing.assert_allclose(np.asarray(out.generator_target).sum(-1), 1.0, atol=1e-5)
-    for node in np.asarray(out.teacher_codes).reshape(-1, cfg.num_candidates):
+    np.testing.assert_allclose(
+        np.asarray(out.nodes.generator_target).sum(-1), 1.0, atol=1e-5
+    )
+    for node in np.asarray(out.nodes.teacher_codes).reshape(-1, cfg.num_candidates):
         assert len(set(node.tolist())) == cfg.num_candidates
 
 
@@ -721,24 +735,27 @@ def test_imagine_has_no_validity_or_legality_input(module_and_params):
     moved_rows = rows.at[1:].set(other[1:])
     moved = apply(params, moved_rows, cells, legal, log_policy)
     assert not np.array_equal(
-        np.asarray(base.post_logits[0, 0]), np.asarray(moved.post_logits[0, 0])
+        np.asarray(base.steps.post_logits[0, 0]),
+        np.asarray(moved.steps.post_logits[0, 0]),
     )
-    for leaf in ("action_logits", "pred_prior"):
+    for group, leaf in (("root", "action_logits"), ("first", "pred_prior")):
         np.testing.assert_array_equal(
-            np.asarray(getattr(base, leaf)[0]), np.asarray(getattr(moved, leaf)[0])
+            np.asarray(getattr(getattr(base, group), leaf)[0]),
+            np.asarray(getattr(getattr(moved, group), leaf)[0]),
         )
     np.testing.assert_array_equal(
-        np.asarray(base.prior_logits[0, 0]), np.asarray(moved.prior_logits[0, 0])
+        np.asarray(base.steps.prior_logits[0, 0]),
+        np.asarray(moved.steps.prior_logits[0, 0]),
     )
     np.testing.assert_array_equal(
-        np.asarray(base.generator_logits[0, 0]),
-        np.asarray(moved.generator_logits[0, 0]),
+        np.asarray(base.nodes.generator_logits[0, 0]),
+        np.asarray(moved.nodes.generator_logits[0, 0]),
     )
     # Positive control for the encoder: it reads the taken cell.
     other_cells = jnp.asarray([1, 8, 0])
     moved = apply(params, rows, other_cells, legal, log_policy)
     assert not np.array_equal(
-        np.asarray(base.align_logits[0]), np.asarray(moved.align_logits[0])
+        np.asarray(base.nodes.align_logits[0]), np.asarray(moved.nodes.align_logits[0])
     )
 
 
@@ -755,10 +772,12 @@ def test_posterior_reads_a_row_that_appears_at_t_plus_one(module_and_params):
     on_row_5 = apply(params, rows.at[1, 5].set(delta), cells, legal, log_policy)
     on_row_9 = apply(params, rows.at[1, 9].add(delta), cells, legal, log_policy)
     assert not np.array_equal(
-        np.asarray(base.post_logits[0, 0]), np.asarray(on_row_5.post_logits[0, 0])
+        np.asarray(base.steps.post_logits[0, 0]),
+        np.asarray(on_row_5.steps.post_logits[0, 0]),
     )
     assert not np.array_equal(
-        np.asarray(on_row_5.post_logits[0, 0]), np.asarray(on_row_9.post_logits[0, 0])
+        np.asarray(on_row_5.steps.post_logits[0, 0]),
+        np.asarray(on_row_9.steps.post_logits[0, 0]),
     )
 
 
@@ -808,7 +827,7 @@ def test_dynamics_out_proj_is_the_single_zero_factor(module_and_params):
     probe = jax.random.normal(jax.random.PRNGKey(3), inputs[0].shape)
 
     def imagined_energy(params):
-        return jnp.sum(module.apply(params, *inputs).pred[0] * probe)
+        return jnp.sum(module.apply(params, *inputs).steps.pred[0] * probe)
 
     grads = jax.jit(jax.grad(imagined_energy))(params)["params"]
     # Fresh: out_proj's gradient is live (one zero factor over live
@@ -836,16 +855,19 @@ def test_zero_row_at_t_is_imagined_from_the_slot_embedding(module_and_params):
     opened = open_zero_init_paths(params, ["dynamics_out_proj"])
     both_zero = rows.at[:, 6].set(0.0)
     out = apply(opened, both_zero, cells, legal, log_policy)
-    imagined_5 = np.asarray(out.pred[0, :, 5])
+    imagined_5 = np.asarray(out.steps.pred[0, :, 5])
     assert np.abs(imagined_5).max() > 0.0
     other = both_zero.at[:, 2].add(1.0)
     moved = apply(opened, other, cells, legal, log_policy)
-    assert not np.array_equal(imagined_5, np.asarray(moved.pred[0, :, 5]))
-    assert not np.array_equal(imagined_5, np.asarray(out.pred[0, :, 6]))
+    assert not np.array_equal(imagined_5, np.asarray(moved.steps.pred[0, :, 5]))
+    assert not np.array_equal(imagined_5, np.asarray(out.steps.pred[0, :, 6]))
 
     def row_energy(params):
         return jnp.sum(
-            module.apply(params, both_zero, cells, legal, log_policy).pred[0, :, 5] ** 2
+            module.apply(params, both_zero, cells, legal, log_policy).steps.pred[
+                0, :, 5
+            ]
+            ** 2
         )
 
     grads = jax.jit(jax.grad(row_energy))(opened)["params"]
@@ -858,7 +880,7 @@ def test_zero_row_at_t_is_imagined_from_the_slot_embedding(module_and_params):
     )
     same = apply(no_identity, both_zero, cells, legal, log_policy)
     np.testing.assert_array_equal(
-        np.asarray(same.pred[0, :, 5]), np.asarray(same.pred[0, :, 6])
+        np.asarray(same.steps.pred[0, :, 5]), np.asarray(same.steps.pred[0, :, 6])
     )
 
 
@@ -873,31 +895,37 @@ def test_unroll_recomputes_the_encoder_and_the_posterior_at_the_imagined_state(
     rows, cells, legal, log_policy = inputs
     opened = open_zero_init_paths(params, ["dynamics_out_proj"])
     out = apply(opened, *inputs)
-    imagined = out.pred[0, 0]
+    imagined = out.steps.pred[0, 0]
     assert not np.array_equal(np.asarray(imagined), np.asarray(rows[1]))
     # The unrolled trace and the standalone method are different
     # executables (TF32 matmuls on the GPU): agreement to ~1e-2, never
     # bitwise; the real-state control differs by O(1).
     recomputed = module.apply(opened, imagined, cells[1], method="action_logits")
     np.testing.assert_allclose(
-        np.asarray(out.align_logits[1, 0]), np.asarray(recomputed), rtol=2e-2, atol=1e-2
+        np.asarray(out.nodes.align_logits[1, 0]),
+        np.asarray(recomputed),
+        rtol=2e-2,
+        atol=1e-2,
     )
     real = module.apply(opened, rows[1], cells[1], method="action_logits")
     assert not np.allclose(
-        np.asarray(out.align_logits[1, 0]), np.asarray(real), rtol=2e-2, atol=1e-2
+        np.asarray(out.nodes.align_logits[1, 0]), np.asarray(real), rtol=2e-2, atol=1e-2
     )
     # The alignment TARGET is the real-state distribution (sg), which the
     # root node of start step 1 also carries.
     np.testing.assert_allclose(
-        np.asarray(out.align_target[1, 0]),
-        np.asarray(out.align_target[0, 1]),
+        np.asarray(out.nodes.align_target[1, 0]),
+        np.asarray(out.nodes.align_target[0, 1]),
         rtol=1e-6,
     )
     posterior = module.apply(
-        opened, imagined, out.action_one_hot[1, 0], rows[2], method="posterior"
+        opened, imagined, out.steps.action_one_hot[1, 0], rows[2], method="posterior"
     )
     np.testing.assert_allclose(
-        np.asarray(out.post_logits[1, 0]), np.asarray(posterior), rtol=2e-2, atol=1e-2
+        np.asarray(out.steps.post_logits[1, 0]),
+        np.asarray(posterior),
+        rtol=2e-2,
+        atol=1e-2,
     )
 
 
@@ -906,10 +934,12 @@ def test_unroll_steps_one_is_the_single_step_model(module_and_params):
     single, _ = _module(unroll_steps=1)
     out = apply(params, *inputs)
     once = jax.jit(single.apply)(params, *inputs)
-    assert once.pred.shape[0] == 1 and once.generator_logits.shape[0] == 2
-    np.testing.assert_array_equal(np.asarray(once.pred[0]), np.asarray(out.pred[0]))
+    assert once.steps.pred.shape[0] == 1 and once.nodes.generator_logits.shape[0] == 2
     np.testing.assert_array_equal(
-        np.asarray(once.action_logits), np.asarray(out.action_logits)
+        np.asarray(once.steps.pred[0]), np.asarray(out.steps.pred[0])
+    )
+    np.testing.assert_array_equal(
+        np.asarray(once.root.action_logits), np.asarray(out.root.action_logits)
     )
 
 
@@ -919,26 +949,26 @@ def test_module_samples_only_under_a_sampling_rng(module_and_params):
     argmax, the deterministic top-J teacher order; with one it draws, so
     the decoded codes are not always the mode and the key is split per
     step."""
-    from rl.model.transition import gumbel_top_k, unimix_probs
+    from rl.model.categoricals import gumbel_top_k, unimix_probs
 
     module, cfg, params, apply, inputs = module_and_params
     mode = apply(params, *inputs)
     np.testing.assert_array_equal(
-        np.asarray(mode.post_one_hot.argmax(-1)),
-        np.asarray(mode.post_logits.argmax(-1)),
+        np.asarray(mode.steps.post_one_hot.argmax(-1)),
+        np.asarray(mode.steps.post_logits.argmax(-1)),
     )
     np.testing.assert_array_equal(
-        np.asarray(mode.action_one_hot[0].argmax(-1)),
-        np.asarray(unimix_probs(mode.align_logits[0]).argmax(-1)),
+        np.asarray(mode.steps.action_one_hot[0].argmax(-1)),
+        np.asarray(unimix_probs(mode.nodes.align_logits[0]).argmax(-1)),
     )
     for step in range(3):
         np.testing.assert_array_equal(
-            np.asarray(mode.teacher_codes[0, step]),
+            np.asarray(mode.nodes.teacher_codes[0, step]),
             np.asarray(
                 gumbel_top_k(
                     jnp.where(
-                        mode.support_mask[0, step],
-                        jnp.log(mode.generator_target[0, step]),
+                        mode.nodes.support_mask[0, step],
+                        jnp.log(mode.nodes.generator_target[0, step]),
                         -jnp.inf,
                     ),
                     cfg.num_candidates,
@@ -954,23 +984,25 @@ def test_module_samples_only_under_a_sampling_rng(module_and_params):
     for seed in range(48):
         drawn = apply(params, *inputs, rngs={"sampling": jax.random.PRNGKey(seed)})
         np.testing.assert_allclose(
-            np.asarray(drawn.action_logits),
-            np.asarray(mode.action_logits),
+            np.asarray(drawn.root.action_logits),
+            np.asarray(mode.root.action_logits),
             rtol=1e-4,
             atol=1e-5,
         )
         is_mode.append(
             np.asarray(
-                drawn.post_one_hot[0].argmax(-1) == mode.post_logits[0].argmax(-1)
+                drawn.steps.post_one_hot[0].argmax(-1)
+                == mode.steps.post_logits[0].argmax(-1)
             )
         )
     is_mode = np.stack(is_mode)
     assert 0.0 < is_mode.mean() < 0.5
     drawn = apply(params, *inputs, rngs={"sampling": jax.random.PRNGKey(0)})
-    classes = np.asarray(drawn.post_one_hot[0].argmax(-1))
+    classes = np.asarray(drawn.steps.post_one_hot[0].argmax(-1))
     assert len({tuple(row) for row in classes}) > 1
     assert not np.array_equal(
-        np.asarray(drawn.teacher_codes[0]), np.asarray(mode.teacher_codes[0])
+        np.asarray(drawn.nodes.teacher_codes[0]),
+        np.asarray(mode.nodes.teacher_codes[0]),
     )
 
 
@@ -1021,13 +1053,15 @@ def test_code_groups_zero_drops_the_chance_path_only():
         "posterior_latent_net",
     }
     out = jax.jit(module.apply)(params, *inputs)
-    assert out.prior_logits.shape == (2, 2, 0, cfg.code_classes)
-    np.testing.assert_array_equal(np.asarray(out.pred[0]), np.asarray(inputs[0]))
+    assert out.steps.prior_logits.shape == (2, 2, 0, cfg.code_classes)
+    np.testing.assert_array_equal(np.asarray(out.steps.pred[0]), np.asarray(inputs[0]))
     # Without a chance code the sequence through g is rows + one token.
     with_rng = jax.jit(module.apply)(
         params, *inputs, rngs={"sampling": jax.random.PRNGKey(0)}
     )
-    np.testing.assert_array_equal(np.asarray(with_rng.pred), np.asarray(out.pred))
+    np.testing.assert_array_equal(
+        np.asarray(with_rng.steps.pred), np.asarray(out.steps.pred)
+    )
 
 
 # ---- the loss bracket ------------------------------------------------
@@ -1052,7 +1086,7 @@ def _value_head_from_logits(logits):
 
 def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None):
     from rl.environment.data import CAT_VF_SUPPORT
-    from rl.model.transition import support_set
+    from rl.model.categoricals import support_set
 
     if n_bins is None:
         n_bins = len(CAT_VF_SUPPORT)
@@ -1485,7 +1519,7 @@ def test_generator_loss_reaches_every_node_and_reads_the_exact_conditional():
     generator whose logits ARE the log conditional targets scores a KL
     of exactly 0 on every occupied slot (the loss is then the targets'
     entropy)."""
-    from rl.model.transition import candidate_targets
+    from rl.model.transition_objectives import candidate_targets
 
     inputs = _bracket_inputs()
     pred = inputs["pred"]
@@ -1774,3 +1808,69 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
     for expected in ("encoder", "action_head", "v_head"):
         assert expected in control, expected
     assert "transition" not in control
+
+
+def test_exported_leaves_match_the_actor_output_dataclass():
+    """The `transition_*` identity is written ONCE, in
+    TransitionOutput.exported. This pins it against PlayerActorOutput: a
+    field added to one side and not the other fails here rather than at the
+    next learner launch."""
+    from rl.model.transition import (
+        INTERNAL_LEAVES,
+        FirstStepOutputs,
+        NodeOutputs,
+        RootOutputs,
+        StepOutputs,
+        TransitionOutput,
+    )
+
+    # The leaves player_model._forward_transition DERIVES rather than
+    # passes through -- everything else must come from exported().
+    derived = {
+        "transition_cons_err",
+        "transition_cons_scale",
+        "transition_cons_valid",
+        "transition_value_head",
+        "transition_value_head_prior",
+        "transition_pred_rms",
+        "transition_newly_valid",
+    }
+    marker = jnp.zeros(())
+    output = jax.tree.map(
+        lambda _: marker,
+        TransitionOutput(
+            root=RootOutputs(*[None] * len(RootOutputs._fields)),
+            nodes=NodeOutputs(*[None] * len(NodeOutputs._fields)),
+            steps=StepOutputs(*[None] * len(StepOutputs._fields)),
+            first=FirstStepOutputs(*[None] * len(FirstStepOutputs._fields)),
+        ),
+        is_leaf=lambda leaf: leaf is None,
+    )
+    exported = set(output.exported())
+    declared = {f.name for f in dataclasses.fields(PlayerActorOutput)}
+    assert exported <= declared, exported - declared
+    transition_fields = {name for name in declared if name.startswith("transition_")}
+    assert transition_fields == exported | derived
+
+    # The internal states are the ONLY leaves held back.
+    held_back = set()
+    for group in output:
+        held_back |= {
+            name for name in type(group)._fields if f"transition_{name}" not in exported
+        }
+    assert held_back == set(INTERNAL_LEAVES)
+
+    # The learner's batch vmap places B after the offset axis on exactly
+    # the node and step leaves, plus the value head read off the imagined
+    # states -- derived from the same grouping.
+    offset_leading = {
+        f"transition_{name}"
+        for group in (NodeOutputs, StepOutputs)
+        for name in group._fields
+        if name not in INTERNAL_LEAVES
+    } | {"transition_value_head"}
+    assert set(PlayerActorOutput.OFFSET_LEADING_LEAVES) == offset_leading
+
+    # Positive control: the checks above are not vacuous.
+    assert not (exported | {"transition_not_a_field"}) <= declared
+    assert transition_fields != (exported | derived) - {"transition_ground"}

@@ -155,7 +155,7 @@ def _probe_forward(module, actor_input, actor_output):
         jnp.concatenate((policy_rows[1:], policy_rows[-1:]), axis=0),
         jnp.concatenate((policy_valid[1:], policy_valid[-1:]), axis=0),
     )
-    pred = transition.ground_prior
+    pred = transition.first.ground_prior
     matched, next_index = jax.vmap(dynamics_alignment)(
         jax.tree.map(lambda leaf: leaf[:-1], env),
         jax.tree.map(lambda leaf: leaf[1:], env),

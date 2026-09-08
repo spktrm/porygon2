@@ -255,6 +255,10 @@ class PlayerActorOutput:
     # The transition leaves whose FIRST axis is the unroll offset (K
     # transitions or K+1 nodes) ahead of the trajectory axis T: the
     # learner's batch vmap must place B after T on these, at axis 2.
+    # This is exactly transition.NodeOutputs + StepOutputs (plus the value
+    # head read off the imagined states) -- the environment layer does not
+    # import the model, so the two are held together by
+    # tests/test_transition_model.py rather than by a shared derivation.
     OFFSET_LEADING_LEAVES = (
         "transition_prior_logits",
         "transition_post_logits",

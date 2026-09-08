@@ -21,6 +21,7 @@ from rl.environment.protos.features_pb2 import (
     FieldFeature,
     InfoFeature,
 )
+from rl.model.categoricals import unimix_probs
 from rl.model.constants import (
     DYNAMICS_GROUP_SLICES,
     LEARNER_ONLY_GROUPS,
@@ -32,11 +33,10 @@ from rl.model.heads import HeadParams
 from rl.model.history_encoder import major_arg_step_mask
 from rl.model.player_model import dynamics_alignment
 from rl.model.state_features import REVEALED_ID_COLUMNS, hp_input_rows
-from rl.model.transition import (
+from rl.model.transition_objectives import (
     candidate_loss,
     candidate_targets,
     exact_decode_loss,
-    unimix_probs,
 )
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState

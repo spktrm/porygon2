@@ -60,6 +60,7 @@ from rl.environment.protos.features_pb2 import (  # noqa: E402
     FieldFeature,
     InfoFeature,
 )
+from rl.model.categoricals import unimix_probs  # noqa: E402
 from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.constants import POLICY_READABLE_ROWS, SEQUENCE_READ_MASK  # noqa: E402
 from rl.model.encoder import Encoder  # noqa: E402
@@ -69,7 +70,6 @@ from rl.model.history_encoder import (  # noqa: E402
     source_rows,
 )
 from rl.model.player_model import get_player_model  # noqa: E402
-from rl.model.transition import unimix_probs  # noqa: E402
 from rl.offline import harness  # noqa: E402
 from rl.offline.separation_probe import actor_input_of  # noqa: E402
 from rl.offline.trunk_homogeneity import valid_steps  # noqa: E402

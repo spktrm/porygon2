@@ -56,6 +56,15 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.data import CAT_VF_SUPPORT
+from rl.model.categoricals import (
+    NEGATIVE_INFINITY_LOGIT,
+    draw_or_mode,
+    gumbel_top_k,
+    masked_log_softmax,
+    straight_through_sample,
+    support_set,
+    unimix_probs,
+)
 from rl.model.constants import (
     CLS_ROW,
     DYNAMICS_TARGET_ROWS,
@@ -67,11 +76,6 @@ from rl.model.constants import (
 from rl.model.heads import chosen_bank_rows
 from rl.model.modules import FFWMLP, MLP, MultiHeadAttention, RMSNorm
 from rl.model.trunk import Trunk
-
-# The 1% unimix floor DreamerV3 puts under every categorical: the KL can
-# never see a zero, and the straight-through sample keeps a gradient.
-UNIMIX = 0.01
-NEGATIVE_INFINITY_LOGIT = -1e9
 
 
 class RealState(NamedTuple):
@@ -113,21 +117,20 @@ class Candidates(NamedTuple):
     retained_mass: jax.Array
 
 
-class TransitionOutput(NamedTuple):
-    """The K-step unroll's outputs. `nodes` have a leading (K + 1) axis
-    over the states hhat_0 = h_t (real) .. hhat_K; `transitions` a leading
-    K axis over the steps hhat_k -> hhat_{k+1}, each paired with the real
-    step t + k + 1; the real-state leaves (`action_*`) describe h_t's
-    legal set through the encoder. After the parent's vmap every leaf
-    also carries the trajectory axis T after the offset axis."""
+class RootOutputs(NamedTuple):
+    """The OBSERVED root state h_t's legal set through the action encoder.
+    One per start step: leading axis T."""
 
-    # Observed root state (h_t).
     action_logits: jax.Array
     action_cells: jax.Array
     action_cell_valid: jax.Array
     action_taken_index: jax.Array
     action_overflow: jax.Array
-    # Nodes hhat_0 .. hhat_K.
+
+
+class NodeOutputs(NamedTuple):
+    """The readers at every node hhat_0 .. hhat_K: leading axis K + 1."""
+
     generator_logits: jax.Array
     teacher_codes: jax.Array
     generator_target: jax.Array
@@ -135,7 +138,12 @@ class TransitionOutput(NamedTuple):
     node_overflow: jax.Array
     align_logits: jax.Array
     align_target: jax.Array
-    # Transitions hhat_k -> hhat_{k+1}.
+
+
+class StepOutputs(NamedTuple):
+    """The transitions hhat_k -> hhat_{k+1}, each paired with the real step
+    t + k + 1: leading axis K."""
+
     action_one_hot: jax.Array
     pred: jax.Array
     prior_logits: jax.Array
@@ -144,46 +152,70 @@ class TransitionOutput(NamedTuple):
     kind_logits: jax.Array
     done_logit: jax.Array
     terminal_logits: jax.Array
-    # The first transition only: the prior-MODE decode (no gradient) and
-    # the grounding reads.
+
+
+class FirstStepOutputs(NamedTuple):
+    """The first transition only: the prior-MODE decode (no gradient) and
+    the grounding reads off it. No offset axis."""
+
     pred_prior: jax.Array
     ground: jax.Array
     ground_prior: jax.Array
+
+
+# The two leaves that never leave the model: the parent reads the imagined
+# STATES for the value head, the consistency error and the rms panel, and
+# exports what it derives from them, not the states themselves.
+INTERNAL_LEAVES = frozenset({"pred", "pred_prior"})
+
+
+class TransitionOutput(NamedTuple):
+    """The K-step unroll's outputs, in the four groups that share a leading
+    axis. After the parent's vmap every leaf also carries the trajectory
+    axis T, at the position `VMAP_AXES` gives for its group -- so a node or
+    step leaf reads (offset, T, ...) and a root leaf (T, ...)."""
+
+    root: RootOutputs
+    nodes: NodeOutputs
+    steps: StepOutputs
+    first: FirstStepOutputs
+
+    def exported(self) -> dict[str, jax.Array]:
+        """The leaves that leave the model as `PlayerActorOutput`'s
+        `transition_*` fields, with the prefix applied in ONE place --
+        `player_model._forward_transition` adds only what it derives. Pinned
+        against the dataclass by tests/test_transition_model.py."""
+        return {
+            f"transition_{name}": leaf
+            for group in self
+            for name, leaf in zip(type(group)._fields, group)
+            if name not in INTERNAL_LEAVES
+        }
+
+
+# The vmap axis the trajectory axis T takes in each group, written once
+# here instead of once per field: a group is exactly the set of leaves
+# that share one.
+VMAP_AXES = TransitionOutput(root=0, nodes=1, steps=1, first=0)
+
+
+class StepLatents(NamedTuple):
+    """One imagined step's latents and the state g wrote under them.
+    `pred_prior` is the prior-MODE decode, present on the first transition
+    only (`with_prior_decode`) and None elsewhere -- it never leaves
+    `_unroll`, which reads it into `FirstStepOutputs`."""
+
+    pred: jax.Array
+    pred_prior: jax.Array | None
+    prior_logits: jax.Array
+    post_logits: jax.Array
+    post_one_hot: jax.Array
 
 
 class NodeReadout(NamedTuple):
     kind_logits: jax.Array
     done_logit: jax.Array
     terminal_logits: jax.Array
-
-
-def unimix_probs(logits: jax.Array) -> jax.Array:
-    """f32 softmax over the last axis with the unimix floor."""
-    probs = jax.nn.softmax(logits.astype(jnp.float32), axis=-1)
-    return (1.0 - UNIMIX) * probs + UNIMIX / logits.shape[-1]
-
-
-def straight_through_sample(probs: jax.Array, rng: jax.Array | None) -> jax.Array:
-    """One-hot forward, the probabilities' gradient backward. With a key the
-    forward is a categorical DRAW from `probs` (the unimix floor is what
-    makes every class reachable), so every class the posterior gives mass
-    to is decoded and trained through the decode; without one it is the
-    argmax -- the mode decode, which under straight-through only ever
-    decodes each group's leading class and lets the rest die (usage
-    perplexity pinned ~2.6 of 16 for 400k steps)."""
-    if rng is None:
-        index = jnp.argmax(probs, axis=-1)
-    else:
-        index = jax.random.categorical(rng, jnp.log(probs), axis=-1)
-    hard = jax.nn.one_hot(index, probs.shape[-1], dtype=probs.dtype)
-    return hard + probs - jax.lax.stop_gradient(probs)
-
-
-def masked_log_softmax(logits: jax.Array, allowed: jax.Array) -> jax.Array:
-    """log-softmax over the allowed entries (f32); the others read the
-    floor logit's log-probability, which a zero target multiplies to 0."""
-    masked = jnp.where(allowed, logits.astype(jnp.float32), NEGATIVE_INFINITY_LOGIT)
-    return jax.nn.log_softmax(masked, axis=-1)
 
 
 def legal_enumeration(legal: jax.Array, taken_cell: jax.Array, max_cells: int):
@@ -203,122 +235,17 @@ def legal_enumeration(legal: jax.Array, taken_cell: jax.Array, max_cells: int):
     return cells, cell_valid, taken_index, overflow
 
 
-class DecodeRead(NamedTuple):
-    """The exact action-discrimination objective (plan §4) at one state:
-    `loss` = H_w(A | U, h) under uniform reference weights over the legal
-    cells, `mutual_information` = log(n) - loss, `accuracy` the expected
-    top-1 decode of the taken cell over u ~ q(. | h, a), `num_valid` n."""
-
-    loss: jax.Array
-    mutual_information: jax.Array
-    accuracy: jax.Array
-    num_valid: jax.Array
+def _stack(entries: list) -> NamedTuple:
+    """Stack a list of same-typed NamedTuples leafwise onto a new leading
+    offset axis, keeping the type."""
+    return jax.tree.map(lambda *leaves: jnp.stack(leaves), *entries)
 
 
-def exact_decode_loss(encoder_logits: jax.Array, cell_valid: jax.Array) -> DecodeRead:
-    """L(h) = -sum_a w(a) sum_u q_a(u) log D_w(a | u), D_w(a | u) =
-    w(a) q_a(u) / sum_a' w(a') q_a'(u), w uniform over the valid cells,
-    q the unimix'd encoder distribution -- summed EXACTLY over every code
-    (no sampled straight-through term: that drops the derivative of the
-    sampling distribution). Stable log-space throughout; an empty legal
-    set reads 0 on every field."""
-    num_valid = cell_valid.sum()
-    log_q = jnp.log(unimix_probs(encoder_logits))
-    log_weight = jnp.where(
-        cell_valid,
-        -jnp.log(jnp.maximum(num_valid, 1).astype(jnp.float32)),
-        NEGATIVE_INFINITY_LOGIT,
-    )
-    joint = log_weight[:, None] + log_q
-    log_mixture = jax.nn.logsumexp(joint, axis=0)
-    log_decode = joint - log_mixture[None]
-    weight = jnp.exp(log_weight)
-    probs = jnp.exp(log_q)
-    loss = -jnp.sum(weight[:, None] * probs * log_decode, where=cell_valid[:, None])
-    decoded = jnp.argmax(jnp.where(cell_valid[:, None], joint, -jnp.inf), axis=0)
-    hit = decoded[None, :] == jnp.arange(cell_valid.shape[0])[:, None]
-    accuracy = jnp.sum(weight[:, None] * probs * hit, where=cell_valid[:, None])
-    log_num = jnp.log(jnp.maximum(num_valid, 1).astype(jnp.float32))
-    nonempty = num_valid > 0
-    return DecodeRead(
-        loss=jnp.where(nonempty, loss, 0.0),
-        mutual_information=jnp.where(nonempty, log_num - loss, 0.0),
-        accuracy=jnp.where(nonempty, accuracy, 0.0),
-        num_valid=num_valid,
-    )
-
-
-def support_set(probs: jax.Array, mass_threshold: float) -> jax.Array:
-    """The smallest descending-probability prefix whose cumulative mass
-    reaches `mass_threshold`, as a boolean mask over the alphabet; ties
-    resolve by index (stable sort)."""
-    order = jnp.argsort(-probs, stable=True)
-    sorted_probs = probs[order]
-    exclusive = jnp.cumsum(sorted_probs) - sorted_probs
-    keep_sorted = exclusive < mass_threshold
-    return jnp.zeros_like(probs, dtype=bool).at[order].set(keep_sorted)
-
-
-def gumbel_top_k(log_probs: jax.Array, num_draws: int, rng: jax.Array | None):
-    """Kool et al. 2019: the top-k of log p + Gumbel noise is k sequential
-    draws without replacement from p (the Plackett-Luce ordering);
-    without a key it is the deterministic top-k. -inf entries are never
-    drawn ahead of finite ones."""
-    perturbed = log_probs
-    if rng is not None:
-        perturbed = log_probs + jax.random.gumbel(rng, log_probs.shape)
-    return jax.lax.top_k(perturbed, num_draws)[1]
-
-
-class CandidateTargets(NamedTuple):
-    allowed: jax.Array
-    targets: jax.Array
-    occupied: jax.Array
-
-
-def candidate_targets(
-    p_target: jax.Array, teacher_codes: jax.Array, support_mask: jax.Array
-) -> CandidateTargets:
-    """Teacher-forced targets for the J candidate slots: slot 0 is trained
-    on the FULL p_target so the first conditional stays a calibrated
-    prior; slot j > 0 on p_target renormalised over the support minus the
-    prefix drawn before it (exact Plackett-Luce conditionals). A slot is
-    occupied when its teacher code lies in the support (slot 0 always)."""
-    num_draws, num_codes = teacher_codes.shape[0], p_target.shape[0]
-    one_hot = jax.nn.one_hot(teacher_codes, num_codes, dtype=jnp.float32)
-    drawn_before = (jnp.cumsum(one_hot, axis=0) - one_hot) > 0.5
-    first = jnp.arange(num_draws)[:, None] == 0
-    allowed = first | (support_mask[None] & jnp.logical_not(drawn_before))
-    targets = p_target[None] * allowed
-    targets = targets / jnp.maximum(targets.sum(-1, keepdims=True), 1e-8)
-    occupied = support_mask[teacher_codes].at[0].set(True)
-    return CandidateTargets(allowed=allowed, targets=targets, occupied=occupied)
-
-
-class CandidateLoss(NamedTuple):
-    loss: jax.Array
-    cross_entropy: jax.Array
-    target_entropy: jax.Array
-
-
-def candidate_loss(logits: jax.Array, targets: CandidateTargets) -> CandidateLoss:
-    """Per node: the first slot's CE weighted once and the mean of the
-    later occupied slots' CEs weighted once, averaged; one occupied slot
-    reads the first CE alone. `cross_entropy - target_entropy` per slot
-    is the KL, the read (CE < log C says nothing)."""
-    log_probs = masked_log_softmax(logits, targets.allowed)
-    cross_entropy = -(targets.targets * log_probs).sum(-1)
-    safe_log = jnp.log(jnp.maximum(targets.targets, 1e-8))
-    target_entropy = -(targets.targets * safe_log).sum(-1)
-    later = targets.occupied & (jnp.arange(logits.shape[0]) > 0)
-    later_count = later.sum()
-    later_mean = jnp.sum(cross_entropy, where=later) / jnp.maximum(later_count, 1)
-    loss = jnp.where(
-        later_count > 0, 0.5 * (cross_entropy[0] + later_mean), cross_entropy[0]
-    )
-    return CandidateLoss(
-        loss=loss, cross_entropy=cross_entropy, target_entropy=target_entropy
-    )
+def _gather_offsets(leaf: jax.Array, offsets: list[jax.Array]) -> jax.Array:
+    """(T, ...) -> (K + 1, T, ...): the real step each offset reads, one
+    take per offset. The last step reads itself; the loss masks the
+    out-of-range offsets."""
+    return jnp.stack([jnp.take(leaf, index, axis=0) for index in offsets])
 
 
 class RowRead(nn.Module):
@@ -356,7 +283,7 @@ class ActionEncoder(nn.Module):
         query = nn.Dense(model_size, dtype=self.dtype, name="query_proj")(
             jnp.concatenate((src_row, tgt_row), axis=-1)
         )
-        attended = MultiHeadAttention(
+        read = MultiHeadAttention(
             name="read",
             num_heads=self.cfg.num_heads,
             qk_size=self.cfg.qk_size,
@@ -365,13 +292,12 @@ class ActionEncoder(nn.Module):
             qk_layer_norm=self.cfg.qk_layer_norm,
             use_bias=self.cfg.use_bias,
             dtype=self.dtype,
-        )(
+        )
+        attended = read(
             q=RMSNorm()(query)[None],
             kv=RMSNorm()(rows),
             mask=jnp.ones((1, rows.shape[0]), bool),
-        )[
-            0
-        ]
+        )[0]
         return MLP(**self.cfg.mlp.to_dict())(
             jnp.concatenate((query, attended), axis=-1)
         )
@@ -643,10 +569,7 @@ class TransitionModel(nn.Module):
             allowed = support & jnp.logical_not(drawn)
             allowed = jnp.where(allowed.any(), allowed, jnp.logical_not(drawn))
             log_conditional = masked_log_softmax(logits, allowed)
-            if keys[slot] is None:
-                index = jnp.argmax(log_conditional)
-            else:
-                index = jax.random.categorical(keys[slot], log_conditional)
+            index = draw_or_mode(log_conditional, keys[slot])
             codes = codes.at[slot].set(index)
             drawn = drawn.at[index].set(True)
             log_draws.append(log_conditional[index])
@@ -743,7 +666,11 @@ class TransitionModel(nn.Module):
         next_rows: jax.Array,
         rng: jax.Array | None,
         with_prior_decode: bool,
-    ):
+    ) -> StepLatents:
+        """One imagined step off `state` along `action_one_hot`: the chance
+        code inferred by the posterior from the real next rows, and the
+        state g writes under it. Without a code the latents read zero and g
+        runs on the action token alone."""
         code_shape = (self.cfg.code_groups, self.cfg.code_classes)
         pred_prior = None
         if self.has_code:
@@ -753,7 +680,9 @@ class TransitionModel(nn.Module):
             pred = self.imagine(state, action_one_hot, post_one_hot)
             if with_prior_decode:
                 prior_mode = jax.nn.one_hot(
-                    jnp.argmax(prior_logits, axis=-1), code_shape[1], dtype=jnp.float32
+                    jnp.argmax(prior_logits, axis=-1),
+                    self.cfg.code_classes,
+                    dtype=jnp.float32,
                 )
                 pred_prior = jax.lax.stop_gradient(
                     self.imagine(
@@ -767,7 +696,13 @@ class TransitionModel(nn.Module):
             pred = self.imagine(state, action_one_hot, None)
             if with_prior_decode:
                 pred_prior = jax.lax.stop_gradient(pred)
-        return pred, pred_prior, prior_logits, post_logits, post_one_hot
+        return StepLatents(
+            pred=pred,
+            pred_prior=pred_prior,
+            prior_logits=prior_logits,
+            post_logits=post_logits,
+            post_one_hot=post_one_hot,
+        )
 
     def _unroll(self, real_rows, reals: RealState, node_keys, transition_keys):
         """One start step: hhat_0 = h_t, K transitions along the recorded
@@ -775,7 +710,8 @@ class TransitionModel(nn.Module):
         inputs (the real steps t .. t + K), gathered by the caller."""
         num_steps = self.unroll_steps
         nodes = []
-        transitions = []
+        steps = []
+        first = None
         state = real_rows[0]
         for offset in range(num_steps + 1):
             real = jax.tree.map(lambda leaf: leaf[offset], reals)
@@ -783,14 +719,14 @@ class TransitionModel(nn.Module):
                 state, real, node_keys[offset], is_root=offset == 0
             )
             nodes.append(
-                (
-                    generator_logits,
-                    real.teacher_codes,
-                    real.code_target,
-                    real.support_mask,
-                    real.overflow,
-                    align_logits,
-                    real.taken_code_probs,
+                NodeOutputs(
+                    generator_logits=generator_logits,
+                    teacher_codes=real.teacher_codes,
+                    generator_target=real.code_target,
+                    support_mask=real.support_mask,
+                    node_overflow=real.overflow,
+                    align_logits=align_logits,
+                    align_target=real.taken_code_probs,
                 )
             )
             if offset == num_steps:
@@ -800,83 +736,48 @@ class TransitionModel(nn.Module):
             state_in = state
             if offset > 0:
                 state_in = 0.5 * state + 0.5 * jax.lax.stop_gradient(state)
-            pred, pred_prior, prior_logits, post_logits, post_one_hot = (
-                self._transition(
-                    state_in,
-                    action_one_hot,
-                    real_rows[offset + 1],
-                    transition_keys[offset],
-                    with_prior_decode=offset == 0,
-                )
+            latents = self._transition(
+                state_in,
+                action_one_hot,
+                real_rows[offset + 1],
+                transition_keys[offset],
+                with_prior_decode=offset == 0,
             )
-            readout = self.node_readout(pred)
+            readout = self.node_readout(latents.pred)
             if offset == 0:
-                first_prior = pred_prior
-                ground = self.ground_delta_head(pred[DYNAMICS_TARGET_ROWS])
-                ground_prior = jax.lax.stop_gradient(
-                    self.ground_delta_head(pred_prior[DYNAMICS_TARGET_ROWS])
+                first = FirstStepOutputs(
+                    pred_prior=latents.pred_prior,
+                    ground=self.ground_delta_head(latents.pred[DYNAMICS_TARGET_ROWS]),
+                    ground_prior=jax.lax.stop_gradient(
+                        self.ground_delta_head(latents.pred_prior[DYNAMICS_TARGET_ROWS])
+                    ),
                 )
-            transitions.append(
-                (
-                    action_one_hot,
-                    pred,
-                    prior_logits,
-                    post_logits,
-                    post_one_hot,
-                    readout.kind_logits,
-                    readout.done_logit,
-                    readout.terminal_logits,
+            steps.append(
+                StepOutputs(
+                    action_one_hot=action_one_hot,
+                    pred=latents.pred,
+                    prior_logits=latents.prior_logits,
+                    post_logits=latents.post_logits,
+                    post_one_hot=latents.post_one_hot,
+                    kind_logits=readout.kind_logits,
+                    done_logit=readout.done_logit,
+                    terminal_logits=readout.terminal_logits,
                 )
             )
-            state = pred
+            state = latents.pred
+        assert first is not None, "unroll_steps >= 1 guarantees a first transition"
         root = jax.tree.map(lambda leaf: leaf[0], reals)
-        stacked_nodes = jax.tree.map(lambda *leaves: jnp.stack(leaves), *nodes)
-        stacked_transitions = jax.tree.map(
-            lambda *leaves: jnp.stack(leaves), *transitions
-        )
-        (
-            generator_logits,
-            teacher_codes,
-            generator_target,
-            support_mask,
-            node_overflow,
-            align_logits,
-            align_target,
-        ) = stacked_nodes
-        (
-            action_one_hot,
-            pred,
-            prior_logits,
-            post_logits,
-            post_one_hot,
-            kind_logits,
-            done_logit,
-            terminal_logits,
-        ) = stacked_transitions
         return TransitionOutput(
-            action_logits=root.logits,
-            action_cells=root.cells,
-            action_cell_valid=root.cell_valid,
-            action_taken_index=root.taken_index,
-            action_overflow=root.overflow,
-            generator_logits=generator_logits,
-            teacher_codes=teacher_codes,
-            generator_target=generator_target,
-            support_mask=support_mask,
-            node_overflow=node_overflow,
-            align_logits=align_logits,
-            align_target=align_target,
-            action_one_hot=action_one_hot,
-            pred=pred,
-            prior_logits=prior_logits,
-            post_logits=post_logits,
-            post_one_hot=post_one_hot,
-            kind_logits=kind_logits,
-            done_logit=done_logit,
-            terminal_logits=terminal_logits,
-            pred_prior=first_prior,
-            ground=ground,
-            ground_prior=ground_prior,
+            root=RootOutputs(
+                action_logits=root.logits,
+                action_cells=root.cells,
+                action_cell_valid=root.cell_valid,
+                action_taken_index=root.taken_index,
+                action_overflow=root.overflow,
+            ),
+            nodes=_stack(nodes),
+            steps=_stack(steps),
+            first=first,
         )
 
     def __call__(
@@ -916,38 +817,10 @@ class TransitionModel(nn.Module):
             jnp.minimum(jnp.arange(num_rows) + offset, num_rows - 1)
             for offset in range(num_steps + 1)
         ]
-        gathered_rows = jnp.stack([jnp.take(rows, index, axis=0) for index in offsets])
+        gathered_rows = _gather_offsets(rows, offsets)
         gathered_reals = jax.tree.map(
-            lambda leaf: jnp.stack(
-                [jnp.take(leaf, index, axis=0) for index in offsets]
-            ),
-            reals,
+            lambda leaf: _gather_offsets(leaf, offsets), reals
         )
-        node_axes = TransitionOutput(
-            action_logits=0,
-            action_cells=0,
-            action_cell_valid=0,
-            action_taken_index=0,
-            action_overflow=0,
-            generator_logits=1,
-            teacher_codes=1,
-            generator_target=1,
-            support_mask=1,
-            node_overflow=1,
-            align_logits=1,
-            align_target=1,
-            action_one_hot=1,
-            pred=1,
-            prior_logits=1,
-            post_logits=1,
-            post_one_hot=1,
-            kind_logits=1,
-            done_logit=1,
-            terminal_logits=1,
-            pred_prior=0,
-            ground=0,
-            ground_prior=0,
-        )
-        return jax.vmap(self._unroll, in_axes=(1, 1, 0, 0), out_axes=node_axes)(
+        return jax.vmap(self._unroll, in_axes=(1, 1, 0, 0), out_axes=VMAP_AXES)(
             gathered_rows, gathered_reals, node_keys, transition_keys
         )
