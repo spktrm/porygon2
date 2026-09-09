@@ -12,6 +12,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
 from rl.environment.utils import next_tqdm_position
+from rl.online.decisions import count_chunk_decisions
 
 
 class BuilderTrajectoryStore:
@@ -142,9 +143,9 @@ def calculate_tracking(old: np.ndarray, new: np.ndarray, tau: float, minlength: 
 class PlayerTrajectoryStore:
     """Stores player trajectories for later use by the learner.
 
-    Uniform unique-chunk sampling under the global reuse cap. Optional
-    learner feedback can retire an individual chunk earlier; retired and
-    cap-exhausted chunks become eligible for replacement.
+    Unique-chunk sampling under a global reuse cap. An optional first-use
+    stream reserves fresh slots across batches and permits early eviction
+    of seen chunks. Learner feedback can also retire individual chunks.
     """
 
     def __init__(
@@ -155,12 +156,16 @@ class PlayerTrajectoryStore:
         name: str = "",
         trajectory_mode: str = "off",
         kl_threshold: float = 0.045,
+        fresh_fraction: float = 0.0,
     ):
         if trajectory_mode not in ("off", "observe", "protect"):
             raise ValueError("trajectory_mode must be off, observe or protect")
         if not np.isfinite(kl_threshold) or kl_threshold <= 0:
             raise ValueError("kl_threshold must be finite and positive")
         self.trajectory_mode = trajectory_mode
+        if not np.isfinite(fresh_fraction) or not 0 <= fresh_fraction <= 1:
+            raise ValueError("fresh_fraction must be finite and in [0, 1]")
+        self.fresh_fraction = float(fresh_fraction)
         self.kl_threshold = kl_threshold
         self._next_id = 1
         self._ids = np.zeros(max_size, dtype=np.uint32)
@@ -189,6 +194,8 @@ class PlayerTrajectoryStore:
         # them per tick to log the realised replay ratio (samples/insert).
         self.total_adds = 0
         self.total_samples = 0
+        self._decision_counts = np.zeros(max_size, dtype=np.int64)
+        self._reset_decision_accounting()
 
         desc = f"player_producer-{name}" if name else "player_producer"
         self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
@@ -233,6 +240,12 @@ class PlayerTrajectoryStore:
 
     def _replaceable(self):
         return self._valid & (self._retired | (self._reuses >= self._max_reuses))
+
+    def _fresh_required(self, batch_size):
+        return int(
+            np.ceil((self.total_samples + batch_size) * self.fresh_fraction)
+            - np.ceil(self.total_samples * self.fresh_fraction)
+        )
 
     def apply_feedback(self, slots, identities, visits, kl_sums, row_counts):
         """Apply learner feedback only to the sampled occupant and newest visit.
@@ -302,14 +315,14 @@ class PlayerTrajectoryStore:
             return logs
 
     def ready_to_sample(self, n: int = None) -> bool:
-        """Returns True if there is at least one trajectory that can be sampled."""
+        """Require distinct eligible chunks; defer unavailable fresh slots."""
         if n is None:
-            return np.any(self._eligible())
-        else:
-            return np.sum(self._eligible()) >= n
+            n = 1
+        eligible = self._eligible()
+        return bool(eligible.sum() >= n)
 
     def ready_to_add(self) -> bool:
-        """True when there is a free slot OR an over-reused one to evict."""
+        """True when there is a free slot or a replaceable occupant."""
         return len(self._trajectories) < self._max_size or np.any(self._replaceable())
 
     @property
@@ -345,6 +358,7 @@ class PlayerTrajectoryStore:
             self._evicted_count = 0
             self.total_adds = 0
             self.total_samples = 0
+            self._reset_decision_accounting()
             if self.need_tracking:
                 self.reset_usage_counts()
 
@@ -393,7 +407,7 @@ class PlayerTrajectoryStore:
         )
 
     def add(self, traj: Trajectory):
-        """Adds a trajectory, replacing a RANDOM over-used entry (reuses >= max_reuses) if the store is full."""
+        """Admit a chunk, preserving unseen occupants in fresh-stream mode."""
         if self._next_id > np.iinfo(np.uint32).max:
             raise OverflowError("replay feedback IDs exhausted; create a new store")
         if self.need_tracking:
@@ -411,7 +425,14 @@ class PlayerTrajectoryStore:
                     "Trajectory store is full and no trajectories are available for replacement."
                 )
                 return
-            replace_index = np.random.choice(available_indices)
+            if self.fresh_fraction > 0:
+                # Retain useful visits regardless of producer speed; take
+                # the oldest exhausted or explicitly retired occupant.
+                replace_index = available_indices[
+                    np.argmin(self._ids[available_indices])
+                ]
+            else:
+                replace_index = np.random.choice(available_indices)
             self._evicted_count += 1
             self._evicted_reuses += int(self._reuses[replace_index])
             current_index = replace_index
@@ -424,10 +445,13 @@ class PlayerTrajectoryStore:
         self._last_feedback_visit[current_index] = 0
         self._last_kl[current_index] = np.nan
         self.total_adds += 1
+        decisions = count_chunk_decisions(traj.player_transitions.env_output.done)
+        self._decision_counts[current_index] = decisions
+        self.total_admitted_decisions += decisions
         self._progress.update(1)
 
     def sample(self, n: int, increment: bool = True) -> list[Trajectory]:
-        """Samples n trajectories uniformly from those with fewer than max_reuses.
+        """Sample distinct eligible chunks, reserving scheduled first-use slots.
 
         Each returned trajectory carries its pre-increment reuse count
         (0 = first visit) for the fresh-vs-replayed staleness diagnostics.
@@ -435,7 +459,30 @@ class PlayerTrajectoryStore:
         valid_indices = self._eligible()
         available_indices = np.where(valid_indices)[0]
 
-        sample_indices = np.random.choice(available_indices, size=n, replace=False)
+        if not self.ready_to_sample(n):
+            raise ValueError("insufficient eligible chunks for the batch")
+        if self.fresh_fraction > 0:
+            fresh_indices = available_indices[self._reuses[available_indices] == 0]
+            fresh_indices = fresh_indices[np.argsort(self._ids[fresh_indices])]
+            replay_indices = available_indices[self._reuses[available_indices] > 0]
+            # Fresh slots are a preference when data is available. Falling
+            # back to replay lets a full seen buffer exhaust its cap and
+            # admit arrivals without discarding useful visits or deadlocking.
+            fresh_count = min(
+                len(fresh_indices),
+                max(self._fresh_required(n), n - len(replay_indices)),
+            )
+            sample_indices = np.concatenate(
+                [
+                    fresh_indices[:fresh_count],
+                    np.random.choice(
+                        replay_indices, size=n - fresh_count, replace=False
+                    ),
+                ]
+            )
+            np.random.shuffle(sample_indices)
+        else:
+            sample_indices = np.random.choice(available_indices, size=n, replace=False)
         sampled = [
             self._trajectories[i].replace(
                 reuse_count=np.array([self._reuses[i]], dtype=np.int32)
@@ -452,10 +499,80 @@ class PlayerTrajectoryStore:
             ]
         if increment:
             # replace=False above guarantees unique indices.
+            first_use = self._reuses[sample_indices] == 0
+            self.total_fresh_samples += int(first_use.sum())
+            self.total_fresh_decisions_sampled += int(
+                self._decision_counts[sample_indices][first_use].sum()
+            )
             self._reuses[sample_indices] += 1
-        self.total_samples += n
+            self.total_samples += n
+            self.total_sampled_decisions += int(
+                self._decision_counts[sample_indices].sum()
+            )
 
         return sampled
+
+    def _reset_decision_accounting(self):
+        self._decision_counts.fill(0)
+        self.total_fresh_samples = 0
+        self.total_fresh_decisions_sampled = 0
+        self.total_admitted_decisions = 0
+        self.total_sampled_decisions = 0
+        self.total_processed_decisions = 0
+        self.total_applied_decisions = 0
+        self.total_processed_updates = 0
+        self.total_applied_updates = 0
+        self.accounting_start_step = None
+
+    def record_decision_accounting(self, host_logs):
+        """Account completed learner calls separately from prefetched samples.
+
+        Counters start at this store's creation/clear, never at the historical
+        run origin. The log worker is the sole recorder. Legacy frame counters
+        and checkpoint/league scheduling remain untouched.
+        """
+        decisions = host_logs.get("player_batch_decisions")
+        if decisions is None:
+            return
+        with self._sample_cv:
+            if self.accounting_start_step is None:
+                self.accounting_start_step = int(host_logs["lifetime_step"]) - 1
+            self.total_processed_updates += 1
+            self.total_processed_decisions += int(decisions)
+            if host_logs["player_update_skipped"] == 0:
+                self.total_applied_updates += 1
+                self.total_applied_decisions += int(decisions)
+            host_logs.update(
+                player_accounting_start_lifetime_step=self.accounting_start_step,
+                player_decisions_admitted_session=self.total_admitted_decisions,
+                player_decisions_sampled_session=self.total_sampled_decisions,
+                player_decisions_processed_session=self.total_processed_decisions,
+                player_decisions_applied_session=self.total_applied_decisions,
+                player_updates_processed_session=self.total_processed_updates,
+                player_updates_applied_session=self.total_applied_updates,
+                player_replay_fresh_chunks_sampled_session=self.total_fresh_samples,
+                player_decisions_first_use_sampled_session=self.total_fresh_decisions_sampled,
+                player_replay_chunks_sampled_session=self.total_samples,
+            )
+            if self.total_admitted_decisions:
+                host_logs["player_decision_reuse_session"] = (
+                    self.total_applied_decisions / self.total_admitted_decisions
+                )
+                host_logs["player_updates_per_fresh_decision_session"] = (
+                    self.total_applied_updates / self.total_admitted_decisions
+                )
+            if self.total_samples:
+                host_logs["player_replay_fresh_chunk_fraction_session"] = (
+                    self.total_fresh_samples / self.total_samples
+                )
+            if self.total_sampled_decisions:
+                host_logs["player_replay_fresh_decision_fraction_session"] = (
+                    self.total_fresh_decisions_sampled / self.total_sampled_decisions
+                )
+            if self._evicted_count:
+                host_logs["player_replay_evicted_mean_reuses"] = (
+                    self._evicted_reuses / self._evicted_count
+                )
 
     def __len__(self):
         return len(self._trajectories)

@@ -106,6 +106,12 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # inside one EMA-target time constant (1/player_ema_update_rate steps).
     player_replay_buffer_capacity: int = 256
     player_replay_ratio: int = 8
+    # Preferred first-use chunk share when available, scheduled across
+    # batches (1/8 gives one slot every two batches of four). Unavailable
+    # fresh slots use replay so retention never requires early eviction.
+    # Startup may use more fresh chunks. First use consumes the reuse cap;
+    # 0 restores uniform capped sampling.
+    player_replay_fresh_fraction: float = 0.125
     builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 10
     # Fraction of replay buffer capacity that must be filled before training

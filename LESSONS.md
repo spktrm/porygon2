@@ -3493,3 +3493,347 @@ Post-removal validation: flat-readout and fast actor-layout tests passed; dtype
 checks passed after completing the removal. Ruff and whitespace checks passed;
 no connection symbols remain in model code or tests. No expensive GPU rerun was
 needed for the restored architecture.
+
+## Fresh replay stream and decision accounting — 2026-09-08
+
+User requested accurate decision accounting and accepted the explicit fresh-stream
+idea. Added `player_replay_fresh_fraction=0.125`: scheduled minimum first-use
+chunk slots (one every two batches of four), oldest unseen first, uniform distinct
+seen samples for the remainder, extra fresh permitted at startup/replay shortage.
+Every first use/prefetch counts towards the existing global cap. To avoid a full-
+buffer fresh-data deadlock, seen chunks can be evicted before exhausting the cap;
+exhausted/retired entries are preferred, then oldest seen. Unseen entries remain
+protected. Zero fraction restores the original uniform capped training sampler
+and replacement policy. Read-only `sample(increment=False)` now also leaves draw
+counters unchanged. This is a new intake/sampling distribution, not an exact
+LASER reproduction or a proven strength improvement; fresh does not mean on-policy.
+
+Reference: Schmitt et al., ICML 2020, https://proceedings.mlr.press/v119/schmitt20a.html
+used seven replay samples per online sample and a distinct online stream. Here the
+quota is in chunks and actor lag remains. Fast producers can drive realised reuse
+below eight. Existing own-trajectory/eval isolation and feedback identity/cap
+contracts remain in place; no cross-population intake or priority correction added.
+
+Admission counts exclude terminal/padded/bootstrap-only rows; forced actions count.
+The learner emits its existing acted-mask count. Host counters distinguish admitted,
+sampled/prefetched, processed and finite-applied decision appearances and updates,
+with applied/admitted reuse and updates-per-fresh-decision ratios. Chunk and decision
+first-use fractions are separate. All cumulative counters explicitly say session,
+with a lifetime-step origin; old checkpoints start new accounting, not invented
+historical totals. Legacy frame_count and league/checkpoint pacing are untouched.
+Definitions: rl/online/README.md. No dashboard publication or training restart.
+
+Validation: 64 focused fast replay/chunk tests passed, including positive controls
+for forced actions versus policy masks, the 29-decisions/48-rows padding example,
+chunk overlap, cap1/2/8, fractional fresh quotas, full-buffer progress, off-mode
+seeded sampling, delayed feedback after early replacement, skipped updates and
+prefetch accounting. Focused Black/isort/Ruff and whitespace checks passed. No
+real-model forward or strength experiment; prior/WM generalisation is unmeasured.
+Revert surfaces: rl/online/{buffer,config,decisions}.py, learner construction,
+train-step scalar/log-worker accounting, tests/test_fresh_replay.py and the added
+mask-equivalence test in tests/test_chunking.py. No commit or launch.
+
+## Fresh-stream main-run restart — 2026-09-09
+
+User authorised rebooting the run after implementation. Confirmed no active
+learner/GPU workload, then launched `bash start.sh --load-mode checkpoint
+--init-ckpt /home/joseph/Documents/porygon2/ckpts/gen9/ckpt_01889162`.
+Main learner PID 469229, tmux `train`; log
+`runtime/learner_20260909_034708.log`. Full checkpoint step 1,889,162 and
+16 historical league entries restored, W&B irqeetfg resumed. Startup config
+confirms fresh fraction .125 and reuse cap/ceiling 8. Both additional lattice
+shapes compiled; actual updates advanced. The script's final tmux attach failed
+because the tool terminal lacked clear support; the session and learner remained
+alive, verified independently. No relaunch was needed.
+
+W&B verification at lifetime step 1,889,204: accounting origin 1,889,162,
+admitted decisions 10,099; sampled/prefetched appearances 5,458; processed and
+applied appearances both 5,130; applied updates 42; latest skipped-update flag 0.
+First-use sampled chunk/decision fractions .4833/.4857 are startup observations,
+not the configured minimum or steady-state ratios. No learner/log-worker errors
+in the bounded startup review. Training remains running. These verify startup
+and counter wiring, not strength or world-model generalisation improvement.
+
+## Fresh-stream first 18.1k-update read — 2026-09-09
+
+Read-only review of completed local irqeetfg W&B records: 18,149 updates from
+1,889,163 through 1,907,311, zero skips. Latest 2k window: realised chunk reuse
+2.334, decision reuse from counter differences 2.325, fresh decisions117.89/s,
+applied decision appearances274.05/s, updates2.494/s. Previous session's actual
+last2k (1,887,161–1,889,160) measured4.373updates/s. Cap remains8, but first-use
+share across this restart is~42.9%; early eviction/intake changed realised reuse
+substantially beyond merely reserving the12.5% minimum.
+
+EMA SimpleHeuristic wins since restart: plainT.5 447/682 (65.54%), plainT1
+187/341 (54.84%), searchT1 186/340 (54.71%). Prior saved session review through
+1,888,347:616/990 (62.22%),235/495 (47.47%),240/486 (49.38%). Latest200 games
+per current actor: plainT.5 pooled260/400, plainT1 116/200, search117/200.
+Encouraging plain-policy point estimates, not a matched causal reuse experiment;
+checkpoints move and continuation/changed data distributions confound attribution.
+No established search advantage or strength-per-hour improvement.
+
+Prior saved last2k versus current last2k: actual-outcome R2 .1524→.1855,
+early outcome-.1471→-.0881; replay value-target fit .9238→.7392; normalised
+entropy .5134→.3331; learner-actor KL .00677→.01821; ISR ESS .99491→.95156.
+Replay posterior pooled delta gain .10295→.15377, prior-MODE gain
+.05494→-.05937. Consistency loss .86175→.76546. These are changing-distribution
+training diagnostics, not frozen held-out prior expectations; no WM improvement
+claim. Fresh/replayed value errors currently .07971/.07862, small aggregate gap.
+
+Reproducible current reader/results: runtime/replay_stream_review_20260909.py,
+runtime/replay-stream-review-20260909.json; previous baseline remains
+runtime/consistency-ablation-01861967/latest-health.json. No forwards, new games,
+coefficient edits or restart. Training remains active.
+
+## Switching decline after fresh-stream restart — 2026-09-09
+
+Read-only current W&B review through1,912,505 (23,343 completed learner records).
+Prior saved last2k / first2k after restart / latest2k: voluntary-switch fraction
+of acted replay rows .10082/.09213/.04304; per-legal-switch-cell probability on
+move-and-switch-choice rows .04228/.03600/.01716. The latter is not total switch
+mass. Voluntary examples per batch11.564/10.6535/4.633; fraction of chunks with a
+voluntary example .87113/.85613/.59763. Forced rows17.289/17.1465/16.533, so the
+observed drop is not simply disappearance of forced-switch requests. Current
+pooled voluntary fraction .04310; current voluntary appearances11.63/s versus
+25.90/s in first2k. Prior last-window batch counts times separately measured
+4.373updates/s suggest~50.6 appearances/s before restart (approximate windows).
+
+Normalised action entropy .51337/.47887/.31447; conditional macro entropy
+.53677/.47704/.26797; modality-uniform KL .95373/1.04528/1.41371. Voluntary-switch
+raw ISR .99184/1.04843/.96834 versus move .99927/.99392/1.00250; below-one switch
+fraction .56367/.47396/.55821. These aggregate means do not establish severe
+importance suppression or measure exact clipped attenuation. Switch-row KL
+.00994/.01677/.02468. Switch-head RMS remains nonzero .00465/.00472/.00437.
+
+Interpretation: move-heavy concentration and declining switch-example supply are
+measured. Fresh first-use quota neither reserves switches nor guarantees useful
+switch advantages. Its early eviction reduced effective reuse to~2.3; feedback
+between fewer switches and fewer labels is plausible, not a causal diagnosis.
+No current advantage-sign/per-loss switch-gradient decomposition establishes
+whether PG/critic labels, shared gradients or state-distribution change drives the
+shift. The modality restorer is finite regularisation, not a hard switch floor.
+Do not infer strategically justified switching decline from SimpleHeuristic wins
+or automatically increase its coefficient. No model forwards or training changes.
+Local reader/results: runtime/switch_review_20260909.py,
+runtime/switch-review-20260909.json.
+
+
+## Retain replay visits and diagnose switch pressure — 2026-09-09
+
+User rejected treating switch decline as benign merely because heuristic wins
+improved, and requested deeper diagnosis and better sample efficiency. Audit
+found a concrete implementation defect in the fresh-stream experiment: allowing
+any seen occupant to be evicted made the configured cap a weak upper bound
+controlled by producer speed. At steps1910089–1912088 the mean evicted reuse was
+2.3238 with cap8, decision reuse2.286, and first-use chunk share~43%. This proves
+lost retention budget, not that every additional visit would improve learning.
+
+Latest inspected switch window1913445–1915444: voluntary-switch row fraction
+.04625 versus prior .10082; voluntary appearances12.80/s versus approximately
+50.6/s before the restart (nearby baseline windows, not a matched timing trial).
+Per-legal-switch-cell probability .01900 versus .04228. Voluntary-switch raw
+ISR .91563, move1.00673; below-one switch fraction .63952. These are sampled
+batch averages, not an estimate of exact clipped attenuation or causal effects.
+The post-stop checkpoint01916493 has switch_bias=-.1585254 versus -.1525829 at
+01889162 (delta -.0059425): a direct odds multiplier exp(delta)~.9941 at fixed
+features. This scalar alone cannot account for the much larger behavioural
+change. State-dependent readouts/features, state distribution and advantages
+remain candidates. Parameter norms do not identify their contributions.
+
+Correction: retain chunks until their cap is exhausted or explicit KL retirement.
+Keep FIFO first-use scheduling, but fill unavailable scheduled fresh slots from
+eligible replay. That resolves the full-seen-buffer producer/consumer deadlock
+without early eviction. Fraction is now an availability-dependent preference,
+not a hard minimum; at fraction1 with cap8, retention wins when fresh is absent.
+No loss, optimiser, cap, batch-size, architecture or regularisation coefficient
+was changed. Backpressure acts directly at learner.enqueue_traj, not through
+an added unbounded trajectory queue. Admission lag can still rise, so watch KL.
+
+Added loss-only switch diagnostics: coefficient-weighted dL/d(common switch
+logit shift) for PG, entropy, reference KL, modality KL and actor backward KL;
+positive suppresses switching under gradient descent. Reuses executable loss
+functions with JVPs, no extra model forward. Taken-switch/stay PG contributions,
+signed raw/normalised advantages and sample counts use actual choice rows.
+Total switch marginal distinguishes cell probability from modality mass.
+Actual signed switch-bias gradient and applied delta expose Adam's scalar route.
+These f32 instruments do not attribute shared-feature motion or guarantee exact
+agreement with bf16 backward; they add no policy force.
+
+Validation: focused replay/chunk/learner-gate checks passed. Saturated-arrival
+regressions span caps1/2/8 and fresh fractions.125/.25/1, assert every eviction
+exhausts its cap, and prove a full-seen buffer progresses. Two small loss-only
+SPO/PPO checks compare each diagnostic to autodiff through actually shifted
+logits, with positive controls, forced-switch and masked rows. Scoped Black,
+isort, Ruff and whitespace checks passed. No real-model test while learner live.
+
+Evaluation plan: hold coefficients fixed for two 10k reference-snapshot cycles
+unless correctness/non-finite problems require stopping. Verify eviction reuse
+matches the effective controller cap, all finite updates apply, and policy
+mismatch does not force sustained cap reductions. Judge switching jointly with
+signed gradient terms and switch advantages; do not impose a scripted switch
+rate or retune the restorer from probability alone. Judge sample efficiency as
+strength gained per admitted decision, alongside wall time, not reuse alone.
+A same-start-checkpoint control is required for a causal learning-efficiency
+claim; sequential before/after windows are confounded by training progress.
+Graceful stop saved full checkpoint01916493; resuming it with this correction.
+Revert surfaces: buffer replacement/readiness/sampling, fresh-fraction docs,
+training/switch_telemetry.py, train-step diagnostics and their focused tests.
+
+
+Live validation of retention correction: resumed W&B run
+`irqeetfg` ( local directory run-20260909_070430-irqeetfg) from01916493;
+log runtime/learner_20260909_070003.log, learner PID480367. Both additional
+shape variants compiled and learner updates completed. At1917041,548 updates
+had applied with zero skips; evicted mean reuse exactly8, effective cap8.
+Latest200 updates measured4.652/s, KL.00819, ESS.9564. This is startup evidence,
+not a settled throughput or strength comparison. Window applied/admitted reuse
+can exceed8 while drawing down previously admitted inventory (latest9.49);
+that is not a per-chunk cap violation. Eviction usage verifies the cap here.
+
+First diagnostic window1916517–1916716: weighted switch-logit PG derivative
++.01115, of which +.01006 came from taken switches; entropy-.000945,
+magnet-.000103, modality-.008354, actorKL+.0000254; total+.001774.
+Actual bias gradient+.001786 agrees closely with the f32 directional estimate.
+Mean voluntary-switch raw advantage-.09092, normalised-.35527. Second inspected
+window1916842–1917041: PG+.009151 (switch+.008207, stay+.000944), entropy-.000960,
+magnet-.000410, modality-.008209, actorKL+.0000627; total-.0003650 versus actual
+bias gradient-.0003608. Raw switch advantage-.08711, normalised-.23533.
+These are batch means over correlated replay visits; count means4.35/4.745.
+Total switch mass on choice rows.05429/.05539, voluntary acted-row fraction
+.04070/.04069. There is no recovery claim from these short windows.
+
+This establishes persistent PG pressure AGAINST sampled switching, chiefly from
+switch examples themselves, not merely lack of examples. The existing restorer
+is active and nearly cancels it; total scalar loss pressure changes sign between
+windows. It does not establish whether switch choices are bad or privileged
+V-trace targets undervalue them. Raw negative advantages rule out batch centring
+as the sole explanation. Follow-up should compare the switch advantage against
+realised outcomes and deployable-critic controls before altering regularisation.
+More reuse may amplify inaccurate labels, so retained visits are not proof of
+sample-efficient learning. No coefficients changed and no further restart.
+Local inspection helper/results: runtime/switch_retention_health_20260909.py,
+runtime/switch-retention-health-20260909.json. No committed changes.
+
+## Paired switch-advantage audit — 2026-09-09
+
+User explicitly requested computing privileged/deployable/realised-outcome
+signals on the same switch transitions after rejecting speculative explanations.
+Existing telemetry did not preserve the paired quantities. Added
+training/advantage_audit.py: both heads use compute_player_targets with identical
+isr/config/batch, from existing target-model outputs (no added model forward).
+For each head, record raw V-trace advantage, realised discounted outcome minus
+its own baseline, and that residual with the same outer clipped rho. The paired
+TD-minus-rho-MC difference cancels the baseline and measures bootstrapped-return
+versus outcome disagreement; behaviour continuation mismatch still remains.
+Outcomes are observational, never counterfactual action labels or a loss input.
+
+Only first-use choice rows contribute, excluding padding, bootstrap, done,
+forced switching and unknown outcomes. Horizons1–5/6–15/16–40/41+ use terminal
+row index = game_length-1 and absolute decision index = offset+local row.
+Publish additive counts/sums rather than sparse batch means, preserving exact
+window pooling. Within-game correlation remains: row counts are not independent
+game sample counts. Controls include stays, head-specific MC baselines,
+head-to-head and TD-to-MC sign disagreement, outcome SSE and mean rho.
+
+Validation:15 focused audit/target tests passed. Hand-computable critics produce
+opposite target signs on the SAME row while the outcome residual is positive;
+tests cover gamma1/.9, outer rho.5, all distance bins, replay exclusion,
+unknown outcomes, forced rows and bootstrap/terminal masks. Black/isort/Ruff and
+whitespace checks passed. No full model forwards/tests alongside the learner.
+Graceful stop saved01920075; resuming that full checkpoint with diagnostics only.
+No loss, coefficient, architecture, sampler or target-estimator changes in this
+step. Readout script runtime/paired_advantage_review.py pools first-use sums.
+
+
+Paired audit result (steps1920076–1921758,1,683 finite updates):1,115 unique
+first-use voluntary-switch rows versus15,918 stay rows. Pooled privileged TD
+advantage-.08020, deployable-.07968; outcome-minus-own-baseline residuals
+-.15792/-.15890. With matching outer rho, privileged outcome residual-.14301:
+TD-minus-rho-MC+.06281. Both heads agree; replacing privileged with deployable
+changes negative to positive on19/1115 rows (1.70%), reverse23/1115 (2.06%).
+Replay-inclusive switch advantage-.08045 over8,892 appearances agrees with
+first-use-.08020, so repeated visits do not create the current negative signal.
+
+By remaining decisions (N,privTD,publicTD,privMC):1–5=(129,-.03557,-.03502,
+-.03332);6–15=(412,-.08229,-.08158,-.07978);16–40=(530,-.09075,-.09055,
+-.26448);41+=(44,-.06424,-.06195,+.02875). The positive6–15 outcome residual
+seen at386 switch rows disappeared with accumulation and was negative in the
+subsequent-row read after1920640. The41+ bucket changed sign and is too small
+for a stable conclusion. Rows remain correlated within games; no independent-
+game confidence claim. Mean outer rho.9273, behaviour-continuation mismatch
+not fully corrected. Outcome residuals are not counterfactual action advantages.
+
+Conclusion: no evidence here for a privileged-head-specific switch penalty or
+pooled hidden positive outcome credit. In the largest distant bucket the TD
+signal is LESS negative than the realised residual. This rejects neither shared
+conditional critic errors nor policy/continuation defects; do not claim switches
+are intrinsically bad, or that collapse is fixed. No coefficients changed.
+Report: runtime/switch-advantage-audit-20260909.md; frozen raw results:
+runtime/paired-advantage-review-1921758.json. Learner continues with audit enabled.
+
+## Privileged-head usefulness audit — 2026-09-09
+
+Follow-up asked why opponent-private knowledge gives little accuracy gain.
+The paired first-use outcome audit supplies a direct error comparison (not just
+advantage similarity): switch MSE public.781756 vs privileged.780656, relative
+reduction.14%; stay MSE.812982 vs.810043, reduction.36%. These are outcome errors
+on choice rows, not all states or an unrevealed-information-conditioned sample.
+Latest500 updates1922271–1922770: mean absolute head gap.02309; TD-label R2
+public.870445/privileged.872182. Those R2 panels compare both heads to the SAME
+bootstrapped win_returns, not independent final outcomes.
+
+Code audit: service serialises opponent's current private request; this is
+hidden-state access, not the future action or terminal outcome. Encoder pools
+private-sheet tokens then applies16x16 hard straight-through categorical codes;
+only their code-table embeddings enter the secret rows read by VALUE_CLS.
+The code is supervised through privileged value loss. Belief label gradients
+are stopped; the hidden-token belief-label change did not alter critic inputs.
+There is no direct hidden-attribute reconstruction requirement on this code.
+The historical Sept5 ledger already recorded the full-code public-token shortcut.
+
+Current code is not trivially dead: mean/min group perplexity5.408/3.367,
+logits/embedding gradient norms.00559/.02026; trained kernel/table RMS
+.07873/.08879. These establish activity, not retention/use of useful secrets.
+Leading unproven mechanism is a value-supervised discrete bottleneck together
+with shared self-bootstrapped labels preserving a public-feature solution.
+Do not claim same labels force equal heads: useful private information could
+still improve prediction under identical labels. No ablation proves this cause.
+A conditional hidden-sheet intervention/outcome-error comparison is needed to
+measure reliance, and a reconstruction probe can distinguish retention from
+readout use. No restart, coefficient or architecture changes in this follow-up.
+
+
+## Privileged attention routing measured — 2026-09-09
+
+User requested attention weights rather than another hypothesised intervention.
+Gracefully paused learner at01929574; ran existing COLLECT_INTERMEDIATES hooks
+on that checkpoint's EMA target encoder, on recorded self-play from01889162
+(collection-920/selfplay.pkl):256 sides,260 chunks,7,377 acted rows,5,429 choice
+rows,724 voluntary switches. No new live model instrumentation or source change.
+All six opponent-private rows valid throughout scored data. This is an older
+fixed state distribution, not current on-policy games.
+
+VALUE_CLS total opponent-private attention by block (mean over heads):
+all decisions .49/1.63/2.02/2.53/1.71/5.92%; voluntary switches
+.49/1.62/2.04/2.55/2.13/6.69%. Uniform valid-key references13.18/13.09%.
+Final-layer head4 is an exception:15.41% all /17.22% switches; other final-layer
+heads2.34/1.92/4.02% all. First layer own private sheets34.26%, field19.52%,
+public entities18.91%, versus opponent-private.49%. This measures weak direct
+private reads on most heads, not absence of every private read.
+
+Private-query rows themselves assign56.36% to private keys in block1, then
+2.40/6.40/6.25/6.31/7.23%; their private-key uniform reference13.48%. Remaining
+attention reads policy-visible rows. Residuals retain information, so this does
+not prove secret content gets erased. Nor do weights alone establish causal
+value influence: value norms/output projection and later mixing matter.
+
+Checks: exactly zero policy-to-private attention; nonzero private-query reads;
+valid six-row input; query sums within bf16 tolerance (max raw error.014725),
+renormalised for reported masses; terminal/padding/bootstrap exclusion and
+named sequence slices. Frozen probe finished successfully before restart.
+Report and raw data: runtime/privileged-attention-probe.{md,json,png,svg};
+script runtime/privileged_attention_probe.py. Resuming01929574 unchanged.
+
+Attention-probe restart verified: runtime/learner_20260909_080752.log, W&B
+run-20260909_081202-irqeetfg;36 finite updates through1929610, zero skips.
+Model/losses unchanged; COLLECT_INTERMEDIATES was confined to the offline probe.

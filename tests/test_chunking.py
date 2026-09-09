@@ -16,6 +16,7 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.online.config import Porygon2LearnerConfig
+from rl.online.decisions import count_chunk_decisions
 from rl.online.player_actor import chunk_spans
 from rl.online.training.targets import compute_player_targets
 
@@ -411,3 +412,31 @@ def test_shape_lattice_trim_is_lossless():
 
     # Full-shape batches and single-entry lattices pass through untouched.
     assert _trim_to_lattice([traj], ((64, 256),))[0] is traj
+
+
+def test_admitted_decisions_match_learner_masks_including_forced_actions():
+    done = np.zeros((64, 3), dtype=bool)
+    done[29, 0] = True
+    done[63, 1] = True
+    batch = _targets_batch(done)
+    # Every action has exactly one legal choice. Policy-mask accounting
+    # would incorrectly report zero instead of counting forced decisions.
+    env_output = batch.player_transitions.env_output
+    action_mask = np.zeros((64, 3, 4), dtype=bool)
+    action_mask[..., 0] = True
+    batch = batch.replace(
+        player_transitions=batch.player_transitions.replace(
+            env_output=env_output.replace(action_mask=jnp.asarray(action_mask))
+        )
+    )
+    targets, _ = compute_player_targets(
+        batch,
+        value_log_probs=jnp.log(jnp.full((64, 3, 3), 1 / 3)),
+        isr=jnp.ones((64, 3)),
+        config=Porygon2LearnerConfig(),
+    )
+    acted = np.asarray(targets.value_mask) & ~done
+    assert not np.asarray(targets.policy_mask).any()
+    np.testing.assert_array_equal(acted.sum(axis=0), [29, 63, 63])
+    for column in range(done.shape[1]):
+        assert count_chunk_decisions(done[:, column]) == acted[:, column].sum()

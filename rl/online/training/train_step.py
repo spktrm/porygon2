@@ -41,6 +41,7 @@ from rl.model.transition_objectives import (
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
+from rl.online.training.advantage_audit import paired_advantage_audit
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
@@ -51,6 +52,7 @@ from rl.online.training.loss import (
     uniform_kl_modalities,
 )
 from rl.online.training.replay import chunk_policy_mismatch
+from rl.online.training.switch_telemetry import switch_loss_telemetry
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
@@ -995,11 +997,22 @@ def train_step(
     # An action was actually taken here — including on forced single-option
     # steps, which policy_mask excludes — but not on terminal rows.
     acted_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
+    training_logs["player_batch_decisions"] = acted_mask.sum(dtype=jnp.int32)
     # One derivation of the switch/move predicates for the whole step —
     # the panels below, critic_outcome_telemetry and the policy-loss
     # telemetry all read THESE, so they cannot drift apart again
     # (telemetry.ActionAxisMasks).
     axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
+    training_logs.update(
+        paired_advantage_audit(
+            batch,
+            player_target_pred.value_head.log_probs,
+            player_target_pred.priv_value_head.log_probs,
+            target_actor_ratio,
+            config,
+            axis,
+        )
+    )
     taken_switch = axis.taken_switch
     has_move = axis.has_move
     voluntary_switch_mask = acted_mask & taken_switch & has_move
@@ -1345,6 +1358,22 @@ def train_step(
             player_ref_kl=loss_mag,
             player_loss_modality_kl=loss_modality_kl,
         )
+        pg_logs.update(
+            switch_loss_telemetry(
+                learner_log_policy,
+                reg_log_policy,
+                flat_action_mask,
+                switch_actions,
+                axis.taken_switch,
+                policy_mask,
+                switch_choice_mask,
+                learner_actor_ratio,
+                learner_actor_log_ratio,
+                pg_adv_norm,
+                pg_advantages,
+                config,
+            )
+        )
         # pg bracket + v + kl.
         loss = (
             # pg: the NashPG bracket — surrogate + ent_coef * (-H) +
@@ -1563,6 +1592,16 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
+            player_switch_bias=prev_player_state.params["params"]["action_head"][
+                "switch_bias"
+            ].mean(),
+            player_switch_bias_gradient=player_grads["params"]["action_head"][
+                "switch_bias"
+            ].sum(),
+            player_switch_bias_applied_delta=(
+                player_state.params["params"]["action_head"]["switch_bias"]
+                - prev_player_state.params["params"]["action_head"]["switch_bias"]
+            ).mean(),
             # Q-head learning readouts: the three-scalar micro gate, the
             # drift-from-init of the zero-init out layers and the pointer
             # kernels, and per-subtree grad norms (pre-clip). A micro
