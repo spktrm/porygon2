@@ -155,7 +155,9 @@ class TypeTables:
             return IMMUNE
         total = 0
         for defend_type in defend:
-            factor = self.chart[attack][defend_type]
+            # A type-changed opponent can be "Typeless" (Burn Up, Double
+            # Shock); the chart has no row for it, and it takes neutral.
+            factor = self.chart[attack].get(defend_type, 0)
             if factor == -9:
                 return IMMUNE
             total += factor
