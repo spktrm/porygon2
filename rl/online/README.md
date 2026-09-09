@@ -114,7 +114,9 @@ behaviour ratio v-trace consumes (`targets.thresholded_target_ratio`);
 comparable to before the restart. `player_discard_taken_frac` is the share of
 policy rows whose taken action the target had dropped below
 `player_prune_threshold` (ratio 0, row discarded — the revert trigger above
-1%), `player_discard_legal_frac` the share of legal cells below the line, and
+1%), `player_discard_taken_frac_{switch,move}` the same by taken modality (a
+switch-side rate well above the move-side one is the threshold acting on rare
+switches), `player_discard_legal_frac` the share of legal cells below the line, and
 `player_discard_position_mean` where in the chunk the discards sit.
 `player_trace_len_mean` / `_raw` is the v-trace continuation length from each
 policy row had c been built from the thresholded / raw ratio. c IS raw (rho

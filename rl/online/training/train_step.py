@@ -953,6 +953,7 @@ def train_step(
     # should be discarded -- a non-trivial rate is the hinge failing and
     # the threshold hiding it (the revert trigger, > 1% of taken rows).
     discarded = policy_mask & jnp.logical_not(target_taken_kept)
+    axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
     row_position = (
         jnp.arange(policy_mask.shape[0], dtype=jnp.float32)[:, None]
         / policy_mask.shape[0]
@@ -960,6 +961,15 @@ def train_step(
     training_logs.update(
         dict(
             player_discard_taken_frac=average(discarded, policy_mask),
+            # By TAKEN modality: a switch-side rate well above the move-side
+            # one is the threshold acting on rare switches -- the
+            # self-sealing direction only the hinge resists.
+            player_discard_taken_frac_switch=average(
+                discarded, policy_mask & axis.taken_switch
+            ),
+            player_discard_taken_frac_move=average(
+                discarded, policy_mask & jnp.logical_not(axis.taken_switch)
+            ),
             player_discard_legal_frac=average(target_removed_legal_frac, policy_mask),
             player_discard_position_mean=average(
                 jnp.broadcast_to(row_position, policy_mask.shape), discarded
@@ -1042,7 +1052,6 @@ def train_step(
     # the panels below, critic_outcome_telemetry and the policy-loss
     # telemetry all read THESE, so they cannot drift apart again
     # (telemetry.ActionAxisMasks).
-    axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
     training_logs.update(
         paired_advantage_audit(
             batch,

@@ -1519,8 +1519,12 @@ def rl_sections():
                 lp(
                     # The discard rate: the revert trigger is > 1% of taken
                     # rows sustained over a 250k-fresh-decision window.
-                    "v-trace discard rate · taken rows (revert > 1%)",
-                    ["player_discard_taken_frac"],
+                    "v-trace discard rate · taken rows, by taken modality",
+                    [
+                        "player_discard_taken_frac",
+                        "player_discard_taken_frac_switch",
+                        "player_discard_taken_frac_move",
+                    ],
                     range_y=(0, 0.05),
                 ),
                 lp(

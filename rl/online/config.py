@@ -604,10 +604,19 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Adam step lifts no exposure measurably at any coefficient (min legal
     # probability .0197 before and after, 27.3% of legal cells under .01),
     # so the cost half of the criterion decided it and the top of the
-    # screened range landed. Never swept in a live learner -- config is a
-    # jit static argname and a host-varied coefficient compiles one
+    # screened range, .005, landed for the 2026-09-09 relaunch. Raised to
+    # .05 the next morning on the live directional read: at .005 the
+    # hinge's pull on the switch logits was -.0005 to -.0013 against the
+    # retired KL's -.0065 to -.0081 and the policy gradient's +-.02 swing,
+    # and its per-cell lift (coef / N ~ coef * .15) held a cell at the
+    # .005 discard line only against an adverse normalised advantage of
+    # ~.15 -- it could not be tested at that size. At .05 the lift is
+    # .0075 (holds against ~1.5), the switch-axis pull ~ -.009 (the KL's
+    # order), and the encoder-gradient cost extrapolates to ~0.1% against
+    # the 10% ceiling. Never swept in a live learner -- config is a jit
+    # static argname and a host-varied coefficient compiles one
     # executable per value. 0.0 is exactly off (no term at all).
-    player_support_hinge_coef: float = 0.005
+    player_support_hinge_coef: float = 0.05
     # DeepNash's FineTuning threshold (rnad.py FineTuning._threshold, its
     # reference value .03): a legal action whose probability is below it is
     # REMOVED and the rest renormalised (rl/model/utils.py prune_log_policy,

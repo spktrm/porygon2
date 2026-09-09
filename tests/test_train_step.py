@@ -104,6 +104,8 @@ def test_train_step_smoke():
         "player_trace_len_mean",
         "player_trace_len_mean_raw",
         "player_discard_taken_frac",
+        "player_discard_taken_frac_switch",
+        "player_discard_taken_frac_move",
         "player_support_min_prob",
         "player_applied_delta_rms_pointer_key",
         "player_pg_adv_mean",

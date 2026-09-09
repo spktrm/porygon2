@@ -4102,3 +4102,26 @@ plain-t1 .586, thresholded .526.
 overnight.** The pre-registered discard-rate trigger is therefore NOT
 applied to this window; the overnight read is the verdict instrument, and
 the cohort re-read on the next checkpoint the strength read.
+
+## Support hinge coefficient .005 → .05, and the discard split — 2026-09-10
+
+Overnight read of the relaunch (irqeetfg, steps 2.12M–2.23M): the hinge's
+directional pull on the switch logits −.0005 to −.0013 against the retired
+modality KL's −.0065 to −.0081 in the pre-restart segment and the policy
+gradient's ±.02 swing; switch mass on choice rows .065–.092 (holding);
+switch cells under .005 .12–.33 and move cells .11–.25, noisy, no trend —
+the structural expectation when ~.08 of mass sits over ~5 bench cells, and
+a per-cell floor the KL never held either (it was invariant to
+within-modality redistribution by design). The hinge cannot push a cell
+down (its tax on an above-line cell, coef · active_fraction · pi, is
+~3e-5 against a ~1e-3 lift), so it was simply too small to test: coef / N
+≈ coef · .15 holds a cell at the .005 line only against an adverse
+normalised advantage of ~.15. User decision: raise to .05 — lift .0075
+(holds against ~1.5), switch-axis pull ~ −.009 (the KL's order), encoder
+gradient cost extrapolated from the screen ~0.1%. Lands at the NEXT
+restart (static config); the overnight run stays at .005 by the user's
+earlier decision. Same commit: `player_discard_taken_frac_{switch,move}`,
+the discard rate by taken modality — a switch-side rate well above the
+move-side one is the threshold acting on rare switches, the self-sealing
+direction only the hinge resists. Validation: fast suite; the smoke
+test's key list carries the two names.
