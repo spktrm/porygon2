@@ -5,20 +5,28 @@ import os
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("WANDB_MODE", "disabled")
 
+import argparse
 import json
+import logging
 from pathlib import Path
 
-import flax.serialization
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 
-from rl.model.constants import CLS_ROW
-from rl.model.heads import CategoricalValueLogitHead
+from rl.model.config import get_player_model_config
 from rl.model.interval_transition import DirectIntervalValue
+from rl.offline import harness
 from rl.offline.interval_data import evaluation_partitions
-from rl.offline.train_interval import game_bootstrap
+from rl.offline.train_interval import (
+    game_bootstrap,
+    interval_optimiser,
+    prepare_output,
+    run_arm,
+    train_read_subset,
+)
+from rl.online.config import Porygon2LearnerConfig
 
 
 def select_checkpoint(records):
@@ -29,25 +37,6 @@ def select_checkpoint(records):
     return min(
         candidates, key=lambda record: (-record["prior_delta_gain"], record["step"])
     )
-
-
-def prepare_targets(arrays, source, cfg):
-    """Only the loss/evaluator receives successor critic outputs."""
-    critic = CategoricalValueLogitHead(cfg.v_head)
-    variables = {"params": source["params"]["v_head"]}
-    apply = jax.jit(lambda rows: critic.apply(variables, rows).log_probs)
-    for name, field in [("root_log_probs", "rows"), ("target_log_probs", "next_rows")]:
-        outputs = []
-        for offset in range(0, len(arrays[field]), 512):
-            rows = arrays[field][offset : offset + 512, CLS_ROW]
-            count = len(rows)
-            rows = np.pad(rows, ((0, 512 - count), (0, 0)), mode="edge")
-            outputs.append(np.asarray(apply(jnp.asarray(rows, cfg.dtype)))[:count])
-        arrays[name] = np.concatenate(outputs)
-    arrays["target_probs"] = np.exp(arrays["target_log_probs"])
-    support = np.asarray(cfg.v_head.category_values, dtype=np.float32)
-    arrays["root_value"] = np.exp(arrays["root_log_probs"]) @ support
-    arrays["target_value"] = arrays["target_probs"] @ support
 
 
 def make_evaluator(model, cfg):
@@ -123,10 +112,7 @@ def train_direct(
     action_conditioned,
     action_representation="latent",
 ):
-    output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
-    if (output / "metrics.jsonl").exists():
-        raise FileExistsError(f"Refusing to overwrite {output}")
+    output = prepare_output(Path(args.out))
     train_indices, validation_indices, final_indices = evaluation_partitions(arrays)
     if len(final_indices):
         raise ValueError("Development training must not receive final-test games")
@@ -166,9 +152,7 @@ def train_direct(
         params["action_table"] = jnp.array(
             source["params"]["transition"]["action_table"], copy=True
         )
-    optimiser = optax.chain(
-        optax.clip_by_global_norm(10), optax.adam(run_cfg.player_learning_rate)
-    )
+    optimiser = interval_optimiser(run_cfg.player_learning_rate)
     state = optimiser.init(params)
     manifest = {
         **vars(args),
@@ -182,7 +166,6 @@ def train_direct(
         "train_intervals": len(train_indices),
         "action_expectation": "exact latent marginal or deterministic observed action rows",
     }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     def loss_fn(parameters, batch, key):
         if action_representation == "rows":
@@ -207,71 +190,96 @@ def train_direct(
         return (
             optax.apply_updates(parameters, updates),
             optimiser_state,
-            loss,
-            optax.global_norm(gradient),
+            {"loss": loss, "gradient_norm": optax.global_norm(gradient)},
         )
 
     evaluate = make_evaluator(model, cfg)
-    rng = np.random.default_rng(args.seed)
-    train_read = np.random.default_rng(args.seed + 2).choice(
-        train_indices, 1663, replace=False
+    train_read = train_read_subset(train_indices, args.train_eval_limit, args.seed)
+
+    def make_batch(indices):
+        batch = {
+            name: jnp.asarray(arrays[name][indices])
+            for name in (
+                "rows",
+                "action_probs",
+                "root_log_probs",
+                "target_probs",
+                "taken_cell",
+            )
+        }
+        batch["rows"] = batch["rows"].astype(cfg.dtype)
+        return batch
+
+    def read_progress(step, params, seen):
+        result = read_direct(
+            evaluate,
+            params,
+            arrays,
+            validation_indices,
+            cfg,
+            output,
+            "validation",
+            step,
+        )
+        result["train_read"] = read_direct(
+            evaluate, params, arrays, train_read, cfg, output, "train", step
+        )
+        return result
+
+    _, records = run_arm(
+        output,
+        output.name,
+        manifest,
+        params,
+        state,
+        update,
+        make_batch,
+        read_progress,
+        train_indices,
+        len(arrays["game"]),
+        args.steps,
+        args.batch_size,
+        args.seed,
+        set(args.eval_steps),
+        log_every=0,
     )
-    records = []
-    with (output / "metrics.jsonl").open("w") as stream:
-        for step in range(args.steps + 1):
-            if step:
-                indices = rng.choice(train_indices, args.batch_size)
-                batch = {
-                    name: jnp.asarray(arrays[name][indices])
-                    for name in (
-                        "rows",
-                        "action_probs",
-                        "root_log_probs",
-                        "target_probs",
-                        "taken_cell",
-                    )
-                }
-                batch["rows"] = batch["rows"].astype(cfg.dtype)
-                params, state, loss, gradient_norm = update(
-                    params,
-                    state,
-                    batch,
-                    jax.random.fold_in(jax.random.key(args.seed), step),
-                )
-                if not np.isfinite(float(loss)) or not np.isfinite(
-                    float(gradient_norm)
-                ):
-                    raise FloatingPointError(f"Non-finite direct update {step}")
-            if step in args.eval_steps:
-                result = read_direct(
-                    evaluate,
-                    params,
-                    arrays,
-                    validation_indices,
-                    cfg,
-                    output,
-                    "validation",
-                    step,
-                )
-                result["train_read"] = read_direct(
-                    evaluate, params, arrays, train_read, cfg, output, "train", step
-                )
-                if step:
-                    result["loss"] = float(loss)
-                    result["gradient_norm"] = float(gradient_norm)
-                records.append(result)
-                stream.write(json.dumps(result) + "\n")
-                stream.flush()
-                print(output.name, json.dumps(result), flush=True)
-                destination = output / f"state-{step:06d}.msgpack"
-                temporary = destination.with_suffix(f".tmp-{os.getpid()}")
-                temporary.write_bytes(
-                    flax.serialization.to_bytes(
-                        {"params": params, "optimiser": state, "step": step}
-                    )
-                )
-                temporary.replace(destination)
     chosen = select_checkpoint(records)
     (output / "selected.json").write_text(json.dumps(chosen, indent=2))
     jax.clear_caches()
     return chosen
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--data", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--action-conditioned", action="store_true")
+    parser.add_argument(
+        "--action-representation", choices=("latent", "rows"), default="latent"
+    )
+    parser.add_argument("--steps", type=int, default=25000)
+    parser.add_argument("--eval-steps", type=int, nargs="+", default=(0, 25000))
+    parser.add_argument("--train-eval-limit", type=int, default=1663)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    with np.load(args.data, allow_pickle=False) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    source = harness.load_params(args.checkpoint)
+    cfg = get_player_model_config(9, train=True)
+    run_cfg = Porygon2LearnerConfig()
+    train_direct(
+        args,
+        arrays,
+        source,
+        cfg,
+        run_cfg,
+        args.action_conditioned,
+        args.action_representation,
+    )
+
+
+if __name__ == "__main__":
+    main()

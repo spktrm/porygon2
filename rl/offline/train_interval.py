@@ -95,11 +95,104 @@ def game_bootstrap(error, energy, games, seed=0, replicates=2000):
     return [float(value) for value in np.quantile(gains, [0.025, 0.975])]
 
 
+def prepare_output(path: Path) -> Path:
+    """The arm's directory; a finished experiment is never overwritten."""
+    path.mkdir(parents=True, exist_ok=True)
+    if (path / "metrics.jsonl").exists():
+        raise FileExistsError(f"Refusing to overwrite experiment {path}")
+    return path
+
+
+def interval_optimiser(learning_rate: float):
+    return optax.chain(optax.clip_by_global_norm(10.0), optax.adam(learning_rate))
+
+
+def train_read_subset(train_indices, limit: int, seed: int):
+    """A fixed subset of the training rows read through the same evaluator
+    as validation (the data/reuse control)."""
+    return np.random.default_rng(seed + 2).choice(
+        train_indices, min(limit, len(train_indices)), replace=False
+    )
+
+
+def write_state(destination: Path, params, optimiser_state, step: int):
+    """An atomic MessagePack checkpoint: params, optimiser state and step."""
+    temporary = destination.with_suffix(f".tmp-{os.getpid()}")
+    temporary.write_bytes(
+        flax.serialization.to_bytes(
+            {"params": params, "optimiser": optimiser_state, "step": step}
+        )
+    )
+    temporary.replace(destination)
+
+
+def run_arm(
+    output: Path,
+    label: str,
+    manifest: dict,
+    params,
+    optimiser_state,
+    update,
+    make_batch,
+    read_progress,
+    train_indices,
+    num_rows: int,
+    steps: int,
+    batch_size: int,
+    seed: int,
+    eval_steps: set[int],
+    log_every: int,
+):
+    """The interval arms' shared loop. `update(params, state, batch, key)
+    -> (params, state, logs)`, every log finite; `make_batch(indices)` the
+    arm's arrays for a draw of training rows; `read_progress(step, params,
+    seen)` its evaluation record, `seen` marking the rows sampled so far.
+    Writes the manifest, `metrics.jsonl` (an update line every `log_every`
+    steps when that is positive, an evaluation line at every step in
+    `eval_steps`) and an atomic `state-{step}.msgpack` at each evaluation.
+    Returns the final params and the evaluation records."""
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    started = time.perf_counter()
+    rng = np.random.default_rng(seed)
+    seen = np.zeros(num_rows, dtype=bool)
+    records = []
+    logs = {}
+    with (output / "metrics.jsonl").open("w") as stream:
+        for step in range(steps + 1):
+            if step:
+                indices = rng.choice(train_indices, batch_size)
+                seen[indices] = True
+                params, optimiser_state, logs = update(
+                    params,
+                    optimiser_state,
+                    make_batch(indices),
+                    jax.random.fold_in(jax.random.key(seed), step),
+                )
+                logs = {name: float(value) for name, value in logs.items()}
+                if not all(np.isfinite(value) for value in logs.values()):
+                    raise FloatingPointError(f"Non-finite update at {step}: {logs}")
+                if log_every and step % log_every == 0:
+                    stream.write(json.dumps({"step": step, **logs}) + "\n")
+                    stream.flush()
+                    print(label, step, json.dumps(logs), flush=True)
+            if step in eval_steps:
+                result = {
+                    **read_progress(step, params, seen),
+                    **logs,
+                    "elapsed_seconds": time.perf_counter() - started,
+                }
+                records.append(result)
+                stream.write(json.dumps(result) + "\n")
+                stream.flush()
+                print(label, json.dumps(result), flush=True)
+                write_state(
+                    output / f"state-{step:06d}.msgpack", params, optimiser_state, step
+                )
+    return params, records
+
+
 def train_arm(args, arrays, source, cfg, run_cfg, evidence):
-    output = Path(args.output) / evidence
-    output.mkdir(parents=True, exist_ok=True)
-    if (output / "metrics.jsonl").exists():
-        raise FileExistsError(f"Refusing to overwrite experiment {output}")
+    output = prepare_output(Path(args.out) / evidence)
     model = IntervalTransition(cfg.transition, cfg.dtype, evidence)
     critic = CategoricalValueLogitHead(cfg.v_head)
     critic_params = {"params": source["params"]["v_head"]}
@@ -120,9 +213,7 @@ def train_arm(args, arrays, source, cfg, run_cfg, evidence):
     params, copied = warm_start_decoder(
         initial["params"], source["params"]["transition"]
     )
-    optimiser = optax.chain(
-        optax.clip_by_global_norm(10.0), optax.adam(run_cfg.player_learning_rate)
-    )
+    optimiser = interval_optimiser(run_cfg.player_learning_rate)
     optimiser_state = optimiser.init(params)
     parameter_count = sum(leaf.size for leaf in jax.tree.leaves(params))
     manifest = {
@@ -152,7 +243,6 @@ def train_arm(args, arrays, source, cfg, run_cfg, evidence):
         "differences_from_production": "frozen actor/action encoder/critic; one-step; no generator, grounding or outcome fitting; isolated Adam",
         "behaviour_semantics": "unidentified; history rows mix contextual effects, not opponent submissions",
     }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     def loss_fn(parameters, batch, rng):
         action_key, posterior_key = jax.random.split(rng)
@@ -255,7 +345,7 @@ def train_arm(args, arrays, source, cfg, run_cfg, evidence):
         )
     )
 
-    def read_split(step, evaluation_indices, split):
+    def read_split(step, params, evaluation_indices, split):
         parts = []
         for offset in range(0, len(evaluation_indices), args.batch_size):
             selected = evaluation_indices[offset : offset + args.batch_size]
@@ -301,76 +391,55 @@ def train_arm(args, arrays, source, cfg, run_cfg, evidence):
         )
         return result
 
-    started = time.perf_counter()
-    rng = np.random.default_rng(args.seed)
-    diagnostic_rng = np.random.default_rng(args.seed + 2)
-    train_read_indices = diagnostic_rng.choice(
-        train_indices, min(args.train_eval_limit, len(train_indices)), replace=False
+    train_read_indices = train_read_subset(
+        train_indices, args.train_eval_limit, args.seed
     )
-    seen = np.zeros(len(arrays["game"]), dtype=bool)
 
-    def read_progress(step):
-        result = read_split(step, heldout_indices, "validation")
+    def make_batch(indices):
+        batch = {
+            name: jnp.asarray(arrays[name][indices])
+            for name in ("rows", "next_rows", "valid", "action_probs")
+        }
+        batch["rows"] = batch["rows"].astype(cfg.dtype)
+        batch["next_rows"] = batch["next_rows"].astype(cfg.dtype)
+        return batch
+
+    def read_progress(step, params, seen):
+        result = read_split(step, params, heldout_indices, "validation")
         if len(train_read_indices):
-            result["train_read"] = read_split(step, train_read_indices, "train")
+            result["train_read"] = read_split(step, params, train_read_indices, "train")
         result["sampled_passes"] = step * args.batch_size / len(train_indices)
         result["unique_sampled_intervals"] = int(seen.sum())
         result["unique_sampled_games"] = len(np.unique(arrays["game"][seen]))
         return result
 
-    with (output / "metrics.jsonl").open("w") as stream:
-        initial_read = read_progress(0)
-        stream.write(json.dumps(initial_read) + "\n")
-        stream.flush()
-        print(evidence, json.dumps(initial_read), flush=True)
-        for step in range(1, args.steps + 1):
-            indices = rng.choice(train_indices, args.batch_size)
-            seen[indices] = True
-            batch = {
-                name: jnp.asarray(arrays[name][indices])
-                for name in ("rows", "next_rows", "valid", "action_probs")
-            }
-            batch["rows"] = batch["rows"].astype(cfg.dtype)
-            batch["next_rows"] = batch["next_rows"].astype(cfg.dtype)
-            params, optimiser_state, logs = update(
-                params,
-                optimiser_state,
-                batch,
-                jax.random.fold_in(jax.random.key(args.seed), step),
-            )
-            numbers = {name: float(value) for name, value in logs.items()}
-            if not all(np.isfinite(value) for value in numbers.values()):
-                raise FloatingPointError(f"Non-finite update at {step}: {numbers}")
-            if step % 100 == 0:
-                stream.write(json.dumps({"step": step, **numbers}) + "\n")
-                stream.flush()
-                print(evidence, step, json.dumps(numbers), flush=True)
-            if (
-                step % args.eval_every == 0
-                or step in args.eval_steps
-                or step == args.steps
-            ):
-                result = {
-                    **read_progress(step),
-                    **numbers,
-                    "elapsed_seconds": time.perf_counter() - started,
-                }
-                stream.write(json.dumps(result) + "\n")
-                stream.flush()
-                print(evidence, json.dumps(result), flush=True)
-                destination = output / f"state-{step:06d}.msgpack"
-                temporary = destination.with_suffix(f".tmp-{os.getpid()}")
-                temporary.write_bytes(
-                    flax.serialization.to_bytes(
-                        {"params": params, "optimiser": optimiser_state, "step": step}
-                    )
-                )
-                temporary.replace(destination)
-        if len(final_indices):
-            final_read = read_split(args.steps, final_indices, "final_test")
+    eval_steps = (
+        set(range(args.eval_every, args.steps + 1, args.eval_every))
+        | set(args.eval_steps)
+        | {0, args.steps}
+    )
+    params, _ = run_arm(
+        output,
+        evidence,
+        manifest,
+        params,
+        optimiser_state,
+        update,
+        make_batch,
+        read_progress,
+        train_indices,
+        len(arrays["game"]),
+        args.steps,
+        args.batch_size,
+        args.seed,
+        eval_steps,
+        log_every=100,
+    )
+    if len(final_indices):
+        final_read = read_split(args.steps, params, final_indices, "final_test")
+        with (output / "metrics.jsonl").open("a") as stream:
             stream.write(json.dumps(final_read) + "\n")
-            stream.flush()
-            print(evidence, json.dumps(final_read), flush=True)
+        print(evidence, json.dumps(final_read), flush=True)
     jax.clear_caches()
 
 
@@ -378,7 +447,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--data", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--out", required=True)
     parser.add_argument(
         "--arms",
         nargs="+",

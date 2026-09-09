@@ -154,7 +154,7 @@ PS_SERVICE_URI=ws://localhost:8081 env/bin/python -m rl.offline.interval_feature
 env/bin/python -m rl.offline.train_interval \
   --checkpoint ckpts/gen9/ckpt_01889162 \
   --data runtime/interval-01889162/features.npz \
-  --output runtime/interval-hold-01889162 --steps 25000 --eval-every 5000
+  --out runtime/interval-hold-01889162 --steps 25000 --eval-every 5000
 ```
 
 Use a fresh output directory; existing experiments are never overwritten. The
