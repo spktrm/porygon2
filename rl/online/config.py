@@ -597,13 +597,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # player_support_n_tau_row / player_support_saturated_frac.
     player_support_tau_max_mass: float = 0.5
     # Screened OFFLINE over recorded chunks at .001 / .0025 / .005
-    # (rl/offline/support_screen.py): the smallest that lifts the abandoned
-    # cells without a > 10% rise in shared-encoder gradient rms. Never
-    # swept in a live learner -- config is a jit static argname and a
-    # host-varied coefficient compiles one executable per value. 0.0 is
-    # exactly off (no term at all), which is where it sits until the
-    # screen sets it before the restart.
-    player_support_hinge_coef: float = 0.0
+    # (rl/offline/support_screen.py, ckpt_02014000, 64 chunks): the encoder
+    # gradient norm moved by at most +0.01% at any of them against the 10%
+    # ceiling, and the hinge's directional pull on the switch logits was
+    # restoring at every value (-.00008 / -.00019 / -.00039); one restored
+    # Adam step lifts no exposure measurably at any coefficient (min legal
+    # probability .0197 before and after, 27.3% of legal cells under .01),
+    # so the cost half of the criterion decided it and the top of the
+    # screened range landed. Never swept in a live learner -- config is a
+    # jit static argname and a host-varied coefficient compiles one
+    # executable per value. 0.0 is exactly off (no term at all).
+    player_support_hinge_coef: float = 0.005
     # DeepNash's FineTuning threshold (rnad.py FineTuning._threshold, its
     # reference value .03): a legal action whose probability is below it is
     # REMOVED and the rest renormalised (rl/model/utils.py prune_log_policy,

@@ -205,9 +205,13 @@ def test_scope_is_the_v_trace_ratio_and_nothing_else():
         game_length=jnp.full((1, B), T, dtype=jnp.int32),
         game_step_offset=jnp.zeros((1, B), dtype=jnp.int32),
     )
+    # player_loss_pg is NOT pinned: the surrogate's ratio is raw but its
+    # advantage is v-trace's, which the threshold changes by design (a
+    # discarded row's advantage is 0 and the batch normalisation moves).
+    # The ratio side is pinned through the clip fraction.
     pinned = (
         "player_learner_actor_ratio",
-        "player_loss_pg",
+        "player_ppo_clip_frac",
         "player_ref_kl",
         "player_loss_entropy",
         "player_loss_support",

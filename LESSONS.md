@@ -4052,3 +4052,34 @@ immune damaging move and an effective alternative;
 REVEALED-ability immunity .306 over 62 (T=.5: .130 / .371); 7
 simulator-confirmed immune actions at mean recorded probability .686. This
 is the before; the after is the same command on a later checkpoint.
+
+The coefficient screen, same window, same 64 chunks, four compiled train
+steps (TRAIN_STEP_JIT twice per batch from the restored state, 16
+batches): pre-update `player_loss_support` .358 with 27.3% of legal cells
+under tau (16.2% under .005, `player_support_min_prob` .0197,
+`N·tau_row` .066, the clamp never binding); shared-encoder gradient norm
+11.1699 / 11.1696 / 11.1700 / 11.1710 at 0 / .001 / .0025 / .005 (relative
+1.0000–1.0001 against the 10% ceiling); `player_switch_logit_grad_support`
+0 / −.00008 / −.00019 / −.00039 (restoring, the right sign); after ONE
+restored-Adam step every exposure read is unchanged to the fourth decimal
+at every coefficient (min .0197, below-.01 .272, below-.001 .048,
+`player_entropy_micro_taken` .432, switch mass .0996). So the screen bounds
+the cost at nothing and cannot see the benefit at one step by
+construction; the pre-registered rule ("the smallest that lifts exposure
+without > 10% encoder rms") has no smallest, and the top of the screened
+range, .005, landed — recorded as a cost-side decision, not a measured
+lift. If the live `player_support_active_fraction` does not fall from .27
+over the first 250k fresh decisions the coefficient is too small for the
+mechanism to be tested at all, and that is a separate restart, not a
+verdict on the hinge.
+
+Slow suite in the same window: everything green except
+`tests/test_history_carry.py::test_server_mixed_group_matches_single_forwards`
+(`np.squeeze` in `InferenceServer._run_group` meets an output leaf whose
+leading axis is not the request's T=1), which fails IDENTICALLY at tag
+`pre-eval-slate-2026-09-09` in a clean worktree — pre-existing, not this
+set's; the inference server is not on the actor path (actors run on the
+CPU direct path) and it is left open here. The scope pin in
+`tests/test_vtrace_threshold.py` was corrected in passing: `player_loss_pg`
+is not invariant to the threshold (its advantage is v-trace's, changed by
+design); the ratio side is pinned through `player_ppo_clip_frac`.
