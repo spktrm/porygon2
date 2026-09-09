@@ -68,7 +68,7 @@ from rl.environment.utils import (
 )
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import invalid_history_carry
-from rl.model.utils import ParamsContainer
+from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import DeviceParamsCache
 
 
@@ -126,7 +126,7 @@ class InferenceServer:
         max_batch: int = 16,
         params_cache_size: int = 16,
         stats: ActorStats | None = None,
-        player_params_view: Callable | None = None,
+        player_params_view: Callable[[Params], Params] | None = None,
     ):
         self._queue: "queue.SimpleQueue[_InferenceRequest]" = queue.SimpleQueue()
         # Per-phase timing sink for _run_group (rl/environment/actor_stats.py).
@@ -149,7 +149,7 @@ class InferenceServer:
         apply_with_heads = functools.partial(player_apply_fn, head_params=head_params)
 
         def _single(params, rng_key, actor_input: PlayerActorInput):
-            # Mirrors Agent._step_player's call exactly (same positional
+            # Mirrors Agent._step's call exactly (same positional
             # actor_output placeholder, same rngs collection name).
             return apply_with_heads(
                 params,
@@ -160,7 +160,7 @@ class InferenceServer:
 
         # in_axes: shared params, per-request rng key, per-request input.
         # Each vmap slice sees env [1(T), ...] / history [H, ...] — the
-        # identical layout Agent._step_player feeds the same apply_fn, so
+        # identical layout Agent._step feeds the same apply_fn, so
         # no model change is involved; this is the same "vmap the
         # single-step apply over a batch axis" move the learner's
         # capacity probe already makes.
@@ -285,7 +285,7 @@ class InferenceServer:
             ]
             stacked = PlayerActorInput(
                 # [B, T=1, ...]: each vmap slice must see env with the same
-                # leading T=1 axis Agent._step_player's `t[None, ...]` adds —
+                # leading T=1 axis Agent._step's `t[None, ...]` adds —
                 # history/packed_history pass through un-expanded there, so
                 # they stack to [B, H, ...] with no extra axis.
                 env=jax.tree.map(
@@ -329,7 +329,7 @@ class InferenceServer:
             request.output = PlayerAgentOutput(
                 actor_output=jax.tree.map(
                     # [B, T=1, ...] -> drop this request's T axis, same
-                    # squeeze Agent._step_player applies.
+                    # squeeze Agent._step applies.
                     lambda x: np.squeeze(x[i], axis=0),
                     batched_output,
                 )
