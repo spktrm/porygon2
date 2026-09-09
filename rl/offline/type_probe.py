@@ -50,6 +50,7 @@ import numpy as np
 
 from rl.environment.data import TARGET_SLOT_INDICES, WILDCARD_MOVE_INDICES
 from rl.environment.protos.features_pb2 import (
+    EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
     MovesetFeature,
@@ -59,7 +60,9 @@ from rl.model.constants import (
     _BANK_MOVE_OFFSET,
     CELL_BANK_SRC,
     MOVE_ROWS,
+    NUM_PRIVATE_SLOTS,
     OPP_ACTIVE_PUBLIC_ROWS,
+    PRIVATE_ROWS,
     PUBLIC_ROWS,
     TARGET_ROWS,
 )
@@ -92,6 +95,8 @@ _TYPECHANGE = (
     EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TYPECHANGE1,
 )
 _MOVE_ID = MovesetFeature.MOVESET_FEATURE__MOVE_ID
+_PRIVATE_SPECIES = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
+_PRIVATE_HP_RATIO = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO
 _OPP_ROW = int(OPP_ACTIVE_PUBLIC_ROWS[0])
 # Move cells are row-major (slot, target) from the first move cell.
 MOVE_CELL_START = int(np.nonzero(CELL_BANK_SRC == _BANK_MOVE_OFFSET)[0][0])
@@ -263,6 +268,55 @@ def label_batch(tables: TypeTables, env, steps: np.ndarray):
     return records
 
 
+def label_switch_batch(tables: TypeTables, env, steps: np.ndarray):
+    """One record per (step, legal switch cell): the candidate's private
+    sheet slot and two matchup classes against the opponent's active --
+    OFFENSIVE (the candidate's primary type into the opponent, its revealed
+    ability's immunity applied) and DEFENSIVE (the opponent's primary type
+    into the candidate's types; the candidate's own ability immunities are
+    not modelled). `alive` checks the slot mapping: a legal switch target
+    must have hp left."""
+    mask = np.asarray(env.action_mask, bool)
+    revealed = np.asarray(env.revealed_team)
+    public = np.asarray(env.public_team)
+    private = np.asarray(env.private_team)
+    records = []
+    for time_index, batch_index in zip(*np.nonzero(steps)):
+        row_mask = mask[time_index, batch_index]
+        defend = opponent_types(
+            tables,
+            revealed[time_index, batch_index, _OPP_ROW],
+            public[time_index, batch_index, _OPP_ROW],
+        )
+        if defend is None:
+            continue
+        immune_to = tables.ability_immunity.get(
+            int(revealed[time_index, batch_index, _OPP_ROW, _ABILITY])
+        )
+        for slot in range(NUM_PRIVATE_SLOTS):
+            if not row_mask[slot]:
+                continue
+            candidate = private[time_index, batch_index, slot]
+            candidate_types = tables.species_types.get(int(candidate[_PRIVATE_SPECIES]))
+            if candidate_types is None:
+                continue
+            records.append(
+                dict(
+                    t=int(time_index),
+                    b=int(batch_index),
+                    slot=slot,
+                    offensive=tables.effectiveness(
+                        candidate_types[0], defend, immune_to
+                    ),
+                    defensive=tables.effectiveness(defend[0], candidate_types, None),
+                    cand_type=tables.type_index[candidate_types[0]],
+                    opp_type=tables.type_index[defend[0]],
+                    alive=bool(candidate[_PRIVATE_HP_RATIO] > 0),
+                )
+            )
+    return records
+
+
 def one_hot(values: np.ndarray, size: int) -> np.ndarray:
     out = np.zeros((len(values), size), dtype=np.float64)
     out[np.arange(len(values)), values] = 1.0
@@ -296,6 +350,18 @@ def run_probe_e(
         f"bilinear move x target (post, rp{projection_dim})": [],
     }
     klass, move_type, opp_type, chunk_of = [], [], [], []
+    switch_readouts = {
+        "candidate row (pre-trunk)": [],
+        "candidate row (post-trunk)": [],
+        "opp active row (pre-trunk)": [],
+        "opp active row (post-trunk)": [],
+        "concat candidate + opp (pre-trunk)": [],
+        "concat candidate + opp (post-trunk)": [],
+        f"bilinear candidate x opp (pre, rp{projection_dim})": [],
+        f"bilinear candidate x opp (post, rp{projection_dim})": [],
+    }
+    switch_labels = {"offensive": [], "defensive": []}
+    cand_type, switch_opp_type, switch_chunk_of, alive = [], [], [], []
     # behaviour: per step, the legal damaging classes and the mass on each
     step_records = []
     for start in range(0, len(chunks), batch_size):
@@ -349,11 +415,42 @@ def run_probe_e(
                 (record["klass"], mass)
             )
         step_records.extend(by_step.values())
+        for record in label_switch_batch(tables, env, steps):
+            time_index, batch_index = record["t"], record["b"]
+            candidate_row = PRIVATE_ROWS.start + record["slot"]
+            opp_row = PUBLIC_ROWS.start + _OPP_ROW
+            pre = assembled[time_index, batch_index, candidate_row]
+            post = encoded[time_index, batch_index, candidate_row]
+            opp_pre = assembled[time_index, batch_index, opp_row]
+            opp_post = encoded[time_index, batch_index, opp_row]
+            switch_readouts["candidate row (pre-trunk)"].append(pre)
+            switch_readouts["candidate row (post-trunk)"].append(post)
+            switch_readouts["opp active row (pre-trunk)"].append(opp_pre)
+            switch_readouts["opp active row (post-trunk)"].append(opp_post)
+            switch_readouts["concat candidate + opp (pre-trunk)"].append(
+                np.concatenate([pre, opp_pre])
+            )
+            switch_readouts["concat candidate + opp (post-trunk)"].append(
+                np.concatenate([post, opp_post])
+            )
+            switch_readouts[
+                f"bilinear candidate x opp (pre, rp{projection_dim})"
+            ].append(np.outer(pre @ projection[0], opp_pre @ projection[1]).ravel())
+            switch_readouts[
+                f"bilinear candidate x opp (post, rp{projection_dim})"
+            ].append(np.outer(post @ projection[0], opp_post @ projection[1]).ravel())
+            for name in switch_labels:
+                switch_labels[name].append(record[name])
+            cand_type.append(record["cand_type"])
+            switch_opp_type.append(record["opp_type"])
+            switch_chunk_of.append(start + batch_index)
+            alive.append(record["alive"])
         logger.info(
-            "probe e: %d/%d chunks, %d move records",
+            "probe e: %d/%d chunks, %d move records, %d switch records",
             start + len(group),
             len(chunks),
             len(klass),
+            len(cand_type),
         )
 
     klass = np.asarray(klass)
@@ -416,6 +513,63 @@ def run_probe_e(
         )
 
     print(
+        "\nSWITCH PAIR -- held-out-by-chunk ridge on (my legal switch candidate, "
+        "their active). OFFENSIVE = candidate's primary type into the opponent, "
+        "DEFENSIVE = opponent's primary type into the candidate. Same estimator "
+        "pre- and post-trunk; the rp bilinear is an accessibility bound only."
+    )
+    cand_type = np.asarray(cand_type)
+    switch_opp_type = np.asarray(switch_opp_type)
+    switch_train = ~np.isin(np.asarray(switch_chunk_of), held_chunks)
+    print(
+        f"  records: {len(cand_type)} legal switch cells; slot-mapping check: "
+        f"{np.mean(alive):.3f} of them have hp left (1.000 expected)"
+    )
+    for label_name, values in switch_labels.items():
+        values = np.asarray(values)
+        print(
+            f"  {label_name.upper()} majority-class floor acc "
+            f"{np.bincount(values).max() / len(values):.3f}; class shares "
+            + ", ".join(
+                f"{name} {np.mean(values == i):.3f}"
+                for i, name in enumerate(CLASS_NAMES)
+            )
+        )
+        label_onehot = one_hot(values, 4)
+        shuffled_values = rng.permutation(values)
+        for name, rows in switch_readouts.items():
+            features = np.asarray(rows, dtype=np.float64)
+            acc, n_held = _ridge_accuracy(features, label_onehot, switch_train, alpha)
+            corr, _ = _ridge_r(features, values.astype(np.float64), switch_train, alpha)
+            floor, _ = _ridge_r(
+                features, shuffled_values.astype(np.float64), switch_train, alpha
+            )
+            print(
+                f"    {name:48s} acc {acc:.3f}  r {corr:+.3f}  shuffled r {floor:+.3f}  n_held {n_held}"
+            )
+    print("  positive controls (each operand alone):")
+    for name in ("candidate row (pre-trunk)", "candidate row (post-trunk)"):
+        acc, _ = _ridge_accuracy(
+            np.asarray(switch_readouts[name], np.float64),
+            one_hot(cand_type, num_types),
+            switch_train,
+            alpha,
+        )
+        print(
+            f"    {name:48s} CANDIDATE PRIMARY TYPE acc {acc:.3f}  (chance {np.bincount(cand_type).max() / len(cand_type):.3f})"
+        )
+    for name in ("opp active row (pre-trunk)", "opp active row (post-trunk)"):
+        acc, _ = _ridge_accuracy(
+            np.asarray(switch_readouts[name], np.float64),
+            one_hot(switch_opp_type, num_types),
+            switch_train,
+            alpha,
+        )
+        print(
+            f"    {name:48s} OPP PRIMARY TYPE acc {acc:.3f}  (chance {np.bincount(switch_opp_type).max() / len(switch_opp_type):.3f})"
+        )
+
+    print(
         "\nBEHAVIOUR -- actor policy mass (temp 1.0) among legal DAMAGING moves, "
         "renormalised over them, on steps where a better class is also legal. "
         "'uniform' = the share a matchup-blind policy would give. Lower than "
@@ -473,10 +627,14 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ridge-alpha", type=float, default=1.0)
     parser.add_argument("--projection-dim", type=int, default=24)
+    parser.add_argument("--max-sides", type=int, default=0)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
-    chunks = harness.flatten(harness.load(args.games_pkl))
+    sides = harness.load(args.games_pkl)
+    if args.max_sides:
+        sides = sides[: args.max_sides]
+    chunks = harness.flatten(sides)
     net = get_player_model(get_player_model_config(9, train=True))
     variables = harness.load_params(args.ckpt)
     tables = TypeTables(args.data_dir)
