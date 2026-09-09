@@ -76,12 +76,12 @@ class SearchBudget(NamedTuple):
 
 
 class SearchRoot(NamedTuple):
-    """`q` and `bonus` are (NUM_ACTION_CELLS,): the per-cell value (0 off
-    the legal set) and what the readout's logits receive (Q / temp on the
-    legal cells; all zero when the root overflowed). The deep leaves are
-    per-decision reads of the depth-1 nodes (0 at depth 1)."""
+    """`cell_values` and `bonus` are (NUM_ACTION_CELLS,): the per-cell value
+    (0 off the legal set) and what the readout's logits receive (Q / temp
+    on the legal cells; all zero when the root overflowed). The deep leaves
+    are per-decision reads of the depth-1 nodes (0 at depth 1)."""
 
-    q: jax.Array
+    cell_values: jax.Array
     bonus: jax.Array
     num_legal: jax.Array
     legal_truncated: jax.Array
@@ -241,10 +241,12 @@ def search_root(
     q_cells = jnp.where(cell_valid, values.mean(axis=0), 0.0)
     # Padded slots point at cell 0 with a zero value: a sum, never a set,
     # so a legal cell 0 keeps its own Q.
-    q = jax.ops.segment_sum(q_cells, cells, num_segments=num_cells)
-    bonus = jnp.where(legal & jnp.logical_not(legal_truncated), q / budget.temp, 0.0)
+    cell_values = jax.ops.segment_sum(q_cells, cells, num_segments=num_cells)
+    bonus = jnp.where(
+        legal & jnp.logical_not(legal_truncated), cell_values / budget.temp, 0.0
+    )
     return SearchRoot(
-        q=q,
+        cell_values=cell_values,
         bonus=bonus,
         num_legal=num_legal,
         legal_truncated=legal_truncated,
@@ -268,7 +270,7 @@ def search_diagnostics(
     )
     pi_search = jnp.where(legal, jnp.exp(log_pi_search), 0.0)
     root_kl = jnp.sum(pi_search * (log_pi_search - log_pi), where=legal)
-    search_value = jnp.sum(pi_search * root.q, where=legal)
+    search_value = jnp.sum(pi_search * root.cell_values, where=legal)
     return SearchDiagnostics(
         root_kl=root_kl,
         search_value=search_value,

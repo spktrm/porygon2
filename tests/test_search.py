@@ -151,7 +151,7 @@ def test_root_q_ranks_legal_cells_by_the_imagined_value():
             rows, legal, jax.random.key(0), _stub_fns(code_value), _budget()
         )
     )(_rows(), _legal(legal_cells))
-    q = np.asarray(root.q)
+    q = np.asarray(root.cell_values)
     np.testing.assert_allclose(q[legal_cells], [0.2, -0.5, 0.9], atol=1e-6)
     assert np.argmax(q) == 120 and q[40] == q[np.asarray(_legal(legal_cells))].min()
     np.testing.assert_allclose(
@@ -178,7 +178,7 @@ def test_padding_never_double_counts_cell_zero():
             rows, legal, jax.random.key(0), _stub_fns(code_value), _budget()
         )
     )(_rows(), _legal([0, 9, 17]))
-    np.testing.assert_allclose(float(root.q[0]), 0.7, atol=1e-6)
+    np.testing.assert_allclose(float(root.cell_values[0]), 0.7, atol=1e-6)
 
 
 def test_overflow_returns_the_base_policy_and_is_counted():
@@ -193,7 +193,7 @@ def test_overflow_returns_the_base_policy_and_is_counted():
     assert np.all(np.asarray(root.bonus) == 0)
     # The scored cells keep their Q as a read.
     np.testing.assert_allclose(
-        np.asarray(root.q)[:MAX_CELLS], code_value[:MAX_CELLS], atol=1e-6
+        np.asarray(root.cell_values)[:MAX_CELLS], code_value[:MAX_CELLS], atol=1e-6
     )
 
 
@@ -283,7 +283,7 @@ def test_depth_two_backs_up_the_improved_candidates_through_continuation():
     root = _depth_two_q(
         code_value, candidate_codes=candidate_codes, candidate_rho=rho, terminal=-1.0
     )
-    np.testing.assert_allclose(float(root.q[3]), improved, rtol=1e-5)
+    np.testing.assert_allclose(float(root.cell_values[3]), improved, rtol=1e-5)
     np.testing.assert_allclose(float(root.deep_gain), improved - 0.4, rtol=1e-5)
     np.testing.assert_allclose(float(root.candidate_retained_mass), 1.0, rtol=1e-6)
     assert float(root.candidate_occupied) == NUM_CANDIDATES
@@ -296,7 +296,7 @@ def test_depth_two_backs_up_the_improved_candidates_through_continuation():
         continue_prob=0.0,
         terminal=-1.0,
     )
-    np.testing.assert_allclose(float(root.q[3]), -1.0, atol=1e-6)
+    np.testing.assert_allclose(float(root.cell_values[3]), -1.0, atol=1e-6)
     np.testing.assert_allclose(float(root.deep_continue), 0.0, atol=1e-6)
     # The plan's counterexamples: a node aliasing a 50% terminal win with
     # a 50% continuation worth -1 backs up 0, whatever its V; the
@@ -315,7 +315,7 @@ def test_depth_two_backs_up_the_improved_candidates_through_continuation():
             continue_prob=continue_prob,
             terminal=terminal,
         )
-        np.testing.assert_allclose(float(root.q[3]), expected, atol=1e-6)
+        np.testing.assert_allclose(float(root.cell_values[3]), expected, atol=1e-6)
     # Unoccupied candidates are never read, whatever their value.
     occupied = np.array([True, True, False, False, False, False, False, False])
     root = _depth_two_q(
@@ -328,7 +328,7 @@ def test_depth_two_backs_up_the_improved_candidates_through_continuation():
     mu = np.exp(logits - logits.max())
     mu = mu / mu.sum()
     np.testing.assert_allclose(
-        float(root.q[3]), float(mu @ candidate_values[:2]), rtol=1e-5
+        float(root.cell_values[3]), float(mu @ candidate_values[:2]), rtol=1e-5
     )
     assert float(root.candidate_occupied) == 2.0
 
@@ -354,7 +354,7 @@ def test_diagnostics_read_zero_at_zero_bonus_and_the_kl_of_a_tilt():
 def _root_with(q, legal):
     zero = jnp.zeros((), jnp.float32)
     return SearchRoot(
-        q=q,
+        cell_values=q,
         bonus=jnp.where(legal, q / TEMP, 0.0),
         num_legal=legal.sum(),
         legal_truncated=jnp.asarray(False),

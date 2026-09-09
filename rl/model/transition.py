@@ -451,8 +451,6 @@ class TransitionModel(nn.Module):
         self.cls_head = MLP(**self.cfg.cls_head.mlp.to_dict())
         self.terminal_outcome_head = MLP(**self.cfg.terminal_outcome.mlp.to_dict())
 
-    # ---- embeddings ---------------------------------------------------
-
     def code_embedding(self, code_one_hot: jax.Array) -> jax.Array:
         """(G, K) one-hot -> the concatenated code-table vector (D,)."""
         table = self.code_table.astype(self.dtype)
@@ -469,8 +467,6 @@ class TransitionModel(nn.Module):
             .astype(jnp.float32)
             .reshape(self.cfg.code_groups, self.cfg.code_classes)
         )
-
-    # ---- the node interface (search, the probe and the tests bind here) --
 
     def imagine(
         self,
@@ -603,8 +599,6 @@ class TransitionModel(nn.Module):
         """E[outcome | this node ends the game] on the value support."""
         probs = jax.nn.softmax(self.node_readout(rows).terminal_logits, axis=-1)
         return probs @ jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
-
-    # ---- the training unroll --------------------------------------------
 
     def real_state(
         self,

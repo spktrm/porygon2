@@ -72,14 +72,14 @@ def test_mcts_finds_delayed_value_through_latent_actions():
     result = run_search(stub_model())
     assert result.visits.sum() == 256
     assert result.visits[0] > result.visits[1] * 3
-    assert result.root.q[0] > 0.7
-    assert result.root.q[1] < -0.4
+    assert result.root.cell_values[0] > 0.7
+    assert result.root.cell_values[1] < -0.4
     assert result.model_calls <= 256
     assert result.depth_reached == 2
     np.testing.assert_array_equal(result.visits[2:], 0)
     # A depth-one control cannot see these delayed rewards.
     shallow = run_search(stub_model(), depth=1)
-    np.testing.assert_array_equal(shallow.root.q, 0)
+    np.testing.assert_array_equal(shallow.root.cell_values, 0)
     probabilities = jax.nn.softmax(
         jnp.where(jnp.array([True, True, False, False]), result.root.bonus, -jnp.inf)
     )
@@ -91,10 +91,10 @@ def test_mcts_finds_delayed_value_through_latent_actions():
 def test_fractional_terminal_payoff_is_counted_once():
     result = run_search(stub_model(continuation=0.25, terminal=-1))
     # Best descendant return .8: .75*(-1) + .25*.8 = -.55, not +.8.
-    assert -0.58 < result.root.q[0] < -0.50
-    assert result.root.q[1] < -0.80
+    assert -0.58 < result.root.cell_values[0] < -0.50
+    assert result.root.cell_values[1] < -0.80
     terminal = run_search(stub_model(continuation=0, terminal=0.6))
-    np.testing.assert_allclose(terminal.root.q[:2], 0.6, atol=1e-6)
+    np.testing.assert_allclose(terminal.root.cell_values[:2], 0.6, atol=1e-6)
     assert terminal.depth_reached == 1
 
 
@@ -106,7 +106,7 @@ def test_chance_is_sampled_not_optimised():
         chance_samples=64,
         legal=jnp.array([True, False, False, False]),
     )
-    assert abs(float(result.root.q[0])) < 0.3
+    assert abs(float(result.root.cell_values[0])) < 0.3
     assert result.model_calls <= 64
     assert result.visits[0] == 1024
 

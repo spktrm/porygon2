@@ -365,7 +365,7 @@ def mcts_root(
     )
     denominator = jnp.maximum(interior.sum(), 1)
     root = SearchRoot(
-        q=action_values,
+        cell_values=action_values,
         bonus=bonus,
         num_legal=num_legal,
         legal_truncated=overflow,

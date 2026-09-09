@@ -435,9 +435,6 @@ def test_masked_percentile_ignores_masked_out_values():
     assert float(masked_percentile(values, jnp.zeros_like(mask), 0.9)) == -1.0
 
 
-# ---- the free functions ------------------------------------------------
-
-
 def test_legal_enumeration_indexes_the_taken_cell_and_counts_overflow():
     from rl.model.transition import legal_enumeration
 
@@ -596,9 +593,6 @@ def test_candidate_targets_exclude_the_prefix_and_the_loss_reads_the_exact_condi
     np.testing.assert_allclose(
         float(read.loss), float(read.cross_entropy[0]), rtol=1e-6
     )
-
-
-# ---- the standalone module -------------------------------------------
 
 
 def _small_transition_cfg(code_groups=2, unroll_steps=2):
@@ -1062,9 +1056,6 @@ def test_code_groups_zero_drops_the_chance_path_only():
     np.testing.assert_array_equal(
         np.asarray(with_rng.steps.pred), np.asarray(out.steps.pred)
     )
-
-
-# ---- the loss bracket ------------------------------------------------
 
 
 NUM_OFFSETS = 2
@@ -1651,9 +1642,6 @@ def test_newly_valid_split_reads_only_transitions_with_an_appearing_row():
     )
     assert float(logs["player_transition_value_delta_r2_no_newly_valid"]) == 0.0
     assert float(logs["player_transition_newly_valid_frac"]) == pytest.approx(1 / 3)
-
-
-# ---- the real model --------------------------------------------------
 
 
 def _network_with_frozen_transition_value_head():
