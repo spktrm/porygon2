@@ -4251,3 +4251,39 @@ of the deleted identity test kept as `test_fresh_stream_under_a_dynamic_cap`),
 `tests/test_buffer.py`, `tests/test_chunking.py`; the train-step leaf dump
 against the tag is owed at the next learner-free window with the rest of
 the tidy.
+
+## Probe — 2026-09-10 switch pair (why every head is flat within switching)
+
+`rl/offline/type_probe.py` SWITCH PAIR block, read at the stop checkpoint
+ckpt_02339569 over the frozen cohort (240 heuristic games, 18,607 legal
+switch cells, 6,121 held out by chunk; the learner stopped for it). Ridge
+reads of the type chart on (my legal switch candidate's private sheet row,
+the opponent's active row), both labels: candidate row pre .486 / post .498
+(OFFENSIVE, floor .542) and .483 / .525 (DEFENSIVE, floor .537); opp row
+pre .496 / post .505 and .517 / .501; concat pre .487 / post .498 and .497 /
+.518; random bilinear rp24 pre r +.14 / +.20, post +.03 / +.08. Every read
+at or under the majority floor; only the PRE-trunk bilinear sees the chart
+at all. Positive controls: the candidate's own primary type from its row
+.916 pre → .637 post; the opponent's .946 → .869. The move × target control
+in the same run: move row post-trunk acc .658 / r +.64 (floor .565), the
+opponent's type readable from the move row at .664, the policy's mass on
+immune moves .148 vs .389 uniform and on supereffective .716 vs .412 — the
+2026-09-03 "post-trunk .50" read is stale for moves.
+
+Reading: the trunk computes the move-vs-opponent matchup into the move row,
+which the readout multiplies against the target row, and computes NOTHING
+of candidate-vs-opponent into the sheet row, which the switch scalar reads
+ALONE (`FlatActionReadout`: one bilinear for moves x targets, a scalar per
+sheet row for switching). No head that reads the sheet rows — the retired Q
+heads, the critic, the switch scalar — is given both sides of the pair, so
+the failure is specific to switching across all of them. Justified: a
+pairwise operand at the switch read over the PRE-trunk rows (types present
+at .92 / .95; the chart is a rank-18 bilinear in type bits) —
+switch(s) = w·c_s + q_raw(r_s)·k_raw(r_opp), q_raw zero-init. Not
+established: the learned-bilinear ceiling on the switch pair (rp24 is an
+accessibility bound only; the move table's .79 came from a learned fit), any
+strength effect, or that the chart is the whole of a switch's value.
+Write-up: docs/switch-pair-probe-2026-09-10.md (local); log
+runtime/type-probe-switch/ckpt_02339569.log. Harness note: run probes in a
+tmux window — the agent harness's memory guard killed two attempts with
+23 GB free.
