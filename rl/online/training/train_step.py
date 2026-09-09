@@ -51,6 +51,7 @@ from rl.online.training.loss import (
     policy_gradient_loss,
     uniform_kl_modalities,
 )
+from rl.online.training.move_telemetry import legal_support_telemetry
 from rl.online.training.replay import chunk_policy_mismatch
 from rl.online.training.switch_telemetry import switch_loss_telemetry
 from rl.online.training.targets import (
@@ -61,6 +62,7 @@ from rl.online.training.targets import (
 from rl.online.training.telemetry import (
     ActionAxisMasks,
     action_axis_masks,
+    applied_delta_telemetry,
     belief_accuracy_logs,
     calculate_r2,
     code_usage_logs,
@@ -1112,6 +1114,7 @@ def train_step(
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
+        learner_actor_ratio_mean = average(learner_actor_ratio, policy_mask)
 
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
@@ -1359,6 +1362,11 @@ def train_step(
             player_loss_modality_kl=loss_modality_kl,
         )
         pg_logs.update(
+            legal_support_telemetry(
+                learner_log_policy, flat_action_mask, switch_actions, policy_mask
+            )
+        )
+        pg_logs.update(
             switch_loss_telemetry(
                 learner_log_policy,
                 reg_log_policy,
@@ -1479,6 +1487,16 @@ def train_step(
             player_action_normalized_entropy=action_head_normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
+            # The LEARNER/behaviour ratio's effective sample size and tail,
+            # a different population from player_isr_ess /
+            # player_rho_clip_frac (the TARGET/behaviour ratio v-trace
+            # consumes, rl/online/training/targets.py) -- never one axis.
+            player_learner_actor_ess=learner_actor_ratio_mean
+            * learner_actor_ratio_mean
+            / (average(jnp.square(learner_actor_ratio), policy_mask) + 1e-8),
+            player_learner_actor_ratio_tail_gt2=average(
+                learner_actor_ratio > 2.0, policy_mask
+            ),
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
             player_learner_actor_forward_kl=loss_actor_forward_kl,
             # Modality-resolved split of the SAME k3 estimator. The
@@ -1608,6 +1626,7 @@ def train_step(
             # kernel rms sitting at its lecun init (0.0625 at fan-in 256)
             # with a flat gate = the within-modality route never trained.
             **head_param_telemetry(prev_player_state.params, player_grads),
+            **applied_delta_telemetry(prev_player_state.params, player_state.params),
             player_win_returns_sum=average(
                 player_targets.win_returns.sum(axis=-1), value_mask
             ),

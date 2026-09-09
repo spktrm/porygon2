@@ -389,6 +389,40 @@ _GRAD_SUBTREES = {
 }
 
 
+# The action-readout leaves a support force acts on directly (the flat
+# hinge, 2026-09-09): the switch scalar's bias, the move-side `query` and
+# the target-side `key`/`local_tgt` projections -- a tgt column is read by
+# every legal move cell of a row, which is the high-gain route the
+# dx65cpwp runaway took.
+_APPLIED_DELTA_LEAVES = {
+    "player_applied_delta_rms_switch_bias": ("action_head", "switch_bias"),
+    "player_applied_delta_rms_pointer_query": ("action_head", "query", "kernel"),
+    "player_applied_delta_rms_pointer_key": ("action_head", "key", "kernel"),
+    "player_applied_delta_rms_pointer_local_tgt": (
+        "action_head",
+        "local_tgt",
+        "kernel",
+    ),
+}
+
+
+def applied_delta_telemetry(prev_params, params) -> dict[str, jax.Array]:
+    """rms of the update Adam ACTUALLY applied to each leaf in
+    _APPLIED_DELTA_LEAVES (post-clip, post the non-finite revert): the
+    gradient norm says what was asked, this says what moved. `prev_params`
+    / `params` are the flax variable dicts before and after the update."""
+    before, after = prev_params["params"], params["params"]
+    logs = {}
+    for key, path in _APPLIED_DELTA_LEAVES.items():
+        if not _has(after, path):
+            continue
+        delta = jnp.asarray(_get(after, path), jnp.float32) - jnp.asarray(
+            _get(before, path), jnp.float32
+        )
+        logs[key] = jnp.sqrt(jnp.mean(jnp.square(delta)))
+    return logs
+
+
 def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
     """Learner-side readouts of the action readout and the trunk actually
     learning: rms of each head leaf against its known init, and pre-clip

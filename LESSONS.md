@@ -3875,3 +3875,24 @@ cell's own logit; a real-model actor forward bit-identical under
 `HeadParams()` vs `HeadParams(prune_threshold=0.0)` with a .1 control that
 changes `log_prob` and no metric), `tests/test_guards.py`. Not claimed:
 any strength effect — nothing here changes what trains.
+
+## Addition ledger — 2026-09-09 flat support telemetry and applied deltas
+
+Observers only, no loss force, no model change. `legal_support_telemetry`
+(`rl/online/training/move_telemetry.py`, called beside
+`switch_loss_telemetry`) reads each real decision row's legal cells as flat
+complete actions: min and median cell probability, legal-cell count, the
+fraction of legal cells below .01/.005/.001, and the same split switch vs
+move (`player_support_*`). `applied_delta_telemetry` (`telemetry.py`)
+generalises `player_switch_bias_applied_delta` to the readout leaves a
+support force acts on directly — `switch_bias`, the move `query`, the
+target `key` and `local_tgt` projections — as rms of the post-clip,
+post-revert update (`player_applied_delta_rms_*`); gradient norms say what
+was asked, these say what moved. `player_learner_actor_ess` and
+`player_learner_actor_ratio_tail_gt2` read the learner/behaviour ratio, a
+different population from the target/behaviour `player_isr_ess` /
+`player_rho_clip_frac` v-trace consumes. These are the exposure instrument
+for the support hinge and the calibration input for the v-trace threshold
+that follow; the panels land with those. Validation:
+`tests/test_move_telemetry.py` (hand-computed rows with a forced row and a
+masked row, permutation invariance, and the lifted-cell positive control).

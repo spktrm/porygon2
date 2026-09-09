@@ -76,6 +76,28 @@ records the actual pre-clip bias gradient and `player_switch_bias_applied_delta`
 records its update after Adam and the non-finite gate. These separate loss
 pressure from momentum on this scalar; they do not explain all policy movement.
 
+## Flat legal-cell support (exposure)
+
+`player_support_{min,median}_prob` and `player_support_legal_count` read each
+real decision row's legal cells as flat complete actions (a move x target or a
+switch is one cell); `player_support_frac_below_{p01,p005,p001}` is the share of
+legal cells below .01 / .005 / .001. `player_support_{switch,move}_min_prob` and
+`player_support_{switch,move}_frac_below_*` split the same reads by cell kind,
+averaged over the rows that have a cell of that kind. Observers only
+(`rl/online/training/move_telemetry.py`): they are the exposure instrument for
+any support force and the calibration input for a pruning threshold.
+
+`player_learner_actor_ess` and `player_learner_actor_ratio_tail_gt2` are the
+LEARNER/behaviour ratio's normalised effective sample size and the share of
+rows with that ratio above 2. They describe a different population from
+`player_isr_ess` / `player_rho_clip_frac`, which read the TARGET/behaviour
+ratio v-trace consumes — never plot the two families on one axis.
+
+`player_applied_delta_rms_{switch_bias,pointer_query,pointer_key,pointer_local_tgt}`
+are the rms of the update Adam actually applied to those action-readout leaves
+(post-clip, post the non-finite revert), generalising
+`player_switch_bias_applied_delta`.
+
 ## Paired switch-advantage audit
 
 `player_adv_audit_{switch,stay}_{all,1_5,6_15,16_40,41_plus}_*` compares
