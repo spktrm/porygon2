@@ -4125,3 +4125,17 @@ the discard rate by taken modality — a switch-side rate well above the
 move-side one is the threshold acting on rare switches, the self-sealing
 direction only the hinge resists. Validation: fast suite; the smoke
 test's key list carries the two names.
+
+Second guard trip of the day: the .005 relaunch stopped itself at 16:39 on
+the host-RAM guard at `ckpt_02038000`, 24k updates in (the 13:08 trip came
+84k after the 08:12 relaunch; the run's history is 120–150k between
+trips — the interval is shortening and wants its own look). Cohort read on
+ckpt_02038000 against the ckpt_02014000 baseline, same 531 states:
+`ineffective_confident_mass` T=1 .144 → .133 (95% CI .081–.207 →
+.082–.191, overlapping), T=.5 .159 → .133, revealed-ability states .306 →
+.167 (62 states), simulator-confirmed immune actions 7 → 7. Descriptive:
+24k updates at coefficient .005 with the threshold live, not attributable
+to any one part. Relaunched from ckpt_02038000 with
+`player_support_hinge_coef` .05 and the discard split (b542724); the
+screen at .025/.05/.1 was skipped to keep the restart short and is owed at
+the next stop.
