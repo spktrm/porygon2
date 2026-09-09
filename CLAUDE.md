@@ -90,7 +90,10 @@ TypeScript game service speaking protobuf over websockets.
   controller. `league_ops.py`: checkpoint-pacing gate, snapshot
   publication, payoff readouts. `diagnostics.py`: RAM attribution.
   `targets.py`: v-trace/Retrace (f32 recursions). `loss.py`,
-  `controllers.py`, `telemetry.py`. `learner.py`: construction, the loop,
+  `controllers.py`, `telemetry.py`. `action_telemetry.py`: the readers over
+  the action axis that call loss/targets callables (legal-cell support,
+  the switch-logit JVPs, the paired advantage audit) — observers only.
+  `learner.py`: construction, the loop,
   the periodic schedule. Free functions over `RunState` where possible —
   that is what lets the tests drive them with plain stubs.
 - `rl/offline/` — `harness.py`: play games with plain params + re-run the

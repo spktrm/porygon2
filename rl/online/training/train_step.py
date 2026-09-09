@@ -41,7 +41,12 @@ from rl.model.transition_objectives import (
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.training.advantage_audit import paired_advantage_audit
+from rl.online.training.action_telemetry import (
+    legal_support_telemetry,
+    masked_policy,
+    paired_advantage_audit,
+    switch_loss_telemetry,
+)
 from rl.online.training.loss import (
     backward_kl_loss,
     clip_fraction,
@@ -51,8 +56,6 @@ from rl.online.training.loss import (
     policy_gradient_loss,
     support_hinge_loss,
 )
-from rl.online.training.move_telemetry import legal_support_telemetry
-from rl.online.training.switch_telemetry import switch_loss_telemetry
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
@@ -336,13 +339,6 @@ def _code_perplexity(probs: jax.Array, mask: jax.Array, prefix: str) -> dict:
         f"{prefix}_perplexity_mean": perplexity.mean(),
         f"{prefix}_perplexity_min": perplexity.min(),
     }
-
-
-def masked_policy(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
-    """f32 probabilities over legal cells: exp(log_policy), illegal cells
-    zeroed, renormalised so the legal mass sums to 1."""
-    policy = jnp.exp(log_policy.astype(jnp.float32)) * legal_mask
-    return policy / jnp.maximum(policy.sum(axis=-1, keepdims=True), 1e-8)
 
 
 def offset_take(array: jax.Array, offset: int) -> jax.Array:

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import MOVE_CELL_OFFSET, NUM_ACTION_CELLS, NUM_SWITCH_CELLS
-from rl.online.training.move_telemetry import legal_support_telemetry
+from rl.online.training.action_telemetry import legal_support_telemetry
 
 SWITCH_CELLS = jnp.arange(NUM_ACTION_CELLS) < NUM_SWITCH_CELLS
 

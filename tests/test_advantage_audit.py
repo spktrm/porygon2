@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from rl.environment.interfaces import Batch, PlayerEnvOutput, PlayerTransition
-from rl.online.training.advantage_audit import paired_advantage_audit
+from rl.online.training.action_telemetry import paired_advantage_audit
 from rl.online.training.targets import two_hot
 
 

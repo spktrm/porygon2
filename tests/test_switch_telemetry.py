@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 
 from rl.environment.data import MOVE_CELL_OFFSET, NUM_ACTION_CELLS, NUM_SWITCH_CELLS
+from rl.online.training.action_telemetry import switch_loss_telemetry
 from rl.online.training.loss import policy_gradient_loss, support_hinge_loss
-from rl.online.training.switch_telemetry import switch_loss_telemetry
 from rl.online.training.targets import reference_kl
 from rl.utils import average
 
