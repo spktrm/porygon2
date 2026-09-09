@@ -49,7 +49,7 @@ from rl.online.training.loss import (
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
-    uniform_kl_modalities,
+    support_hinge_loss,
 )
 from rl.online.training.move_telemetry import legal_support_telemetry
 from rl.online.training.replay import chunk_policy_mismatch
@@ -58,6 +58,7 @@ from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     reference_kl,
+    thresholded_target_ratio,
 )
 from rl.online.training.telemetry import (
     ActionAxisMasks,
@@ -900,12 +901,33 @@ def train_step(
         0.0,
     )
 
+    # Already flat: the env mask IS the block-cell vector since 2026-08-31.
+    flat_action_mask = player_transitions.env_output.action_mask
     target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
-    target_actor_ratio = jnp.exp(target_actor_log_ratio)
     # mu/pi_target clipped at 2, telemetry only (player_impact_clip_frac):
     # the IMPACT surrogate it once recentred is gone; the panel still
     # reads how far behaviour has drifted from the fast target.
     actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
+    # The v-trace ratio pi_target / mu with the TARGET policy thresholded at
+    # player_prune_threshold first (2026-09-09, DeepNash's FineTuning
+    # placement): a taken action the target has dropped below the line
+    # gets ratio 0 and v-trace discards the row. This is the only place
+    # the thresholded distribution enters the learner -- the learner
+    # ratio, the surrogate, the magnet, the entropy term and the support
+    # hinge all read the raw policies. The raw ratio feeds the telemetry
+    # twins (player_isr_ess_raw, ...) and nothing else.
+    (
+        target_actor_ratio,
+        target_actor_ratio_raw,
+        target_taken_kept,
+        target_removed_legal_frac,
+    ) = thresholded_target_ratio(
+        player_target_pred.action_head.log_policy,
+        player_actor_log_prob,
+        player_actor_action_head.action_index,
+        flat_action_mask,
+        config.player_prune_threshold,
+    )
 
     # IMPACT-style targets: the fast target network supplies the Retrace
     # reference policy and value/kl bootstraps. Under
@@ -921,10 +943,29 @@ def train_step(
         value_log_probs=target_value_log_probs,
         isr=target_actor_ratio,
         config=config,
+        isr_raw=target_actor_ratio_raw,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
+    # The discard rate: the support hinge holds every legal cell at
+    # player_support_tau, twice the threshold, so in equilibrium nothing
+    # should be discarded -- a non-trivial rate is the hinge failing and
+    # the threshold hiding it (the revert trigger, > 1% of taken rows).
+    discarded = policy_mask & jnp.logical_not(target_taken_kept)
+    row_position = (
+        jnp.arange(policy_mask.shape[0], dtype=jnp.float32)[:, None]
+        / policy_mask.shape[0]
+    )
+    training_logs.update(
+        dict(
+            player_discard_taken_frac=average(discarded, policy_mask),
+            player_discard_legal_frac=average(target_removed_legal_frac, policy_mask),
+            player_discard_position_mean=average(
+                jnp.broadcast_to(row_position, policy_mask.shape), discarded
+            ),
+        )
+    )
     # NashPG reference SNAP: reg_params <- target_params every
     # player_reg_snap_steps — their outer-loop rho reset, in place,
     # still three param sets, FROZEN between snaps. (The continuous EMA
@@ -966,9 +1007,6 @@ def train_step(
                 "plasticity_value_err_reuse_gap": fresh_err - replay_err,
             }
         )
-    # Already flat: the env mask IS the block-cell vector since 2026-08-31.
-    flat_action_mask = player_transitions.env_output.action_mask
-
     # NashPG advantage: the plain v-trace pass from targets.py, batch-
     # normalised over the surrogate's own rows with masked mean/std (the
     # reference's update_agent does exactly this per minibatch). f32
@@ -1307,19 +1345,19 @@ def train_step(
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
 
-        # The zero-avoiding term, on the MODALITY MARGINAL (2026-08-31):
-        # forward KL from uniform over live modalities, modality-level
-        # gradient exactly pi_m - 1/M. It is the only force in this bracket
-        # that is not pi-prefactored, so it is the only one still acting on
-        # a modality the policy has abandoned -- and unlike the row form it
-        # replaced (the sp75c lesson) the loss is IDENTICALLY invariant to
-        # within-modality redistribution, so it restores WHETHER-to-switch
-        # mass without flattening WHICH-move-to-pick. The constant reference
-        # still cannot be ratcheted flat or invert on the Q^pi sign.
-        loss_modality_kl = average(
-            uniform_kl_modalities(learner_log_policy, flat_action_mask),
-            policy_mask,
+        # The flat support hinge (2026-09-09, loss.support_hinge_loss): the
+        # one restoring force in this bracket, holding every legal cell at
+        # player_support_tau and exactly silent above it. It is not
+        # pi-prefactored on the cell it lifts, so it is the only term still
+        # acting on an abandoned action; unlike the modality-marginal KL it
+        # replaced it says nothing above the line, where the critic ranks.
+        support_rows, support_active_rows, support_tau_row = support_hinge_loss(
+            learner_log_policy,
+            flat_action_mask,
+            config.player_support_tau,
+            config.player_support_tau_max_mass,
         )
+        loss_support = average(support_rows, policy_mask)
 
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
@@ -1359,7 +1397,17 @@ def train_step(
             # a level climbing ACROSS snaps is a policy running away
             # faster than the snap period can repair.
             player_ref_kl=loss_mag,
-            player_loss_modality_kl=loss_modality_kl,
+            player_loss_support=loss_support,
+            player_support_active_fraction=average(support_active_rows, policy_mask),
+            # N * tau_row: the mass the hinge asks for per row; 1.0 would be
+            # unsatisfiable, the tau_max_mass clamp caps it and
+            # saturated_frac says how often the clamp binds.
+            player_support_n_tau_row=average(
+                flat_action_mask.sum(-1) * support_tau_row, policy_mask
+            ),
+            player_support_saturated_frac=average(
+                support_tau_row < config.player_support_tau, policy_mask
+            ),
         )
         pg_logs.update(
             legal_support_telemetry(
@@ -1385,16 +1433,16 @@ def train_step(
         loss = (
             # pg: the NashPG bracket — surrogate + ent_coef * (-H) +
             # mag_coef * KL(pi || pi_reg), one coefficient scaling
-            # improvement and regularisation together — plus the
-            # zero-avoiding KL, which is the one deliberate divergence from
-            # the reference actor loss (the reference carries no
+            # improvement and regularisation together — plus the flat
+            # support hinge, the one deliberate divergence from the
+            # reference actor loss (the reference carries no
             # mass-independent restorer in either mag_divergence mode).
             config.player_pg_coef
             * (
                 loss_pg
                 + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
-                + config.player_uniform_kl_coef * loss_modality_kl
+                + config.player_support_hinge_coef * loss_support
             )
             # v: one critic, on the deploy-time information set. The
             # all-action advantage that sat beside it retired 2026-08-29 --

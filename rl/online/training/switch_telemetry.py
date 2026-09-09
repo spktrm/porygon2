@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 
-from rl.online.training.loss import policy_gradient_loss, uniform_kl_modalities
+from rl.online.training.loss import policy_gradient_loss, support_hinge_loss
 from rl.online.training.targets import reference_kl
 from rl.utils import average
 
@@ -56,8 +56,14 @@ def switch_loss_telemetry(
     def magnet_loss(log_probs):
         return average(reference_kl(log_probs, reg_log_policy, legal_mask), policy_mask)
 
-    def modality_loss(log_probs):
-        return average(uniform_kl_modalities(log_probs, legal_mask), policy_mask)
+    def support_loss(log_probs):
+        rows, _, _ = support_hinge_loss(
+            log_probs,
+            legal_mask,
+            config.player_support_tau,
+            config.player_support_tau_max_mass,
+        )
+        return average(rows, policy_mask)
 
     gradients = {}
     gradients["pg"] = (
@@ -67,7 +73,7 @@ def switch_loss_telemetry(
     for name, objective, coefficient in (
         ("entropy", entropy_loss, config.player_ent_coef),
         ("magnet", magnet_loss, config.player_mag_coef),
-        ("modality", modality_loss, config.player_uniform_kl_coef),
+        ("support", support_loss, config.player_support_hinge_coef),
     ):
         gradients[name] = (
             config.player_pg_coef

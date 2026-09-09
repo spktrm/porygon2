@@ -3925,3 +3925,102 @@ the trust region's existence. Revert handle: tag
 the derivative through shifted logits). Not claimed: any effect on
 strength or staleness — read `player_learner_actor_forward_kl` and the
 learner/behaviour ESS after the restart that carries this.
+
+## Removal + addition ledger — 2026-09-09 flat support hinge
+
+Deleted `loss.uniform_kl_modalities` and `player_uniform_kl_coef` (.025,
+the modality-marginal zero-avoider live since 2026-08-31, last read
+`player_loss_modality_kl` 1.264 → 1.203 holding `player_switch_mass_choice`
+.07171) and put the FLAT SUPPORT HINGE in its place inside the
+`player_pg_coef` bracket: over a row's legal cells as flat complete
+actions, `(1/N) Σ_a max(0, log(tau_row / pi_a))`, `tau` .01,
+`tau_row = min(tau, .5 / N)` (the feasibility clamp, panelled as
+`player_support_n_tau_row` / `player_support_saturated_frac`), derivative
+`active_fraction · pi_b − below_b / N` — bounded, zero-sum over the row,
+no pi prefactor on the cell it lifts, exactly silent above the line. Why a
+replacement and not a pair: at a starved action the two forces are the
+same order and equally pi-independent, but the KL keeps pulling toward
+uniform modality mass at every probability and pushes DOWN anything above
+its target, while the hinge hands the choice back to the critic; a silent
+hinge under a live KL would have proved nothing; and the KL's grouping
+through `CELL_MODALITY_MASK` (MOVE vs WILDCARD) pulled P(tera | move)
+toward one half, conditional derivative `c/M · (2q − 1)` — the flat form
+has no hierarchy to do that with, which retires the "group tera with the
+ordinary moves" question by deleting the grouping.
+
+The axis sp75c failed on, taken deliberately: the row-form uniform KL
+applied force at every probability and pinned `player_entropy_micro_taken`
+at .93 (control .84, exploit halved). The hinge is silent above tau, so
+discrimination above it is untouched; that panel (now on its own, currently
+.4919) is the abort instrument. Accepted openly: a flat hinge does say
+WHICH — it lifts ineffective legal moves along with useful ones. That is
+the price of not letting the learner's current probabilities decide what
+stays in contention.
+
+Calibration: 5–6 bench cells at .01 induce a switch-mass floor of 5–6%,
+just under the .07171 the KL was holding. `player_support_hinge_coef`
+lands at 0.0 (exactly off) and is set by the offline screen
+(`rl/offline/support_screen.py`, .001/.0025/.005 over recorded chunks:
+the smallest that lifts the abandoned cells without a > 10% rise in
+shared-encoder gradient rms) before the restart; never swept live (config
+is a jit static argname). Revert handle: tag `pre-eval-slate-2026-09-09`
+(the whole 2026-09-09 set reverts together — the effects train in, a
+zeroed coefficient is not a revert). Validation:
+`tests/test_support_hinge.py` (silent above tau / positive on a 1e-4 cell;
+coefficient 0 and forced rows exactly off; illegal cells never scored;
+permutation invariance; the derivative formula and its zero sum against
+`jax.grad`; the zero subgradient at the hinge; the clamp binding on a
+100-cell row and not on four; a ±1e4 saturating row finite and bounded),
+`tests/test_switch_telemetry.py` (the hinge's directional term mirrors the
+executable loss). `TestUniformKlModalities` goes with the term.
+
+## Addition ledger — 2026-09-09 learner-side v-trace thresholding
+
+`targets.thresholded_target_ratio`: the v-trace ratio pi_target(a) / mu(a)
+is built from the TARGET policy with every legal cell below
+`player_prune_threshold` (.005) removed and the rest renormalised — the
+same `prune_log_policy` the `thresholded` eval slot samples from — so a
+taken action the target has dropped below the line gets ratio 0 and
+v-trace discards the row (no value target, no advantage; every earlier
+row's trace is cut there). Applied to the π entering v-trace and nowhere
+else: the learner ratio, the SPO surrogate, the magnet, the entropy term,
+the hinge, `player_learner_actor_forward_kl` and `chunk_policy_mismatch`
+read the raw policies, so the reuse controller's set-point keeps its
+meaning; the training actors are untouched. Variance control on the
+target estimator, not a policy force and not exploration.
+
+Reference diff against `~/Downloads/rnad.py` (local): `FineTuning`
+(:137) is elimination not a floor (`_threshold` :184–196, with the
+all-below guard copied verbatim), applied inside `loss()` (:798,
+`policy_pprocessed` → `v_trace` as `merged_policy`) and at acting (:1007);
+`acting_policy` and the NeuRD loss's `pi` stay raw (:817, :836). Three
+deliberate divergences, owned: always on from the restart (the reference
+gates it on `from_learner_steps`, −1 = off, a late strength fix for a
+converged policy — the divergence with the most weight behind it, and why
+the discard rate is a revert trigger not a panel); .005 not .03; no 1/32
+discretisation (at .005 it would not dominate the threshold, so dropping
+it is coherent). One further difference, not a choice: our v-trace policy
+is the target network's, so the discard decision is made on a lagged
+distribution.
+
+The hazard, measured not assumed: the continuation `c` is the same ratio,
+so one zeroed row cuts the trace for every row before it in the chunk.
+`player_trace_len_mean` / `_raw` (realised continuation length from each
+policy row, thresholded vs raw) and `player_discard_{taken_frac,
+legal_frac, position_mean}` read it live; the pre-restart cut measurement
+on recorded chunks (`rl/offline/support_screen.py`) decides the
+restriction pre-registered 2026-09-09: if > 5% of chunks carry a discard
+before their midpoint, threshold rho only and leave `c` raw (split
+`rho_t` / `c_t` at `targets.py`, merged 2026-08-21). `player_isr_ess` and
+`player_rho_clip_frac` change meaning at this restart; their `_raw` twins
+carry the comparable series. Revert (the whole set): `player_discard_taken_frac`
+> 1% sustained over one 250k-fresh-decision window (≈ 1.7 h). Validation:
+`tests/test_vtrace_threshold.py` (threshold 0 bit-identical; the .004 row
+discarded with its raw ratio intact and the .40 rows untouched — the
+positive control; the all-below guard; a discarded mid-chunk row zeroing
+its own advantage, leaving a bootstrap-only value target, unchanged rows
+after it and cut rows before it, with the trace-length twins reading the
+cut; and the slow scope pin — learner ratio, surrogate, magnet, entropy,
+hinge and forward KL bit-identical under threshold .3 vs 0 while the
+v-trace ESS and the discard rate move). Not claimed: any effect on
+strength; the set lands together and is read on the frozen cohort.

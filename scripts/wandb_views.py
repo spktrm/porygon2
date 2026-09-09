@@ -231,15 +231,24 @@ def rl_sections():
                     ["player_pg_adv_mean", "player_pg_adv_std"],
                 ),
                 lp(
-                    # Per-axis normalised entropies, OBSERVERS since
+                    # The ABORT instrument for the flat support hinge
+                    # (2026-09-09), on its own panel: the sp75c row-form
+                    # uniform KL pinned this at .93 while the control fell
+                    # to .84 and halved the exploit. The hinge is silent
+                    # above tau, so this should hold its ~.49; rising
+                    # toward .93 with ineffective_confident_mass unmoved is
+                    # the whole-set revert.
+                    "Within-taken-modality normalised entropy (abort instrument)",
+                    ["player_entropy_micro_taken"],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    # Modality-marginal normalised entropy, OBSERVER since
                     # 2026-08-30: macro dying while the joint H holds is
                     # the modality-collapse shape the global panel in
                     # "0 · At a glance" cannot see.
-                    "Per-axis normalised entropies (observers)",
-                    [
-                        "player_entropy_macro",
-                        "player_entropy_micro_taken",
-                    ],
+                    "Modality-marginal normalised entropy (observer)",
+                    ["player_entropy_macro"],
                 ),
                 lp(
                     # Modality decomposition of the throttle on any
@@ -259,24 +268,20 @@ def rl_sections():
                     log_y=True,
                 ),
                 lp(
-                    # The zero-avoiding term on the MODALITY MARGINAL:
-                    # forward KL from uniform over live modalities, the one
-                    # force in the bracket that is not pi-prefactored and so
-                    # the only one still acting on an abandoned modality --
-                    # identically silent within a modality since 2026-08-31
-                    # (the sp75c row form flattened WHICH-move). Read
-                    # against prob_switch -- rising mass with this falling
-                    # is the term doing its job and relaxing; pinned with
-                    # mass unmoved is paying and buying nothing.
-                    "Zero-avoiding KL & switch mass",
-                    ["player_loss_modality_kl", "player_policy_prob_switch"],
+                    # The flat support hinge (2026-09-09, replacing the
+                    # modality-marginal KL): the one restoring force, silent
+                    # above tau. Read against switch mass -- falling as mass
+                    # returns is the term relaxing; pinned with mass unmoved
+                    # is paying and buying nothing. Detail in section 11.
+                    "Support hinge & switch mass",
+                    ["player_loss_support", "player_switch_mass_choice"],
                 ),
                 lp(
                     "Loss components",
                     [
                         "player_loss_pg",
                         "player_loss_entropy",
-                        "player_loss_modality_kl",
+                        "player_loss_support",
                         "player_loss_kl",
                         "player_loss_v_win",
                     ],
@@ -1168,10 +1173,34 @@ def rl_sections():
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
                 ),
                 lp(
+                    # rho_clip_frac reads the THRESHOLDED target/behaviour
+                    # ratio since 2026-09-09; its _raw twin is the series
+                    # comparable to before the restart.
                     "Clip fractions",
-                    ["player_impact_clip_frac", "player_rho_clip_frac"],
+                    [
+                        "player_impact_clip_frac",
+                        "player_rho_clip_frac",
+                        "player_rho_clip_frac_raw",
+                    ],
                 ),
-                lp("ISR ESS", ["player_isr_ess"]),
+                lp(
+                    # Target/behaviour ratio ESS, thresholded vs raw twin.
+                    "ISR ESS · v-trace ratio (thresholded vs raw)",
+                    ["player_isr_ess", "player_isr_ess_raw"],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    # The LEARNER/behaviour ratio -- a different population
+                    # from the v-trace ratio above; never one axis.
+                    "Learner/behaviour ratio ESS",
+                    ["player_learner_actor_ess"],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    "Learner/behaviour ratio tail mass above 2",
+                    ["player_learner_actor_ratio_tail_gt2"],
+                    range_y=(0, 1),
+                ),
                 lp(
                     "Ratios",
                     ["player_learner_actor_ratio", "player_learner_target_ratio"],
@@ -1292,6 +1321,19 @@ def rl_sections():
                 lp(
                     "Gradient / param norm (aggregate)",
                     ["player_gradient_norm", "player_param_norm"],
+                ),
+                lp(
+                    # What Adam APPLIED to the readout leaves a support
+                    # force acts on (post-clip, post-revert rms), beside the
+                    # switch_bias delta that started the pattern.
+                    "Applied update rms · action readout leaves",
+                    [
+                        "player_applied_delta_rms_switch_bias",
+                        "player_applied_delta_rms_pointer_query",
+                        "player_applied_delta_rms_pointer_key",
+                        "player_applied_delta_rms_pointer_local_tgt",
+                    ],
+                    log_y=True,
                 ),
             ],
         ),
@@ -1415,6 +1457,92 @@ def rl_sections():
                     "League cache",
                     ["diag_league_cache_mb", "diag_league_cache_entries"],
                     smooth=0,
+                ),
+            ],
+        ),
+        ws.Section(
+            # The 2026-09-09 support set read top to bottom: what the policy
+            # exposes (flat legal-cell support), what the hinge asks and
+            # pays, what the v-trace threshold discards and the trace it
+            # cuts. Every trajectory keyed to lifetime_step.
+            name="11 · Action support & exposure",
+            is_open=True,
+            panels=[
+                lp(
+                    # The floor of the policy's legal support, as flat
+                    # complete actions: the hinge lifts min toward tau.
+                    "Legal-cell probability floor (min / median, log)",
+                    ["player_support_min_prob", "player_support_median_prob"],
+                    log_y=True,
+                ),
+                lp(
+                    "Legal cells below the lines (fraction)",
+                    [
+                        "player_support_frac_below_p01",
+                        "player_support_frac_below_p005",
+                        "player_support_frac_below_p001",
+                    ],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    "Switch-cell floor vs move-cell floor (log)",
+                    [
+                        "player_support_switch_min_prob",
+                        "player_support_move_min_prob",
+                    ],
+                    log_y=True,
+                ),
+                lp(
+                    "Switch vs move cells below .005 (fraction)",
+                    [
+                        "player_support_switch_frac_below_p005",
+                        "player_support_move_frac_below_p005",
+                    ],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    "Legal cells per decision",
+                    ["player_support_legal_count"],
+                ),
+                lp(
+                    # The hinge: loss, the fraction of legal cells it is
+                    # pushing on, the per-row mass it asks (N * tau_row) and
+                    # how often the tau_max_mass clamp binds.
+                    "Support hinge loss & active fraction",
+                    ["player_loss_support", "player_support_active_fraction"],
+                ),
+                lp(
+                    "Support ask N * tau_row & clamp saturation",
+                    ["player_support_n_tau_row", "player_support_saturated_frac"],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    # The discard rate: the revert trigger is > 1% of taken
+                    # rows sustained over a 250k-fresh-decision window.
+                    "v-trace discard rate · taken rows (revert > 1%)",
+                    ["player_discard_taken_frac"],
+                    range_y=(0, 0.05),
+                ),
+                lp(
+                    "v-trace discard · legal cells below the line, position of discards",
+                    ["player_discard_legal_frac", "player_discard_position_mean"],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    # One discarded row cuts the trace for every row before
+                    # it; the raw twin is the same chunks unthresholded.
+                    "Realised trace length · thresholded vs raw",
+                    ["player_trace_len_mean", "player_trace_len_mean_raw"],
+                ),
+                lp(
+                    "Directional switch-logit gradient by term",
+                    [
+                        "player_switch_logit_grad_pg",
+                        "player_switch_logit_grad_entropy",
+                        "player_switch_logit_grad_magnet",
+                        "player_switch_logit_grad_support",
+                        "player_switch_logit_grad_actor_total",
+                    ],
                 ),
             ],
         ),

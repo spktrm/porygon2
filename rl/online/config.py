@@ -567,47 +567,68 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (loss.factorised_entropies). Revert handles in the LESSONS.md
     # ledgers.
     player_ent_coef: float = 0.01
-    # The ZERO-AVOIDING term (loss.uniform_kl_modalities): forward KL from
-    # the CONSTANT uniform over each row's LIVE MODALITIES, modality-level
-    # gradient exactly pi_m - 1/M. It is the only force in the bracket that
-    # is not pi-prefactored, and that is not a matter of degree: the
-    # surrogate's expected force on a cell carries the same pi_b the entropy
-    # bonus does, so their ratio is mass-independent and the entropy
-    # equilibrium is exp(-|A|/alpha) -- no coefficient holds a floor, which
-    # is what four retunes (0.01/0.05/0.1/0.2) measured. Here the prefactor
-    # cancels on one side only: equilibrium modality mass ~ coef/(M*|A|), so
-    # the ask DIVERGES as the modality starves and RELAXES as evidence
-    # arrives.
+    # The FLAT SUPPORT HINGE (2026-09-09, loss.support_hinge_loss): over a
+    # row's legal cells as flat complete actions, (1/N) sum_a max(0,
+    # log(tau / pi_a)) -- every legal action held at tau, the term exactly
+    # silent once all clear it. Its per-logit derivative
+    # active_fraction * pi_b - below_b / N is bounded, zero-sum over the
+    # row and carries no pi prefactor on the cell it lifts, so it is the
+    # one force still acting on an abandoned action; above tau it says
+    # nothing and the critic ranks. It REPLACES the modality-marginal
+    # uniform KL (player_uniform_kl_coef .025, 2026-08-31 to 2026-09-09):
+    # at a starved action the two are the same order and equally
+    # pi-independent, but the KL kept pulling toward uniform modality mass
+    # at every probability -- and, with CELL_MODALITY_MASK separating MOVE
+    # from WILDCARD, pulled P(tera | move) toward one half. The flat form
+    # imposes no hierarchy at all (LESSONS.md "Removal + addition ledger —
+    # 2026-09-09 flat support hinge").
     #
-    # WHY THE MARGINAL (2026-08-31, the sp75b/sp75c matched BR pair): the
-    # row form (pi_b - 1/k over every legal cell) bought every mass metric
-    # (entropy_macro 2.8x the control, prob_switch 4.3x, vol_switch_rows
-    # 7.7x) and HALVED the exploit (0.186 vs 0.343 @69k) -- it separated
-    # moves from each other with the same force it restored switch mass
-    # with, entropy_micro_taken pinned at 0.93. The marginal form's loss
-    # depends on the modality masses alone: within-modality redistribution
-    # is IDENTICALLY invariant, and the per-cell force is proportional to
-    # the policy's own conditional -- the regulariser says WHETHER, never
-    # WHICH, as an algebraic identity rather than a hope.
-    #
-    # Sized on the equilibrium, never on loss balance, with M = 2-3 against
-    # the row form's k ~ 10 -- the SAME coefficient buys ~5x the modality
-    # mass, so 0.025 here is not the sp75d halving arm resized: it holds
-    # switch mass ~0.06 against a 0.2 sigma headwind and ~0.025 against
-    # 0.5 sigma, floors comfortably above the 0.015 collapse level that
-    # still yield to real evidence. Set 0.0 for a control arm -- that is
-    # bit-identical to no term at all. Watch: player_loss_modality_kl
-    # falling as switch mass returns is the term relaxing (healthy); pinned
-    # with mass unmoved is paying-and-buying-nothing (the abort).
-    player_uniform_kl_coef: float = 0.025
+    # tau = .01 is twice player_prune_threshold: an action must lose half
+    # its supported mass before the v-trace threshold discards it, and that
+    # factor of two is the hysteresis band. Calibration: 5-6 bench cells at
+    # .01 induce a switch-mass floor of 5-6%, just under the .07171 the KL
+    # was holding -- low enough that evidence, not the floor, sets the
+    # resting level. Confirm against player_switch_mass_choice in the
+    # first 250k fresh decisions.
+    player_support_tau: float = 0.01
+    # The feasibility clamp: per row tau_row = min(tau, tau_max_mass / N),
+    # so N * tau can never exceed this and make the loss unsatisfiable
+    # (doubles, or a move with many legal target cells). Panelled as
+    # player_support_n_tau_row / player_support_saturated_frac.
+    player_support_tau_max_mass: float = 0.5
+    # Screened OFFLINE over recorded chunks at .001 / .0025 / .005
+    # (rl/offline/support_screen.py): the smallest that lifts the abandoned
+    # cells without a > 10% rise in shared-encoder gradient rms. Never
+    # swept in a live learner -- config is a jit static argname and a
+    # host-varied coefficient compiles one executable per value. 0.0 is
+    # exactly off (no term at all), which is where it sits until the
+    # screen sets it before the restart.
+    player_support_hinge_coef: float = 0.0
     # DeepNash's FineTuning threshold (rnad.py FineTuning._threshold, its
     # reference value .03): a legal action whose probability is below it is
     # REMOVED and the rest renormalised (rl/model/utils.py prune_log_policy,
     # with the reference's guard that a row entirely below the line keeps
-    # its legal set). Where it applies: the `thresholded` eval slot samples
-    # the thresholded policy (HeadParams.prune_threshold). The training
-    # actors never do -- mu stays the policy as trained. 0.0 is
-    # bit-identical to no threshold.
+    # its legal set). Where it applies, and nowhere else: (1) the
+    # `thresholded` eval slot samples the thresholded policy
+    # (HeadParams.prune_threshold); (2) the learner thresholds the TARGET
+    # policy entering v-trace (targets.thresholded_target_ratio), so a
+    # taken action the target has dropped below the line gets ratio 0 and
+    # its row is discarded -- variance control on the target estimator,
+    # the reference's own placement (rnad.py:798 post-processes pi for
+    # v_trace only; acting_policy and the policy loss's pi stay raw). The
+    # learner ratio, the surrogate, the magnet, the entropy term and the
+    # support hinge read the raw policies; the training actors never
+    # threshold -- mu stays the policy as trained. 0.0 is bit-identical to
+    # no threshold everywhere.
+    #
+    # Three deliberate divergences from the reference, owned: always on
+    # from the restart (rnad gates it on from_learner_steps, off by
+    # default, as a late strength fix for a converged policy); .005 not
+    # .03, so it bites on far fewer actions; no 1/32 discretisation. The
+    # support hinge above holds every legal cell at twice this line, so in
+    # equilibrium the discard zone is empty -- player_discard_taken_frac
+    # above 1% sustained is the hinge failing and this hiding it, the
+    # whole-set revert trigger.
     player_prune_threshold: float = 0.005
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,

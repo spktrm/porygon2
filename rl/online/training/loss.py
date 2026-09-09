@@ -49,46 +49,45 @@ def factorised_entropies(
     return h_macro, h_micro_taken
 
 
-def uniform_kl_modalities(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
-    """Per-row KL(u || pi_m) over LIVE modalities -- the ZERO-AVOIDING term,
-    moved to the MODALITY MARGINAL (2026-08-31).
+def support_hinge_loss(
+    log_policy: jax.Array,
+    legal_mask: jax.Array,
+    tau: float,
+    tau_max_mass: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """The FLAT SUPPORT HINGE (2026-09-09): per row, over the legal cells
+    read as flat complete actions (a move x target or a switch is one
+    cell, no hierarchy),
 
-    The row form (`uniform_kl_rows`, gradient pi_b - 1/k over every legal
-    cell) was measured on the sp75b/sp75c matched BR pair to be a ROW
-    flattener: its pull separates moves from each other with the same force
-    it restores switch mass with, buying WHETHER-to-switch and paying in
-    WHICH-move-to-pick (entropy_micro_taken pinned 0.93 against the
-    control's 0.84, exploit halved). This form keeps everything the constant
-    reference bought and drops the tax:
+        loss = (1/N) * sum_a max(0, log(tau_row / pi_a)),   N = legal cells
 
-        KL(u || pi_m) = -(1/M) * sum_m log pi_m   (+ a constant), M = live
-        d/d y_b       = pi_b - (1/M) * pi_b / pi_m(b)
+    the one restoring force in the policy bracket. Its derivative w.r.t.
+    flat logit z_b is `active_fraction * pi_b - below_b / N` (below_b the
+    indicator that cell b is under the line): bounded by 1, zero-sum over
+    the legal cells, and with NO pi prefactor on the term that lifts an
+    abandoned cell -- the three properties LESSONS requires of a
+    mass-restoring mechanism. Exactly silent once every legal cell clears
+    tau_row (the zero subgradient at the hinge), so above the line the
+    critic alone ranks the actions; forced and singleton rows are silent
+    without a mask. Replaces the modality-marginal uniform KL, which kept
+    pulling toward uniform modality mass at every probability.
 
-    summed over a modality's cells that is exactly **pi_m - 1/M**: bounded,
-    zero-sum over modalities, NO pi_m prefactor -- and the per-cell force is
-    proportional to the CONDITIONAL pi_b/pi_m, so the term moves mass into a
-    modality along the policy's own within-modality ranking and never
-    reranks it. The loss depends on the marginals alone: any redistribution
-    within a modality is invariant, which is the phase-4 law -- the
-    regulariser says WHETHER, never WHICH -- written as an identity rather
-    than an aspiration.
+    The feasibility guard: N * tau can exceed 1 (doubles, or a move with
+    many legal target cells), which would make the loss unsatisfiable and
+    the pressure permanent, so per row `tau_row = min(tau, tau_max_mass /
+    N)`, returned so the caller can panel N * tau_row.
 
-    A row with one live modality contributes -log 1 = 0, so forced rows are
-    silent without a mask (the caller's row mask still applies). Returned
-    per row, f32.
+    Returns (loss per row, fraction of legal cells under the line per row,
+    tau_row), all f32.
     """
-    modality_oh = jax.nn.one_hot(
-        jnp.asarray(CELL_MODALITY_MASK), NUM_MODALITY_FEATURES, dtype=jnp.bool_
-    )
     log_policy32 = log_policy.astype(jnp.float32)
-    marginal = jax.nn.logsumexp(
-        jnp.where(legal_mask[..., None] & modality_oh, log_policy32[..., None], -1e9),
-        axis=-2,
-    )
-    live = marginal > -1e8
-    num_live = live.sum(axis=-1)
-    weights = live / jnp.maximum(num_live, 1)[..., None]
-    return -(weights * jnp.where(live, marginal, 0.0)).sum(axis=-1)
+    legal_count = jnp.maximum(legal_mask.sum(axis=-1), 1)
+    tau_row = jnp.minimum(tau, tau_max_mass / legal_count)
+    deficit = jnp.log(tau_row)[..., None] - log_policy32
+    active = legal_mask & (deficit > 0)
+    loss = jnp.where(active, deficit, 0.0).sum(axis=-1) / legal_count
+    active_fraction = active.sum(axis=-1) / legal_count
+    return loss, active_fraction, tau_row
 
 
 def spo_objective(

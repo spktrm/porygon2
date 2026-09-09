@@ -98,6 +98,28 @@ are the rms of the update Adam actually applied to those action-readout leaves
 (post-clip, post the non-finite revert), generalising
 `player_switch_bias_applied_delta`.
 
+## Support hinge and v-trace threshold (2026-09-09)
+
+`player_loss_support` is the flat support hinge
+(`rl/online/training/loss.py support_hinge_loss`, coefficient
+`player_support_hinge_coef` inside the `player_pg_coef` bracket);
+`player_support_active_fraction` the share of legal cells it is pushing on,
+`player_support_n_tau_row` the per-row mass it asks (`N * tau_row`) and
+`player_support_saturated_frac` how often the `tau_max_mass` clamp binds.
+`player_switch_logit_grad_support` is its entry in the directional list above.
+
+`player_isr_ess` and `player_rho_clip_frac` read the THRESHOLDED target /
+behaviour ratio v-trace consumes (`targets.thresholded_target_ratio`);
+`player_isr_ess_raw` / `player_rho_clip_frac_raw` are the raw twins, the series
+comparable to before the restart. `player_discard_taken_frac` is the share of
+policy rows whose taken action the target had dropped below
+`player_prune_threshold` (ratio 0, row discarded — the revert trigger above
+1%), `player_discard_legal_frac` the share of legal cells below the line, and
+`player_discard_position_mean` where in the chunk the discards sit.
+`player_trace_len_mean` / `_raw` is the realised v-trace continuation length
+from each policy row, thresholded against raw: one discarded row cuts the
+trace for every row before it.
+
 ## Paired switch-advantage audit
 
 `player_adv_audit_{switch,stay}_{all,1_5,6_15,16_40,41_plus}_*` compares

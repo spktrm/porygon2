@@ -9,7 +9,9 @@ from rl.environment.interfaces import (
     PlayerTargets,
     Trajectory,
 )
+from rl.model.utils import prune_log_policy
 from rl.online.config import Porygon2LearnerConfig
+from rl.utils import average
 
 
 def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax.Array:
@@ -36,11 +38,64 @@ def vtrace(td_errors: jax.Array, discount_t: jax.Array, c_tm1: jax.Array) -> jax
     return errors
 
 
+def thresholded_target_ratio(
+    target_log_policy: jax.Array,
+    behaviour_log_prob: jax.Array,
+    action_index: jax.Array,
+    legal_mask: jax.Array,
+    threshold: float,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """The v-trace ratio pi_target(a) / mu(a) at the taken action, with the
+    target policy THRESHOLDED first (rl/model/utils.py prune_log_policy --
+    the same operation the `thresholded` eval slot samples from): a taken
+    action the target has dropped below `threshold` gets ratio 0, so
+    v-trace discards the row. DeepNash's `FineTuning` placement
+    (rnad.py:798 post-processes pi and hands it to v_trace as
+    merged_policy; acting_policy and the policy loss's pi stay raw): this
+    is the ONLY place the thresholded distribution enters the learner.
+    Variance control on the target estimator, not a policy force.
+
+    Returns (ratio, raw ratio, taken-action-kept mask, fraction of the row's
+    legal cells removed). threshold 0.0 makes ratio == raw ratio bit for
+    bit; the raw ratio is what the telemetry twins read.
+    """
+    pruned = prune_log_policy(target_log_policy, legal_mask, threshold)
+    index = action_index[..., None]
+    taken_pruned = jnp.take_along_axis(pruned, index, axis=-1)[..., 0]
+    taken_raw = jnp.take_along_axis(target_log_policy, index, axis=-1)[..., 0]
+    removed = legal_mask & (pruned <= jnp.finfo(pruned.dtype).min)
+    kept_taken = taken_pruned > jnp.finfo(pruned.dtype).min
+    ratio_raw = jnp.exp(taken_raw - behaviour_log_prob)
+    ratio = jnp.where(kept_taken, jnp.exp(taken_pruned - behaviour_log_prob), 0.0)
+    removed_legal_fraction = removed.sum(axis=-1) / jnp.maximum(
+        legal_mask.sum(axis=-1), 1
+    )
+    return ratio, ratio_raw, kept_taken, removed_legal_fraction
+
+
+def trace_run_length(continues: jax.Array) -> jax.Array:
+    """Per row, how many consecutive rows from it (itself included) keep
+    the v-trace continuation alive -- `continues` is (T, B) True where the
+    trace passes through the row. A thresholded ratio zeroing one row cuts
+    every earlier row's run at it; the raw ratio never does, so the two
+    runs side by side are the realised cost of the threshold."""
+
+    def _body(run, alive):
+        run = jnp.where(alive, 1.0 + run, 0.0)
+        return run, run
+
+    _, runs = jax.lax.scan(
+        _body, jnp.zeros(continues.shape[1:], jnp.float32), continues, reverse=True
+    )
+    return runs
+
+
 def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
     isr: jax.Array,
     config: Porygon2LearnerConfig,
+    isr_raw: jax.Array | None = None,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes Retrace VALUE targets on the win/loss channel plus the
     plain v-trace POLICY advantage the PPO surrogate reads (2026-08-26 —
@@ -58,7 +113,14 @@ def compute_player_targets(
 
     config.player_lambda (0.8, AlphaStar's TD(lambda) value) shapes the
     value targets.
+
+    ``isr`` is the THRESHOLDED ratio (thresholded_target_ratio) and
+    ``isr_raw`` the raw one, read only by the telemetry twins so the ESS,
+    clip-fraction and trace-length panels keep a comparable series across
+    the restart that introduced the threshold; None means "the same".
     """
+    if isr_raw is None:
+        isr_raw = isr
     dones = batch.player_transitions.env_output.done
     mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
     discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
@@ -151,13 +213,22 @@ def compute_player_targets(
     # truncated estimator is living off a few samples) and the fraction of
     # steps where the v-trace ρ/c truncation at 1 is active. Both feed the
     # replay-ratio controller diagnostics alongside the actor KL.
-    isr_mean = isr.mean(where=policy_mask)
-    isr_sq_mean = jnp.square(isr).mean(where=policy_mask)
-
-    channel_logs = {
-        "player_isr_ess": isr_mean * isr_mean / (isr_sq_mean + 1e-8),
-        "player_rho_clip_frac": (isr > 1.0).mean(where=policy_mask),
-    }
+    channel_logs = {}
+    for suffix, ratio in (("", isr), ("_raw", isr_raw)):
+        ratio_mean = ratio.mean(where=policy_mask)
+        ratio_sq_mean = jnp.square(ratio).mean(where=policy_mask)
+        channel_logs[f"player_isr_ess{suffix}"] = (
+            ratio_mean * ratio_mean / (ratio_sq_mean + 1e-8)
+        )
+        channel_logs[f"player_rho_clip_frac{suffix}"] = (ratio > 1.0).mean(
+            where=policy_mask
+        )
+        # Realised trace length: rows the continuation survives from each
+        # policy row -- the game's end (discount 0) ends it for both, a
+        # zeroed ratio ends it for the thresholded one only.
+        channel_logs[f"player_trace_len_mean{suffix}"] = average(
+            trace_run_length((ratio > 0.0) & (discount_t > 0.0)), policy_mask
+        )
 
     return (
         PlayerTargets(

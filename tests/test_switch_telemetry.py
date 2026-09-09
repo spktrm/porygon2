@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from rl.environment.data import MOVE_CELL_OFFSET, NUM_ACTION_CELLS, NUM_SWITCH_CELLS
-from rl.online.training.loss import policy_gradient_loss, uniform_kl_modalities
+from rl.online.training.loss import policy_gradient_loss, support_hinge_loss
 from rl.online.training.switch_telemetry import switch_loss_telemetry
 from rl.online.training.targets import reference_kl
 from rl.utils import average
@@ -22,7 +22,9 @@ def test_switch_direction_matches_full_logit_derivative(objective):
         player_pg_coef=0.8,
         player_ent_coef=0.01,
         player_mag_coef=0.2,
-        player_uniform_kl_coef=0.025,
+        player_support_tau=0.01,
+        player_support_tau_max_mass=0.5,
+        player_support_hinge_coef=0.0025,
     )
     legal = jnp.zeros((4, NUM_ACTION_CELLS), dtype=bool)
     legal = legal.at[:, [0, 1, MOVE_CELL_OFFSET, MOVE_CELL_OFFSET + 1]].set(True)
@@ -67,8 +69,16 @@ def test_switch_direction_matches_full_logit_derivative(objective):
                 * config.player_mag_coef
                 * average(reference_kl(log_policy, reference, legal), valid),
                 config.player_pg_coef
-                * config.player_uniform_kl_coef
-                * average(uniform_kl_modalities(log_policy, legal), valid),
+                * config.player_support_hinge_coef
+                * average(
+                    support_hinge_loss(
+                        log_policy,
+                        legal,
+                        config.player_support_tau,
+                        config.player_support_tau_max_mass,
+                    )[0],
+                    valid,
+                ),
             ]
         )
 
@@ -95,11 +105,13 @@ def test_switch_direction_matches_full_logit_derivative(objective):
     actual = jnp.stack(
         [
             logs[f"player_switch_logit_grad_{name}"]
-            for name in ("pg", "entropy", "magnet", "modality")
+            for name in ("pg", "entropy", "magnet", "support")
         ]
     )
     np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-5)
-    assert logs["player_switch_logit_grad_modality"] < 0  # Restores low switch mass.
+    # Every legal cell here sits above tau, so the hinge is exactly silent
+    # (its active case is tests/test_support_hinge.py's).
+    assert logs["player_switch_logit_grad_support"] == 0.0
     assert logs["player_switch_logit_grad_pg_taken_switch"] < 0
     assert abs(float(logs["player_switch_logit_grad_actor_total"])) > 0.01
     np.testing.assert_allclose(
