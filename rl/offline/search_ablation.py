@@ -18,6 +18,7 @@ from pathlib import Path  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+from rl.environment.utils import acted_rows  # noqa: E402
 from rl.offline import harness  # noqa: E402
 
 
@@ -26,10 +27,7 @@ def summarise_game(side):
     metrics = {}
     for chunk in side:
         env = chunk.player_transitions.env_output
-        real_rows = int(chunk.game_length[0] - chunk.game_step_offset[0])
-        acted = (np.arange(env.done.shape[0]) < real_rows) & ~np.asarray(env.done, bool)
-        # Overlapping final rows bootstrap the next chunk; they are not actions.
-        acted[-1] = False
+        acted = acted_rows(env.done)
         record["steps"] += int(acted.sum())
         search = chunk.player_transitions.agent_output.actor_output.search
         for name in (

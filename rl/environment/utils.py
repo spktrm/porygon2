@@ -265,6 +265,17 @@ def packed_valid_rows(packed_history: PlayerPackedHistoryOutput) -> int:
     )
 
 
+def acted_rows(done: np.ndarray) -> np.ndarray:
+    """The rows a chunk's player acted on, over a (T,) or (T, B) done column:
+    every row before the done row, and never the final row -- it is
+    bootstrap-only unless it is the done row, and then it is not acted on
+    either (the chunk contract, `player_actor.chunk_spans`)."""
+    done = np.asarray(done, dtype=bool)
+    acted = np.zeros(done.shape, dtype=bool)
+    acted[:-1] = np.cumsum(done, axis=0)[:-1] == 0
+    return acted
+
+
 def _cut_history_windows(
     history: PlayerHistoryOutput,
     packed_history: PlayerPackedHistoryOutput,

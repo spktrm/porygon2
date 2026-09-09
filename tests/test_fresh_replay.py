@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 from rl.environment.interfaces import PlayerEnvOutput, PlayerTransition, Trajectory
+from rl.environment.utils import acted_rows
 from rl.online.buffer import PlayerTrajectoryStore
-from rl.online.decisions import count_chunk_decisions
 from rl.online.training.workers import wandb_log_worker
 
 
@@ -47,7 +47,7 @@ def fill_store(store, count):
     ],
 )
 def test_decision_count_excludes_terminal_padding_and_bootstrap(done, expected):
-    assert count_chunk_decisions(done) == expected
+    assert acted_rows(done).sum() == expected
 
 
 def test_overlapping_chunks_count_each_decision_once():
@@ -56,7 +56,7 @@ def test_overlapping_chunks_count_each_decision_once():
     first = np.zeros(64, dtype=bool)
     second = np.zeros(64, dtype=bool)
     second[7] = True
-    assert count_chunk_decisions(first) + count_chunk_decisions(second) == 70
+    assert acted_rows(first).sum() + acted_rows(second).sum() == 70
 
 
 def test_fractional_fresh_slots_without_batch_duplicates():

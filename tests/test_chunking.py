@@ -15,8 +15,8 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.protos.features_pb2 import FieldFeature
+from rl.environment.utils import acted_rows
 from rl.online.config import Porygon2LearnerConfig
-from rl.online.decisions import count_chunk_decisions
 from rl.online.player_actor import chunk_spans
 from rl.online.training.targets import compute_player_targets
 
@@ -439,4 +439,4 @@ def test_admitted_decisions_match_learner_masks_including_forced_actions():
     assert not np.asarray(targets.policy_mask).any()
     np.testing.assert_array_equal(acted.sum(axis=0), [29, 63, 63])
     for column in range(done.shape[1]):
-        assert count_chunk_decisions(done[:, column]) == acted[:, column].sum()
+        assert acted_rows(done[:, column]).sum() == acted[:, column].sum()

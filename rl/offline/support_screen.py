@@ -41,6 +41,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 import jax  # noqa: E402
 import numpy as np  # noqa: E402
 
+from rl.environment.utils import acted_rows  # noqa: E402
 from rl.model.builder_model import get_builder_model  # noqa: E402
 from rl.model.config import (  # noqa: E402
     get_builder_model_config,
@@ -154,7 +155,7 @@ def cut_audit(target_params, chunks, threshold: float, batch_size: int):
     training: the target policy thresholded and gathered at the taken
     action, per acted row."""
     discarded_rows = 0
-    acted_rows = 0
+    acted_row_count = 0
     chunks_with_discard = 0
     chunks_cut_before_midpoint = 0
     positions = []
@@ -175,12 +176,9 @@ def cut_audit(target_params, chunks, threshold: float, batch_size: int):
         index += legal.shape[1]
         for column, chunk in enumerate(group):
             real = int(chunk.game_length[0] - chunk.game_step_offset[0])
-            acted = (np.arange(legal.shape[0]) < real) & ~np.asarray(
-                env.done[:, column], bool
-            )
-            acted[-1] = False
+            acted = acted_rows(env.done[:, column])
             discards = acted & ~kept[:, column]
-            acted_rows += int(acted.sum())
+            acted_row_count += int(acted.sum())
             discarded_rows += int(discards.sum())
             if discards.any():
                 chunks_with_discard += 1
@@ -191,8 +189,8 @@ def cut_audit(target_params, chunks, threshold: float, batch_size: int):
     return {
         "threshold": threshold,
         "chunks": len(chunks),
-        "acted_rows": acted_rows,
-        "discarded_row_fraction": discarded_rows / max(acted_rows, 1),
+        "acted_rows": acted_row_count,
+        "discarded_row_fraction": discarded_rows / max(acted_row_count, 1),
         "chunks_with_discard_fraction": chunks_with_discard / max(len(chunks), 1),
         "chunks_cut_before_midpoint_fraction": chunks_cut_before_midpoint
         / max(len(chunks), 1),

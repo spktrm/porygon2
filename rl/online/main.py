@@ -25,6 +25,7 @@ from rl.environment.data import CAT_VF_SUPPORT, NUM_SWITCH_CELLS
 from rl.environment.env import BattleError, SinglePlayerSyncEnvironment
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
+from rl.environment.utils import acted_rows
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config, get_player_model_config
 from rl.model.heads import HeadParams
@@ -202,10 +203,8 @@ def eval_game_logs(
     """
     transitions = eval_trajectory.player_transitions
     env_output = transitions.env_output
-    num_rows = env_output.done.shape[0]
     num_real = int(eval_trajectory.game_length[0] - eval_trajectory.game_step_offset[0])
-    real = np.arange(num_rows) < num_real
-    acted = real & ~np.asarray(env_output.done, dtype=bool)
+    acted = acted_rows(env_output.done)
     action_mask = np.asarray(env_output.action_mask, dtype=bool)
     switch_legal = action_mask[:, :NUM_SWITCH_CELLS].any(-1)
     other_legal = action_mask[:, NUM_SWITCH_CELLS:].any(-1)

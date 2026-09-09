@@ -11,8 +11,7 @@ from rl.environment.interfaces import (
     Trajectory,
 )
 from rl.environment.protos.features_pb2 import PackedSetFeature
-from rl.environment.utils import next_tqdm_position
-from rl.online.decisions import count_chunk_decisions
+from rl.environment.utils import acted_rows, next_tqdm_position
 
 
 class BuilderTrajectoryStore:
@@ -226,12 +225,9 @@ class PlayerTrajectoryStore:
             - np.ceil(self.total_samples * self.fresh_fraction)
         )
 
-    def ready_to_sample(self, n: int = None) -> bool:
-        """Require distinct eligible chunks; defer unavailable fresh slots."""
-        if n is None:
-            n = 1
-        eligible = self._eligible()
-        return bool(eligible.sum() >= n)
+    def ready_to_sample(self, count: int = 1) -> bool:
+        """True when at least `count` distinct chunks are eligible."""
+        return bool(self._eligible().sum() >= count)
 
     def ready_to_add(self) -> bool:
         """True when there is a free slot or a replaceable occupant."""
@@ -343,21 +339,19 @@ class PlayerTrajectoryStore:
         self._ids[current_index] = self._next_id
         self._next_id += 1
         self.total_adds += 1
-        decisions = count_chunk_decisions(traj.player_transitions.env_output.done)
+        decisions = int(acted_rows(traj.player_transitions.env_output.done).sum())
         self._decision_counts[current_index] = decisions
         self.total_admitted_decisions += decisions
         self._progress.update(1)
 
-    def sample(self, n: int, increment: bool = True) -> list[Trajectory]:
+    def sample(self, count: int, increment: bool = True) -> list[Trajectory]:
         """Sample distinct eligible chunks, reserving scheduled first-use slots.
 
         Each returned trajectory carries its pre-increment reuse count
         (0 = first visit) for the fresh-vs-replayed staleness diagnostics.
         """
-        valid_indices = self._eligible()
-        available_indices = np.where(valid_indices)[0]
-
-        if not self.ready_to_sample(n):
+        available_indices = np.where(self._eligible())[0]
+        if len(available_indices) < count:
             raise ValueError("insufficient eligible chunks for the batch")
         if self.fresh_fraction > 0:
             fresh_indices = available_indices[self._reuses[available_indices] == 0]
@@ -368,19 +362,21 @@ class PlayerTrajectoryStore:
             # admit arrivals without discarding useful visits or deadlocking.
             fresh_count = min(
                 len(fresh_indices),
-                max(self._fresh_required(n), n - len(replay_indices)),
+                max(self._fresh_required(count), count - len(replay_indices)),
             )
             sample_indices = np.concatenate(
                 [
                     fresh_indices[:fresh_count],
                     np.random.choice(
-                        replay_indices, size=n - fresh_count, replace=False
+                        replay_indices, size=count - fresh_count, replace=False
                     ),
                 ]
             )
             np.random.shuffle(sample_indices)
         else:
-            sample_indices = np.random.choice(available_indices, size=n, replace=False)
+            sample_indices = np.random.choice(
+                available_indices, size=count, replace=False
+            )
         sampled = [
             self._trajectories[i].replace(
                 reuse_count=np.array([self._reuses[i]], dtype=np.int32)
@@ -395,7 +391,7 @@ class PlayerTrajectoryStore:
                 self._decision_counts[sample_indices][first_use].sum()
             )
             self._reuses[sample_indices] += 1
-            self.total_samples += n
+            self.total_samples += count
             self.total_sampled_decisions += int(
                 self._decision_counts[sample_indices].sum()
             )

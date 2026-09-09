@@ -38,6 +38,7 @@ from rl.environment.protos.features_pb2 import (  # noqa: E402
     InfoFeature,
     MovesetFeature,
 )
+from rl.environment.utils import acted_rows  # noqa: E402
 from rl.model.constants import (  # noqa: E402
     _BANK_MOVE_OFFSET,
     CELL_BANK_SRC,
@@ -196,14 +197,7 @@ def read(arguments):
             temperature: _sharpen(log_policy, legal, temperature)
             for temperature in temperatures
         }
-        group = chunks[index : index + legal.shape[1]]
-        acted = np.zeros(legal.shape[:2], bool)
-        for column, chunk in enumerate(group):
-            real = int(chunk.game_length[0] - chunk.game_step_offset[0])
-            acted[:, column] = (np.arange(legal.shape[0]) < real) & ~np.asarray(
-                env.done[:, column], bool
-            )
-            acted[-1, column] = False
+        acted = acted_rows(env.done)
         records = label_batch(tables, env, acted)
         by_state = {}
         for record in records:
