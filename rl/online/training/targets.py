@@ -11,6 +11,7 @@ from rl.environment.interfaces import (
 )
 from rl.model.utils import prune_log_policy
 from rl.online.config import Porygon2LearnerConfig
+from rl.online.training.telemetry import ratio_ess_and_tail
 from rl.utils import average
 
 
@@ -222,14 +223,10 @@ def compute_player_targets(
     # replay-ratio controller diagnostics alongside the actor KL.
     channel_logs = {}
     for suffix, ratio in (("", isr), ("_raw", isr_raw)):
-        ratio_mean = ratio.mean(where=policy_mask)
-        ratio_sq_mean = jnp.square(ratio).mean(where=policy_mask)
-        channel_logs[f"player_isr_ess{suffix}"] = (
-            ratio_mean * ratio_mean / (ratio_sq_mean + 1e-8)
-        )
-        channel_logs[f"player_rho_clip_frac{suffix}"] = (ratio > 1.0).mean(
-            where=policy_mask
-        )
+        (
+            channel_logs[f"player_isr_ess{suffix}"],
+            channel_logs[f"player_rho_clip_frac{suffix}"],
+        ) = ratio_ess_and_tail(ratio, policy_mask, 1.0)
         # Realised trace length had the continuation been built from this
         # ratio: rows it survives from each policy row (the game's end,
         # discount 0, ends it for both; a zeroed ratio ends it too). c IS

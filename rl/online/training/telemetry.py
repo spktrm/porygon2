@@ -395,15 +395,32 @@ _GRAD_SUBTREES = {
 # every legal move cell of a row, which is the high-gain route the
 # dx65cpwp runaway took.
 _APPLIED_DELTA_LEAVES = {
-    "player_applied_delta_rms_switch_bias": ("action_head", "switch_bias"),
-    "player_applied_delta_rms_pointer_query": ("action_head", "query", "kernel"),
-    "player_applied_delta_rms_pointer_key": ("action_head", "key", "kernel"),
+    "player_applied_delta_rms_switch_bias": (("action_head", "switch_bias"),),
+    "player_applied_delta_rms_pointer_query": (("action_head", "query", "kernel"),),
+    "player_applied_delta_rms_pointer_key": (("action_head", "key", "kernel"),),
     "player_applied_delta_rms_pointer_local_tgt": (
-        "action_head",
-        "local_tgt",
-        "kernel",
+        ("action_head", "local_tgt", "kernel"),
     ),
 }
+
+
+_SWITCH_BIAS = ("action_head", "switch_bias")
+
+
+def _rms_panels(table: dict[str, tuple], tree, read_leaf) -> dict[str, jax.Array]:
+    """One panel per `table` entry: the mean over its leaf paths of each
+    leaf's rms, `read_leaf(path)` the f32 array a path names. An entry with
+    a path absent from `tree` logs nothing (a config-gated module)."""
+    logs = {}
+    for key, paths in table.items():
+        if not all(_has(tree, path) for path in paths):
+            continue
+        logs[key] = jnp.mean(
+            jnp.stack(
+                [jnp.sqrt(jnp.mean(jnp.square(read_leaf(path)))) for path in paths]
+            )
+        )
+    return logs
 
 
 def applied_delta_telemetry(prev_params, params) -> dict[str, jax.Array]:
@@ -412,15 +429,25 @@ def applied_delta_telemetry(prev_params, params) -> dict[str, jax.Array]:
     gradient norm says what was asked, this says what moved. `prev_params`
     / `params` are the flax variable dicts before and after the update."""
     before, after = prev_params["params"], params["params"]
-    logs = {}
-    for key, path in _APPLIED_DELTA_LEAVES.items():
-        if not _has(after, path):
-            continue
-        delta = jnp.asarray(_get(after, path), jnp.float32) - jnp.asarray(
+
+    def applied_delta(path):
+        return jnp.asarray(_get(after, path), jnp.float32) - jnp.asarray(
             _get(before, path), jnp.float32
         )
-        logs[key] = jnp.sqrt(jnp.mean(jnp.square(delta)))
-    return logs
+
+    return _rms_panels(_APPLIED_DELTA_LEAVES, after, applied_delta)
+
+
+def switch_bias_telemetry(prev_params, params, grads) -> dict[str, jax.Array]:
+    """The switch bias before the update, its pre-clip gradient, and the
+    mean delta the update applied."""
+    before = _get(prev_params["params"], _SWITCH_BIAS)
+    after = _get(params["params"], _SWITCH_BIAS)
+    return {
+        "player_switch_bias": before.mean(),
+        "player_switch_bias_gradient": _get(grads["params"], _SWITCH_BIAS).sum(),
+        "player_switch_bias_applied_delta": (after - before).mean(),
+    }
 
 
 def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
@@ -428,27 +455,41 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
     learning: rms of each head leaf against its known init, and pre-clip
     grad norms per subtree. `params`/`grads` are the flax variable dicts
     (top-level "params" collection)."""
-    p, g = params["params"], grads["params"]
-    logs = {}
-    for key, paths in {
-        **_ACTION_HEAD_LEAVES,
-        **_TRUNK_LEAVES,
-        **_OPP_CODE_LEAVES,
-        **_HISTORY_LEAVES,
-        **_TRANSITION_LEAVES,
-    }.items():
-        if not all(_has(p, path) for path in paths):
-            continue
-        leaves = [jnp.asarray(_get(p, path), jnp.float32) for path in paths]
-        logs[key] = jnp.mean(
-            jnp.stack([jnp.sqrt(jnp.mean(jnp.square(x))) for x in leaves])
-        )
+    param_tree, grad_tree = params["params"], grads["params"]
+
+    def leaf(path):
+        return jnp.asarray(_get(param_tree, path), jnp.float32)
+
+    logs = _rms_panels(
+        {
+            **_ACTION_HEAD_LEAVES,
+            **_TRUNK_LEAVES,
+            **_OPP_CODE_LEAVES,
+            **_HISTORY_LEAVES,
+            **_TRANSITION_LEAVES,
+        },
+        param_tree,
+        leaf,
+    )
     for key, path in _GRAD_SUBTREES.items():
-        if not _has(g, path):
+        if not _has(grad_tree, path):
             continue
-        logs[key] = optax.global_norm(_get(g, path))
-    logs.update(state_kernel_telemetry(p))
+        logs[key] = optax.global_norm(_get(grad_tree, path))
+    logs.update(state_kernel_telemetry(param_tree))
     return logs
+
+
+def ratio_ess_and_tail(
+    ratio: jax.Array, mask: jax.Array, tail_line: float
+) -> tuple[jax.Array, jax.Array]:
+    """Normalised effective sample size of importance ratios over the masked
+    rows (1 = fully on-policy; low means the estimator is living off a few
+    samples) and the fraction of rows above `tail_line`."""
+    ratio_mean = average(ratio, mask)
+    ratio_sq_mean = average(jnp.square(ratio), mask)
+    return ratio_mean * ratio_mean / (ratio_sq_mean + 1e-8), average(
+        ratio > tail_line, mask
+    )
 
 
 def state_kernel_telemetry(params) -> dict[str, jax.Array]:

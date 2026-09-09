@@ -73,6 +73,8 @@ from rl.online.training.telemetry import (
     critic_outcome_telemetry,
     head_param_telemetry,
     promote_map,
+    ratio_ess_and_tail,
+    switch_bias_telemetry,
 )
 from rl.utils import average
 
@@ -1213,7 +1215,9 @@ def train_step(
 
         learner_actor_log_ratio = learner_log_prob - player_actor_log_prob
         learner_actor_ratio = jnp.exp(learner_actor_log_ratio)
-        learner_actor_ratio_mean = average(learner_actor_ratio, policy_mask)
+        learner_actor_ess, learner_actor_ratio_tail = ratio_ess_and_tail(
+            learner_actor_ratio, policy_mask, 2.0
+        )
 
         learner_target_log_ratio = learner_log_prob - player_target_log_prob
         learner_target_ratio = jnp.exp(learner_target_log_ratio)
@@ -1586,12 +1590,8 @@ def train_step(
             # a different population from player_isr_ess /
             # player_rho_clip_frac (the TARGET/behaviour ratio v-trace
             # consumes, rl/online/training/targets.py) -- never one axis.
-            player_learner_actor_ess=learner_actor_ratio_mean
-            * learner_actor_ratio_mean
-            / (average(jnp.square(learner_actor_ratio), policy_mask) + 1e-8),
-            player_learner_actor_ratio_tail_gt2=average(
-                learner_actor_ratio > 2.0, policy_mask
-            ),
+            player_learner_actor_ess=learner_actor_ess,
+            player_learner_actor_ratio_tail_gt2=learner_actor_ratio_tail,
             player_learner_target_ratio=average(learner_target_ratio, policy_mask),
             player_learner_actor_forward_kl=loss_actor_forward_kl,
             # Modality-resolved split of the SAME k3 estimator. The
@@ -1705,16 +1705,9 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            player_switch_bias=prev_player_state.params["params"]["action_head"][
-                "switch_bias"
-            ].mean(),
-            player_switch_bias_gradient=player_grads["params"]["action_head"][
-                "switch_bias"
-            ].sum(),
-            player_switch_bias_applied_delta=(
-                player_state.params["params"]["action_head"]["switch_bias"]
-                - prev_player_state.params["params"]["action_head"]["switch_bias"]
-            ).mean(),
+            **switch_bias_telemetry(
+                prev_player_state.params, player_state.params, player_grads
+            ),
             # Q-head learning readouts: the three-scalar micro gate, the
             # drift-from-init of the zero-init out layers and the pointer
             # kernels, and per-subtree grad norms (pre-clip). A micro
