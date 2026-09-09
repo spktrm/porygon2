@@ -42,7 +42,6 @@ import argparse  # noqa: E402
 import logging  # noqa: E402
 from collections import Counter  # noqa: E402
 
-import flax.linen as nn  # noqa: E402
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
@@ -62,8 +61,6 @@ from rl.environment.protos.features_pb2 import (  # noqa: E402
 )
 from rl.model.categoricals import unimix_probs  # noqa: E402
 from rl.model.config import get_player_model_config  # noqa: E402
-from rl.model.constants import POLICY_READABLE_ROWS, SEQUENCE_READ_MASK  # noqa: E402
-from rl.model.encoder import Encoder  # noqa: E402
 from rl.model.history_encoder import (  # noqa: E402
     SIDE_MINE,
     relevant_edges,
@@ -71,6 +68,7 @@ from rl.model.history_encoder import (  # noqa: E402
 )
 from rl.model.player_model import get_player_model  # noqa: E402
 from rl.offline import harness  # noqa: E402
+from rl.offline.harness import encode_policy_rows  # noqa: E402
 from rl.offline.separation_probe import actor_input_of  # noqa: E402
 from rl.offline.trunk_homogeneity import valid_steps  # noqa: E402
 from rl.online.training.batching import stack_batch  # noqa: E402
@@ -85,28 +83,6 @@ EVENT_OF_MAJOR = {
 SIDE_OPP = 1 - SIDE_MINE
 MIN_TOKEN_COUNT = 5
 INPUT_NAMES = ("post", "prior", "prior_feat", "delta_read", "pooled", "rows_pca")
-
-
-def _encode(module, actor_input, actor_output):
-    encoder = module.encoder
-    env = actor_input.env
-    *history_inputs, _ = encoder._history_inputs(
-        env, actor_input.packed_history, actor_input.history
-    )
-    assemble = nn.vmap(
-        Encoder._assemble_sequence,
-        variable_axes={"params": None},
-        split_rngs={"params": False},
-        in_axes=0,
-        out_axes=0,
-    )
-    sequence, row_valid, _, _ = assemble(encoder, env, *history_inputs)
-    kept = encoder.kept_rows()
-    read_mask = SEQUENCE_READ_MASK[np.ix_(kept, kept)]
-    trunk_out = jax.vmap(lambda seq, ok: encoder.trunk(seq, ok, read_mask))(
-        sequence, row_valid
-    )
-    return trunk_out[:, POLICY_READABLE_ROWS], row_valid[:, POLICY_READABLE_ROWS]
 
 
 def _transition_reads(module, rows, row_valid, actions):
@@ -202,7 +178,7 @@ def collect(net, variables, sides):
     encode = jax.jit(
         jax.vmap(
             lambda params, actor_input, actor_output: net.apply(
-                params, actor_input, actor_output, method=_encode
+                params, actor_input, actor_output, method=encode_policy_rows
             ),
             in_axes=(None, 1, 1),
             out_axes=1,
@@ -289,10 +265,12 @@ def report(name, inputs, target, groups, seed, rows_mask=None):
         f"{'input':>12} {'dims':>6} {'linear':>8} {'mlp':>8}   (accuracy above the majority marginal)"
     )
     for input_name in INPUT_NAMES:
-        pca_dims = 0
-        features = inputs["rows" if input_name == "rows_pca" else input_name]
         if input_name == "rows_pca":
             pca_dims = 256
+            features = inputs["rows"]
+        else:
+            pca_dims = 0
+            features = inputs[input_name]
         linear = held_out_accuracy(features, target, groups, _linear, pca_dims)
         mlp = held_out_accuracy(features, target, groups, lambda: _mlp(seed), pca_dims)
         print(

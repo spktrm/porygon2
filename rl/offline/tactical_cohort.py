@@ -31,21 +31,21 @@ from pathlib import Path
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from rl.environment.protos.features_pb2 import (  # noqa: E402
+from rl.environment.protos.features_pb2 import (
     EntityRevealedNodeFeature,
     InfoFeature,
     MovesetFeature,
 )
-from rl.environment.utils import acted_rows  # noqa: E402
-from rl.model.constants import (  # noqa: E402
+from rl.environment.utils import acted_rows
+from rl.model.constants import (
     _BANK_MOVE_OFFSET,
     CELL_BANK_SRC,
     OPP_ACTIVE_PUBLIC_ROWS,
 )
-from rl.offline import harness  # noqa: E402
-from rl.offline.type_probe import (  # noqa: E402
+from rl.offline import harness
+from rl.offline.type_probe import (
     IMMUNE,
     TypeTables,
     label_batch,
@@ -57,7 +57,6 @@ logger = logging.getLogger(__name__)
 ROOT = Path("runtime/tactical-cohort")
 GAMES_PATH = ROOT / "games.pkl"
 LOGS_DIR = ROOT / "logs"
-CHART_PATH = "runtime/priority-audit-01861967/typechart.json"
 TAG = "tactical-cohort"
 _ABILITY = EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY
 _MOVE_ID = MovesetFeature.MOVESET_FEATURE__MOVE_ID
@@ -97,7 +96,7 @@ DYNAMIC_ABILITIES = {
 
 def immunity_events(path: Path):
     """The simulator's own `-immune` lines against p2 following a p1 move,
-    per turn (runtime/priority-audit-01861967/policy_probe.py's reader)."""
+    per turn."""
     events = []
     turn = 0
     move = None
@@ -169,7 +168,7 @@ def _sharpen(log_policy, legal, temperature):
 def read(arguments):
     sides = harness.load(str(GAMES_PATH))
     parameters = harness.load_params(arguments.checkpoint)
-    tables = TypeTables("data/data", CHART_PATH)
+    tables = TypeTables("data/data")
     enums = json.loads(Path("data/data/data.json").read_text())
     ability_names = {value: name for name, value in enums["abilities"].items()}
     chunks = []
@@ -279,16 +278,18 @@ def read(arguments):
                 )
         index += legal.shape[1]
 
+    if confirmed:
+        confirmed_recorded_probability_mean = float(
+            np.mean([event["recorded_probability"] for event in confirmed])
+        )
+    else:
+        confirmed_recorded_probability_mean = None
     result = dict(
         checkpoint=arguments.checkpoint,
         games=len(sides),
         states=len(states),
         confirmed_immune_actions=len(confirmed),
-        confirmed_recorded_probability_mean=(
-            float(np.mean([event["recorded_probability"] for event in confirmed]))
-            if confirmed
-            else None
-        ),
+        confirmed_recorded_probability_mean=confirmed_recorded_probability_mean,
     )
     rng = np.random.default_rng(arguments.seed)
     game_ids = np.asarray([state["game"] for state in states])
@@ -296,7 +297,10 @@ def read(arguments):
     for temperature in temperatures:
         masses = np.asarray([state[f"mass_t{temperature}"] for state in states])
         key = f"ineffective_confident_mass_t{temperature}"
-        result[key] = float(masses.mean()) if len(masses) else None
+        if len(masses):
+            result[key] = float(masses.mean())
+        else:
+            result[key] = None
         if len(unique_games) > 1:
             samples = []
             for _ in range(arguments.bootstrap):

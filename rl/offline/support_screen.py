@@ -38,22 +38,22 @@ from pathlib import Path
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
-import jax  # noqa: E402
-import numpy as np  # noqa: E402
+import jax
+import numpy as np
 
-from rl.environment.utils import acted_rows  # noqa: E402
-from rl.model.builder_model import get_builder_model  # noqa: E402
-from rl.model.config import (  # noqa: E402
+from rl.environment.utils import acted_rows
+from rl.model.builder_model import get_builder_model
+from rl.model.config import (
     get_builder_model_config,
     get_player_model_config,
 )
-from rl.model.player_model import get_player_model  # noqa: E402
-from rl.model.utils import prune_log_policy  # noqa: E402
-from rl.offline import harness  # noqa: E402
-from rl.online.artifact import create_train_state, load_from_checkpoint  # noqa: E402
-from rl.online.config import Porygon2LearnerConfig  # noqa: E402
-from rl.online.training.batching import stack_batch  # noqa: E402
-from rl.online.training.train_step import TRAIN_STEP_JIT  # noqa: E402
+from rl.model.player_model import get_player_model
+from rl.model.utils import prune_log_policy
+from rl.offline import harness
+from rl.online.artifact import create_train_state, load_from_checkpoint
+from rl.online.config import Porygon2LearnerConfig
+from rl.online.training.batching import stack_batch
+from rl.online.training.train_step import TRAIN_STEP_JIT
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,10 @@ def cut_audit(target_params, chunks, threshold: float, batch_size: int):
                 positions.append(first / max(real, 1))
                 if first < real / 2:
                     chunks_cut_before_midpoint += 1
+    if positions:
+        first_discard_position_median = float(np.median(positions))
+    else:
+        first_discard_position_median = None
     return {
         "threshold": threshold,
         "chunks": len(chunks),
@@ -194,9 +198,7 @@ def cut_audit(target_params, chunks, threshold: float, batch_size: int):
         "chunks_with_discard_fraction": chunks_with_discard / max(len(chunks), 1),
         "chunks_cut_before_midpoint_fraction": chunks_cut_before_midpoint
         / max(len(chunks), 1),
-        "first_discard_position_median": (
-            float(np.median(positions)) if positions else None
-        ),
+        "first_discard_position_median": first_discard_position_median,
     }
 
 

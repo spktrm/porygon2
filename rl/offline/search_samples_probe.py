@@ -59,7 +59,6 @@ import argparse  # noqa: E402
 import logging  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 
-import flax.linen as nn  # noqa: E402
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
@@ -73,14 +72,12 @@ from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.constants import (  # noqa: E402
     CLS_ROW,
     MOVE_ROWS,
-    POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
-    SEQUENCE_READ_MASK,
     TARGET_ROWS,
 )
-from rl.model.encoder import Encoder  # noqa: E402
 from rl.model.player_model import get_player_model  # noqa: E402
 from rl.offline import harness  # noqa: E402
+from rl.offline.harness import encode_policy_rows  # noqa: E402
 from rl.offline.separation_probe import actor_input_of  # noqa: E402
 from rl.offline.trunk_homogeneity import valid_steps  # noqa: E402
 from rl.online.training.batching import stack_batch  # noqa: E402
@@ -94,30 +91,6 @@ KIND_NAMES = {
     RequestType.REQUEST_TYPE__SWITCH: "switch",
     RequestType.REQUEST_TYPE__TEAM: "team",
 }
-
-
-def _encode(module, actor_input, actor_output):
-    """One chunk -> the post-trunk policy-readable rows (T, 73, D) and
-    their validity, exactly what the live search reads."""
-    encoder = module.encoder
-    env = actor_input.env
-    *history_inputs, _ = encoder._history_inputs(
-        env, actor_input.packed_history, actor_input.history
-    )
-    assemble = nn.vmap(
-        Encoder._assemble_sequence,
-        variable_axes={"params": None},
-        split_rngs={"params": False},
-        in_axes=0,
-        out_axes=0,
-    )
-    sequence, row_valid, _, _ = assemble(encoder, env, *history_inputs)
-    kept = encoder.kept_rows()
-    read_mask = SEQUENCE_READ_MASK[np.ix_(kept, kept)]
-    trunk_out = jax.vmap(lambda seq, ok: encoder.trunk(seq, ok, read_mask))(
-        sequence, row_valid
-    )
-    return trunk_out[:, POLICY_READABLE_ROWS], row_valid[:, POLICY_READABLE_ROWS]
 
 
 def _root_values(module, rows, legal, rng, num_samples, max_cells):
@@ -349,7 +322,7 @@ def collect(net, variables, chunks, roots, num_samples, samples_per_call, seed):
     encode = jax.jit(
         jax.vmap(
             lambda params, actor_input, actor_output: net.apply(
-                params, actor_input, actor_output, method=_encode
+                params, actor_input, actor_output, method=encode_policy_rows
             ),
             in_axes=(None, 1, 1),
             out_axes=1,
@@ -421,7 +394,7 @@ def collect_calibration(
     encode = jax.jit(
         jax.vmap(
             lambda params, actor_input, actor_output: net.apply(
-                params, actor_input, actor_output, method=_encode
+                params, actor_input, actor_output, method=encode_policy_rows
             ),
             in_axes=(None, 1, 1),
             out_axes=1,
@@ -520,7 +493,7 @@ def _delta_stats(stack) -> dict[str, float]:
 
 def _stack(transitions: list[Transition]) -> dict[str, np.ndarray]:
     return {
-        key: np.stack([t.values[key] for t in transitions])
+        key: np.stack([transition.values[key] for transition in transitions])
         for key in transitions[0].values
     }
 
@@ -533,7 +506,7 @@ def resample_games(transitions: list[Transition], rng) -> list[Transition]:
         by_game.setdefault(transition.game, []).append(transition)
     games = list(by_game)
     drawn = rng.choice(len(games), len(games), replace=True)
-    return [t for index in drawn for t in by_game[games[index]]]
+    return [transition for index in drawn for transition in by_game[games[index]]]
 
 
 def bootstrap_delta_stats(transitions, replicates, seed) -> dict[str, float]:
@@ -569,7 +542,9 @@ def summarise_calibration(
         return {}
     stack = _stack(transitions)
     support = np.asarray(CAT_VF_SUPPORT, np.float32)
-    outcomes = np.asarray([t.outcome for t in transitions], np.float32)
+    outcomes = np.asarray(
+        [transition.outcome for transition in transitions], np.float32
+    )
     label = (outcomes[:, None] == support[None]).astype(np.float32)
     target_delta = stack["real_v"] - stack["root_v"]
     ce_copy = _cross_entropy(stack["root_logits"], label)
@@ -582,7 +557,7 @@ def summarise_calibration(
     mse_real = float(np.mean((stack["real_v"] - outcomes) ** 2))
     stats = {
         "n": len(transitions),
-        "games": len({t.game for t in transitions}),
+        "games": len({transition.game for transition in transitions}),
         "abs_real_delta_v": float(np.abs(target_delta).mean()),
         "delta_energy": float(np.sum(target_delta**2)),
         "sign_acc_root": float(np.mean(np.sign(stack["root_v"]) == outcomes)),
@@ -637,14 +612,32 @@ def calibration_splits(transitions: list[Transition], min_n: int = 20):
     pair with at least `min_n` transitions."""
     splits = [
         ("all transitions", transitions),
-        ("switch taken", [t for t in transitions if t.is_switch]),
-        ("move taken", [t for t in transitions if not t.is_switch]),
-        ("rows newly valid at t+1", [t for t in transitions if t.newly_valid]),
-        ("no newly valid row", [t for t in transitions if not t.newly_valid]),
+        (
+            "switch taken",
+            [transition for transition in transitions if transition.is_switch],
+        ),
+        (
+            "move taken",
+            [transition for transition in transitions if not transition.is_switch],
+        ),
+        (
+            "rows newly valid at transition+1",
+            [transition for transition in transitions if transition.newly_valid],
+        ),
+        (
+            "no newly valid row",
+            [transition for transition in transitions if not transition.newly_valid],
+        ),
     ]
-    pairs = sorted({(t.kind, t.next_kind) for t in transitions})
+    pairs = sorted(
+        {(transition.kind, transition.next_kind) for transition in transitions}
+    )
     for kind, next_kind in pairs:
-        subset = [t for t in transitions if (t.kind, t.next_kind) == (kind, next_kind)]
+        subset = [
+            transition
+            for transition in transitions
+            if (transition.kind, transition.next_kind) == (kind, next_kind)
+        ]
         if len(subset) >= min_n:
             title = (
                 f"request {KIND_NAMES.get(kind, kind)} -> "

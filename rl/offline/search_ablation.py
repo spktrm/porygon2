@@ -10,16 +10,16 @@ import os
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.75")
 
-import argparse  # noqa: E402
-import json  # noqa: E402
-import logging  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
+import argparse
+import json
+import logging
+import time
+from pathlib import Path
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from rl.environment.utils import acted_rows  # noqa: E402
-from rl.offline import harness  # noqa: E402
+from rl.environment.utils import acted_rows
+from rl.offline import harness
 
 
 def summarise_game(side):
@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--chance-samples", type=int, default=4)
     parser.add_argument("--device", choices=("cpu", "gpu"), default="gpu")
     parser.add_argument("--seed", type=int, default=123)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--out", required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     mode = args.arm.rstrip("12")
@@ -102,7 +102,7 @@ def main():
         "simulator_seeds_paired": False,
         "games": games,
     }
-    Path(args.output).write_text(json.dumps(result, indent=2))
+    Path(args.out).write_text(json.dumps(result, indent=2))
     print(
         json.dumps({key: value for key, value in result.items() if key != "games"}),
         flush=True,

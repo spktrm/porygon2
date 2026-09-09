@@ -22,14 +22,16 @@ from rl.model.categoricals import unimix_probs
 from rl.model.config import get_player_model_config
 from rl.model.player_model import get_player_model
 from rl.offline import harness
+from rl.offline.harness import encode_policy_rows
 from rl.offline.interval_data import game_split, iter_intervals
-from rl.offline.search_samples_probe import _encode
 from rl.offline.separation_probe import actor_input_of
 from rl.online.training.batching import stack_batch
 
+logger = logging.getLogger(__name__)
+
 
 def _features(module, actor_input, actor_output):
-    rows, valid = _encode(module, actor_input, actor_output)
+    rows, valid = encode_policy_rows(module, actor_input, actor_output)
     probabilities = jax.vmap(module.transition.action_logits)(
         rows, actor_output.action_head.action_index
     )
@@ -93,7 +95,7 @@ def export_features(checkpoint, sides, game_ids, output):
                 records["kind"].append(interval.request_type)
                 records["terminal"].append(interval.terminal)
         if (side_index + 1) % 16 == 0:
-            print(f"Encoded {side_index + 1}/{len(sides)} sides", flush=True)
+            logger.info("encoded %d/%d sides", side_index + 1, len(sides))
     arrays = {name: np.asarray(values) for name, values in records.items()}
     np.savez_compressed(output, **arrays)
     print(

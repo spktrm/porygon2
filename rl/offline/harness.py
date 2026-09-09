@@ -39,6 +39,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -49,7 +50,12 @@ from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput, Trajectory
 from rl.environment.protos.features_pb2 import InfoFeature
 from rl.model.config import get_player_model_config
-from rl.model.constants import IS_WILDCARD_CELL
+from rl.model.constants import (
+    IS_WILDCARD_CELL,
+    POLICY_READABLE_ROWS,
+    SEQUENCE_READ_MASK,
+)
+from rl.model.encoder import Encoder
 from rl.model.heads import HeadParams
 from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.search import configure_search
@@ -280,6 +286,31 @@ def dump(sides, path: str) -> None:
 def load(path: str):
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+def encode_policy_rows(module, actor_input, actor_output):
+    """One chunk -> the post-trunk policy-readable rows (T, 73, D) and
+    their validity, exactly what the live search reads. Bound as a flax
+    `method=` on the player module (the probes' shared read)."""
+    encoder = module.encoder
+    env = actor_input.env
+    *history_inputs, _ = encoder._history_inputs(
+        env, actor_input.packed_history, actor_input.history
+    )
+    assemble = nn.vmap(
+        Encoder._assemble_sequence,
+        variable_axes={"params": None},
+        split_rngs={"params": False},
+        in_axes=0,
+        out_axes=0,
+    )
+    sequence, row_valid, _, _ = assemble(encoder, env, *history_inputs)
+    kept = encoder.kept_rows()
+    read_mask = SEQUENCE_READ_MASK[np.ix_(kept, kept)]
+    trunk_out = jax.vmap(lambda seq, ok: encoder.trunk(seq, ok, read_mask))(
+        sequence, row_valid
+    )
+    return trunk_out[:, POLICY_READABLE_ROWS], row_valid[:, POLICY_READABLE_ROWS]
 
 
 def forward(

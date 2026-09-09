@@ -113,19 +113,40 @@ _ABILITY_IMMUNITY = {
 }
 
 
+# The dex's `damageTaken` codes (0 neutral, 1 weak, 2 resist, 3 immune) as
+# the chart's `chart[atk][def]` values.
+_DAMAGE_TAKEN_TO_CHART = {0: 0, 1: 1, 2: -1, 3: -9}
+
+
+def chart_from_dex(typechart: list[dict]) -> dict[str, dict[str, int]]:
+    """`chart[atk][def]` in {-9 immune, -1 resist, 0 neutral, 1 weak} over
+    the 18 gen9 types, from the dex export's per-defender `damageTaken`.
+    Stellar is left out: it is no defending type."""
+    entries = [entry for entry in typechart if entry["id"] != "stellar"]
+    return {
+        attack["name"]: {
+            defender["name"]: _DAMAGE_TAKEN_TO_CHART[
+                defender["damageTaken"][attack["name"]]
+            ]
+            for defender in entries
+        }
+        for attack in entries
+    }
+
+
 class TypeTables:
     """Enum index -> dex facts, from the same data the encoder's tables are
     built from, plus the gen9 chart (`chart[atk][def]` in {-9 immune, -1, 0, 1})."""
 
-    def __init__(self, data_dir: str, chart_path: str):
+    def __init__(self, data_dir: str):
         with open(f"{data_dir}/data.json") as handle:
             enums = json.load(handle)
         with open(f"{data_dir}/gen9/moves.json") as handle:
             moves = {move["id"]: move for move in json.load(handle)}
         with open(f"{data_dir}/gen9/species.json") as handle:
             species = {mon["id"]: mon for mon in json.load(handle)}
-        with open(chart_path) as handle:
-            self.chart = json.load(handle)
+        with open(f"{data_dir}/gen9/typechart.json") as handle:
+            self.chart = chart_from_dex(json.load(handle))
         self.type_names = sorted(self.chart)
         self.type_index = {name: i for i, name in enumerate(self.type_names)}
         # typechart enum value -> capitalised name (the chart's key space)
@@ -448,9 +469,6 @@ def main(argv=None):
     parser.add_argument("--games-pkl", required=True)
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--data-dir", default="data/data")
-    parser.add_argument(
-        "--chart", required=True, help="typechart json: chart[atk][def]"
-    )
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ridge-alpha", type=float, default=1.0)
@@ -461,7 +479,7 @@ def main(argv=None):
     chunks = harness.flatten(harness.load(args.games_pkl))
     net = get_player_model(get_player_model_config(9, train=True))
     variables = harness.load_params(args.ckpt)
-    tables = TypeTables(args.data_dir, args.chart)
+    tables = TypeTables(args.data_dir)
     run_probe_e(
         net,
         variables,

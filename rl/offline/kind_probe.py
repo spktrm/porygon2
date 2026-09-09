@@ -322,7 +322,6 @@ def main(argv=None):
     parser.add_argument("--games-pkl", default="runtime/lineage_games_ckpt182000.pkl")
     parser.add_argument("--ckpt", default=None, help="trained params; default fresh")
     parser.add_argument("--data-dir", default="data/data")
-    parser.add_argument("--chart", default="rl/offline/typechart.json")
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--steps-per-chunk", type=int, default=4)
     parser.add_argument("--rank", type=int, default=16)
@@ -332,7 +331,7 @@ def main(argv=None):
     rng = np.random.default_rng(args.seed)
 
     chunks = harness.flatten(harness.load(args.games_pkl))
-    tables = TypeTables(args.data_dir, args.chart)
+    tables = TypeTables(args.data_dir)
     net = get_player_model(get_player_model_config(9, train=True))
     if args.ckpt:
         variables = harness.load_params(args.ckpt)
