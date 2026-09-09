@@ -116,9 +116,10 @@ policy rows whose taken action the target had dropped below
 `player_prune_threshold` (ratio 0, row discarded — the revert trigger above
 1%), `player_discard_legal_frac` the share of legal cells below the line, and
 `player_discard_position_mean` where in the chunk the discards sit.
-`player_trace_len_mean` / `_raw` is the realised v-trace continuation length
-from each policy row, thresholded against raw: one discarded row cuts the
-trace for every row before it.
+`player_trace_len_mean` / `_raw` is the v-trace continuation length from each
+policy row had c been built from the thresholded / raw ratio. c IS raw (rho
+only carries the threshold, the restriction the offline cut audit fired), so
+`_raw` is the live trace and the thresholded series is the cut avoided.
 
 ## Paired switch-advantage audit
 

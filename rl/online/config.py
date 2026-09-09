@@ -612,10 +612,13 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # `thresholded` eval slot samples the thresholded policy
     # (HeadParams.prune_threshold); (2) the learner thresholds the TARGET
     # policy entering v-trace (targets.thresholded_target_ratio), so a
-    # taken action the target has dropped below the line gets ratio 0 and
+    # taken action the target has dropped below the line gets rho 0 and
     # its row is discarded -- variance control on the target estimator,
     # the reference's own placement (rnad.py:798 post-processes pi for
-    # v_trace only; acting_policy and the policy loss's pi stay raw). The
+    # v_trace only; acting_policy and the policy loss's pi stay raw). rho
+    # only: the trace ratio c stays raw, the pre-registered restriction
+    # the offline cut audit fired (7.8% of chunks cut before the midpoint
+    # against the 5% gate; targets.compute_player_targets). The
     # learner ratio, the surrogate, the magnet, the entropy term and the
     # support hinge read the raw policies; the training actors never
     # threshold -- mu stays the policy as trained. 0.0 is bit-identical to

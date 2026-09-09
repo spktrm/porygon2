@@ -115,9 +115,17 @@ def compute_player_targets(
     value targets.
 
     ``isr`` is the THRESHOLDED ratio (thresholded_target_ratio) and
-    ``isr_raw`` the raw one, read only by the telemetry twins so the ESS,
-    clip-fraction and trace-length panels keep a comparable series across
-    the restart that introduced the threshold; None means "the same".
+    ``isr_raw`` the raw one; None means "the same". rho reads the
+    thresholded ratio, c the RAW one (2026-09-09, pre-registered and fired
+    by the offline cut audit on ckpt_02014000: 7.8% of recorded chunks
+    carried a discard before their midpoint against the 5% gate, median
+    first discard at 21% of the chunk -- with c thresholded too, one
+    abandoned action would have cut credit assignment for every row before
+    it in one chunk in thirteen). So a discarded row loses its own
+    advantage and TD term and nothing else; its value target still
+    bootstraps through c. The raw ratio also feeds the telemetry
+    twins so the ESS, clip-fraction and trace-length panels keep a
+    comparable series across the restart.
     """
     if isr_raw is None:
         isr_raw = isr
@@ -126,13 +134,12 @@ def compute_player_targets(
     discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
 
     # Truncated importance weights, AlphaStar/IMPALA: clipped IS only.
-    # rho and c are the SAME quantity here — the two were separate
-    # expressions behind a player_alpha blend between raw and clipped IS,
-    # a dial nothing ever moved off 1.0 (removed 2026-08-21), so this is
-    # one min() instead of four multiplies and two adds.
-    truncated_isr = jnp.minimum(1.0, isr).astype(jnp.float32)
-    rho_t = truncated_isr
-    c_t = truncated_isr
+    # rho and c were ONE quantity from 2026-08-21 (the player_alpha blend
+    # between raw and clipped IS that once separated them never moved off
+    # 1.0) until 2026-09-09, when they split again on a different axis:
+    # rho carries the threshold, c does not (see the docstring).
+    rho_t = jnp.minimum(1.0, isr).astype(jnp.float32)
+    c_t = jnp.minimum(1.0, isr_raw).astype(jnp.float32)
 
     # Scalar-space recursion (2026-08-26). The recursion used to run
     # per-atom in distribution space, accumulating signed measures
@@ -223,9 +230,11 @@ def compute_player_targets(
         channel_logs[f"player_rho_clip_frac{suffix}"] = (ratio > 1.0).mean(
             where=policy_mask
         )
-        # Realised trace length: rows the continuation survives from each
-        # policy row -- the game's end (discount 0) ends it for both, a
-        # zeroed ratio ends it for the thresholded one only.
+        # Realised trace length had the continuation been built from this
+        # ratio: rows it survives from each policy row (the game's end,
+        # discount 0, ends it for both; a zeroed ratio ends it too). c IS
+        # the raw one, so the live trace is the _raw series; the
+        # thresholded series is the cut the restriction avoids.
         channel_logs[f"player_trace_len_mean{suffix}"] = average(
             trace_run_length((ratio > 0.0) & (discount_t > 0.0)), policy_mask
         )

@@ -1529,9 +1529,11 @@ def rl_sections():
                     range_y=(0, 1),
                 ),
                 lp(
-                    # One discarded row cuts the trace for every row before
-                    # it; the raw twin is the same chunks unthresholded.
-                    "Realised trace length · thresholded vs raw",
+                    # c is RAW (rho only carries the threshold, the
+                    # restriction the 2026-09-09 cut audit fired), so _raw is
+                    # the live trace and the thresholded series the cut a
+                    # thresholded c would have made.
+                    "Trace length · live (raw c) vs had c been thresholded",
                     ["player_trace_len_mean", "player_trace_len_mean_raw"],
                 ),
                 lp(

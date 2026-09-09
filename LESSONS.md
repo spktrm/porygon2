@@ -4024,3 +4024,31 @@ cut; and the slow scope pin — learner ratio, surrogate, magnet, entropy,
 hinge and forward KL bit-identical under threshold .3 vs 0 while the
 v-trace ESS and the discard rate move). Not claimed: any effect on
 strength; the set lands together and is read on the frozen cohort.
+
+## Stop window — 2026-09-09 cut audit fired the rho-only restriction
+
+The previous run had stopped itself at 13:08 on the host-RAM guard at
+`ckpt_02014000` (step 2,014,000), so that is the stop checkpoint for the
+whole set. `rl/offline/support_screen.py` on it, 32 self-play games → 64
+chunks, 1,702 acted rows, threshold .005 on the target policy: .29% of
+acted rows discarded, 7.8% of chunks carrying a discard, every one of
+them before the chunk's midpoint (median first discard at 21% of the
+chunk). Against the pre-registered 5% gate the restriction fires: rho
+carries the threshold, c stays raw (`compute_player_targets`), so a
+discarded row loses its own advantage and TD term and nothing else (its
+value target still bootstraps through c) — with
+c thresholded too, one chunk in thirteen would have lost credit assignment
+for four fifths of its rows to one abandoned action. `player_trace_len_mean`
+now reads the cut avoided and `_raw` the live trace.
+`tests/test_vtrace_threshold.py` carries the positive control (the same
+discard fed to c does cut every earlier row).
+
+Frozen cohort built the same window (`rl/offline/tactical_cohort.py
+collect`, 240 heuristic games at T=.5, seed 909, 162 wins, the
+simulator's logs beside it) and read on ckpt_02014000: 531 states with an
+immune damaging move and an effective alternative;
+`ineffective_confident_mass` .144 at T=1 (whole-game bootstrap 95% CI
+.081–.207), .159 at T=.5 (.079–.244); type immunity .122 over 470 states,
+REVEALED-ability immunity .306 over 62 (T=.5: .130 / .371); 7
+simulator-confirmed immune actions at mean recorded probability .686. This
+is the before; the after is the same command on a later checkpoint.

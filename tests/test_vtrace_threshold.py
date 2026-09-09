@@ -100,9 +100,10 @@ def _min_batch(done, win_reward, action_mask, action_index):
     )
 
 
-def test_discarded_row_produces_no_target_and_cuts_the_trace():
+def test_discarded_row_loses_its_own_target_and_nothing_else():
     # A 6-row chunk, terminal win on the last row, V = 0, lambda 1, gamma 1:
-    # every row's return is the outcome unless the trace is cut.
+    # every row's return is the outcome unless the trace is cut. rho is
+    # thresholded, c is raw (2026-09-09), so only the discarded row changes.
     T = 6
     done = jnp.zeros((T, 1), bool).at[T - 1, 0].set(True)
     # Reward 0 (the centre bin) everywhere but the terminal win.
@@ -122,17 +123,19 @@ def test_discarded_row_produces_no_target_and_cuts_the_trace():
     targets, logs = compute_player_targets(batch, value_log_probs, cut, config, raw)
     adv_reference = np.asarray(reference.pg_advantages)[:, 0]
     adv = np.asarray(targets.pg_advantages)[:, 0]
-    # The discarded row itself: advantage 0 (rho = 0) and a bootstrap-only
-    # value target; the rows after it are unchanged.
+    # The discarded row itself: advantage 0 (rho = 0); its value target
+    # still bootstraps through the raw c from the rows after it, which are
+    # unchanged.
     assert adv[3] == 0.0 and adv_reference[3] != 0.0
     np.testing.assert_array_equal(adv[4:], adv_reference[4:])
-    # (V = 0 everywhere, so the bootstrap-only target is two_hot(0) -- the
-    # centre bin -- where the reference row carried the win.)
-    np.testing.assert_allclose(np.asarray(targets.win_returns)[3, 0], [0, 1, 0])
-    np.testing.assert_allclose(np.asarray(reference.win_returns)[3, 0], [0, 0, 1])
-    # And every row BEFORE it lost the outcome: the trace was cut there.
-    assert np.all(adv_reference[:3] != 0.0) and np.all(adv[:3] == 0.0)
-    # The realised trace length says so, the raw twin does not.
+    np.testing.assert_array_equal(
+        np.asarray(targets.win_returns)[3:], np.asarray(reference.win_returns)[3:]
+    )
+    # The rows BEFORE it keep the outcome: c is raw, the trace is not cut.
+    np.testing.assert_array_equal(adv[:3], adv_reference[:3])
+    assert np.all(adv[:3] != 0.0)
+    # The trace-length twins: the thresholded series reads the cut the
+    # restriction avoids, the raw series the live continuation.
     assert float(logs["player_trace_len_mean"]) < float(
         logs["player_trace_len_mean_raw"]
     )
@@ -143,6 +146,10 @@ def test_discarded_row_produces_no_target_and_cuts_the_trace():
     # Twins: the raw ESS is 1 either way, the thresholded one is not.
     np.testing.assert_allclose(float(logs["player_isr_ess_raw"]), 1.0, atol=1e-6)
     assert float(logs["player_isr_ess"]) < 1.0
+    # Positive control: the same discard fed to c as well DOES cut every
+    # earlier row -- the split is what keeps them.
+    both_cut, _ = compute_player_targets(batch, value_log_probs, cut, config, cut)
+    assert np.all(np.asarray(both_cut.pg_advantages)[:3, 0] == 0.0)
 
 
 def test_trace_run_length_counts_to_the_first_cut():
