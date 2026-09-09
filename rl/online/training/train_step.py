@@ -1376,7 +1376,6 @@ def train_step(
                 policy_mask,
                 switch_choice_mask,
                 learner_actor_ratio,
-                learner_actor_log_ratio,
                 pg_adv_norm,
                 pg_advantages,
                 config,
@@ -1412,9 +1411,9 @@ def train_step(
             # The revealed-row control, likewise unscaled: its input is under
             # stop_gradient, so only its own MLP receives the gradient.
             + loss_revealed_belief
-            # kl: trust region against the behaviour policy — the
-            # replay-staleness guard alongside the PPO clip.
-            + config.player_kl_loss_coef * loss_actor_backward_kl
+            # The actor backward KL is a diagnostic only since 2026-09-09
+            # (config.py, the removed player_kl_loss_coef): the trust region
+            # against the behaviour policy is the clip and the magnet.
         )
 
         if config.player_replay_trajectory_mode != "off" and not isinstance(
@@ -1481,6 +1480,7 @@ def train_step(
             player_history_gate_mean=average(
                 learner_player_pred.history_gate_mean, value_mask
             ),
+            # Diagnostic since 2026-09-09: no coefficient scales it.
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,

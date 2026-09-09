@@ -56,7 +56,7 @@ are unchanged. They remain unsuitable as unique-decision counters.
 
 ## Switch learning diagnostics
 
-`player_switch_logit_grad_{pg,entropy,magnet,modality,actor_kl}` report the
+`player_switch_logit_grad_{pg,entropy,magnet,modality}` report the
 coefficient-weighted directional actor-loss derivatives for raising all switch
 logits together, holding model features fixed. **Positive suppresses switching
 under gradient descent; negative encourages it.** These f32 diagnostics reuse

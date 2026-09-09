@@ -3896,3 +3896,32 @@ for the support hinge and the calibration input for the v-trace threshold
 that follow; the panels land with those. Validation:
 `tests/test_move_telemetry.py` (hand-computed rows with a forced row and a
 masked row, permutation invariance, and the lifted-cell positive control).
+
+## Removal ledger — 2026-09-09 actor backward-KL force
+
+Deleted `config.player_kl_loss_coef` (.05) and its term
+`player_kl_loss_coef * loss_actor_backward_kl` from the player loss — the
+sampled k3 KL(learner || behaviour) on the taken action, outside the
+`player_pg_coef` bracket. Not an ablation: it penalised the learner for
+moving away from the behaviour policy, which is exactly the direction a
+support force pushes when it lifts an action mu almost never takes; two
+terms pulling opposite ways on the same cells, this one measured at
+.00796 (`player_learner_actor_backward_kl`, `player_ref_kl` .01124
+beside it) and doing no identified work. The estimator stays computed and
+logged under both names; `player_switch_logit_grad_actor_kl` goes with
+the force (a directional derivative of a term that no longer exists).
+
+What still holds drift down: the SPO trust region (`player_ppo_clip` .2),
+the magnet (`player_mag_coef` .2, `reg_params` snapping every 10k) and the
+replay-reuse controller, which reads `player_learner_actor_forward_kl` —
+a different estimator — against its .045 set-point and is untouched. In
+expectation the two KLs combined into one KL toward normalised
+reg^0.8 · behaviour^0.2 at weight .25
+(`docs/representation-and-action-support-plan-2026-09-09.md` §5), so
+what changes is the pull toward the behaviour policy's OLD mistakes, not
+the trust region's existence. Revert handle: tag
+`pre-actor-kl-removal-2026-09-09`. Validation:
+`tests/test_switch_telemetry.py` (the four remaining terms still match
+the derivative through shifted logits). Not claimed: any effect on
+strength or staleness — read `player_learner_actor_forward_kl` and the
+learner/behaviour ESS after the restart that carries this.

@@ -8,11 +8,7 @@ import numpy as np
 import pytest
 
 from rl.environment.data import MOVE_CELL_OFFSET, NUM_ACTION_CELLS, NUM_SWITCH_CELLS
-from rl.online.training.loss import (
-    backward_kl_loss,
-    policy_gradient_loss,
-    uniform_kl_modalities,
-)
+from rl.online.training.loss import policy_gradient_loss, uniform_kl_modalities
 from rl.online.training.switch_telemetry import switch_loss_telemetry
 from rl.online.training.targets import reference_kl
 from rl.utils import average
@@ -27,7 +23,6 @@ def test_switch_direction_matches_full_logit_derivative(objective):
         player_ent_coef=0.01,
         player_mag_coef=0.2,
         player_uniform_kl_coef=0.025,
-        player_kl_loss_coef=0.05,
     )
     legal = jnp.zeros((4, NUM_ACTION_CELLS), dtype=bool)
     legal = legal.at[:, [0, 1, MOVE_CELL_OFFSET, MOVE_CELL_OFFSET + 1]].set(True)
@@ -74,10 +69,6 @@ def test_switch_direction_matches_full_logit_derivative(objective):
                 config.player_pg_coef
                 * config.player_uniform_kl_coef
                 * average(uniform_kl_modalities(log_policy, legal), valid),
-                config.player_kl_loss_coef
-                * backward_kl_loss(
-                    policy_ratio=ratio, log_policy_ratio=log_ratio, valid=valid
-                ),
             ]
         )
 
@@ -95,7 +86,6 @@ def test_switch_direction_matches_full_logit_derivative(objective):
             valid,
             choice,
             jnp.exp(log_ratio),
-            log_ratio,
             advantages,
             advantages * 2,
             config,
@@ -105,7 +95,7 @@ def test_switch_direction_matches_full_logit_derivative(objective):
     actual = jnp.stack(
         [
             logs[f"player_switch_logit_grad_{name}"]
-            for name in ("pg", "entropy", "magnet", "modality", "actor_kl")
+            for name in ("pg", "entropy", "magnet", "modality")
         ]
     )
     np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-5)

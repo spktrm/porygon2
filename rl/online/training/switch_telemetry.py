@@ -3,11 +3,7 @@
 import jax
 import jax.numpy as jnp
 
-from rl.online.training.loss import (
-    backward_kl_loss,
-    policy_gradient_loss,
-    uniform_kl_modalities,
-)
+from rl.online.training.loss import policy_gradient_loss, uniform_kl_modalities
 from rl.online.training.targets import reference_kl
 from rl.utils import average
 
@@ -21,7 +17,6 @@ def switch_loss_telemetry(
     policy_mask,
     choice_mask,
     policy_ratio,
-    log_policy_ratio,
     advantages,
     raw_advantages,
     config,
@@ -42,7 +37,6 @@ def switch_loss_telemetry(
     )
     taken_tangent = taken_switch.astype(jnp.float32) - switch_mass
     policy_ratio = jax.lax.stop_gradient(policy_ratio.astype(jnp.float32))
-    log_policy_ratio = jax.lax.stop_gradient(log_policy_ratio.astype(jnp.float32))
 
     def pg_loss(ratios):
         return policy_gradient_loss(
@@ -65,11 +59,6 @@ def switch_loss_telemetry(
     def modality_loss(log_probs):
         return average(uniform_kl_modalities(log_probs, legal_mask), policy_mask)
 
-    def actor_kl(ratios, log_ratios):
-        return backward_kl_loss(
-            policy_ratio=ratios, log_policy_ratio=log_ratios, valid=policy_mask
-        )
-
     gradients = {}
     gradients["pg"] = (
         config.player_pg_coef
@@ -85,14 +74,6 @@ def switch_loss_telemetry(
             * coefficient
             * jax.jvp(objective, (log_policy,), (log_tangent,))[1]
         )
-    gradients["actor_kl"] = (
-        config.player_kl_loss_coef
-        * jax.jvp(
-            actor_kl,
-            (policy_ratio, log_policy_ratio),
-            (policy_ratio * taken_tangent, taken_tangent),
-        )[1]
-    )
     logs = {
         f"player_switch_logit_grad_{name}": gradient
         for name, gradient in gradients.items()

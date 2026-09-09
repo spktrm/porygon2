@@ -407,7 +407,16 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Loss coefficients
     ## Player
-    player_kl_loss_coef: float = 0.05
+    # The actor backward-KL force (`player_kl_loss_coef` .05 on the sampled
+    # k3 KL(learner || behaviour)) was REMOVED 2026-09-09: it penalised the
+    # learner for moving away from the behaviour policy, which is the
+    # direction a support force pushes when it lifts an action mu almost
+    # never takes -- two terms pulling opposite ways on the same cells, one
+    # measured at .00796 and doing no identified work. The estimator stays
+    # logged (player_loss_kl / player_learner_actor_backward_kl). What
+    # still holds drift down: the SPO clip, the magnet, and the reuse
+    # controller, which reads the forward KL (LESSONS.md "Removal ledger —
+    # 2026-09-09 actor backward-KL force").
     player_value_head_loss_coef: float = 1.0
     # The privileged critic (2026-09-01): trained beside the deployable head
     # on the SAME win_returns; its CE carries this coefficient.
