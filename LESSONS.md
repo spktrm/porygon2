@@ -4083,3 +4083,22 @@ CPU direct path) and it is left open here. The scope pin in
 `tests/test_vtrace_threshold.py` was corrected in passing: `player_loss_pg`
 is not invariant to the threshold (its advantage is v-trace's, changed by
 design); the ratio side is pinned through `player_ppo_clip_frac`.
+
+Launch check, 2026-09-09 15:11 relaunch from ckpt_02014000 (wandb
+irqeetfg resumed), read at lifetime_step 2,024,880: every flag live
+(`player_support_hinge_coef` .005, tau .01, `player_prune_threshold` .005,
+the two eval slots initialised, the two deleted coefficients absent from
+the printed config), no non-finite skips or guard lines. `player_isr_ess`
+.963 against `_raw` .986 — the threshold is live. `player_discard_taken_frac`
+.024, above the 1% line from the first window (the offline audit on FRESH
+self-play read .003: the live gap is replay staleness, taken actions the
+target has since dropped); `player_discard_legal_frac` .203,
+`player_support_active_fraction` .328, `player_switch_logit_grad_support`
+−.0009, switch mass .045, `player_entropy_micro_taken` .447; trace length
+12.3 had c been thresholded against 17.1 live. Eval after 217 games each:
+plain-t1 .586, thresholded .526.
+
+**User decision 2026-09-09: no revert regardless — the set rides out
+overnight.** The pre-registered discard-rate trigger is therefore NOT
+applied to this window; the overnight read is the verdict instrument, and
+the cohort re-read on the next checkpoint the strength read.
