@@ -185,13 +185,16 @@ def _sign_disagreement(negative, positive):
 
 
 def paired_advantage_audit(
-    batch, public_log_probs, privileged_log_probs, isr, config, axis
+    batch, public_log_probs, privileged_log_probs, isr, isr_raw, config, axis
 ):
     """Compare both V-trace estimators with behaviour-outcome residuals.
 
-    Uses each head's own baseline for its MC residual. The rho-weighted
-    residual additionally matches the V-trace advantage's outer weight,
-    so their difference isolates bootstrap disagreement on the same row.
+    `isr` / `isr_raw` are the learner's own v-trace inputs (rho from the
+    thresholded ratio, c from the raw one), so the advantages audited are
+    the ones trained on. Uses each head's own baseline for its MC
+    residual. The rho-weighted residual additionally matches the V-trace
+    advantage's outer weight, so their difference isolates bootstrap
+    disagreement on the same row.
     Outcomes are observational behaviour returns, not counterfactual Q
     labels. Sums and counts are emitted, so wandb's window mean is a mean
     over the sparse rows rather than a mean of per-batch means. First
@@ -205,7 +208,9 @@ def paired_advantage_audit(
         ("public", public_log_probs),
         ("privileged", privileged_log_probs),
     ):
-        targets, _ = compute_player_targets(batch, log_probs, isr, config)
+        targets, _ = compute_player_targets(
+            batch, log_probs, isr, config, isr_raw=isr_raw
+        )
         value = jnp.exp(log_probs.astype(jnp.float32)) @ jnp.asarray(
             CAT_VF_SUPPORT, dtype=jnp.float32
         )

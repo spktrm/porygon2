@@ -40,9 +40,10 @@ def test_paired_advantages_masks_distance_and_outer_weight(discount):
         taken_switch=jnp.zeros((4, 6), dtype=bool).at[0].set(True).at[1, 0].set(True),
     )
     config = SimpleNamespace(player_gamma=discount, player_lambda=0.0)
+    isr = jnp.full((4, 6), 0.5)
     logs = jax.jit(
         lambda: paired_advantage_audit(
-            batch, public, privileged, jnp.full((4, 6), 0.5), config, axis
+            batch, public, privileged, isr, isr, config, axis
         )
     )()
     assert logs["player_adv_audit_switch_all_count"] == 4
@@ -70,7 +71,19 @@ def test_paired_advantages_masks_distance_and_outer_weight(discount):
     assert logs[f"{prefix}_priv_negative_public_positive_sum"] == 1
     assert logs[f"{prefix}_privileged_td_negative_mc_positive_sum"] == 1
     assert all(np.isfinite(value) for value in logs.values())
+    # The raw ratio builds c (the learner's v-trace since 2ac1e25): with a
+    # live trace, zeroing it changes the audited advantage.
+    traced = SimpleNamespace(player_gamma=discount, player_lambda=1.0)
+    audit = jax.jit(
+        lambda raw: paired_advantage_audit(
+            batch, public, privileged, isr, raw, traced, axis
+        )
+    )
+    assert (
+        audit(isr)[f"{prefix}_public_td_sum"]
+        != audit(jnp.zeros_like(isr))[f"{prefix}_public_td_sum"]
+    )
 
 
 def test_missing_metadata_produces_no_audit():
-    assert paired_advantage_audit(Batch(), None, None, None, None, None) == {}
+    assert paired_advantage_audit(Batch(), None, None, None, None, None, None) == {}

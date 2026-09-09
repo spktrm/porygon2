@@ -1112,6 +1112,7 @@ def train_step(
             player_target_pred.value_head.log_probs,
             player_target_pred.priv_value_head.log_probs,
             target_actor_ratio,
+            target_actor_ratio_raw,
             config,
             axis,
         )
