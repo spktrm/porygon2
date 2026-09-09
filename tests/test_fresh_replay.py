@@ -11,26 +11,28 @@ from rl.online.decisions import count_chunk_decisions
 from rl.online.training.workers import wandb_log_worker
 
 
-def trajectory(done):
+def trajectory(done, tag=0):
+    # `game_length` carries an admission tag so a sampled chunk can be told
+    # apart without the store exposing its slots.
     return Trajectory(
         player_transitions=PlayerTransition(
             env_output=PlayerEnvOutput(done=np.asarray(done, dtype=bool))
-        )
+        ),
+        game_length=np.array([tag], dtype=np.int32),
     )
+
+
+def tag_of(chunk):
+    return chunk.game_length.item()
 
 
 def fresh_store(size=8, fraction=0.125, cap=8):
-    return PlayerTrajectoryStore(
-        max_size=size,
-        max_reuses=cap,
-        fresh_fraction=fraction,
-        trajectory_mode="observe",
-    )
+    return PlayerTrajectoryStore(max_size=size, max_reuses=cap, fresh_fraction=fraction)
 
 
 def fill_store(store, count):
     for _ in range(count):
-        store.add(trajectory([False, False, True, False]))
+        store.add(trajectory([False, False, True, False], tag=store.total_adds))
 
 
 @pytest.mark.parametrize(
@@ -63,15 +65,15 @@ def test_fractional_fresh_slots_without_batch_duplicates():
     initial = store.sample(4)
     assert all(chunk.reuse_count.item() == 0 for chunk in initial)
     oldest_unseen = sorted(
-        set(store._ids) - {chunk.replay_id.item() for chunk in initial}
+        set(range(store.total_adds)) - {tag_of(chunk) for chunk in initial}
     )
     for expected_fresh in [0, 1, 0, 1]:
         batch = store.sample(4)
-        assert len({chunk.replay_id.item() for chunk in batch}) == 4
+        assert len({tag_of(chunk) for chunk in batch}) == 4
         fresh = [chunk for chunk in batch if chunk.reuse_count.item() == 0]
         assert len(fresh) == expected_fresh
         if fresh:
-            assert fresh[0].replay_id.item() == oldest_unseen.pop(0)
+            assert tag_of(fresh[0]) == oldest_unseen.pop(0)
         assert all(chunk.reuse_count.item() < 8 for chunk in batch)
 
 
@@ -118,32 +120,15 @@ def test_unseen_chunks_cannot_be_evicted_and_dropped_add_not_counted():
     assert store.total_admitted_decisions == 4
 
 
-def test_fresh_stream_preserves_feedback_identity_and_dynamic_cap():
-    store = PlayerTrajectoryStore(
-        max_size=2, max_reuses=8, fresh_fraction=0.5, trajectory_mode="protect"
-    )
+def test_fresh_stream_under_a_dynamic_cap():
+    store = fresh_store(size=2, fraction=0.5)
     fill_store(store, 2)
-    old = store.sample(2)[0]
-    feedback = (
-        old.replay_slot,
-        old.replay_id,
-        old.reuse_count + 1,
-        np.array([1.0]),
-        np.array([1]),
-    )
-    store.apply_feedback(*feedback)
-    fill_store(store, 1)
-    # The retired occupant is replaced first; delayed feedback cannot retire
-    # its unseen replacement, even before that replacement's first visit.
-    slot = old.replay_slot.item()
-    assert store._ids[slot] != old.replay_id.item()
-    store.apply_feedback(*feedback)
-    assert not store._retired[slot]
+    store.sample(2)
     assert store.ready_to_sample(2)
     store.set_max_reuses(1)
     assert not store.ready_to_sample(2)
     assert store.ready_to_add()
-    fill_store(store, 1)
+    fill_store(store, 2)
     assert store.ready_to_sample(2)
     assert all(chunk.reuse_count.item() == 0 for chunk in store.sample(2))
 
@@ -155,7 +140,8 @@ def test_zero_fraction_preserves_uniform_sampler_and_replacement():
     expected_slots = np.random.choice(np.arange(4), size=2, replace=False)
     np.random.seed(728)
     sampled = store.sample(2)
-    assert [chunk.replay_slot.item() for chunk in sampled] == list(expected_slots)
+    # Slots were filled in admission order, so the slot index is the tag.
+    assert [tag_of(chunk) for chunk in sampled] == list(expected_slots)
     assert not store.ready_to_add()
     assert store.ready_to_sample(4)
 

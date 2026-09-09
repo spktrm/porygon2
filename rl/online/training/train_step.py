@@ -52,7 +52,6 @@ from rl.online.training.loss import (
     support_hinge_loss,
 )
 from rl.online.training.move_telemetry import legal_support_telemetry
-from rl.online.training.replay import chunk_policy_mismatch
 from rl.online.training.switch_telemetry import switch_loss_telemetry
 from rl.online.training.targets import (
     compute_builder_targets,
@@ -1472,20 +1471,6 @@ def train_step(
             # (config.py, the removed player_kl_loss_coef): the trust region
             # against the behaviour policy is the clip and the magnet.
         )
-
-        if config.player_replay_trajectory_mode != "off" and not isinstance(
-            batch.replay_id, tuple
-        ):
-            kl_sums, row_counts = chunk_policy_mismatch(
-                learner_actor_ratio, learner_actor_log_ratio, policy_mask
-            )
-            pg_logs["_player_replay_feedback"] = (
-                batch.replay_slot[0],
-                batch.replay_id[0],
-                batch.reuse_count[0] + 1,
-                kl_sums,
-                row_counts,
-            )
 
         return loss, dict(
             **pg_logs,

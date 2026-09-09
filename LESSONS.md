@@ -2102,7 +2102,9 @@ dashboard, not auto-corrected.
 
 ## 6. Replay, staleness, exploration
 
-- **2026-09-07 per-chunk protection built, not activated.**
+- **2026-09-07 per-chunk protection built, not activated — DELETED
+  2026-09-09** (never switched on in any run; "Removal ledger — 2026-09-09
+  per-chunk retention feedback" below carries the revert handle).
   `player_replay_trajectory_mode` defaults to `off`; `observe` logs detached
   per-chunk taken-action k3 mismatch with unchanged uniform sampling, and
   `protect` retires chunks above the existing KL threshold from FUTURE draws.
@@ -4139,3 +4141,42 @@ to any one part. Relaunched from ckpt_02038000 with
 `player_support_hinge_coef` .05 and the discard split (b542724); the
 screen at .025/.05/.1 was skipped to keep the restart short and is owed at
 the next stop.
+
+## Removal ledger — 2026-09-09 per-chunk retention feedback
+
+Deleted the per-chunk retention feedback built 2026-09-07/08 (`ca34c74`):
+`player_replay_trajectory_mode` (observe/protect) and its `kl_threshold`,
+`PlayerTrajectoryStore.apply_feedback` / `feedback_logs` and the seven
+never-written fields behind them (`_retired`, `_last_feedback_visit`,
+`_last_kl`, `_feedback_applied`, `_feedback_ignored`,
+`_threshold_crossings`, `_retired_total`), `Trajectory.replay_{slot,id}`
+and their `stack_batch` legs, `rl/online/training/replay.py`
+(`chunk_policy_mismatch`, `consume_replay_feedback`), the train-step
+`_player_replay_feedback` block, the log-worker call, and
+`tests/test_trajectory_replay.py`. The fresh stream is untouched
+(`player_replay_fresh_fraction`, oldest-id eviction over `_ids`,
+`reuse_count`, the decision accounting).
+
+Measured reason: the mode was `off` in every run since it landed, so the
+whole path was dead code at the shipped config — yet the store still
+allocated and reset the seven fields in three places, `apply_feedback`
+duplicated the validity predicate that `consume_replay_feedback` re-spelled
+(and the two disagreed: the store also rejected stale slot/id/visit, so
+`player_replay_trajectory_threshold_crossings` and
+`player_replay_chunk_above_threshold_frac` answered the same question
+differently), and `feedback_logs` logged seven constant-zero scalars
+(`player_replay_feedback_{applied,ignored}`,
+`player_replay_trajectory_{threshold_crossings,retired_total,
+retired_resident,observed_resident,eligible}`) every learner step. No
+dashboard panel read any of them. Nothing here changes what trains.
+Revert handle: tag `pre-tidy-2026-09-09` (the last commit carrying it) and
+`ca34c74` (the landing). `player_replay_kl_target` STAYS — it is the replay
+PI controller's setpoint (`workers.update_replay_controller`), which the
+mode only borrowed.
+
+Validation: `tests/test_fresh_replay.py` (chunks re-identified by an
+admission tag on `game_length` instead of `replay_id`; the dynamic-cap half
+of the deleted identity test kept as `test_fresh_stream_under_a_dynamic_cap`),
+`tests/test_buffer.py`, `tests/test_chunking.py`; the train-step leaf dump
+against the tag is owed at the next learner-free window with the rest of
+the tidy.
