@@ -3523,7 +3523,41 @@ with applied/admitted reuse and updates-per-fresh-decision ratios. Chunk and dec
 first-use fractions are separate. All cumulative counters explicitly say session,
 with a lifetime-step origin; old checkpoints start new accounting, not invented
 historical totals. Legacy frame_count and league/checkpoint pacing are untouched.
-Definitions: rl/online/README.md. No dashboard publication or training restart.
+No dashboard publication or training restart.
+
+Definitions (moved here from rl/online/README.md when that file was deleted in
+the 2026-09-09 tidy). A decision is a real acted row, forced single-option
+actions included; terminal rows, terminal padding and a nonterminal
+bootstrap-only final row do not count, so overlapping chunks count each
+admitted decision once (`rl/environment/utils.acted_rows`). The two player
+perspectives are separate decisions, not games or simulator turns.
+
+| metric | meaning |
+|---|---|
+| `player_batch_decisions` | acted rows in this learner batch (the learner mask) |
+| `player_decisions_admitted_session` | fresh decisions inserted into replay |
+| `player_decisions_sampled_session` | decision appearances drawn from replay, prefetch included |
+| `player_decisions_processed_session` | decision appearances in completed learner calls, skipped updates included |
+| `player_decisions_applied_session` | decision appearances in finite applied updates |
+| `player_updates_processed_session` / `_applied_session` | completed calls / applied updates |
+| `player_decision_reuse_session` | applied decision appearances / admitted fresh decisions |
+| `player_updates_per_fresh_decision_session` | applied updates / admitted fresh decisions |
+| `player_replay_fresh_chunk_fraction_session` | first-use chunks / sampled chunks |
+| `player_replay_fresh_decision_fraction_session` | first-use decision appearances / sampled decision appearances |
+| `player_replay_evicted_mean_reuses` | mean consumed uses of evicted chunks |
+
+Exact counters for the current store session from
+`player_accounting_start_lifetime_step`; a new process, a restore or a store
+clear starts a new session (no lifetime totals are inferred). The log worker
+records completed calls in order, while admission and sampling snapshots run
+ahead of the logged call; read ratios after warm-up and derive windowed rates
+from counter differences within one session. Fresh chunks are taken in
+admission order, replay chunks uniformly without replacement within a batch;
+"first use" means never sampled, not on-policy (actor and queue lag remain).
+The fraction is measured in chunks, so decision fractions differ with chunk
+length, and it is a preference, not a floor: unavailable fresh slots use
+replay, which is what lets a full seen buffer exhaust its cap and admit
+arrivals without early eviction or deadlock.
 
 Validation: 64 focused fast replay/chunk tests passed, including positive controls
 for forced actions versus policy masks, the 29-decisions/48-rows padding example,
@@ -3716,6 +3750,25 @@ sample-efficient learning. No coefficients changed and no further restart.
 Local inspection helper/results: runtime/switch_retention_health_20260909.py,
 runtime/switch-retention-health-20260909.json. No committed changes.
 
+Definitions of the switch diagnostics (from the deleted rl/online/README.md;
+`rl/online/training/action_telemetry.switch_loss_telemetry`):
+`player_switch_logit_grad_{pg,entropy,magnet,support}` are the
+coefficient-weighted directional derivatives of each actor-loss term for
+raising every switch logit together with the features held fixed — positive
+suppresses switching under gradient descent, negative encourages it — f32
+JVPs of the executable loss functions on their shared policy-row
+denominator, attributing no shared-feature update (`support` replaced the
+`modality` entry with the uniform KL, 2026-09-09);
+`player_switch_logit_grad_actor_total` their sum.
+`player_switch_logit_grad_pg_taken_{switch,stay}` restrict the PG term to
+the move-and-switch choice rows; `player_choice_{switch,stay}_adv_raw` /
+`_adv_normalised` are the signed advantages on those rows (sampled-action
+advantages, not matched counterfactual values), `_count` beside them so an
+empty subset is not a zero mean. `player_switch_mass_choice` is total switch
+mass on choice rows (not the per-cell probability); `player_switch_bias_gradient`
+the pre-clip gradient of the switch bias and `player_switch_bias_applied_delta`
+its update after Adam and the non-finite gate.
+
 ## Paired switch-advantage audit — 2026-09-09
 
 User explicitly requested computing privileged/deployable/realised-outcome
@@ -3772,6 +3825,24 @@ conditional critic errors nor policy/continuation defects; do not claim switches
 are intrinsically bad, or that collapse is fixed. No coefficients changed.
 Report: runtime/switch-advantage-audit-20260909.md; frozen raw results:
 runtime/paired-advantage-review-1921758.json. Learner continues with audit enabled.
+
+Definitions (from the deleted rl/online/README.md;
+`rl/online/training/action_telemetry.paired_advantage_audit`):
+`player_adv_audit_{switch,stay}_{all,1_5,6_15,16_40,41_plus}_*` compares the
+two estimators on the same first-use choice rows; horizons count actor
+decisions to the terminal reward from whole-game length and chunk offset;
+forced switches, terminal/padded/bootstrap-only rows, replay visits and
+unknown outcomes are excluded. Sum `_count` and every `*_sum` over a window
+before dividing — never average sparse per-batch means; rows within a game
+stay correlated. For each of `public` and `privileged`: `td` is that head's
+V-trace advantage (rho thresholded, c raw — the learner's own since the
+2026-09-09 tidy), `mc` the discounted realised behaviour outcome minus the
+head's own value, `rho_mc` the same under `td`'s outer truncated weight, so
+`td - rho_mc` isolates bootstrap disagreement with the observed outcome with
+the baseline cancelled (the behaviour continuation is not corrected to the
+target policy; this is no counterfactual switch-versus-stay read). The other
+sums record value, outcome, squared outcome error, mean outer weight and
+paired sign disagreements. Outcomes enter these diagnostics only.
 
 ## Privileged-head usefulness audit — 2026-09-09
 
