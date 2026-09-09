@@ -59,7 +59,7 @@ from rl.model.modules import MLP
 from rl.model.search import SearchBudget, SearchFns, search_diagnostics, search_root
 from rl.model.transition import TransitionModel
 from rl.model.trunk import row_homogeneity
-from rl.model.utils import get_num_params
+from rl.model.utils import get_num_params, prune_log_policy
 
 
 def actor_params_view(variables, *, search: bool = False):
@@ -77,11 +77,6 @@ def actor_params_view(variables, *, search: bool = False):
     if search:
         required.append("transition")
     return {"params": {name: variables["params"][name] for name in required}}
-
-
-def _sampling_log_policy(log_policy: jax.Array, valid_mask: jax.Array) -> jax.Array:
-    """log pi with illegal cells at the dtype's min, for sample_categorical."""
-    return jnp.where(valid_mask, log_policy, jnp.finfo(log_policy.dtype).min)
 
 
 def _match_rows(key_now: jax.Array, key_next: jax.Array, valid_now, valid_next):
@@ -274,6 +269,7 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
         search_bonus: jax.Array | None = None,
+        prune_threshold: float = 0.0,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
         the block cells (the historical path, unchanged); doubles = two head-level
@@ -283,9 +279,11 @@ class Porygon2PlayerModel(nn.Module):
         singles-only."""
         if self.cfg.num_decision_slots == 2:
             assert search_bonus is None
-            return self._forward_two_slots(sequence_rows, valid_mask, head, train, temp)
+            return self._forward_two_slots(
+                sequence_rows, valid_mask, head, train, temp, prune_threshold
+            )
         return self._forward_single_slot(
-            sequence_rows, valid_mask, head, train, temp, search_bonus
+            sequence_rows, valid_mask, head, train, temp, search_bonus, prune_threshold
         )
 
     def _legal_logits(
@@ -308,6 +306,7 @@ class Porygon2PlayerModel(nn.Module):
         given_index: jax.Array | None,
         temp: float,
         search_bonus: jax.Array | None = None,
+        prune_threshold: float = 0.0,
     ):
         """Score one decision's cells and pick an action.
 
@@ -320,7 +319,11 @@ class Porygon2PlayerModel(nn.Module):
         the sampler can never draw one. `search_bonus` adds the search
         arm's Q / temp on legal cells (0 elsewhere) BEFORE the softmax, so
         pi here IS the searched policy and every metric reads it; None is
-        bit-identical to the trained policy.
+        bit-identical to the trained policy. `prune_threshold` removes the
+        legal cells below it from mu ONLY (rl/model/utils.py
+        prune_log_policy; 0.0 is bit-identical): the metrics read pi
+        untouched, and the stored log_prob is mu's, so an eval slot
+        sampling the thresholded policy reports what it sampled.
         """
         flat_valid = valid_mask
         pi_logits = self._legal_logits(sequence_rows, valid_mask, temp)
@@ -330,7 +333,7 @@ class Porygon2PlayerModel(nn.Module):
         # flat readout's all-zero init produces, so the init policy and the
         # metric anchor are the same distribution.
         metrics = compute_policy_metrics(logits=pi_logits, valid_mask=flat_valid)
-        log_mu = _sampling_log_policy(metrics.log_policy, flat_valid)
+        log_mu = prune_log_policy(metrics.log_policy, flat_valid, prune_threshold)
         action_index = (
             given_index
             if given_index is not None
@@ -347,6 +350,7 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
         search_bonus: jax.Array | None = None,
+        prune_threshold: float = 0.0,
     ):
         flat_valid, metrics, action_index, log_prob = self._score_and_sample(
             sequence_rows,
@@ -354,6 +358,7 @@ class Porygon2PlayerModel(nn.Module):
             head.action_index if train else None,
             temp,
             search_bonus,
+            prune_threshold,
         )
         learner_only = {}
         if self.cfg.train:
@@ -392,6 +397,7 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
+        prune_threshold: float = 0.0,
     ):
         """Doubles: valid_mask is (2, NUM_ACTION_CELLS) per-slot masks and, in train,
         head.action_index is (2,). One trunk pass serves both decisions —
@@ -411,14 +417,14 @@ class Porygon2PlayerModel(nn.Module):
         """
         stage1_given = head.action_index[0] if train else None
         flat_valid_1, metrics_1, index_1, log_prob_1 = self._score_and_sample(
-            sequence_rows, valid_mask[0], stage1_given, temp
+            sequence_rows, valid_mask[0], stage1_given, temp, None, prune_threshold
         )
 
         cond_rows = self.slot_conditioning(sequence_rows, index_1)
         mask_2 = self._apply_choice_collision(valid_mask[1], index_1)
         stage2_given = head.action_index[1] if train else None
         flat_valid_2, metrics_2, index_2, log_prob_2 = self._score_and_sample(
-            cond_rows, mask_2, stage2_given, temp
+            cond_rows, mask_2, stage2_given, temp, None, prune_threshold
         )
 
         action_index = jnp.stack([index_1, index_2])
@@ -583,6 +589,7 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
             temp=head_params.temp,
             search_bonus=search_bonus,
+            prune_threshold=head_params.prune_threshold,
         )
         learner_only = {}
         if self.cfg.train:

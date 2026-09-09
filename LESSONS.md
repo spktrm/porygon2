@@ -3837,3 +3837,41 @@ script runtime/privileged_attention_probe.py. Resuming01929574 unchanged.
 Attention-probe restart verified: runtime/learner_20260909_080752.log, W&B
 run-20260909_081202-irqeetfg;36 finite updates through1929610, zero skips.
 Model/losses unchanged; COLLECT_INTERMEDIATES was confined to the offline probe.
+
+## Removal ledger — 2026-09-09 search eval actor
+
+Deleted the depth-1 expectimax eval slot (`eval_search_slots`, its
+`-search` thread and the `search-*` per-game eval logs) and the disabled
+depth-2 slot (`eval_search_depth`), and re-cut the slate to exactly two
+slots against the simple heuristic, both EMA params at T=1:
+`EvalActor-simpleheuristic-plain-t1-0` (the policy sampled exactly as the
+training actors sample it) and `EvalActor-simpleheuristic-thresholded-1`
+(the same policy with every legal cell below `player_prune_threshold`
+= .005 removed and the rest renormalised at sampling, DeepNash's
+`FineTuning._threshold` guard included, via the new traced
+`HeadParams.prune_threshold`; 0.0 is bit-identical and is what every
+training actor passes). The two T=0.5 slots retire with them: T=.5 is not
+comparable across head parameterisations (2026-08-29) and the live read
+moves to an offline diagnostic. Series are keyed by thread name, so the
+`-0`/`-1`/`-t1-2`/`-search-3` series end at the restart that carries this.
+
+Measured reason: at ckpt_01861967 depth-one expectimax moved root KL by
+.000026–.000101 and left both inspected bad actions (Psychic Noise into a
+revealed Soundproof; the Decidueye case) ranked first in 16/16 seeds — the
+arm was pricing nothing. `rl/model/search.py`, the model's `cfg.search`
+branch and `actor_params_view(search=True)` STAY for the offline readers
+(`rl/offline/harness.py configure_search`, `search_ablation.py`,
+`search_samples_probe.py`) and their tests. Revert handle: tag
+`pre-eval-slate-2026-09-09` (the slot construction in `rl/online/main.py`
+and the two config fields). The eval-leak gate `should_push_trajectory`
+gains `tests/test_guards.py` — the thresholded slot samples a distribution
+no training actor uses and was the first eval case the gate had no test
+for.
+
+Validation: `tests/test_prune_policy.py` (threshold 0 bit-identical to the
+sampling form; removal + renormalisation; the untouched-above-the-line
+positive control; the all-below guard; zero gradient through a removed
+cell's own logit; a real-model actor forward bit-identical under
+`HeadParams()` vs `HeadParams(prune_threshold=0.0)` with a .1 control that
+changes `log_prob` and no metric), `tests/test_guards.py`. Not claimed:
+any strength effect — nothing here changes what trains.

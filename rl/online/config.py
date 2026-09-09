@@ -14,23 +14,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # between games (no create/destroy churn, no inference contention).
     num_player_actors: int = 12
     num_builder_actors: int = 4
-    # One eval thread per entry; each plays the service baseline at that
-    # index (service/src/server/eval.ts: 0=random, 1=default,
-    # 2=simple_heuristic). The index travels explicitly in the env username
-    # suffix and the baseline name in the metric key, so eval coverage no
-    # longer depends implicitly on actor count. All threads point at the
-    # strongest baseline: Random/Default were saturated (93%/72% at 163k
-    # steps) while winrate-vs-simple-heuristic — the series runs are judged
-    # by — was starved at ~1 game per 80 learner steps.
-    eval_baselines: tuple[int, ...] = (2, 2, 2)
-    # Search eval slots (2026-09-06, stochastic-transition Step 3): extra
-    # eval threads against the LAST baseline above, playing the same EMA
-    # params through a search-enabled actor network (cfg.search.enabled,
-    # depth-1 expectimax over the transition model's prior samples) at
-    # temp 1.0 -- the matched arm of the `-t1` slot. wr(search) - wr(t1)
-    # on the same checkpoint is the model's worth in play. 0 = no search
-    # arm (the search network is not even built).
-    eval_search_slots: int = 1
+    # The service baseline both eval slots play (service/src/server/eval.ts:
+    # 0=random, 1=default, 2=simple_heuristic); the index travels in the env
+    # username suffix and the baseline name in the metric key. The
+    # strongest: Random/Default were saturated (93%/72% at 163k steps).
+    # The slate itself is fixed at two slots (rl/online/main.py, 2026-09-09):
+    # `plain-t1`, the EMA params sampled exactly as the training actors
+    # sample them, and `thresholded`, the same params sampled with
+    # player_prune_threshold applied -- their gap prices the threshold in
+    # play. The earlier T=0.5 slots and the search eval actor are gone
+    # (LESSONS.md "Removal ledger — 2026-09-09 search eval actor").
+    eval_baseline: int = 2
     # Every Nth eval game per thread uses the live (main) params instead of
     # the EMA target as a divergence sanity check. The target lags the live
     # params by only ~1/player_ema_update_rate steps, so alternating every
@@ -511,20 +505,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # A hypothesis with its own panels (the teacher-vs-imagined KL); 0 is
     # the control.
     player_transition_align_coef: float = 1.0
-    # A second baseline search eval slot playing `cfg.search.depth` 2 (the
-    # generator's candidates expanded at every depth-1 node) beside the
-    # depth-1 slot; 0 = no such slot. Search runs on these eval actors
-    # ONLY -- never on the self-play actors, never in the learner.
-    # 0 since the 2026-09-07 relaunch: with the slot at 2 the host-RAM
-    # guard tripped 784 steps in (available 0.135 < 0.15 at 1,836,000 --
-    # the static depth-2 tree, 16 cells x 8 chance x 8 candidates x 2
-    # inner = 2176 transitions per decision plus the generator's
-    # sequential draws, compiled and run on a CPU actor thread inside the
-    # learner process). Re-enable only after the arm's host memory and
-    # latency are profiled and provisioned (plan §7 "Static budget and
-    # controls"); the depth-2 read stays offline until then.
-    eval_search_depth: int = 0
-
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
     # pi/mu with a batch-normalised v-trace advantage from V, plus a
@@ -611,6 +591,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # falling as switch mass returns is the term relaxing (healthy); pinned
     # with mass unmoved is paying-and-buying-nothing (the abort).
     player_uniform_kl_coef: float = 0.025
+    # DeepNash's FineTuning threshold (rnad.py FineTuning._threshold, its
+    # reference value .03): a legal action whose probability is below it is
+    # REMOVED and the rest renormalised (rl/model/utils.py prune_log_policy,
+    # with the reference's guard that a row entirely below the line keeps
+    # its legal set). Where it applies: the `thresholded` eval slot samples
+    # the thresholded policy (HeadParams.prune_threshold). The training
+    # actors never do -- mu stays the policy as trained. 0.0 is
+    # bit-identical to no threshold.
+    player_prune_threshold: float = 0.005
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,
     # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every

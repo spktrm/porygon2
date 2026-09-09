@@ -49,6 +49,33 @@ def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     return jnp.where(legal_actions, log_policy, 0.0)
 
 
+def prune_log_policy(
+    log_policy: jax.Array, legal_actions: jax.Array, threshold: float
+) -> jax.Array:
+    """The policy with every legal cell below `threshold` removed and the
+    rest renormalised, as log-probabilities with removed and illegal cells
+    at the dtype's min -- the sampling form, so exp() at a gathered cell is
+    exactly the thresholded probability and a removed cell's is 0.
+
+    DeepNash's FineTuning._threshold (rnad.py:184-196) without its
+    discretisation: `kept = pi >= threshold`, with the reference's guard
+    that a row whose every legal cell is below the line keeps its whole
+    legal set rather than losing all of it. A row in which nothing was
+    removed is returned untouched (not renormalised), so threshold 0.0 is
+    bit-identical on every legal cell and the guard case costs nothing.
+    """
+    chex.assert_equal_shape((log_policy, legal_actions), dims=-1)
+    policy = jnp.where(legal_actions, jnp.exp(log_policy), 0.0)
+    max_policy = policy.max(axis=-1, keepdims=True)
+    kept = legal_actions & ((policy >= threshold) | (max_policy < threshold))
+    dtype_min = jnp.finfo(log_policy.dtype).min
+    kept_log_policy = jnp.where(kept, log_policy, dtype_min)
+    log_kept_mass = jax.nn.logsumexp(kept_log_policy, axis=-1, keepdims=True)
+    nothing_removed = (kept == legal_actions).all(axis=-1, keepdims=True)
+    renormalised = jnp.where(nothing_removed, log_policy, log_policy - log_kept_mass)
+    return jnp.where(kept, renormalised, dtype_min)
+
+
 def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:
     def calculate_params(key: str, vars: Params) -> int:
         total = 0

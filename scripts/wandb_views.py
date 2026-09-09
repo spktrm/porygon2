@@ -94,23 +94,28 @@ def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
     return wr.LinePlot(**{k: v for k, v in kwargs.items() if v is not None})
 
 
+# The eval slate since 2026-09-09 (rl/online/main.py): two slots against
+# the simple heuristic, both the EMA params at T=1. `plain-t1` samples the
+# policy exactly as the training actors do; `thresholded` samples it with
+# every legal cell below player_prune_threshold removed and the rest
+# renormalised (HeadParams.prune_threshold) -- the distribution the
+# learner's v-trace ratios are built on. Their gap prices the threshold
+# in play. Series are keyed by the eval thread's name, so the earlier
+# `-0`/`-1` (T=0.5), `-t1-2` and `-search-3` series end at that restart.
 SH = "EvalActor-simpleheuristic"
-PLAIN_T05_ACTORS = (f"{SH}-0", f"{SH}-1")
-PLAIN_T1_ACTOR = f"{SH}-t1-2"
-SEARCH_T1_ACTOR = f"{SH}-search-3"
-T1_ACTORS = (PLAIN_T1_ACTOR, SEARCH_T1_ACTOR)
-EVAL_ACTORS = (*PLAIN_T05_ACTORS, *T1_ACTORS)
+PLAIN_T1_ACTOR = f"{SH}-plain-t1-0"
+THRESHOLDED_ACTOR = f"{SH}-thresholded-1"
+EVAL_ACTORS = (PLAIN_T1_ACTOR, THRESHOLDED_ACTOR)
 
 
-def search_winrate_panel():
-    """One canonical comparison in the overview and search detail sections.
-
-    These are actor-side averages (200-game half-life, reset on restart),
-    with no additional UI smoothing. The active search method is expectimax.
-    """
+def threshold_winrate_panel():
+    """One canonical comparison in the overview and eval-slate sections:
+    the policy as sampled by the training actors against the same policy
+    thresholded at sampling. Actor-side averages (200-game half-life,
+    reset on restart), no additional UI smoothing."""
     return lp(
-        "EMA win rate · T=1 plain vs depth-1 expectimax (200-game half-life)",
-        [f"smoothed-wr-{actor}" for actor in T1_ACTORS],
+        "EMA win rate · T=1 plain vs thresholded (200-game half-life)",
+        [f"smoothed-wr-{actor}" for actor in EVAL_ACTORS],
         x="lifetime_step",
         smooth=0,
         range_y=(0, 1),
@@ -131,29 +136,22 @@ def rl_sections():
             name="0 · At a glance",
             is_open=True,
             panels=[
+                threshold_winrate_panel(),
                 lp(
-                    "EMA win rate · plain T=0.5, actors 0/1 (200-game half-life)",
-                    [f"smoothed-wr-{actor}" for actor in PLAIN_T05_ACTORS],
-                    x="lifetime_step",
-                    smooth=0,
-                    range_y=(0, 1),
-                ),
-                search_winrate_panel(),
-                lp(
-                    "EMA alive-mon margin · plain T=0.5 (200-game half-life)",
-                    [f"smoothed-margin-{actor}" for actor in PLAIN_T05_ACTORS],
+                    "EMA alive-mon margin · T=1 plain vs thresholded (200-game half-life)",
+                    [f"smoothed-margin-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
-                    "Main-parameter payoff · T=0.5 (sparse games, UI-smoothed)",
-                    [f"main-payoff-{actor}" for actor in PLAIN_T05_ACTORS],
+                    "Main-parameter payoff · T=1 (sparse games, UI-smoothed)",
+                    [f"main-payoff-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0.9,
                     range_y=(-1, 1),
                 ),
                 lp(
-                    "Eval games since restart · T=0.5, T=1 plain and search",
+                    "Eval games since restart · T=1 plain and thresholded",
                     [f"games-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
@@ -999,55 +997,32 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # Current eval: depth-1 expectimax and its plain-policy control,
-            # both EMA at T=1. No depth-2 eval actor is currently enabled.
-            name="3c · Search eval · depth-1 expectimax, T=1",
+            # The eval slate: the policy as the training actors sample it
+            # against the same policy thresholded at sampling, both EMA at
+            # T=1. The search eval actor was deleted 2026-09-09 (LESSONS.md
+            # "Removal ledger — 2026-09-09 search eval actor").
+            name="3c · Eval slate · T=1 plain vs thresholded",
             is_open=True,
             panels=[
-                search_winrate_panel(),
+                threshold_winrate_panel(),
                 lp(
-                    "EMA alive-mon margin · T=1 plain vs expectimax (200-game half-life)",
-                    [f"smoothed-margin-{actor}" for actor in T1_ACTORS],
+                    "Eval games since restart · T=1 plain vs thresholded",
+                    [f"games-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
-                    "Eval games since restart · T=1 plain vs expectimax",
-                    [f"games-{actor}" for actor in T1_ACTORS],
-                    x="lifetime_step",
-                    smooth=0,
-                ),
-                lp(
-                    "Search root KL(pi_search || pi) per decision",
-                    [f"search-root-kl-{SEARCH_T1_ACTOR}"],
-                    x="lifetime_step",
-                    smooth=0.95,
-                ),
-                lp(
-                    "Search value minus V at the root",
-                    [f"search-value-gap-{SEARCH_T1_ACTOR}"],
-                    x="lifetime_step",
-                    smooth=0.95,
-                ),
-                lp(
-                    "Voluntary switches per offered decision · T=1 plain vs expectimax",
-                    [f"switch-frac-{actor}" for actor in T1_ACTORS],
+                    "Voluntary switches per offered decision · T=1 plain vs thresholded",
+                    [f"switch-frac-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0.95,
                     range_y=(0, 1),
                 ),
                 lp(
-                    "Eval ms per decision · T=1 plain vs expectimax (CPU)",
-                    [f"ms-per-step-{actor}" for actor in T1_ACTORS],
+                    "Eval ms per decision · T=1 plain vs thresholded (CPU)",
+                    [f"ms-per-step-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0.9,
-                ),
-                lp(
-                    "Search legal-set overflow fraction",
-                    [f"search-legal-truncated-{SEARCH_T1_ACTOR}"],
-                    x="lifetime_step",
-                    smooth=0.95,
-                    range_y=(0, 1),
                 ),
             ],
         ),

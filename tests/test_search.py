@@ -365,7 +365,7 @@ def _root_with(q, legal):
     )
 
 
-def test_eval_game_logs_read_real_acted_rows_and_search_leaves_when_present():
+def test_eval_game_logs_read_real_acted_rows_and_never_search_leaves():
     from rl.online.main import eval_game_logs
 
     num_rows = 6
@@ -393,31 +393,21 @@ def test_eval_game_logs_read_real_acted_rows_and_search_leaves_when_present():
         )
 
     logs = eval_game_logs(trajectory(SearchOutput()), 2.0, "s")
-    # Two decisions offered a switch (rows 0, 2), one took it.
+    # Two decisions offered a switch (rows 0, 2), one took it; the terminal
+    # row and the padding are out.
     assert logs["switch-frac-s"] == 0.5 and logs["ms-per-step-s"] == 500.0
     assert not any(key.startswith("search-") for key in logs)
-    depth_one = SearchOutput(
+    # The search eval actor was deleted 2026-09-09: search leaves, even when
+    # a trajectory carries them (the offline readers still produce them),
+    # are not an eval read.
+    searched = SearchOutput(
         root_kl=root_kl,
         search_value=root_kl,
         root_value_gap=root_kl,
         num_legal=root_kl,
         legal_truncated=np.ones(num_rows, bool),
     )
-    logs = eval_game_logs(trajectory(depth_one), 2.0, "s")
-    # Acted rows are 0-2 only: the terminal row and the padding are out.
-    np.testing.assert_allclose(logs["search-root-kl-s"], 0.2, rtol=1e-6)
-    assert logs["search-legal-truncated-s"] == 1.0
-    assert "search-deep-gain-s" not in logs
-    depth_two = dataclasses.replace(
-        depth_one,
-        deep_gain=root_kl,
-        deep_continue=root_kl,
-        candidate_retained_mass=root_kl,
-        candidate_occupied=root_kl,
-    )
-    logs = eval_game_logs(trajectory(depth_two), 2.0, "s")
-    np.testing.assert_allclose(logs["search-deep-gain-s"], 0.2, rtol=1e-6)
-    np.testing.assert_allclose(logs["search-candidate-occupied-s"], 0.2, rtol=1e-6)
+    assert eval_game_logs(trajectory(searched), 2.0, "s") == logs
 
 
 @pytest.mark.gpu

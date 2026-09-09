@@ -19,7 +19,17 @@ from rl.model.utils import legal_log_policy, legal_policy
 
 
 class HeadParams(NamedTuple):
+    """Per-CALL sampling knobs, traced (a new value never recompiles).
+
+    `prune_threshold` (2026-09-09) is DeepNash's FineTuning threshold: legal
+    cells whose probability is below it are removed from the SAMPLED
+    distribution and the rest renormalised (rl/model/utils.py
+    prune_log_policy). 0.0, the training actors' value, is bit-identical
+    to sampling the policy as trained; only the `thresholded` eval slot
+    sets it. The policy's metrics always read the untouched policy."""
+
     temp: float = 1.0
+    prune_threshold: float = 0.0
 
 
 class PolicyMetrics(NamedTuple):

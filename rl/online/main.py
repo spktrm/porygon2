@@ -192,19 +192,13 @@ def eval_game_logs(
     """Per-game reads off the LAST chunk of an eval game (its padding rows
     copy the terminal step, so only the first `game_length - offset` rows
     are real, and the done row takes no action). Logged for every eval
-    arm so the search slot has a matched control on each:
+    slot so the two arms read against each other:
 
     - switch-frac: voluntary switches per decision that offered one (the
       action mask legalises a switch cell AND a non-switch cell) -- the
       axis the BR probes located the exploit on; higher is not better by
-      itself, it is read against the `-t1` slot;
-    - ms-per-step: unroll wall time per real step (search's cost);
-    - search-*: the search read (rl/model/search.py) when the arm ran
-      it -- root-kl is KL(pi_search || pi) per decision (0 = the operator
-      is inert, > 0.5 = it replaced the policy), value-gap is the search
-      value minus V at the root (positive = search expects to do better
-      than the policy's own estimate), legal-truncated is the share of
-      decisions with more legal cells than cfg.search.max_cells scored.
+      itself, it is read `thresholded` against `plain-t1`;
+    - ms-per-step: unroll wall time per real step.
     """
     transitions = eval_trajectory.player_transitions
     env_output = transitions.env_output
@@ -225,33 +219,6 @@ def eval_game_logs(
     }
     if offered.any():
         logs[f"switch-frac-{session_id}"] = float(took_switch[offered].mean())
-    search = transitions.agent_output.actor_output.search
-    if not isinstance(search.root_kl, tuple) and acted.any():
-        logs[f"search-root-kl-{session_id}"] = float(
-            np.asarray(search.root_kl)[acted].mean()
-        )
-        logs[f"search-value-gap-{session_id}"] = float(
-            np.asarray(search.root_value_gap)[acted].mean()
-        )
-        logs[f"search-legal-truncated-{session_id}"] = float(
-            np.asarray(search.legal_truncated)[acted].mean()
-        )
-        if not isinstance(search.deep_gain, tuple):
-            # The depth-2 arm's reads of its depth-1 nodes: the backup's
-            # gain over V, the predicted continuation, and the generator's
-            # retained prior mass / occupied candidate count.
-            logs[f"search-deep-gain-{session_id}"] = float(
-                np.asarray(search.deep_gain)[acted].mean()
-            )
-            logs[f"search-deep-continue-{session_id}"] = float(
-                np.asarray(search.deep_continue)[acted].mean()
-            )
-            logs[f"search-candidate-retained-mass-{session_id}"] = float(
-                np.asarray(search.candidate_retained_mass)[acted].mean()
-            )
-            logs[f"search-candidate-occupied-{session_id}"] = float(
-                np.asarray(search.candidate_occupied)[acted].mean()
-            )
     return logs
 
 
@@ -267,8 +234,8 @@ def run_eval_heuristic(
     step_count = main_run_state.eval_snapshot.step_count
 
     # Metric identity comes from the eval thread's name (set at spawn:
-    # EvalActor-simpleheuristic-0, ...), not the env username, so renaming
-    # or reusing envs never renames the wandb series.
+    # EvalActor-simpleheuristic-plain-t1-0, ...), not the env username, so
+    # renaming or reusing envs never renames the wandb series.
     session_id = threading.current_thread().name
 
     games = 0
@@ -559,25 +526,22 @@ def main(args: argparse.Namespace):
         player_params_view=actor_params_view,
         device=actor_device,
     )
-    eval_agent = Agent(
-        actor_player_network.apply,
-        actor_builder_network.apply,
-        player_params_view=actor_params_view,
-        player_head_params=HeadParams(temp=0.5),
-        builder_head_params=HeadParams(temp=1.0),
-        device=actor_device,
-    )
-    # The CROSS-LINEAGE eval arm (2026-08-29). temp=0.5 is not comparable
-    # across the flat-readout rewrite: the hierarchical head divided BOTH
-    # levels by temp, so eval sharpened the modality marginal as well as the
-    # within-modality choice, and the flat head's single division does not.
-    # The two differ by a per-modality reweighting that relatively
-    # down-weights the concentrated switch modality -- so the same policy
-    # reads as switching more under the new head, which would look like a
-    # free improvement and is pure parameterisation. temp=1.0 is identical
-    # under both, so it is the arm to compare across the boundary; temp=0.5
-    # stays as the within-lineage trend.
-    eval_agent_untempered = Agent(
+    # The eval slate (2026-09-09): two slots against the same baseline,
+    # both the EMA params at temp 1.0 -- the temperature the training
+    # actors sample at, and the only one comparable across head
+    # parameterisations (the flat readout's single division vs the
+    # hierarchical head's two, 2026-08-29). `plain-t1` samples the policy
+    # exactly as the training actors do; `thresholded` samples it with
+    # every legal cell below player_prune_threshold removed and the rest
+    # renormalised -- the distribution the learner's v-trace ratios are
+    # built on, sampled nowhere else. wr(thresholded) - wr(plain-t1) on
+    # the same checkpoint prices the threshold in play. The search eval
+    # actor (depth-1 expectimax, 2026-09-06) was deleted here 2026-09-09:
+    # its measured influence at 01861967 was root KL .000026-.000101 with
+    # both inspected bad actions still ranked first in 16/16 seeds
+    # (LESSONS.md "Removal ledger — 2026-09-09 search eval actor"); search
+    # stays for the offline readers (rl/offline/harness.py).
+    eval_agent_plain = Agent(
         actor_player_network.apply,
         actor_builder_network.apply,
         player_params_view=actor_params_view,
@@ -585,47 +549,28 @@ def main(args: argparse.Namespace):
         builder_head_params=HeadParams(temp=1.0),
         device=actor_device,
     )
-
-    # The SEARCH eval arms (2026-09-06; depth 2 2026-09-07): the same
-    # params through an actor network whose config enables cfg.search --
-    # the root's legal cells through the transition model, added to the
-    # logits before sampling (rl/model/search.py). Separate network
-    # objects because search is a static config branch; the param tree
-    # is the learner's, unchanged. temp 1.0 so the `-t1` slot is the
-    # matched control of both. These baseline eval actors are the ONLY
-    # place search runs: the self-play actors and the learner never
-    # build a search-enabled network.
-    def search_agent(depth: int) -> Agent:
-        search_player_model_config = get_player_model_config(
-            learner_config.generation, train=False, dtype=actor_dtype
-        )
-        search_player_model_config.search.enabled = True
-        search_player_model_config.search.depth = depth
-        search_player_network = get_player_model(search_player_model_config)
-        return Agent(
-            search_player_network.apply,
-            actor_builder_network.apply,
-            player_params_view=functools.partial(actor_params_view, search=True),
-            player_head_params=HeadParams(temp=1.0),
-            builder_head_params=HeadParams(temp=1.0),
-            device=actor_device,
-        )
-
-    eval_agent_search = None
-    if learner_config.eval_search_slots > 0:
-        eval_agent_search = search_agent(1)
-    eval_agent_search_deep = None
-    if learner_config.eval_search_depth > 0:
-        assert learner_config.eval_search_depth >= 2, "depth 1 is the -search slot"
-        eval_agent_search_deep = search_agent(learner_config.eval_search_depth)
+    eval_agent_thresholded = Agent(
+        actor_player_network.apply,
+        actor_builder_network.apply,
+        player_params_view=actor_params_view,
+        player_head_params=HeadParams(
+            temp=1.0, prune_threshold=learner_config.player_prune_threshold
+        ),
+        builder_head_params=HeadParams(temp=1.0),
+        device=actor_device,
+    )
+    eval_slate = (
+        (eval_agent_plain, "-plain-t1"),
+        (eval_agent_thresholded, "-thresholded"),
+    )
     # One timing sink shared by every training actor, its env and the
     # server; the learner drains it (actor_stats_log_steps).
     actor_stats = ActorStats()
     # Under "gpu": one batched-inference server for ALL training
     # PlayerActors (rl/online/inference.py), same apply_fn and default
-    # HeadParams as learning_agent — eval actors stay on eval_agent's
-    # direct path (different sampling temperature, and 3 low-volume
-    # threads don't warrant a second server), and builder actors too
+    # HeadParams as learning_agent — eval actors stay on their agents'
+    # direct path (the thresholded slot's HeadParams differ, and 2
+    # low-volume threads don't warrant a second server), and builder actors too
     # (one team-build per game vs ~35 player steps). The server's
     # constructor defaults are the values the deleted inference_* config
     # fields held (b219d84). Under "cpu" there is no server: every actor
@@ -751,12 +696,9 @@ def main(args: argparse.Namespace):
         smogon_format=learner_config.smogon_format,
     )
     # Two workers per player actor (both sides of a game step
-    # concurrently), plus the eval actors.
+    # concurrently), plus one per eval slot (each submits one unroll).
     executor = concurrent.futures.ThreadPoolExecutor(
-        max_workers=(
-            2 * learner_config.num_player_actors
-            + 2 * len(learner_config.eval_baselines)
-        )
+        max_workers=2 * learner_config.num_player_actors + len(eval_slate)
     )
 
     learner: Learner | None = None
@@ -817,36 +759,20 @@ def main(args: argparse.Namespace):
                 )
             )
 
+        baseline_index = learner_config.eval_baseline
         logger.info(
-            "Initializing %d evaluation actors (baseline indices: %s, "
-            "search slots: %d)...",
-            len(learner_config.eval_baselines) + learner_config.eval_search_slots,
-            learner_config.eval_baselines,
-            learner_config.eval_search_slots,
+            "Initializing %d evaluation actors against baseline %d: %s",
+            len(eval_slate),
+            baseline_index,
+            [slot_suffix for _, slot_suffix in eval_slate],
         )
-        # Slot order: the tempered slots, the untempered `-t1` slot, then
-        # the search slots against the same (last) baseline. The suffix is
-        # the thread name's, i.e. the wandb series' -- the three arms land
-        # on separate series.
-        eval_slots = []
-        for eval_id, baseline_index in enumerate(learner_config.eval_baselines):
-            untempered = eval_id == len(learner_config.eval_baselines) - 1
-            if untempered:
-                eval_slots.append((baseline_index, eval_agent_untempered, "-t1"))
-            else:
-                eval_slots.append((baseline_index, eval_agent, ""))
-        for _ in range(learner_config.eval_search_slots):
-            eval_slots.append(
-                (learner_config.eval_baselines[-1], eval_agent_search, "-search")
-            )
-        if eval_agent_search_deep is not None:
-            eval_slots.append(
-                (
-                    learner_config.eval_baselines[-1],
-                    eval_agent_search_deep,
-                    f"-search-d{learner_config.eval_search_depth}",
-                )
-            )
+        # Slot order fixes the eval_id in the thread name, i.e. the wandb
+        # series: EvalActor-simpleheuristic-plain-t1-0 and
+        # EvalActor-simpleheuristic-thresholded-1.
+        eval_slots = [
+            (baseline_index, slot_agent, slot_suffix)
+            for slot_agent, slot_suffix in eval_slate
+        ]
         for eval_id, (baseline_index, slot_agent, slot_suffix) in enumerate(eval_slots):
             baseline_name = EVAL_BASELINE_NAMES[baseline_index]
             actor = PlayerActor(
