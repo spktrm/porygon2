@@ -387,64 +387,10 @@ def _probs_entropy(probs: jax.Array) -> jax.Array:
     return -(probs * jnp.log(jnp.maximum(probs, 1e-8))).sum(-1)
 
 
-def transition_losses(
-    pred,
-    env_output,
-    acted_mask: jax.Array,
-    value_mask: jax.Array,
-    win_returns: jax.Array,
-    v_target: jax.Array,
-    cat_vf_support: jax.Array,
-    splits: dict[str, jax.Array],
-    axis: ActionAxisMasks,
-    config: Porygon2LearnerConfig,
-) -> tuple[jax.Array, dict[str, jax.Array]]:
-    """Every transition-model loss except grounding (rl/model/transition.py;
-    the K-step unroll and latent actions 2026-09-07), each on an OBSERVED
-    label, over the unroll's eligible offsets (`unroll_masks`):
-
-    - consistency (first transition only; a read at `cons_coef` 0): per
-      sequence group, the imagined rows' squared error against the real
-      next post-trunk rows normalised by the copy predictor's, over rows
-      present at either endpoint and groups with eligible rows;
-    - the KL halves (DreamerV3) at every transition: prior <- sg(posterior)
-      at dyn_coef, posterior <- sg(prior) at rep_coef, each clipped below
-      at free_nats, the posterior RECOMPUTED at the imagined state;
-    - value: the shared critic on every imagined CLS row, CE to the real
-      t+k+1 win_returns; the calibration block (2026-09-06) reads the
-      first transition against the copy predictor (`value_delta_r2`,
-      copy = 0 exactly, real = 1; split by taken modality and by whether
-      a row APPEARS at t+1) and the deeper offsets against the same copy;
-    - request kind (CE) and the joint termination objective at every
-      transition: done BCE + done * CE of the conditional terminal-outcome
-      logits against the actual terminal row's recorded outcome -- the
-      negative log-likelihood of {continue, loss, draw, win} factorised
-      into done and the outcome given done (the fractional-continuation
-      backup in rl/model/search.py reads both);
-    - decode (the root state): the EXACT action-discrimination objective
-      of the action encoder over the enumerated legal cells (summed over
-      every code; `decode_coef`), with its information reads;
-    - generator (every node): the candidate generator teacher-forced on
-      the base policy's latent target -- the first slot on the full
-      target, the later occupied slots on the target renormalised over
-      the support minus the prefix (rl/model/transition.py
-      `candidate_loss`); CE - target entropy is the read;
-    - align (imagined nodes): the encoder on the imagined state with the
-      recorded cell held to its real-state distribution (`align_coef`).
-
-    Each repeated family is averaged over its eligible offsets with equal
-    weights, then the caller's `player_dynamics_coef` brackets the sum.
-    Overflowed enumerations (more legal cells than the static width, or a
-    padded row) mask the action-set terms and are counted.
-    """
+def _consistency_losses(pred, first_step: jax.Array) -> tuple[jax.Array, dict]:
+    """The first transition's imagined rows against the real next post-trunk
+    rows, per sequence group, normalised by the copy predictor's error."""
     logs = {}
-    num_offsets = pred.transition_prior_logits.shape[0]
-    node_masks, transition_masks = unroll_masks(acted_mask, value_mask, num_offsets)
-    first_step = transition_masks[0]
-    acted_mask.shape[0]
-    tail = jnp.zeros((1,) + first_step.shape[1:], bool)
-    splits = {name: jnp.concatenate([rows, tail]) for name, rows in splits.items()}
-
     err = pred.transition_cons_err.astype(jnp.float32)
     scale = pred.transition_cons_scale.astype(jnp.float32)
     # Both-absent rows have zero real movement: scoring their imagined
@@ -464,7 +410,6 @@ def transition_losses(
         group_losses.append(group_loss)
         present = group_mask.any()
         group_present.append(present)
-        # An absent group is unscored, not a perfect reconstruction.
         logs[f"player_transition_cons_gain_{group.name.lower()}"] = jnp.where(
             present, 1.0 - group_loss, 0.0
         )
@@ -485,38 +430,43 @@ def transition_losses(
         ),
         0.0,
     )
+    return loss_cons, logs
 
-    # ---- the chance code, every transition ---------------------------
+
+def _chance_code_losses(
+    pred, transition_masks: list[jax.Array], splits: dict, config
+) -> tuple[jax.Array, dict]:
+    """The KL halves at every transition; the first transition carries the
+    usage and liveness reads."""
+    logs = {}
+    if pred.transition_prior_logits.shape[-2] == 0:
+        return jnp.zeros((), jnp.float32), logs
+
+    def kl(from_probs, to_probs):
+        return (from_probs * (jnp.log(from_probs) - jnp.log(to_probs))).sum(
+            axis=(-2, -1)
+        )
+
+    free = config.player_transition_free_nats
     kl_terms = []
-    if pred.transition_prior_logits.shape[-2] > 0:
-
-        def kl(from_probs, to_probs):
-            return (from_probs * (jnp.log(from_probs) - jnp.log(to_probs))).sum(
-                axis=(-2, -1)
-            )
-
-        free = config.player_transition_free_nats
-        for offset in range(num_offsets):
-            mask = transition_masks[offset]
-            prior_logits = pred.transition_prior_logits[offset]
-            post_logits = pred.transition_post_logits[offset]
-            prior = unimix_probs(prior_logits)
-            post = unimix_probs(post_logits)
-            kl_dyn = kl(jax.lax.stop_gradient(post), prior)
-            kl_rep = kl(post, jax.lax.stop_gradient(prior))
-            kl_terms.append(
-                config.player_transition_dyn_coef
-                * average(jnp.maximum(kl_dyn, free), mask)
-                + config.player_transition_rep_coef
-                * average(jnp.maximum(kl_rep, free), mask)
-            )
-            kl_value = jax.lax.stop_gradient(kl_dyn)
-            logs[_offset_name("player_transition_kl", offset)] = average(kl_value, mask)
-            logs[_offset_name("player_transition_prior_post_agree", offset)] = average(
-                (prior.argmax(-1) == post.argmax(-1)).all(-1).astype(jnp.float32), mask
-            )
-            if offset > 0:
-                continue
+    for offset, mask in enumerate(transition_masks):
+        prior_logits = pred.transition_prior_logits[offset]
+        post_logits = pred.transition_post_logits[offset]
+        prior = unimix_probs(prior_logits)
+        post = unimix_probs(post_logits)
+        kl_dyn = kl(jax.lax.stop_gradient(post), prior)
+        kl_rep = kl(post, jax.lax.stop_gradient(prior))
+        kl_terms.append(
+            config.player_transition_dyn_coef * average(jnp.maximum(kl_dyn, free), mask)
+            + config.player_transition_rep_coef
+            * average(jnp.maximum(kl_rep, free), mask)
+        )
+        kl_value = jax.lax.stop_gradient(kl_dyn)
+        logs[_offset_name("player_transition_kl", offset)] = average(kl_value, mask)
+        logs[_offset_name("player_transition_prior_post_agree", offset)] = average(
+            (prior.argmax(-1) == post.argmax(-1)).all(-1).astype(jnp.float32), mask
+        )
+        if offset == 0:
             logs["player_transition_kl_free_frac"] = average(
                 (kl_value < free).astype(jnp.float32), mask
             )
@@ -535,19 +485,26 @@ def transition_losses(
                 .astype(jnp.float32),
                 mask,
             )
-    if kl_terms:
-        loss_kl = jnp.mean(jnp.stack(kl_terms))
-    else:
-        loss_kl = jnp.zeros((), jnp.float32)
+    return jnp.mean(jnp.stack(kl_terms)), logs
 
-    # ---- value, every transition, calibrated against the copy ---------
+
+def _value_losses(
+    pred,
+    transition_masks: list[jax.Array],
+    win_returns: jax.Array,
+    v_target: jax.Array,
+    support: jax.Array,
+    axis: ActionAxisMasks,
+) -> tuple[jax.Array, dict]:
+    """The shared critic on every imagined CLS row against the real t+k+1
+    win_returns; the first transition calibrated against the copy."""
+    logs = {}
     real_head = pred.value_head
     real_v = real_head.expectation.astype(jnp.float32)
     real_logits = real_head.logits.astype(jnp.float32)
-    support = cat_vf_support.astype(jnp.float32)
+    newly_valid = pred.transition_newly_valid
     value_terms = []
-    for offset in range(num_offsets):
-        mask = transition_masks[offset]
+    for offset, mask in enumerate(transition_masks):
         next_returns = offset_take(win_returns, offset + 1).astype(jnp.float32)
         value_head = pred.transition_value_head
         head_logits = value_head.logits[offset].astype(jnp.float32)
@@ -566,75 +523,89 @@ def transition_losses(
             value_target=next_returns @ support,
             mask=mask,
         )
-        if offset > 0:
-            continue
-        next_v_target = offset_take(v_target, 1).astype(jnp.float32)
-        value_gap = jnp.abs(expectation - next_v_target)
-        logs["player_transition_value_gap"] = average(value_gap, mask)
-        prior_head = pred.transition_value_head_prior
-        prior_expectation = prior_head.expectation.astype(jnp.float32)
-        switch_step = mask & axis.taken_switch & axis.has_move
-        move_step = mask & jnp.logical_not(axis.taken_switch)
-        for name, rows in (
-            ("_switch", switch_step),
-            ("_move", move_step),
-            ("_newly_valid", mask & newly_valid),
-            ("_no_newly_valid", mask & jnp.logical_not(newly_valid)),
-        ):
-            logs[f"player_transition_value_delta_r2{name}"] = delta_gain(
-                expectation - real_v, target_delta, rows
-            )
-        for name, rows in (("", mask), ("_switch", switch_step), ("_move", move_step)):
+        if offset == 0:
+            next_v_target = offset_take(v_target, 1).astype(jnp.float32)
+            value_gap = jnp.abs(expectation - next_v_target)
+            logs["player_transition_value_gap"] = average(value_gap, mask)
+            prior_head = pred.transition_value_head_prior
+            prior_expectation = prior_head.expectation.astype(jnp.float32)
+            switch_step = mask & axis.taken_switch & axis.has_move
+            move_step = mask & jnp.logical_not(axis.taken_switch)
+            # The "" r2 is the per-offset panel above; the summed terms
+            # are logged for the splits a window read pools (delta_gain_terms).
+            for name, rows, terms_logged in (
+                ("", mask, True),
+                ("_switch", switch_step, True),
+                ("_move", move_step, True),
+                ("_newly_valid", mask & newly_valid, False),
+                ("_no_newly_valid", mask & jnp.logical_not(newly_valid), False),
+            ):
+                residual, energy = delta_gain_terms(
+                    expectation - real_v, target_delta, rows
+                )
+                if name:
+                    logs[f"player_transition_value_delta_r2{name}"] = 1.0 - residual / (
+                        energy + 1e-8
+                    )
+                if terms_logged:
+                    logs[f"player_transition_value_delta_sse{name}"] = residual
+                    logs[f"player_transition_value_delta_energy{name}"] = energy
             residual, energy = delta_gain_terms(
-                expectation - real_v, target_delta, rows
+                prior_expectation - real_v, target_delta, mask
             )
-            logs[f"player_transition_value_delta_sse{name}"] = residual
-            logs[f"player_transition_value_delta_energy{name}"] = energy
-        logs["player_transition_value_delta_r2_prior"] = delta_gain(
-            prior_expectation - real_v, target_delta, mask
-        )
-        residual, _ = delta_gain_terms(prior_expectation - real_v, target_delta, mask)
-        logs["player_transition_value_delta_sse_prior"] = residual
-        logs["player_transition_value_gap_prior"] = average(
-            jnp.abs(prior_expectation - next_v_target), mask
-        )
-        logs["player_transition_value_gap_switch"] = average(value_gap, switch_step)
-        logs["player_transition_value_gap_move"] = average(value_gap, move_step)
-        ce_copy = average(
-            optax.softmax_cross_entropy(logits=real_logits, labels=next_returns), mask
-        )
-        ce_real = average(
-            optax.softmax_cross_entropy(
-                logits=offset_take(real_logits, 1), labels=next_returns
-            ),
-            mask,
-        )
-        ce_prior = average(
-            optax.softmax_cross_entropy(
-                logits=prior_head.logits.astype(jnp.float32), labels=next_returns
-            ),
-            mask,
-        )
-        ce_headroom = jnp.maximum(ce_copy - ce_real, 1e-3)
-        logs["player_transition_value_gain"] = (ce_copy - loss_value) / ce_headroom
-        logs["player_transition_value_gain_prior"] = (ce_copy - ce_prior) / ce_headroom
-        logs["player_transition_value_ce_copy"] = ce_copy
-        logs["player_transition_value_ce_real"] = ce_real
-        logs["player_transition_value_ce_prior"] = ce_prior
-    loss_value = jnp.mean(jnp.stack(value_terms))
+            logs["player_transition_value_delta_r2_prior"] = 1.0 - residual / (
+                energy + 1e-8
+            )
+            logs["player_transition_value_delta_sse_prior"] = residual
+            logs["player_transition_value_gap_prior"] = average(
+                jnp.abs(prior_expectation - next_v_target), mask
+            )
+            logs["player_transition_value_gap_switch"] = average(value_gap, switch_step)
+            logs["player_transition_value_gap_move"] = average(value_gap, move_step)
+            ce_copy = average(
+                optax.softmax_cross_entropy(logits=real_logits, labels=next_returns),
+                mask,
+            )
+            ce_real = average(
+                optax.softmax_cross_entropy(
+                    logits=offset_take(real_logits, 1), labels=next_returns
+                ),
+                mask,
+            )
+            ce_prior = average(
+                optax.softmax_cross_entropy(
+                    logits=prior_head.logits.astype(jnp.float32), labels=next_returns
+                ),
+                mask,
+            )
+            ce_headroom = jnp.maximum(ce_copy - ce_real, 1e-3)
+            logs["player_transition_value_gain"] = (ce_copy - loss_value) / ce_headroom
+            logs["player_transition_value_gain_prior"] = (
+                ce_copy - ce_prior
+            ) / ce_headroom
+            logs["player_transition_value_ce_copy"] = ce_copy
+            logs["player_transition_value_ce_real"] = ce_real
+            logs["player_transition_value_ce_prior"] = ce_prior
     logs["player_transition_pred_rms"] = pred.transition_pred_rms.astype(
         jnp.float32
     ).mean()
+    return jnp.mean(jnp.stack(value_terms)), logs
 
-    # ---- kind, done and the conditional terminal outcome ---------------
+
+def _termination_losses(
+    pred, env_output, transition_masks: list[jax.Array], support: jax.Array
+) -> tuple[jax.Array, jax.Array, dict]:
+    """Request kind (CE) and the joint termination objective at every
+    transition: done BCE + done * CE of the conditional terminal-outcome
+    logits against the terminal row's recorded outcome."""
+    logs = {}
     kind_terms = []
     termination_terms = []
     request_kind = env_output.info[..., InfoFeature.INFO_FEATURE__REQUEST_TYPE]
     done = env_output.done.astype(jnp.float32)
     outcome = env_output.win_reward.astype(jnp.float32)
     outcome_probs = outcome / jnp.maximum(outcome.sum(-1, keepdims=True), 1e-8)
-    for offset in range(num_offsets):
-        mask = transition_masks[offset]
+    for offset, mask in enumerate(transition_masks):
         kind_labels = offset_take(request_kind, offset + 1)
         kind_logits = pred.transition_kind_logits[offset].astype(jnp.float32)
         kind_terms.append(
@@ -685,11 +656,14 @@ def transition_losses(
             logs["player_transition_terminal_rows"] = terminal_rows.sum().astype(
                 jnp.float32
             )
-    loss_kind = jnp.mean(jnp.stack(kind_terms))
-    loss_termination = jnp.mean(jnp.stack(termination_terms))
+    return jnp.mean(jnp.stack(kind_terms)), jnp.mean(jnp.stack(termination_terms)), logs
 
-    # ---- the latent action: decode at the root ------------------------
-    root_mask = node_masks[0] & jnp.logical_not(pred.transition_action_overflow)
+
+def _decode_losses(pred, root_mask_all: jax.Array) -> tuple[jax.Array, dict]:
+    """The exact action-discrimination objective of the action encoder over
+    the enumerated legal cells at the root, with its information reads."""
+    logs = {}
+    root_mask = root_mask_all & jnp.logical_not(pred.transition_action_overflow)
     decode = jax.vmap(jax.vmap(exact_decode_loss))(
         pred.transition_action_logits.astype(jnp.float32),
         pred.transition_action_cell_valid,
@@ -701,7 +675,7 @@ def transition_losses(
         decode.num_valid.astype(jnp.float32), root_mask
     )
     logs["player_transition_action_overflow_frac"] = average(
-        pred.transition_action_overflow.astype(jnp.float32), node_masks[0]
+        pred.transition_action_overflow.astype(jnp.float32), root_mask_all
     )
     taken_logits = pred.transition_align_logits[0].astype(jnp.float32)
     logs["player_transition_action_logit_mean"] = average(
@@ -728,14 +702,19 @@ def transition_losses(
             "player_transition_action",
         )
     )
+    return loss_decode, logs
 
-    # ---- the candidate generator, every node ---------------------------
+
+def _generator_losses(
+    pred, node_masks: list[jax.Array]
+) -> tuple[jax.Array, jax.Array, dict]:
+    """The candidate generator teacher-forced on the base policy's latent
+    target at every node, and the encoder aligned on the imagined ones."""
+    logs = {}
     generator_terms = []
     align_terms = []
-    for offset in range(num_offsets + 1):
-        mask = node_masks[offset] & jnp.logical_not(
-            pred.transition_node_overflow[offset]
-        )
+    for offset, node_mask in enumerate(node_masks):
+        mask = node_mask & jnp.logical_not(pred.transition_node_overflow[offset])
         targets = jax.vmap(jax.vmap(candidate_targets))(
             pred.transition_generator_target[offset],
             pred.transition_teacher_codes[offset],
@@ -776,19 +755,97 @@ def transition_losses(
             logs["player_transition_generator_support"] = average(
                 pred.transition_support_mask[offset].sum(-1).astype(jnp.float32), mask
             )
-            continue
-        align_target = pred.transition_align_target[offset]
-        align_log = jnp.log(unimix_probs(pred.transition_align_logits[offset]))
-        align_ce = -(align_target * align_log).sum(-1)
-        align_terms.append(average(align_ce, mask))
-        logs[_offset_name("player_transition_align_kl", offset)] = average(
-            align_ce - _probs_entropy(align_target), mask
-        )
+        else:
+            align_target = pred.transition_align_target[offset]
+            align_log = jnp.log(unimix_probs(pred.transition_align_logits[offset]))
+            align_ce = -(align_target * align_log).sum(-1)
+            align_terms.append(average(align_ce, mask))
+            logs[_offset_name("player_transition_align_kl", offset)] = average(
+                align_ce - _probs_entropy(align_target), mask
+            )
     loss_generator = jnp.mean(jnp.stack(generator_terms))
     if align_terms:
         loss_align = jnp.mean(jnp.stack(align_terms))
     else:
         loss_align = jnp.zeros((), jnp.float32)
+    return loss_generator, loss_align, logs
+
+
+def transition_losses(
+    pred,
+    env_output,
+    acted_mask: jax.Array,
+    value_mask: jax.Array,
+    win_returns: jax.Array,
+    v_target: jax.Array,
+    cat_vf_support: jax.Array,
+    splits: dict[str, jax.Array],
+    axis: ActionAxisMasks,
+    config: Porygon2LearnerConfig,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """Every transition-model loss except grounding (rl/model/transition.py;
+    the K-step unroll and latent actions 2026-09-07), each on an OBSERVED
+    label, over the unroll's eligible offsets (`unroll_masks`):
+
+    - consistency (first transition only; `cons_coef` 1.0 since 2026-09-08):
+      per sequence group, the imagined rows' squared error against the real
+      next post-trunk rows normalised by the copy predictor's, over rows
+      present at either endpoint and groups with eligible rows;
+    - the KL halves (DreamerV3) at every transition: prior <- sg(posterior)
+      at dyn_coef, posterior <- sg(prior) at rep_coef, each clipped below
+      at free_nats, the posterior RECOMPUTED at the imagined state;
+    - value: the shared critic on every imagined CLS row, CE to the real
+      t+k+1 win_returns; the calibration block (2026-09-06) reads the
+      first transition against the copy predictor (`value_delta_r2`,
+      copy = 0 exactly, real = 1; split by taken modality and by whether
+      a row APPEARS at t+1) and the deeper offsets against the same copy;
+    - request kind (CE) and the joint termination objective at every
+      transition: done BCE + done * CE of the conditional terminal-outcome
+      logits against the actual terminal row's recorded outcome -- the
+      negative log-likelihood of {continue, loss, draw, win} factorised
+      into done and the outcome given done (the fractional-continuation
+      backup in rl/model/search.py reads both);
+    - decode (the root state): the EXACT action-discrimination objective
+      of the action encoder over the enumerated legal cells (summed over
+      every code; `decode_coef`), with its information reads;
+    - generator (every node): the candidate generator teacher-forced on
+      the base policy's latent target -- the first slot on the full
+      target, the later occupied slots on the target renormalised over
+      the support minus the prefix (rl/model/transition.py
+      `candidate_loss`); CE - target entropy is the read;
+    - align (imagined nodes): the encoder on the imagined state with the
+      recorded cell held to its real-state distribution (`align_coef`).
+
+    Each repeated family is averaged over its eligible offsets with equal
+    weights, then the caller's `player_dynamics_coef` brackets the sum.
+    Overflowed enumerations (more legal cells than the static width, or a
+    padded row) mask the action-set terms and are counted.
+    """
+    num_offsets = pred.transition_prior_logits.shape[0]
+    node_masks, transition_masks = unroll_masks(acted_mask, value_mask, num_offsets)
+    first_step = transition_masks[0]
+    tail = jnp.zeros((1,) + first_step.shape[1:], bool)
+    splits = {name: jnp.concatenate([rows, tail]) for name, rows in splits.items()}
+    support = cat_vf_support.astype(jnp.float32)
+
+    loss_cons, logs = _consistency_losses(pred, first_step)
+    loss_kl, kl_logs = _chance_code_losses(pred, transition_masks, splits, config)
+    loss_value, value_logs = _value_losses(
+        pred, transition_masks, win_returns, v_target, support, axis
+    )
+    loss_kind, loss_termination, termination_logs = _termination_losses(
+        pred, env_output, transition_masks, support
+    )
+    loss_decode, decode_logs = _decode_losses(pred, node_masks[0])
+    loss_generator, loss_align, generator_logs = _generator_losses(pred, node_masks)
+    for family_logs in (
+        kl_logs,
+        value_logs,
+        termination_logs,
+        decode_logs,
+        generator_logs,
+    ):
+        logs.update(family_logs)
 
     # `cons_coef`, `decode_coef` and `align_coef` multiply the gradient
     # only; their logged losses keep reading the unscaled terms.
