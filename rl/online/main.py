@@ -519,12 +519,19 @@ def main(args: argparse.Namespace):
     # extra network would trigger redundant jax.jit traces of the identical
     # apply_fn for no reason (rl/online/agent.py's Agent is already fully
     # stateless w.r.t. "which model": params are a per-call argument).
-    learning_agent = Agent(
-        actor_player_network.apply,
-        actor_builder_network.apply,
-        player_params_view=actor_params_view,
-        device=actor_device,
-    )
+    def make_agent(
+        player_head_params=HeadParams(), builder_head_params=HeadParams()
+    ) -> Agent:
+        return Agent(
+            actor_player_network.apply,
+            actor_builder_network.apply,
+            player_params_view=actor_params_view,
+            player_head_params=player_head_params,
+            builder_head_params=builder_head_params,
+            device=actor_device,
+        )
+
+    learning_agent = make_agent()
     # The eval slate (2026-09-09): two slots against the same baseline,
     # both the EMA params at temp 1.0 -- the temperature the training
     # actors sample at, and the only one comparable across head
@@ -540,27 +547,17 @@ def main(args: argparse.Namespace):
     # both inspected bad actions still ranked first in 16/16 seeds
     # (LESSONS.md "Removal ledger — 2026-09-09 search eval actor"); search
     # stays for the offline readers (rl/offline/harness.py).
-    eval_agent_plain = Agent(
-        actor_player_network.apply,
-        actor_builder_network.apply,
-        player_params_view=actor_params_view,
-        player_head_params=HeadParams(temp=1.0),
-        builder_head_params=HeadParams(temp=1.0),
-        device=actor_device,
-    )
-    eval_agent_thresholded = Agent(
-        actor_player_network.apply,
-        actor_builder_network.apply,
-        player_params_view=actor_params_view,
-        player_head_params=HeadParams(
-            temp=1.0, prune_threshold=learner_config.player_prune_threshold
-        ),
-        builder_head_params=HeadParams(temp=1.0),
-        device=actor_device,
-    )
     eval_slate = (
-        (eval_agent_plain, "-plain-t1"),
-        (eval_agent_thresholded, "-thresholded"),
+        (make_agent(HeadParams(temp=1.0), HeadParams(temp=1.0)), "-plain-t1"),
+        (
+            make_agent(
+                HeadParams(
+                    temp=1.0, prune_threshold=learner_config.player_prune_threshold
+                ),
+                HeadParams(temp=1.0),
+            ),
+            "-thresholded",
+        ),
     )
     # One timing sink shared by every training actor, its env and the
     # server; the learner drains it (actor_stats_log_steps).
@@ -759,21 +756,15 @@ def main(args: argparse.Namespace):
             )
 
         baseline_index = learner_config.eval_baseline
+        baseline_name = EVAL_BASELINE_NAMES[baseline_index]
         logger.info(
-            "Initializing %d evaluation actors against baseline %d: %s",
+            "Initialising %d evaluation actors against baseline %d: %s",
             len(eval_slate),
             baseline_index,
             [slot_suffix for _, slot_suffix in eval_slate],
         )
-        # Slot order fixes the eval_id in the thread name, i.e. the wandb
-        # series: EvalActor-simpleheuristic-plain-t1-0 and
-        # EvalActor-simpleheuristic-thresholded-1.
-        eval_slots = [
-            (baseline_index, slot_agent, slot_suffix)
-            for slot_agent, slot_suffix in eval_slate
-        ]
-        for eval_id, (baseline_index, slot_agent, slot_suffix) in enumerate(eval_slots):
-            baseline_name = EVAL_BASELINE_NAMES[baseline_index]
+        # Slot order fixes the eval_id in the thread name, i.e. the wandb series.
+        for eval_id, (slot_agent, slot_suffix) in enumerate(eval_slate):
             actor = PlayerActor(
                 agent=slot_agent,
                 # The username MUST start with "eval-heuristic" (the
