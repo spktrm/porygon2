@@ -100,11 +100,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # inside one EMA-target time constant (1/player_ema_update_rate steps).
     player_replay_buffer_capacity: int = 256
     player_replay_ratio: int = 8
-    # Preferred first-use chunk share when available, scheduled across
-    # batches (1/8 gives one slot every two batches of four). Unavailable
-    # fresh slots use replay so retention never requires early eviction.
-    # Startup may use more fresh chunks. First use consumes the reuse cap;
-    # 0 restores uniform capped sampling.
+    # The fresh stream (2026-09-08, 224582c): the share of each batch's
+    # slots scheduled for FIRST-use chunks, oldest admitted first (1/8 is
+    # one slot every two batches of four). An unavailable fresh slot falls
+    # back to replay, so retention never forces an early eviction; startup
+    # may use more fresh chunks; first use consumes the reuse cap. 0
+    # restores uniform capped sampling exactly. Reads: LESSONS.md "Fresh
+    # replay stream and decision accounting — 2026-09-08" and the
+    # 2026-09-09 first-18.1k-update read.
     player_replay_fresh_fraction: float = 0.125
     builder_replay_buffer_capacity: int = 512
     builder_replay_ratio: int = 10
@@ -403,16 +406,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Loss coefficients
     ## Player
-    # The actor backward-KL force (`player_kl_loss_coef` .05 on the sampled
-    # k3 KL(learner || behaviour)) was REMOVED 2026-09-09: it penalised the
-    # learner for moving away from the behaviour policy, which is the
-    # direction a support force pushes when it lifts an action mu almost
-    # never takes -- two terms pulling opposite ways on the same cells, one
-    # measured at .00796 and doing no identified work. The estimator stays
-    # logged (player_loss_kl / player_learner_actor_backward_kl). What
-    # still holds drift down: the SPO clip, the magnet, and the reuse
-    # controller, which reads the forward KL (LESSONS.md "Removal ledger —
-    # 2026-09-09 actor backward-KL force").
+    # (`player_kl_loss_coef`, the actor backward-KL force, was REMOVED
+    # 2026-09-09 -- LESSONS.md "Removal ledger — 2026-09-09 actor
+    # backward-KL force".)
     player_value_head_loss_coef: float = 1.0
     # The privileged critic (2026-09-01): trained beside the deployable head
     # on the SAME win_returns; its CE carries this coefficient.
@@ -510,6 +506,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # A hypothesis with its own panels (the teacher-vs-imagined KL); 0 is
     # the control.
     player_transition_align_coef: float = 1.0
+
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
     # pi/mu with a batch-normalised v-trace advantage from V, plus a
@@ -563,56 +560,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (loss.factorised_entropies). Revert handles in the LESSONS.md
     # ledgers.
     player_ent_coef: float = 0.01
-    # The FLAT SUPPORT HINGE (2026-09-09, loss.support_hinge_loss): over a
-    # row's legal cells as flat complete actions, (1/N) sum_a max(0,
-    # log(tau / pi_a)) -- every legal action held at tau, the term exactly
-    # silent once all clear it. Its per-logit derivative
-    # active_fraction * pi_b - below_b / N is bounded, zero-sum over the
-    # row and carries no pi prefactor on the cell it lifts, so it is the
-    # one force still acting on an abandoned action; above tau it says
-    # nothing and the critic ranks. It REPLACES the modality-marginal
-    # uniform KL (player_uniform_kl_coef .025, 2026-08-31 to 2026-09-09):
-    # at a starved action the two are the same order and equally
-    # pi-independent, but the KL kept pulling toward uniform modality mass
-    # at every probability -- and, with CELL_MODALITY_MASK separating MOVE
-    # from WILDCARD, pulled P(tera | move) toward one half. The flat form
-    # imposes no hierarchy at all (LESSONS.md "Removal + addition ledger —
-    # 2026-09-09 flat support hinge").
-    #
-    # tau = .01 is twice player_prune_threshold: an action must lose half
-    # its supported mass before the v-trace threshold discards it, and that
-    # factor of two is the hysteresis band. Calibration: 5-6 bench cells at
-    # .01 induce a switch-mass floor of 5-6%, just under the .07171 the KL
-    # was holding -- low enough that evidence, not the floor, sets the
-    # resting level. Confirm against player_switch_mass_choice in the
-    # first 250k fresh decisions.
-    player_support_tau: float = 0.01
-    # The feasibility clamp: per row tau_row = min(tau, tau_max_mass / N),
-    # so N * tau can never exceed this and make the loss unsatisfiable
-    # (doubles, or a move with many legal target cells). Panelled as
-    # player_support_n_tau_row / player_support_saturated_frac.
-    player_support_tau_max_mass: float = 0.5
-    # Screened OFFLINE over recorded chunks at .001 / .0025 / .005
-    # (rl/offline/support_screen.py, ckpt_02014000, 64 chunks): the encoder
-    # gradient norm moved by at most +0.01% at any of them against the 10%
-    # ceiling, and the hinge's directional pull on the switch logits was
-    # restoring at every value (-.00008 / -.00019 / -.00039); one restored
-    # Adam step lifts no exposure measurably at any coefficient (min legal
-    # probability .0197 before and after, 27.3% of legal cells under .01),
-    # so the cost half of the criterion decided it and the top of the
-    # screened range, .005, landed for the 2026-09-09 relaunch. Raised to
-    # .05 the next morning on the live directional read: at .005 the
-    # hinge's pull on the switch logits was -.0005 to -.0013 against the
-    # retired KL's -.0065 to -.0081 and the policy gradient's +-.02 swing,
-    # and its per-cell lift (coef / N ~ coef * .15) held a cell at the
-    # .005 discard line only against an adverse normalised advantage of
-    # ~.15 -- it could not be tested at that size. At .05 the lift is
-    # .0075 (holds against ~1.5), the switch-axis pull ~ -.009 (the KL's
-    # order), and the encoder-gradient cost extrapolates to ~0.1% against
-    # the 10% ceiling. Never swept in a live learner -- config is a jit
-    # static argname and a host-varied coefficient compiles one
-    # executable per value. 0.0 is exactly off (no term at all).
-    player_support_hinge_coef: float = 0.05
     # DeepNash's FineTuning threshold (rnad.py FineTuning._threshold, its
     # reference value .03): a legal action whose probability is below it is
     # REMOVED and the rest renormalised (rl/model/utils.py prune_log_policy,
@@ -637,11 +584,56 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # from the restart (rnad gates it on from_learner_steps, off by
     # default, as a late strength fix for a converged policy); .005 not
     # .03, so it bites on far fewer actions; no 1/32 discretisation. The
-    # support hinge above holds every legal cell at twice this line, so in
+    # support hinge below holds every legal cell at twice this line, so in
     # equilibrium the discard zone is empty -- player_discard_taken_frac
     # above 1% sustained is the hinge failing and this hiding it, the
     # whole-set revert trigger.
     player_prune_threshold: float = 0.005
+    # tau (.01) is twice player_prune_threshold: an action must lose half
+    # its supported mass before the v-trace threshold discards it, and that
+    # factor of two is the hysteresis band. Calibration: 5-6 bench cells at
+    # .01 induce a switch-mass floor of 5-6%, just under the .07171 the KL
+    # was holding -- low enough that evidence, not the floor, sets the
+    # resting level. Confirm against player_switch_mass_choice in the
+    # first 250k fresh decisions.
+    player_support_tau: float = 2 * player_prune_threshold
+    # The FLAT SUPPORT HINGE (2026-09-09, loss.support_hinge_loss): over a
+    # row's legal cells as flat complete actions, (1/N) sum_a max(0,
+    # log(tau / pi_a)) -- every legal action held at tau, the term exactly
+    # silent once all clear it. Its per-logit derivative
+    # active_fraction * pi_b - below_b / N is bounded, zero-sum over the
+    # row and carries no pi prefactor on the cell it lifts, so it is the
+    # one force still acting on an abandoned action; above tau it says
+    # nothing and the critic ranks. It REPLACES the modality-marginal
+    # uniform KL (player_uniform_kl_coef .025, 2026-08-31 to 2026-09-09):
+    # at a starved action the two are the same order and equally
+    # pi-independent, but the KL kept pulling toward uniform modality mass
+    # at every probability -- and, with CELL_MODALITY_MASK separating MOVE
+    # from WILDCARD, pulled P(tera | move) toward one half. The flat form
+    # imposes no hierarchy at all (LESSONS.md "Removal + addition ledger —
+    # 2026-09-09 flat support hinge").
+    #
+    # Screened OFFLINE over recorded chunks at .001 / .0025 / .005
+    # (rl/offline/support_screen.py, ckpt_02014000, 64 chunks): the encoder
+    # gradient norm moved by at most +0.01% at any of them against the 10%
+    # ceiling, and the hinge's directional pull on the switch logits was
+    # restoring at every value (-.00008 / -.00019 / -.00039); one restored
+    # Adam step lifts no exposure measurably at any coefficient (min legal
+    # probability .0197 before and after, 27.3% of legal cells under .01),
+    # so the cost half of the criterion decided it and the top of the
+    # screened range, .005, landed for the 2026-09-09 relaunch. Raised to
+    # .05 the next morning on the live directional read: at .005 the
+    # hinge's pull on the switch logits was -.0005 to -.0013 against the
+    # retired KL's -.0065 to -.0081 and the policy gradient's +-.02 swing,
+    # and its per-cell lift (coef / N ~ coef * .15) held a cell at the
+    # .005 discard line only against an adverse normalised advantage of
+    # ~.15 -- it could not be tested at that size. At .05 the lift is
+    # .0075 (holds against ~1.5), the switch-axis pull ~ -.009 (the KL's
+    # order), and the encoder-gradient cost extrapolates to ~0.1% against
+    # the 10% ceiling. Never swept in a live learner -- config is a jit
+    # static argname and a host-varied coefficient compiles one
+    # executable per value. 0.0 is exactly off (no term at all).
+    player_support_hinge_coef: float = 0.05
     # The support-anchor family (forward KL toward a temperature-raised /
     # advantage-tilted reference; player_support_{coef,temperature,
     # adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every

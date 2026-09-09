@@ -133,10 +133,7 @@ def switch_loss_telemetry(
 
     def support_loss(log_probs):
         rows, _, _ = support_hinge_loss(
-            log_probs,
-            legal_mask,
-            config.player_support_tau,
-            config.player_support_tau_max_mass,
+            log_probs, legal_mask, config.player_support_tau
         )
         return average(rows, policy_mask)
 

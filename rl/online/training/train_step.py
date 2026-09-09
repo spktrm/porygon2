@@ -1418,10 +1418,7 @@ def train_step(
         # acting on an abandoned action; unlike the modality-marginal KL it
         # replaced it says nothing above the line, where the critic ranks.
         support_rows, support_active_rows, support_tau_row = support_hinge_loss(
-            learner_log_policy,
-            flat_action_mask,
-            config.player_support_tau,
-            config.player_support_tau_max_mass,
+            learner_log_policy, flat_action_mask, config.player_support_tau
         )
         loss_support = average(support_rows, policy_mask)
 

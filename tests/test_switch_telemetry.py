@@ -23,7 +23,6 @@ def test_switch_direction_matches_full_logit_derivative(objective):
         player_ent_coef=0.01,
         player_mag_coef=0.2,
         player_support_tau=0.01,
-        player_support_tau_max_mass=0.5,
         player_support_hinge_coef=0.0025,
     )
     legal = jnp.zeros((4, NUM_ACTION_CELLS), dtype=bool)
@@ -71,12 +70,7 @@ def test_switch_direction_matches_full_logit_derivative(objective):
                 config.player_pg_coef
                 * config.player_support_hinge_coef
                 * average(
-                    support_hinge_loss(
-                        log_policy,
-                        legal,
-                        config.player_support_tau,
-                        config.player_support_tau_max_mass,
-                    )[0],
+                    support_hinge_loss(log_policy, legal, config.player_support_tau)[0],
                     valid,
                 ),
             ]

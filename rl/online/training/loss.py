@@ -49,11 +49,18 @@ def factorised_entropies(
     return h_macro, h_micro_taken
 
 
+# The support hinge's feasibility clamp: per row tau_row = min(tau,
+# SUPPORT_TAU_MAX_MASS / N), so N * tau_row can never exceed this and make
+# the loss unsatisfiable (doubles, or a move with many legal target cells).
+# Panelled as player_support_n_tau_row / player_support_saturated_frac.
+SUPPORT_TAU_MAX_MASS = 0.5
+
+
 def support_hinge_loss(
     log_policy: jax.Array,
     legal_mask: jax.Array,
     tau: float,
-    tau_max_mass: float,
+    tau_max_mass: float = SUPPORT_TAU_MAX_MASS,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """The FLAT SUPPORT HINGE (2026-09-09): per row, over the legal cells
     read as flat complete actions (a move x target or a switch is one
