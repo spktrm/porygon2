@@ -447,10 +447,11 @@ class Encoder(nn.Module):
         # no gates and no block masks -- see rl/model/trunk.py for why the
         # three gated streams and their two feeding cross-attention reads all
         # collapse into this at 61 rows.
-        # Every row enters the trunk at RMS 1, a fresh embedding table's
-        # magnitude, normalised per row and rescaled per group -- the
-        # registers the trunk appends pass through the same module, so
-        # nothing enters at a magnitude of its own.
+        # Every row's CONTENT enters the trunk at RMS 1, a fresh embedding
+        # table's magnitude, normalised per row and rescaled per group, with
+        # the additive group/row identity on top -- the registers the trunk
+        # appends pass through the same module, so nothing enters at a
+        # magnitude of its own.
         self.trunk = Trunk(self.cfg.trunk, name="trunk")
         self.input_normalisation = SequenceInputNormalisation(
             num_groups=NUM_SEQUENCE_GROUPS, name="input_normalisation"
@@ -1283,19 +1284,24 @@ class Encoder(nn.Module):
             dynamics_valid = jnp.take(row_valid, jnp.asarray(DYNAMICS_TARGET_ROWS))
             dynamics_rows = jnp.where(dynamics_valid[:, None], dynamics_rows, 0)
 
-        # Param shapes are the FULL layout's on both paths (one checkpoint);
-        # the actor indexes the rows it kept.
+        # The content is normalised FIRST and the identity goes on AFTER
+        # (2026-09-10): the norm divides a row by its own content RMS, so a
+        # bias added before it is divided too -- 35% of a CLS row (content
+        # RMS 0.18) but 0.1% of a history row (RMS ~66), with the gradient
+        # into the bias shrunk by the same factor, which is the very
+        # disparity the norm removes from the content. Added after, every
+        # row carries the same identity share with an unattenuated gradient
+        # -- the token-plus-position embedding form. Param shapes are the
+        # FULL layout's on both paths (one checkpoint); the actor indexes
+        # the rows it kept.
+        group_ids = jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
+        sequence = self.input_normalisation(sequence, row_valid, group_ids)
         sequence = (
             sequence
-            + self.sequence_group_bias.astype(dtype)[
-                jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
-            ]
+            + self.sequence_group_bias.astype(dtype)[group_ids]
             + self.sequence_row_bias.astype(dtype)[jnp.asarray(kept_rows)]
         )
         sequence = jnp.where(row_valid[:, None], sequence, 0)
-        sequence = self.input_normalisation(
-            sequence, row_valid, jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
-        )
         return sequence, row_valid, opp_code_labels, dynamics_rows
 
     def _batched_forward(
