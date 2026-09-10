@@ -110,7 +110,10 @@ class Learner:
         # executables per distinct static value OOM-killed run 1326
         # (LESSONS.md 1).
 
-        self._train_step_jit = train_step if debug else TRAIN_STEP_JIT
+        if debug:
+            self._train_step_jit = train_step
+        else:
+            self._train_step_jit = TRAIN_STEP_JIT
         # Shape-lattice fail-fast: every combo compiles at the FIRST batch
         # (_precompile_lattice) so no variant can arrive as a surprise
         # compile mid-run. Process-local by design.
@@ -439,13 +442,13 @@ class Learner:
             # state args, so passing the live states would free them, and
             # a leaf-type-changing copy (e.g. jnp.copy on a weak-typed
             # python scalar) would trace as yet another variant.
+            def copy_leaf(leaf):
+                if isinstance(leaf, jax.Array):
+                    return jnp.array(leaf, copy=True)
+                return leaf
+
             def copy_state(tree):
-                return jax.tree.map(
-                    lambda x: (
-                        jnp.array(x, copy=True) if isinstance(x, jax.Array) else x
-                    ),
-                    tree,
-                )
+                return jax.tree.map(copy_leaf, tree)
 
             self._train_step_jit(
                 copy_state(run_state.player_state),

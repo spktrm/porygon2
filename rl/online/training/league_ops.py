@@ -46,7 +46,10 @@ def should_add_new_player(
     latest = league.get_latest_player(origin="main")
     current = league.get_live(MAIN_KEY)
 
-    latest_frames = latest.player_frame_count if latest is not None else 0
+    if latest is not None:
+        latest_frames = latest.player_frame_count
+    else:
+        latest_frames = 0
     frames_passed = int(current.player_frame_count - latest_frames)
 
     if frames_passed < config.add_player_min_frames:

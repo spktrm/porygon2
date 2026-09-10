@@ -127,7 +127,10 @@ def print_table(means, counts, key: str):
     print(f"\n{key} (mean over {int(counts[('all', key)].max())} valid steps)")
     print("block  " + "  ".join(f"{name[:12]:>12}" for name in names))
     for block in range(blocks):
-        label = "input" if block == 0 else str(block)
+        if block == 0:
+            label = "input"
+        else:
+            label = str(block)
         print(
             f"{label:>5}  "
             + "  ".join(f"{means[(name, key)][block]:12.3f}" for name in names)

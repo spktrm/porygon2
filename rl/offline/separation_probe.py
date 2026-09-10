@@ -763,7 +763,10 @@ def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float
                 value, n_held = _ridge_r(
                     entry["features"][subset].astype(np.float64), labels, train, alpha
                 )
-                held_std = labels[~train].std() if (~train).any() else float("nan")
+                if (~train).any():
+                    held_std = labels[~train].std()
+                else:
+                    held_std = float("nan")
                 print(
                     f"{name:<22} {subset_name:<9} {label_name:<8} "
                     f"{value:>7.3f} {held_std:>7.3f} {n_held:>7}"

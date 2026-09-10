@@ -35,7 +35,10 @@ def _chunk_required_shape(traj: Trajectory) -> tuple[int, int]:
     """
     done = np.asarray(traj.player_transitions.env_output.done)
     done_rows = done.reshape(done.shape[0], -1).any(axis=-1)
-    t_req = int(done_rows.argmax()) + 1 if done_rows.any() else done.shape[0]
+    if done_rows.any():
+        t_req = int(done_rows.argmax()) + 1
+    else:
+        t_req = done.shape[0]
     field = np.asarray(traj.player_history.field)
     valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
     packed_valid = int(
@@ -93,7 +96,9 @@ def _or_empty(x):
     stacks it to ()) when the actor did not attach them — keep that
     sentinel rather than an empty array so consumers can test with
     isinstance(x, tuple), as they do for reuse_count."""
-    return () if isinstance(x, tuple) else x
+    if isinstance(x, tuple):
+        return ()
+    return x
 
 
 def stack_batch(
@@ -130,11 +135,7 @@ def stack_batch(
         player_transitions=stacked_trajectory.player_transitions,
         player_packed_history=stacked_trajectory.player_packed_history,
         player_history=stacked_trajectory.player_history,
-        reuse_count=(
-            ()
-            if isinstance(stacked_trajectory.reuse_count, tuple)
-            else stacked_trajectory.reuse_count
-        ),
+        reuse_count=_or_empty(stacked_trajectory.reuse_count),
         game_outcome=_or_empty(stacked_trajectory.game_outcome),
         game_length=_or_empty(stacked_trajectory.game_length),
         game_step_offset=_or_empty(stacked_trajectory.game_step_offset),

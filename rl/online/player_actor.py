@@ -358,11 +358,12 @@ class PlayerActor:
         game_done = bool(np.asarray(player_traj[-1].env_output.done).item())
         # Completed-game side data for every chunk (Trajectory docstring):
         # the outcome is only knowable here, after the whole game ran.
-        game_outcome = (
-            float(np.asarray(player_traj[-1].env_output.win_reward) @ CAT_VF_SUPPORT)
-            if game_done
-            else float("nan")
-        )
+        if game_done:
+            game_outcome = float(
+                np.asarray(player_traj[-1].env_output.win_reward) @ CAT_VF_SUPPORT
+            )
+        else:
+            game_outcome = float("nan")
         final_window = self._snapshot_window(player_actor_input)
 
         def make_chunk(rows: list[PlayerTransition], window, start: int) -> Trajectory:

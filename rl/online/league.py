@@ -260,7 +260,10 @@ class League:
         if len(self.players) <= self.league_size:
             return
         main = self.live.get(MAIN_KEY)
-        main_step = main.step_count if main is not None else MAIN_KEY
+        if main is not None:
+            main_step = main.step_count
+        else:
+            main_step = MAIN_KEY
         while len(self.players) > self.cull_size:
             candidates = [s for s in self.players if s != main_step]
             if not candidates:
@@ -282,7 +285,10 @@ class League:
     def _retention_score(self, step: int) -> float:
         """Higher = keep hot. Challenge to main + UCB exploration bonus."""
         main = self.live.get(MAIN_KEY)
-        main_step = main.step_count if main is not None else MAIN_KEY
+        if main is not None:
+            main_step = main.step_count
+        else:
+            main_step = MAIN_KEY
         challenge = 1.0 - self._win_rate_by_steps(main_step, step)
         n = self._opponent_games(step)
         total = sum(self._opponent_games(s) for s in self._cache) or 1.0

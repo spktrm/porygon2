@@ -41,10 +41,12 @@ T = TypeVar("T")
 def promote_map(tree: T, dtype) -> T:
     # Masks stay bool: a bf16 mask makes `average`'s denominator a bf16
     # count, exact only up to 256 rows.
-    return jax.tree.map(
-        lambda x: x if jnp.issubdtype(x.dtype, jnp.bool_) else x.astype(dtype),
-        tree,
-    )
+    def promote_leaf(leaf):
+        if jnp.issubdtype(leaf.dtype, jnp.bool_):
+            return leaf
+        return leaf.astype(dtype)
+
+    return jax.tree.map(promote_leaf, tree)
 
 
 def renormalize(loss: jax.Array, mask: jax.Array) -> jax.Array:

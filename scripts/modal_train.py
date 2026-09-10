@@ -335,7 +335,11 @@ def train_rl(debug: bool = False, load_state_mode: str = "checkpoint"):
 
         _start_commit_loop()
         train_env = dict(os.environ, LOAD_STATE_MODE=load_state_mode)
-        cmd = [sys.executable, "-m", "rl.online.main"] + (["--debug"] if debug else [])
+        if debug:
+            debug_args = ["--debug"]
+        else:
+            debug_args = []
+        cmd = [sys.executable, "-m", "rl.online.main"] + debug_args
         subprocess.run(cmd, cwd=REPO_REMOTE, env=train_env, check=True)
     finally:
         service.terminate()

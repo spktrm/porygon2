@@ -26,7 +26,8 @@ def make_run_state(player_bytes=0, builder_bytes=0):
 
 
 def diag(stub, logs=None):
-    logs = {} if logs is None else logs
+    if logs is None:
+        logs = {}
     log_memory_diagnostics(stub.run_state, stub.league, logs)
     return logs
 

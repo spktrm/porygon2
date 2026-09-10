@@ -134,7 +134,10 @@ def parse_log(lines: list[str], moves: dict) -> GameStats | None:
                 if bucket is not None:
                     stats.decisions_by_hp[bucket][1] += 1
             stats.switch_kinds[kind] += 1
-            in_hp = hp_fraction(args[2]) if len(args) > 2 else float("nan")
+            if len(args) > 2:
+                in_hp = hp_fraction(args[2])
+            else:
+                in_hp = float("nan")
             if kind == "voluntary":
                 stats.switch_in_hp.append(in_hp)
             active_hp[side] = in_hp
@@ -177,7 +180,10 @@ def parse_log(lines: list[str], moves: dict) -> GameStats | None:
                     stats.attack_outcomes["miss"] += 1
                     last_attack = None
                 else:
-                    opp = "p2" if side == "p1" else "p1"
+                    if side == "p1":
+                        opp = "p2"
+                    else:
+                        opp = "p1"
                     last_attack = (side, opp, active_hp[opp], False)
         elif cmd in ("-supereffective", "-resisted", "-immune"):
             if last_attack is not None and side_of(args[0]) == last_attack[1]:
@@ -192,7 +198,10 @@ def parse_log(lines: list[str], moves: dict) -> GameStats | None:
                 last_attack = None
         elif cmd in ("-damage", "-heal", "-sethp"):
             side = side_of(args[0])
-            new_hp = hp_fraction(args[1]) if len(args) > 1 else float("nan")
+            if len(args) > 1:
+                new_hp = hp_fraction(args[1])
+            else:
+                new_hp = float("nan")
             residual = any(a.startswith("[from]") for a in args[2:])
             if (
                 last_attack is not None
@@ -276,6 +285,14 @@ def summarise(games: list[GameStats], sides_wanted) -> dict[str, float]:
     vol = kinds["voluntary"]
     decisions = n_moves + vol
     attacks = max(outcomes["total"], 1)
+    if out_hp:
+        vol_switch_out_hp = np.mean(out_hp)
+    else:
+        vol_switch_out_hp = float("nan")
+    if in_hp:
+        vol_switch_in_hp = np.mean(in_hp)
+    else:
+        vol_switch_in_hp = float("nan")
     row = {
         "games": len(games),
         "turns/game": np.mean([g.turns for g in games]),
@@ -284,8 +301,8 @@ def summarise(games: list[GameStats], sides_wanted) -> dict[str, float]:
         "switch_kinds vol/faint/pivot/eject/drag": (
             f"{vol}/{kinds['faint']}/{kinds['pivot']}/{kinds['eject']}/{kinds['drag']}"
         ),
-        "vol_switch_out_hp": np.mean(out_hp) if out_hp else float("nan"),
-        "vol_switch_in_hp": np.mean(in_hp) if in_hp else float("nan"),
+        "vol_switch_out_hp": vol_switch_out_hp,
+        "vol_switch_in_hp": vol_switch_in_hp,
     }
     for index, (lo, hi) in enumerate(HP_BUCKETS):
         counts = by_hp[index]
@@ -305,18 +322,30 @@ def summarise(games: list[GameStats], sides_wanted) -> dict[str, float]:
         row[f"move_share {key}"] = moves[key] / max(n_moves, 1)
     for key in ("supereffective", "resisted", "immune", "miss", "ko"):
         row[f"attack {key}"] = outcomes[key] / attacks
-    row["attack dmg (frac of target max)"] = np.mean(damage) if damage else float("nan")
-    row["attack dmg==0 share"] = (
-        float(np.mean(np.array(damage) == 0.0)) if damage else float("nan")
-    )
+    if damage:
+        attack_damage_mean = np.mean(damage)
+        attack_damage_zero_share = float(np.mean(np.array(damage) == 0.0))
+    else:
+        attack_damage_mean = float("nan")
+        attack_damage_zero_share = float("nan")
+    row["attack dmg (frac of target max)"] = attack_damage_mean
+    row["attack dmg==0 share"] = attack_damage_zero_share
     row["tera games"] = tera_games / max(n_sides, 1)
-    row["tera turn / game turns"] = np.mean(tera_rel) if tera_rel else float("nan")
-    row["mons left (winner)"] = (
-        np.mean(remaining_win) if remaining_win else float("nan")
-    )
-    row["mons left (loser)"] = (
-        np.mean(remaining_lose) if remaining_lose else float("nan")
-    )
+    if tera_rel:
+        tera_turn_fraction = np.mean(tera_rel)
+    else:
+        tera_turn_fraction = float("nan")
+    row["tera turn / game turns"] = tera_turn_fraction
+    if remaining_win:
+        mons_left_winner = np.mean(remaining_win)
+    else:
+        mons_left_winner = float("nan")
+    row["mons left (winner)"] = mons_left_winner
+    if remaining_lose:
+        mons_left_loser = np.mean(remaining_lose)
+    else:
+        mons_left_loser = float("nan")
+    row["mons left (loser)"] = mons_left_loser
     return row
 
 

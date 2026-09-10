@@ -208,4 +208,6 @@ def list_ckpt_dirs(root: str) -> list[tuple[int, str]]:
 
 def most_recent_ckpt_dir(root: str) -> str | None:
     dirs = list_ckpt_dirs(root)
-    return dirs[-1][1] if dirs else None
+    if dirs:
+        return dirs[-1][1]
+    return None

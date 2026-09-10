@@ -36,7 +36,10 @@ class BuilderTrajectoryStore:
         self._add_cv = threading.Condition(lock)
         self._sample_cv = threading.Condition(lock)
 
-        desc = f"builder_producer-{name}" if name else "builder_producer"
+        if name:
+            desc = f"builder_producer-{name}"
+        else:
+            desc = "builder_producer"
         self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
     @classmethod
@@ -175,7 +178,10 @@ class PlayerTrajectoryStore:
         self._decision_counts = np.zeros(max_size, dtype=np.int64)
         self._reset_decision_accounting()
 
-        desc = f"player_producer-{name}" if name else "player_producer"
+        if name:
+            desc = f"player_producer-{name}"
+        else:
+            desc = "player_producer"
         self._progress = tqdm(desc=desc, smoothing=0.1, position=next_tqdm_position())
 
         self.need_tracking = need_tracking

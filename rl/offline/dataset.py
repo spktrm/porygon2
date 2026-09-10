@@ -225,13 +225,21 @@ def _final_margin(
         cap = min(6 - my_faints, MAX_MARGIN)
         if alive_diff <= 0:
             return margin, "clamped", cap
-        return margin, ("played_out" if opp_faints == 6 else "conceded"), cap
+        if opp_faints == 6:
+            ending = "played_out"
+        else:
+            ending = "conceded"
+        return margin, ending, cap
     if win_reward[0] == 1:
         margin = min(max(alive_diff, -MAX_MARGIN), -1)
         cap = min(6 - opp_faints, MAX_MARGIN)
         if alive_diff >= 0:
             return margin, "clamped", cap
-        return margin, ("played_out" if my_faints == 6 else "conceded"), cap
+        if my_faints == 6:
+            ending = "played_out"
+        else:
+            ending = "conceded"
+        return margin, ending, cap
     return 0, "tie", 0
 
 
@@ -248,7 +256,10 @@ def _margin_label(
     perspective-independent), so pair-aware batching is undisturbed."""
     label = np.zeros(NUM_MARGIN_BINS, dtype=np.float32)
     if ending == "conceded" and censor_decay > 0.0 and abs(margin) < margin_cap:
-        sign = 1 if margin > 0 else -1
+        if margin > 0:
+            sign = 1
+        else:
+            sign = -1
         weight = 1.0
         for k in range(abs(margin), margin_cap + 1):
             label[sign * k + MAX_MARGIN] = weight
@@ -490,11 +501,11 @@ def _action_targets(
         run_dist = np.where(reveal_at[t], 0.0, run_dist + 1.0)
 
     base = revealed & ~fainted
-    action_target = np.where(
-        next_id >= 0,
-        next_id,
-        ACTION_NONE_CLASS if ending == "played_out" else -1,
-    )
+    if ending == "played_out":
+        no_next_target = ACTION_NONE_CLASS
+    else:
+        no_next_target = -1
+    action_target = np.where(next_id >= 0, next_id, no_next_target)
     action_target = np.where(base, action_target, -1).astype(np.int32)
     action_is_reveal = (next_is_reveal & (action_target >= 0)).astype(np.float32)
 
@@ -556,15 +567,18 @@ def trajectory_to_example(
     # trajectory toward an outcome the states never indicated.
     if config is not None and config.drop_clamped_forfeits and ending == "clamped":
         return None
-    censor_decay = config.concession_censor_decay if config is not None else 0.0
+    if config is not None:
+        censor_decay = config.concession_censor_decay
+    else:
+        censor_decay = 0.0
     margin_label = _margin_label(margin, ending, censor_decay, margin_cap)
     env = jax.tree.map(lambda *xs: np.stack(xs), *[s.env for s in steps])
-    survival_discount = (
-        config.survival_discount if config is not None else DEFAULT_SURVIVAL_DISCOUNT
-    )
-    unseen_discount = (
-        config.unseen_discount if config is not None else DEFAULT_UNSEEN_DISCOUNT
-    )
+    if config is not None:
+        survival_discount = config.survival_discount
+        unseen_discount = config.unseen_discount
+    else:
+        survival_discount = DEFAULT_SURVIVAL_DISCOUNT
+        unseen_discount = DEFAULT_UNSEEN_DISCOUNT
     view = _slot_view(env)
     survival_target, survival_mask = _survival_targets(view, ending, survival_discount)
     aux = _action_targets(view, ending, unseen_discount)

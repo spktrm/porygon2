@@ -353,7 +353,10 @@ def main(argv=None):
     )
     for block in (0, -1):
         kinds, overlap = subspace_overlap(collected, block, args.rank)
-        label = "input" if block == 0 else "final"
+        if block == 0:
+            label = "input"
+        else:
+            label = "final"
         print_overlap(kinds, overlap, f"{label}, rank {args.rank}")
 
 

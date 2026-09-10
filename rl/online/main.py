@@ -174,10 +174,14 @@ def run_training_actor_pair(
             # pushed before the abort is ordinary truncated-game data.
             # Start another rather than kill this pair's thread — a dead
             # Selfplay thread silently costs the run two actor slots.
+            if str(e):
+                reason = str(e).splitlines()[0]
+            else:
+                reason = e
             logger.warning(
                 "%s: battle aborted by the service, starting a new game — %s",
                 worker_id,
-                str(e).splitlines()[0] if str(e) else e,
+                reason,
             )
             for actor in (player, opponent):
                 actor.reset_game_id()
@@ -617,7 +621,10 @@ def main(args: argparse.Namespace):
     # resume didn't actually happen (params/scratch mode, or checkpoint
     # mode falling back to scratch because no checkpoint exists) — those
     # are new lineages and get a fresh session.
-    wandb_resume = load_wandb_run_info(learner_config) if mode == "checkpoint" else None
+    if mode == "checkpoint":
+        wandb_resume = load_wandb_run_info(learner_config)
+    else:
+        wandb_resume = None
     if wandb_resume is not None:
         wandb_group = wandb_resume["group"]
         logger.info("Resuming previous wandb session %s", wandb_group)
@@ -654,16 +661,20 @@ def main(args: argparse.Namespace):
     else:
         job_type = "main"
     run_id = resume_run_ids.get(job_name)
+    # "allow", not "must": resume the run when it still exists
+    # server-side, otherwise recreate it under the same id — a
+    # wandb-side deletion should never block a training restart.
+    if run_id:
+        wandb_resume_mode = "allow"
+    else:
+        wandb_resume_mode = None
     wandb_run = wandb.init(
         project="pokemon-rl",
         group=wandb_group,
         job_type=job_type,
         name=f"{wandb_group}-{job_name}",
         id=run_id,
-        # "allow", not "must": resume the run when it still exists
-        # server-side, otherwise recreate it under the same id — a
-        # wandb-side deletion should never block a training restart.
-        resume="allow" if run_id else None,
+        resume=wandb_resume_mode,
         tags=[job_type],
         config=model_config_payload,
     )
@@ -845,16 +856,20 @@ def main(args: argparse.Namespace):
             "Shutting down: finishing the wandb run (further Ctrl-C is "
             "ignored — this takes a few seconds)..."
         )
+        if crashed:
+            exit_code = 1
+        else:
+            exit_code = 0
         executor.shutdown(wait=False, cancel_futures=True)
         if inference_server is not None:
             inference_server.stop()
-        _finish_wandb_bounded(wandb_run, exit_code=1 if crashed else 0)
+        _finish_wandb_bounded(wandb_run, exit_code=exit_code)
 
     if crashed:
         logger.error("Training run crashed — see traceback above.")
     else:
         logger.info("Training run complete.")
-    _hard_exit(1 if crashed else 0)
+    _hard_exit(exit_code)
 
 
 def _finish_wandb_bounded(

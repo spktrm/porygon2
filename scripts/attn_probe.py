@@ -44,13 +44,18 @@ def _latest_ckpt(root="ckpts/gen9"):
 
 def collect(tree, path="", out=None):
     """Flatten a Flax intermediates tree to {path: array}."""
-    out = {} if out is None else out
+    if out is None:
+        out = {}
     if isinstance(tree, dict):
         for k, v in tree.items():
             collect(v, f"{path}/{k}", out)
     elif isinstance(tree, (list, tuple)):
         for i, v in enumerate(tree):
-            collect(v, path if len(tree) == 1 else f"{path}[{i}]", out)
+            if len(tree) == 1:
+                child_path = path
+            else:
+                child_path = f"{path}[{i}]"
+            collect(v, child_path, out)
     elif hasattr(tree, "shape"):
         out[path] = np.asarray(tree)
     return out

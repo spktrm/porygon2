@@ -68,7 +68,11 @@ print("REPORT " + json.dumps(report))
 
 def _run(collect: bool) -> dict:
     env = dict(os.environ)
-    env["COLLECT_INTERMEDIATES"] = "1" if collect else "0"
+    if collect:
+        collect_flag = "1"
+    else:
+        collect_flag = "0"
+    env["COLLECT_INTERMEDIATES"] = collect_flag
     proc = subprocess.run(
         [sys.executable, "-c", _SCRIPT],
         env=env,

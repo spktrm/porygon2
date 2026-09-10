@@ -336,11 +336,10 @@ class Porygon2PlayerModel(nn.Module):
         # metric anchor are the same distribution.
         metrics = compute_policy_metrics(logits=pi_logits, valid_mask=flat_valid)
         log_mu = prune_log_policy(metrics.log_policy, flat_valid, prune_threshold)
-        action_index = (
-            given_index
-            if given_index is not None
-            else sample_categorical(log_mu, self.make_rng("sampling"))
-        )
+        if given_index is not None:
+            action_index = given_index
+        else:
+            action_index = sample_categorical(log_mu, self.make_rng("sampling"))
         log_prob = jnp.take(log_mu, action_index, axis=-1)
         return flat_valid, metrics, action_index, log_prob
 
@@ -354,10 +353,14 @@ class Porygon2PlayerModel(nn.Module):
         search_bonus: jax.Array | None = None,
         prune_threshold: float = 0.0,
     ):
+        if train:
+            given_index = head.action_index
+        else:
+            given_index = None
         flat_valid, metrics, action_index, log_prob = self._score_and_sample(
             sequence_rows,
             valid_mask,
-            head.action_index if train else None,
+            given_index,
             temp,
             search_bonus,
             prune_threshold,
@@ -417,14 +420,20 @@ class Porygon2PlayerModel(nn.Module):
         action indices, (2, NUM_ACTION_CELLS) full-support log_policy in the learner)
         is the remaining doubles workstream; the model side is complete.
         """
-        stage1_given = head.action_index[0] if train else None
+        if train:
+            stage1_given = head.action_index[0]
+        else:
+            stage1_given = None
         flat_valid_1, metrics_1, index_1, log_prob_1 = self._score_and_sample(
             sequence_rows, valid_mask[0], stage1_given, temp, None, prune_threshold
         )
 
         cond_rows = self.slot_conditioning(sequence_rows, index_1)
         mask_2 = self._apply_choice_collision(valid_mask[1], index_1)
-        stage2_given = head.action_index[1] if train else None
+        if train:
+            stage2_given = head.action_index[1]
+        else:
+            stage2_given = None
         flat_valid_2, metrics_2, index_2, log_prob_2 = self._score_and_sample(
             cond_rows, mask_2, stage2_given, temp, None, prune_threshold
         )
@@ -458,14 +467,14 @@ class Porygon2PlayerModel(nn.Module):
             denom > 0, entropy / jnp.maximum(denom, 1e-9), 0.0
         )
 
+        if self.cfg.train:
+            log_policy = jnp.stack([metrics_1.log_policy, metrics_2.log_policy])
+        else:
+            log_policy = ()
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob_1 + log_prob_2,
-            log_policy=(
-                jnp.stack([metrics_1.log_policy, metrics_2.log_policy])
-                if self.cfg.train
-                else ()
-            ),
+            log_policy=log_policy,
             entropy=entropy,
             normalized_entropy=normalized_entropy,
             magnet_kl=metrics_1.magnet_kl + metrics_2.magnet_kl,

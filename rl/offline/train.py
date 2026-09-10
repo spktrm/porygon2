@@ -356,7 +356,10 @@ def save_artifact(
     step: int,
     best: bool = False,
 ) -> str:
-    ckpt_name = "ckpt_best" if best else f"ckpt_{step:08}"
+    if best:
+        ckpt_name = "ckpt_best"
+    else:
+        ckpt_name = f"ckpt_{step:08}"
     format_dir = config.format_id
     if config.ensemble_index >= 0:
         format_dir = f"{config.format_id}-ens{config.ensemble_index}"
