@@ -21,6 +21,7 @@ carries no search leaves at all.
 
 import dataclasses
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -28,6 +29,7 @@ import pytest
 
 from rl.environment.data import NUM_ACTION_CELLS, NUM_SWITCH_CELLS
 from rl.environment.interfaces import (
+    PlayerActorInput,
     PlayerActorOutput,
     PlayerAgentOutput,
     PlayerEnvOutput,
@@ -60,7 +62,7 @@ CODE_GROUPS = 2
 CODE_CLASSES = 16
 
 
-def _budget(depth=1, num_samples_inner=2):
+def _budget(depth: int = 1, num_samples_inner: int = 2) -> SearchBudget:
     return SearchBudget(
         depth=depth,
         num_samples=NUM_SAMPLES,
@@ -71,13 +73,13 @@ def _budget(depth=1, num_samples_inner=2):
 
 
 def _stub_fns(
-    code_value,
-    candidate_codes=None,
-    candidate_rho=None,
-    occupied=None,
-    continue_prob=1.0,
-    terminal=0.0,
-):
+    code_value: np.ndarray,
+    candidate_codes: np.ndarray | None = None,
+    candidate_rho: np.ndarray | None = None,
+    occupied: np.ndarray | None = None,
+    continue_prob: float = 1.0,
+    terminal: float = 0.0,
+) -> SearchFns:
     """A model whose imagined state's value is `code_value[u]` whatever
     the chance code: `encoder_fn` maps cell c to code c mod 64 exactly,
     `imagine_fn` writes the code's value into the CLS row, `value_fn`
@@ -93,19 +95,21 @@ def _stub_fns(
         occupied = np.ones(NUM_CANDIDATES, bool)
     occupied = jnp.asarray(occupied)
 
-    def encoder_fn(rows, cell):
+    def encoder_fn(rows: jax.Array, cell: jax.Array) -> jax.Array:
         return jax.nn.one_hot(cell % NUM_CODES, NUM_CODES, dtype=jnp.float32)
 
-    def prior_fn(rows, action_one_hot):
+    def prior_fn(rows: jax.Array, action_one_hot: jax.Array) -> jax.Array:
         return jnp.zeros((CODE_GROUPS, CODE_CLASSES), jnp.float32)
 
-    def imagine_fn(rows, action_one_hot, code_one_hot):
+    def imagine_fn(
+        rows: jax.Array, action_one_hot: jax.Array, code_one_hot: jax.Array
+    ) -> jax.Array:
         return rows.at[CLS_ROW, 0].set(action_one_hot @ code_value)
 
-    def value_fn(cls_row):
+    def value_fn(cls_row: jax.Array) -> jax.Array:
         return cls_row[0]
 
-    def generate_fn(rows, rng):
+    def generate_fn(rows: jax.Array, rng: jax.Array) -> Candidates:
         return Candidates(
             codes=candidate_codes,
             occupied=occupied,
@@ -115,10 +119,10 @@ def _stub_fns(
             retained_mass=jnp.sum(candidate_rho, where=occupied),
         )
 
-    def continue_fn(rows):
+    def continue_fn(rows: jax.Array) -> jax.Array:
         return jnp.float32(continue_prob)
 
-    def terminal_fn(rows):
+    def terminal_fn(rows: jax.Array) -> jax.Array:
         return jnp.float32(terminal)
 
     return SearchFns(
@@ -132,17 +136,17 @@ def _stub_fns(
     )
 
 
-def _legal(cells):
+def _legal(cells: np.ndarray | list[int]) -> jax.Array:
     legal = np.zeros(NUM_ACTION_CELLS, bool)
     legal[cells] = True
     return jnp.asarray(legal)
 
 
-def _rows():
+def _rows() -> jax.Array:
     return jnp.zeros((NUM_POLICY_READABLE_ROWS, MODEL_SIZE))
 
 
-def test_root_q_ranks_legal_cells_by_the_imagined_value():
+def test_root_q_ranks_legal_cells_by_the_imagined_value() -> None:
     legal_cells = np.array([3, 40, 120])
     code_value = np.zeros(NUM_CODES, np.float32)
     code_value[legal_cells % NUM_CODES] = [0.2, -0.5, 0.9]
@@ -167,7 +171,7 @@ def test_root_q_ranks_legal_cells_by_the_imagined_value():
     assert float(root.deep_gain) == 0.0 and float(root.candidate_occupied) == 0.0
 
 
-def test_padding_never_double_counts_cell_zero():
+def test_padding_never_double_counts_cell_zero() -> None:
     # Cell 0 legal and the `nonzero` fill value is 0: with 13 padded
     # entries all pointing at cell 0, a set-scatter or an unmasked sum
     # would corrupt its Q. It must equal its own value exactly.
@@ -181,7 +185,7 @@ def test_padding_never_double_counts_cell_zero():
     np.testing.assert_allclose(float(root.cell_values[0]), 0.7, atol=1e-6)
 
 
-def test_overflow_returns_the_base_policy_and_is_counted():
+def test_overflow_returns_the_base_policy_and_is_counted() -> None:
     code_value = np.arange(NUM_CODES, dtype=np.float32) / NUM_CODES
     root = jax.jit(
         lambda rows, legal: search_root(
@@ -197,7 +201,7 @@ def test_overflow_returns_the_base_policy_and_is_counted():
     )
 
 
-def test_chance_is_averaged_over_the_prior_draws_never_maximised():
+def test_chance_is_averaged_over_the_prior_draws_never_maximised() -> None:
     """`chance_backup` is the MEAN of the leaf over the drawn codes: with
     a leaf that reads the first chance group's class, the value equals
     the mean over the same draws `sample_chance` produces from the same
@@ -207,10 +211,12 @@ def test_chance_is_averaged_over_the_prior_draws_never_maximised():
     prior_logits = jnp.zeros((CODE_GROUPS, CODE_CLASSES), jnp.float32)
     class_value = jnp.linspace(-1.0, 1.0, CODE_CLASSES)
 
-    def prior_fn(rows, action_one_hot):
+    def prior_fn(rows: jax.Array, action_one_hot: jax.Array) -> jax.Array:
         return prior_logits
 
-    def imagine_fn(rows, action_one_hot, code_one_hot):
+    def imagine_fn(
+        rows: jax.Array, action_one_hot: jax.Array, code_one_hot: jax.Array
+    ) -> jax.Array:
         return rows.at[CLS_ROW, 0].set(code_one_hot[0] @ class_value)
 
     fns = _stub_fns(np.zeros(NUM_CODES))._replace(
@@ -232,7 +238,7 @@ def test_chance_is_averaged_over_the_prior_draws_never_maximised():
     assert float(value) < drawn_values.max()
 
 
-def test_subset_improvement_is_the_kl_regularised_softmax_over_the_set():
+def test_subset_improvement_is_the_kl_regularised_softmax_over_the_set() -> None:
     rho = jnp.asarray([0.5, 0.3, 0.1, 0.1])
     q = jnp.asarray([0.0, 0.2, -0.3, 0.9])
     occupied = jnp.asarray([True, True, True, False])
@@ -255,7 +261,9 @@ def test_subset_improvement_is_the_kl_regularised_softmax_over_the_set():
     )
 
 
-def _depth_two_q(code_value, **stub_kwargs):
+def _depth_two_q(
+    code_value: np.ndarray, **stub_kwargs: np.ndarray | float
+) -> SearchRoot:
     fns = _stub_fns(code_value, **stub_kwargs)
     root = jax.jit(
         lambda rows, legal: search_root(
@@ -265,7 +273,7 @@ def _depth_two_q(code_value, **stub_kwargs):
     return root
 
 
-def test_depth_two_backs_up_the_improved_candidates_through_continuation():
+def test_depth_two_backs_up_the_improved_candidates_through_continuation() -> None:
     """Every depth-1 node has the same stub readers, so the root cell's
     value IS B_1 = (1 - c) T + c E_mu[Q] with Q the candidates' code
     values (chance-free here); `deep_gain` reads B_1 - V(h_1)."""
@@ -333,7 +341,7 @@ def test_depth_two_backs_up_the_improved_candidates_through_continuation():
     assert float(root.candidate_occupied) == 2.0
 
 
-def test_diagnostics_read_zero_at_zero_bonus_and_the_kl_of_a_tilt():
+def test_diagnostics_read_zero_at_zero_bonus_and_the_kl_of_a_tilt() -> None:
     legal = _legal([2, 5, 8, 11])
     base_logits = jnp.asarray(np.random.default_rng(0).normal(size=NUM_ACTION_CELLS))
     zero_root = _root_with(jnp.zeros(NUM_ACTION_CELLS), legal)
@@ -351,7 +359,7 @@ def test_diagnostics_read_zero_at_zero_bonus_and_the_kl_of_a_tilt():
     )
 
 
-def _root_with(q, legal):
+def _root_with(q: jax.Array, legal: jax.Array) -> SearchRoot:
     zero = jnp.zeros((), jnp.float32)
     return SearchRoot(
         cell_values=q,
@@ -365,7 +373,7 @@ def _root_with(q, legal):
     )
 
 
-def test_eval_game_logs_read_real_acted_rows_and_never_search_leaves():
+def test_eval_game_logs_read_real_acted_rows_and_never_search_leaves() -> None:
     from rl.online.main import eval_game_logs
 
     num_rows = 6
@@ -377,7 +385,7 @@ def test_eval_game_logs_read_real_acted_rows_and_never_search_leaves():
     action_index = np.array([0, NUM_SWITCH_CELLS, NUM_SWITCH_CELLS, 0, 0, 0])
     root_kl = np.array([0.1, 0.2, 0.3, 9.0, 9.0, 9.0], np.float32)
 
-    def trajectory(search):
+    def trajectory(search: SearchOutput) -> Trajectory:
         return Trajectory(
             player_transitions=PlayerTransition(
                 env_output=PlayerEnvOutput(done=done, action_mask=action_mask),
@@ -413,8 +421,10 @@ def test_eval_game_logs_read_real_acted_rows_and_never_search_leaves():
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_search_moves_the_real_policy_and_the_plain_arm_carries_no_leaves(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model

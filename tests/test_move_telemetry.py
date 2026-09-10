@@ -10,7 +10,7 @@ from rl.online.training.action_telemetry import legal_support_telemetry
 SWITCH_CELLS = jnp.arange(NUM_ACTION_CELLS) < NUM_SWITCH_CELLS
 
 
-def _rows():
+def _rows() -> tuple[jax.Array, jax.Array, jax.Array]:
     # Row 0: two switches and two moves, one move at 1e-4. Row 1: forced
     # switch (one legal cell). Row 2: masked out of the policy rows, with
     # an absurd distribution that must not leak into any readout.
@@ -29,7 +29,7 @@ def _rows():
     return log_policy, legal, policy_mask
 
 
-def test_readouts_match_hand_values():
+def test_readouts_match_hand_values() -> None:
     log_policy, legal, policy_mask = _rows()
     logs = legal_support_telemetry(log_policy, legal, SWITCH_CELLS, policy_mask)
     logs = {key: float(value) for key, value in logs.items()}
@@ -53,7 +53,7 @@ def test_readouts_match_hand_values():
     np.testing.assert_allclose(logs["player_support_move_frac_below_p001"], 0.5)
 
 
-def test_permutation_invariant_over_cells():
+def test_permutation_invariant_over_cells() -> None:
     log_policy, legal, policy_mask = _rows()
     permutation = jax.random.permutation(jax.random.key(3), NUM_ACTION_CELLS)
     reference = legal_support_telemetry(log_policy, legal, SWITCH_CELLS, policy_mask)
@@ -67,7 +67,7 @@ def test_permutation_invariant_over_cells():
         np.testing.assert_allclose(float(permuted[key]), float(value), rtol=1e-6)
 
 
-def test_lifting_the_abandoned_cell_clears_the_lines():
+def test_lifting_the_abandoned_cell_clears_the_lines() -> None:
     # Positive control: the same rows with the 1e-4 cell raised to .011 read
     # nothing below any line.
     log_policy, legal, policy_mask = _rows()

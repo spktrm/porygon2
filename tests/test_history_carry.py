@@ -7,15 +7,23 @@ and get the same function with no select in the trace). The positive
 control is the same garbage under `valid=True`, which must move the policy.
 """
 
+from collections.abc import Callable
+
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from rl.environment.interfaces import HistoryCarry, PlayerActorOutput
+from rl.environment.interfaces import (
+    HistoryCarry,
+    PlayerActorInput,
+    PlayerActorOutput,
+)
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.model.heads import HeadParams
+from rl.model.history_encoder import PerSlotHistoryOutput
 from rl.model.utils import open_zero_init_paths
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
@@ -34,7 +42,11 @@ def _garbage_carry(width: int, valid: bool) -> HistoryCarry:
 
 
 @pytest.fixture(scope="module")
-def carry_params(real_model_and_trajectory):
+def carry_params(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> dict:
     """The flat readout is zero-init (every logit exactly 0 at step 0), so
     on fresh params log_policy is uniform whatever the history says and a
     "the carry moves the policy" control passes or fails vacuously. Open
@@ -42,15 +54,19 @@ def carry_params(real_model_and_trajectory):
     return open_zero_init_paths(real_model_and_trajectory[1], ["action_head"])
 
 
-def _width(params) -> int:
+def _width(params: dict) -> int:
     return params["params"]["encoder"]["history_encoder"]["initial_slot_state"].shape[
         -1
     ]
 
 
 def test_invalid_carry_is_the_from_scratch_forward_bit_for_bit(
-    real_model_and_trajectory, real_model_apply, carry_params
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+    carry_params: dict,
+) -> None:
     network, _, actor_input, actor_output = real_model_and_trajectory
     params = carry_params
     base = real_model_apply(params, actor_input, actor_output, HeadParams())
@@ -88,8 +104,11 @@ def test_invalid_carry_is_the_from_scratch_forward_bit_for_bit(
 
 
 def test_zero_new_steps_returns_the_carry_itself(
-    real_model_and_trajectory, carry_params
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    carry_params: dict,
+) -> None:
     """A window with no valid step: `state_at_requests` falls back to what
     the window started from, i.e. the carry when it is valid and the learned
     h0 when it is not."""
@@ -101,7 +120,9 @@ def test_zero_new_steps_returns_the_carry_itself(
     empty_history = actor_input.history.replace(field=jnp.asarray(field))
 
     @jax.jit
-    def encode(carry):
+    def encode(
+        carry: HistoryCarry,
+    ) -> tuple[jax.Array, jax.Array, jax.Array, PerSlotHistoryOutput]:
         return network.apply(
             params,
             actor_input.env,
@@ -137,7 +158,7 @@ def test_zero_new_steps_returns_the_carry_itself(
     assert not np.asarray(nodes).any()
 
 
-def _window_at(full_window, request_count: int):
+def _window_at(full_window: PlayerActorInput, request_count: int) -> PlayerActorInput:
     """What the service sent at request ``request_count``: the full
     window's steps stamped <= that count (edges are stamped with the
     request count they were ingested under, monotone), the packed rows
@@ -154,7 +175,7 @@ def _window_at(full_window, request_count: int):
         row_end = None
     field[later] = 0
 
-    def cut_rows(cache):
+    def cut_rows(cache: np.ndarray) -> np.ndarray:
         cache = np.asarray(cache).copy()
         if row_end is not None:
             cache[row_end:] = 0
@@ -169,11 +190,11 @@ def _window_at(full_window, request_count: int):
     )
 
 
-def _squeeze_request(output):
+def _squeeze_request(output: PlayerActorOutput) -> PlayerActorOutput:
     return jax.tree.map(lambda x: np.asarray(x)[0], output)
 
 
-def _max_diff(left, right) -> float:
+def _max_diff(left: PlayerActorOutput, right: PlayerActorOutput) -> float:
     """Largest gap on either compared readout: log_policy or value log-probs."""
     policy = np.abs(
         np.asarray(left.action_head.log_policy, np.float32)
@@ -187,8 +208,12 @@ def _max_diff(left, right) -> float:
 
 
 def test_suffix_carry_replays_the_game_within_bf16(
-    real_model_and_trajectory, real_model_apply, carry_params
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+    carry_params: dict,
+) -> None:
     """Test (a): every request of the ex.bin game served from the previous
     request's carry over its suffix alone matches the full-window forward
     on log_policy and value log-probs within the bf16 GEMM leading-dim
@@ -212,7 +237,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
     width = _width(params)
     num_requests = int(np.asarray(full_window.env.done).shape[0])
 
-    def forward(actor_input, request_count):
+    def forward(actor_input: PlayerActorInput, request_count: int) -> PlayerActorOutput:
         # The session model is train=True: the readout is teacher-forced
         # on the stored action, so hand it the trajectory's own row.
         taken = jax.tree.map(
@@ -222,7 +247,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
             real_model_apply(params, actor_input, taken, HeadParams())
         )
 
-    def policy_diff(left, right) -> float:
+    def policy_diff(left: PlayerActorOutput, right: PlayerActorOutput) -> float:
         return float(
             np.abs(
                 np.asarray(left.action_head.log_policy, np.float32)
@@ -230,7 +255,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
             ).max()
         )
 
-    def value_diff(left, right) -> float:
+    def value_diff(left: PlayerActorOutput, right: PlayerActorOutput) -> float:
         return float(
             np.abs(
                 np.asarray(left.value_head.log_probs, np.float32)
@@ -318,8 +343,11 @@ def test_suffix_carry_replays_the_game_within_bf16(
 
 
 def test_server_mixed_group_matches_single_forwards(
-    real_model_and_trajectory, carry_params
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    carry_params: dict,
+) -> None:
     """Test (f): one carrying and one non-carrying request in the same
     inference-server group each equal their own single forward within
     bf16 -- the non-carrying one filled with an invalid carry, the
@@ -342,7 +370,13 @@ def test_server_mixed_group_matches_single_forwards(
     # given index only picks which log_prob is reported.
     taken = jax.tree.map(lambda x: np.asarray(x)[21:22], full_output)
 
-    def teacher_forced_apply(params, actor_input, _placeholder, head_params, rngs):
+    def teacher_forced_apply(
+        params: dict,
+        actor_input: PlayerActorInput,
+        _placeholder: PlayerActorOutput,
+        head_params: HeadParams,
+        rngs: dict[str, jax.Array],
+    ) -> PlayerActorOutput:
         output = network.apply(
             params, actor_input, taken, head_params=head_params, rngs=rngs
         )
@@ -364,7 +398,7 @@ def test_server_mixed_group_matches_single_forwards(
         builder_params=None,
     )
 
-    def request(rng_seed, actor_input):
+    def request(rng_seed: int, actor_input: PlayerActorInput) -> _InferenceRequest:
         # A server request's env has no T axis (_run_group adds it);
         # _window_at keeps the [T=1] slice the jitted apply expects.
         return _InferenceRequest(
@@ -376,7 +410,7 @@ def test_server_mixed_group_matches_single_forwards(
             done=threading.Event(),
         )
 
-    def run(requests):
+    def run(requests: list[_InferenceRequest]) -> list[PlayerActorOutput]:
         server._run_group(requests)
         return [r.output.actor_output for r in requests]
 

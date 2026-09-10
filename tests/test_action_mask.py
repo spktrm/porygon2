@@ -30,20 +30,20 @@ from rl.environment.utils import (
 )
 
 
-def make_mask(kind, **kwargs):
+def make_mask(kind: int, **kwargs: int) -> ActionMask:
     fields = dict(move_targets=[0] * len(MOVE_INDICES), **kwargs)
     return ActionMask(kind=kind, **fields)
 
 
-def cells(mask_vector):
+def cells(mask_vector: np.ndarray) -> set[int]:
     return {int(cell) for cell in np.flatnonzero(mask_vector)}
 
 
-def move_cell(move_slot, target_bit):
+def move_cell(move_slot: int, target_bit: int) -> int:
     return MOVE_CELL_OFFSET + move_slot * NUM_TARGET_SLOTS + target_bit
 
 
-def test_move_slot_lights_only_its_own_cells():
+def test_move_slot_lights_only_its_own_cells() -> None:
     mask = make_mask(ActionRequestKind.ACTION_REQUEST_KIND__MOVE)
     mask.move_targets[3] = 1 << 2
     assert cells(_cells_from_structured_mask(mask)) == {move_cell(3, 2)}
@@ -55,7 +55,7 @@ def test_move_slot_lights_only_its_own_cells():
     assert cells(_cells_from_structured_mask(other)) == {move_cell(7, 2)}
 
 
-def test_clearing_one_bit_clears_exactly_one_cell():
+def test_clearing_one_bit_clears_exactly_one_cell() -> None:
     mask = make_mask(ActionRequestKind.ACTION_REQUEST_KIND__MOVE)
     mask.move_targets[0] = (1 << 2) | (1 << 0)
     both = cells(_cells_from_structured_mask(mask))
@@ -73,7 +73,7 @@ def test_clearing_one_bit_clears_exactly_one_cell():
         ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW,
     ],
 )
-def test_switch_bits_are_kind_invariant(kind):
+def test_switch_bits_are_kind_invariant(kind: int) -> None:
     """One question -- "may this mon come in" -- one cell per reserve. The
     kind (and the ally half) matter only to the service's DECODER, which
     picks between a lead and a `switch` choice string; the cells are
@@ -86,7 +86,7 @@ def test_switch_bits_are_kind_invariant(kind):
     assert cells(_cells_from_structured_mask(other_half)) == {0, 2}
 
 
-def test_standalone_actions_light_the_other_block():
+def test_standalone_actions_light_the_other_block() -> None:
     mask = make_mask(ActionRequestKind.ACTION_REQUEST_KIND__FORCE_SWITCH)
     mask.other_srcs = 1 << 5
     assert cells(_cells_from_structured_mask(mask)) == {OTHER_CELL_OFFSET + 5}
@@ -99,7 +99,7 @@ def test_standalone_actions_light_the_other_block():
         ActionRequestKind.ACTION_REQUEST_KIND__WAIT,
     ],
 )
-def test_a_request_with_no_choice_is_all_legal(kind):
+def test_a_request_with_no_choice_is_all_legal(kind: int) -> None:
     """Nothing is being asked. Every cell stays legal so masked averages
     downstream never meet an empty row, and the service answers "default" for
     whichever cell comes back."""
@@ -108,7 +108,7 @@ def test_a_request_with_no_choice_is_all_legal(kind):
     assert mask_vector.all()
 
 
-def test_legacy_grid_folds_onto_block_cells():
+def test_legacy_grid_folds_onto_block_cells() -> None:
     """The replay-shard shim: every reachable class of grid cell must land on
     its block cell -- battle switch (ALLY_i_SWITCH src, RESERVE_j tgt) and
     team-preview lead (RESERVE_j src) both onto switch cell j, a move onto
@@ -129,7 +129,7 @@ def test_legacy_grid_folds_onto_block_cells():
     assert _cells_from_packed_grid(np.ones_like(grid)).all()
 
 
-def test_bundled_states_decode_to_real_decisions():
+def test_bundled_states_decode_to_real_decisions() -> None:
     """End to end on ex.bin: the fixture must carry the structured mask, and
     every state must offer at least one choice over the 295 cells."""
     from rl.environment.data import EX_BATCH
@@ -144,7 +144,7 @@ def test_bundled_states_decode_to_real_decisions():
         assert mask_vector.sum() >= 1
 
 
-def test_switch_block_size_matches_reserves():
+def test_switch_block_size_matches_reserves() -> None:
     assert NUM_SWITCH_CELLS == len(RESERVE_ENTITY_INDICES)
     assert NUM_ACTION_CELLS == (
         NUM_SWITCH_CELLS + len(MOVE_INDICES) * NUM_TARGET_SLOTS + NUM_TARGET_SLOTS

@@ -2,12 +2,15 @@
 trailing history window clip, and the bootstrap-row mask in
 compute_player_targets."""
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from rl.environment.interfaces import (
+    PlayerActorInput,
+    PlayerActorOutput,
     PlayerEnvOutput,
     PlayerHistoryOutput,
     PlayerPackedHistoryOutput,
@@ -23,7 +26,9 @@ from rl.online.training.targets import compute_player_targets
 
 @pytest.mark.parametrize("chunk_length", [3, 4, 64])
 @pytest.mark.parametrize("game_done", [True, False])
-def test_chunk_spans_cover_every_step_exactly_once(chunk_length, game_done):
+def test_chunk_spans_cover_every_step_exactly_once(
+    chunk_length: int, game_done: bool
+) -> None:
     stride = chunk_length - 1
     for num_steps in range(1, 4 * chunk_length + 3):
         spans = chunk_spans(num_steps, chunk_length, game_done)
@@ -56,7 +61,7 @@ def test_chunk_spans_cover_every_step_exactly_once(chunk_length, game_done):
             assert num_steps - 1 - covered < stride + 1
 
 
-def test_chunk_spans_short_game_is_single_span():
+def test_chunk_spans_short_game_is_single_span() -> None:
     assert chunk_spans(1, 64, True) == [(0, 0)]
     assert chunk_spans(40, 64, True) == [(0, 39)]
     # Exactly one full chunk.
@@ -68,7 +73,9 @@ def test_chunk_spans_short_game_is_single_span():
     assert chunk_spans(127, 64, False) == [(0, 63), (63, 126)]
 
 
-def _windows_fixture(valid_steps: int, rows_per_step: int, capacity: int = 512):
+def _windows_fixture(
+    valid_steps: int, rows_per_step: int, capacity: int = 512
+) -> tuple[PlayerHistoryOutput, PlayerPackedHistoryOutput]:
     """Consistent field+packed pair: step s owns packed rows
     [s*rows_per_step, (s+1)*rows_per_step), named by its
     RELEVANT_ENTITY_IDX columns — the contiguous-ascending layout the
@@ -105,7 +112,7 @@ def _windows_fixture(valid_steps: int, rows_per_step: int, capacity: int = 512):
     return PlayerHistoryOutput(field=field), packed
 
 
-def test_joint_tail_clip_keeps_recent_rows_and_rebases_indices():
+def test_joint_tail_clip_keeps_recent_rows_and_rebases_indices() -> None:
     from rl.environment.utils import clip_history_windows_tail
 
     history, packed = _windows_fixture(valid_steps=300, rows_per_step=2)
@@ -130,7 +137,7 @@ def test_joint_tail_clip_keeps_recent_rows_and_rebases_indices():
     )
 
 
-def test_joint_tail_clip_short_history_is_identity_with_padding():
+def test_joint_tail_clip_short_history_is_identity_with_padding() -> None:
     from rl.environment.utils import clip_history_windows_tail
 
     history, packed = _windows_fixture(valid_steps=100, rows_per_step=2)
@@ -150,7 +157,7 @@ def test_joint_tail_clip_short_history_is_identity_with_padding():
     assert out_packed.edge_cache[200:].sum() == 0
 
 
-def test_joint_tail_clip_shrinks_field_window_to_fit_packed_budget():
+def test_joint_tail_clip_shrinks_field_window_to_fit_packed_budget() -> None:
     """Dense games (3 packed rows per step) cannot fit history_length
     steps into the 2x packed budget — the field window must shrink, as in
     the service's getHistory loop, never misalign."""
@@ -175,7 +182,7 @@ def test_joint_tail_clip_shrinks_field_window_to_fit_packed_budget():
 # with the other model-forward suites so the model initialises once.
 
 
-def _history_valid_counts(actor_input):
+def _history_valid_counts(actor_input: PlayerActorInput) -> tuple[int, int]:
     """(valid field steps, occupied packed rows) for the bundled fixture."""
     from rl.environment.protos.enums_pb2 import SpeciesEnum
     from rl.environment.protos.features_pb2 import EntityRevealedNodeFeature
@@ -197,7 +204,11 @@ def _history_valid_counts(actor_input):
 
 
 @pytest.mark.slow
-def test_untruncated_tail_window_preserves_every_token(real_model_and_trajectory):
+def test_untruncated_tail_window_preserves_every_token(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """A window generous enough to drop nothing must be CONTENT-IDENTICAL:
     the kept rows are an exact prefix and the rest is zero padding.
 
@@ -239,8 +250,10 @@ def test_untruncated_tail_window_preserves_every_token(real_model_and_trajectory
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_untruncated_tail_window_forward_matches_within_bf16(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """The same window, through the model, agrees only to bf16 precision.
 
     Exact equality is UNATTAINABLE here and the test used to demand it
@@ -292,7 +305,11 @@ def test_untruncated_tail_window_forward_matches_within_bf16(
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_truncated_tail_window_forward_is_finite(real_model_and_trajectory):
+def test_truncated_tail_window_forward_is_finite(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """A window that genuinely drops the oldest tokens (the burn-in
     approximation for deep-in-game chunks) must still produce finite,
     normalised outputs — requests older than the window read the h0
@@ -315,7 +332,7 @@ def test_truncated_tail_window_forward_is_finite(real_model_and_trajectory):
     assert np.isfinite(np.asarray(out.action_head.log_prob, dtype=np.float32)).all()
 
 
-def _targets_batch(dones: np.ndarray):
+def _targets_batch(dones: np.ndarray) -> Trajectory:
     """Minimal batch for compute_player_targets: T x B dones, everything
     else neutral (uniform four-cell masks, zero reward off-terminal)."""
     t_len, batch_size = dones.shape
@@ -330,7 +347,7 @@ def _targets_batch(dones: np.ndarray):
     return Trajectory(player_transitions=PlayerTransition(env_output=env))
 
 
-def test_final_row_is_bootstrap_only_unless_terminal():
+def test_final_row_is_bootstrap_only_unless_terminal() -> None:
     t_len, batch_size = 5, 2
     dones = np.zeros((t_len, batch_size), dtype=bool)
     # Column 0: game ends at row 2 (rows 3-4 are done-copy padding).
@@ -362,7 +379,7 @@ def test_final_row_is_bootstrap_only_unless_terminal():
     np.testing.assert_array_equal(policy_mask[:, 1], [1, 1, 1, 1, 0])
 
 
-def test_shape_lattice_trim_is_lossless():
+def test_shape_lattice_trim_is_lossless() -> None:
     """The static shape lattice (2026-08-20): _chunk_required_shape reads
     each chunk's real content and _trim_to_lattice slices to the first
     fitting combo — never dropping a valid history step, and preserving
@@ -414,7 +431,7 @@ def test_shape_lattice_trim_is_lossless():
     assert _trim_to_lattice([traj], ((64, 256),))[0] is traj
 
 
-def test_admitted_decisions_match_learner_masks_including_forced_actions():
+def test_admitted_decisions_match_learner_masks_including_forced_actions() -> None:
     done = np.zeros((64, 3), dtype=bool)
     done[29, 0] = True
     done[63, 1] = True

@@ -1,6 +1,7 @@
 """Posterior visibility, ancestral deployment and matched-control contracts."""
 
 import copy
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -16,9 +17,16 @@ from rl.model.interval_transition import (
 )
 from rl.offline.train_interval import balanced_kl, consistency_terms, game_bootstrap
 
+IntervalModels = tuple[
+    dict[str, tuple[IntervalTransition, dict, Callable]],
+    jax.Array,
+    jax.Array,
+    jax.Array,
+]
+
 
 @pytest.fixture(scope="module")
-def interval_models():
+def interval_models() -> IntervalModels:
     cfg = get_player_model_config(9, train=True).transition
     cfg.block.model_size = 32
     cfg.block.hidden_size = 64
@@ -42,7 +50,9 @@ def interval_models():
     return models, rows, successor, action
 
 
-def test_matched_arms_have_identical_initial_parameters(interval_models):
+def test_matched_arms_have_identical_initial_parameters(
+    interval_models: IntervalModels,
+) -> None:
     models, *_ = interval_models
     combined = models["combined"][1]
     history = models["history"][1]
@@ -53,7 +63,9 @@ def test_matched_arms_have_identical_initial_parameters(interval_models):
         np.testing.assert_array_equal(combined_leaf, history_leaf)
 
 
-def test_history_posterior_visibility_has_positive_controls(interval_models):
+def test_history_posterior_visibility_has_positive_controls(
+    interval_models: IntervalModels,
+) -> None:
     models, rows, successor, action = interval_models
     groups = np.asarray(SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS])
     nonhistory_row = int(np.flatnonzero(groups == SequenceGroup.PRIVATE_ENTITY)[0])
@@ -82,8 +94,8 @@ def test_history_posterior_visibility_has_positive_controls(interval_models):
 
 
 def test_prior_is_independent_of_posterior_parameters_with_live_decoder(
-    interval_models,
-):
+    interval_models: IntervalModels,
+) -> None:
     models, rows, _, action = interval_models
     model, variables, _ = models["history"]
     variables = copy.deepcopy(variables)
@@ -108,11 +120,13 @@ def test_prior_is_independent_of_posterior_parameters_with_live_decoder(
     assert not np.allclose(original, apply(changed))
 
 
-def test_dynamics_kl_does_not_backpropagate_through_posterior_choice(interval_models):
+def test_dynamics_kl_does_not_backpropagate_through_posterior_choice(
+    interval_models: IntervalModels,
+) -> None:
     models, rows, successor, action = interval_models
     model, variables, _ = models["history"]
 
-    def loss(next_rows):
+    def loss(next_rows: jax.Array) -> jax.Array:
         prediction = model.apply(variables, rows, action, next_rows, jax.random.key(7))
         return balanced_kl(
             prediction.prior_logits, prediction.posterior_logits, 0.5, 0.0, 0.0
@@ -122,7 +136,9 @@ def test_dynamics_kl_does_not_backpropagate_through_posterior_choice(interval_mo
     np.testing.assert_array_equal(gradient, jnp.zeros_like(gradient))
 
 
-def test_warm_start_is_strict_and_copies_only_decoder(interval_models):
+def test_warm_start_is_strict_and_copies_only_decoder(
+    interval_models: IntervalModels,
+) -> None:
     models, *_ = interval_models
     params = models["history"][1]["params"]
     source = jax.tree.map(lambda value: value + 1, params["dynamics"])
@@ -140,7 +156,7 @@ def test_warm_start_is_strict_and_copies_only_decoder(interval_models):
         warm_start_decoder(params, {})
 
 
-def test_consistency_counts_disappearance_but_not_both_absent():
+def test_consistency_counts_disappearance_but_not_both_absent() -> None:
     rows = jnp.ones((2, len(POLICY_READABLE_ROWS), 4))
     successor = jnp.zeros_like(rows)
     valid = jnp.ones(rows.shape[:-1], bool)
@@ -153,13 +169,13 @@ def test_consistency_counts_disappearance_but_not_both_absent():
     ) == pytest.approx(0)
 
 
-def test_bootstrap_pools_both_sides_by_game():
+def test_bootstrap_pools_both_sides_by_game() -> None:
     games = np.asarray(["game1", "game1", "game2", "game2"])
     energy = np.asarray([1.0, 9.0, 2.0, 8.0])
     assert game_bootstrap(energy, energy, games) == [0.0, 0.0]
     assert game_bootstrap(np.zeros(4), energy, games) == [1.0, 1.0]
 
 
-def test_unknown_evidence_rejected():
+def test_unknown_evidence_rejected() -> None:
     with pytest.raises(ValueError, match="evidence"):
         posterior_movement(jnp.ones((1, 1)), jnp.ones((1, 1)), "unknown")

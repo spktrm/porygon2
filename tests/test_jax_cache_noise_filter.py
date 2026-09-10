@@ -10,7 +10,7 @@ import logging
 from rl.online.main import JaxCacheNoiseFilter
 
 
-def make_record(msg: str, *args) -> logging.LogRecord:
+def make_record(msg: str, *args: str | float) -> logging.LogRecord:
     return logging.LogRecord(
         name="jax._src.compiler",
         level=logging.WARNING,
@@ -22,7 +22,7 @@ def make_record(msg: str, *args) -> logging.LogRecord:
     )
 
 
-def test_drops_the_miss_announcement():
+def test_drops_the_miss_announcement() -> None:
     record = make_record(
         "PERSISTENT COMPILATION CACHE MISS for '%s' with key %r",
         "jit__normal",
@@ -31,7 +31,7 @@ def test_drops_the_miss_announcement():
     assert JaxCacheNoiseFilter().filter(record) is False
 
 
-def test_drops_the_sub_2s_reason():
+def test_drops_the_sub_2s_reason() -> None:
     record = make_record(
         "Not writing persistent cache entry for '%s' because it took < %.2f "
         "seconds to compile (%.2fs)",
@@ -42,7 +42,7 @@ def test_drops_the_sub_2s_reason():
     assert JaxCacheNoiseFilter().filter(record) is False
 
 
-def test_keeps_the_host_callbacks_reason():
+def test_keeps_the_host_callbacks_reason() -> None:
     record = make_record(
         "Not writing persistent cache entry for '%s' because it uses host "
         "callbacks (e.g. from jax.debug.print or breakpoint)",
@@ -51,11 +51,11 @@ def test_keeps_the_host_callbacks_reason():
     assert JaxCacheNoiseFilter().filter(record) is True
 
 
-def test_keeps_the_process_id_reason():
+def test_keeps_the_process_id_reason() -> None:
     record = make_record("Not writing persistent cache entry since process_id != 0")
     assert JaxCacheNoiseFilter().filter(record) is True
 
 
-def test_keeps_unrelated_compiler_messages():
+def test_keeps_unrelated_compiler_messages() -> None:
     record = make_record("Persistent compilation cache hit for '%s'", "jit_stage")
     assert JaxCacheNoiseFilter().filter(record) is True

@@ -9,11 +9,13 @@ Fast: the layout contract. Slow: the numerical equivalence on real params,
 with the control that the readout is live (the zero-init readout would
 make a uniform-vs-uniform comparison pass vacuously)."""
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.constants import (
     CLS_ROW,
     DYNAMICS_TARGET_ROWS,
@@ -34,7 +36,7 @@ from rl.model.constants import (
 from rl.model.heads import HeadParams
 
 
-def test_actor_rows_are_the_policy_readable_prefix_plus_history():
+def test_actor_rows_are_the_policy_readable_prefix_plus_history() -> None:
     dropped = np.setdiff1d(np.arange(NUM_SEQUENCE_ROWS), POLICY_READABLE_ROWS)
     np.testing.assert_array_equal(
         dropped,
@@ -75,8 +77,10 @@ def test_actor_rows_are_the_policy_readable_prefix_plus_history():
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_actor_forward_matches_the_learner_forward_on_the_kept_rows(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     from rl.model.config import get_player_model_config
     from rl.model.player_model import get_player_model
     from rl.model.utils import open_zero_init_paths
@@ -105,7 +109,7 @@ def test_actor_forward_matches_the_learner_forward_on_the_kept_rows(
             rngs={"sampling": jax.random.key(0)},
         )
 
-    def diff(left, right) -> float:
+    def diff(left: jax.Array, right: jax.Array) -> float:
         return float(
             np.abs(np.asarray(left, np.float32) - np.asarray(right, np.float32)).max()
         )

@@ -8,12 +8,12 @@ import numpy as np
 from rl.model.trunk import row_homogeneity
 
 
-def _np(values):
+def _np(values: np.ndarray) -> tuple[float, float]:
     cosine, participation = row_homogeneity(jnp.asarray(values))
     return float(cosine), float(participation)
 
 
-def test_orthonormal_rows_are_maximally_spread():
+def test_orthonormal_rows_are_maximally_spread() -> None:
     rows = 8
     cosine, participation = _np(np.eye(rows, 16, dtype=np.float32))
     assert abs(cosine) < 1e-6
@@ -22,14 +22,14 @@ def test_orthonormal_rows_are_maximally_spread():
     assert abs(participation - (rows - 1)) < 1e-4
 
 
-def test_identical_rows_are_fully_collapsed():
+def test_identical_rows_are_fully_collapsed() -> None:
     values = np.tile(np.arange(1, 17, dtype=np.float32), (8, 1))
     cosine, participation = _np(values)
     assert abs(cosine - 1.0) < 1e-4  # tf32 matmul on the GPU
     assert np.isnan(participation)
 
 
-def test_common_offset_reads_on_cosine_not_participation():
+def test_common_offset_reads_on_cosine_not_participation() -> None:
     """A shared large offset over an orthonormal spread: cosine goes to ~1
     while the centred participation is untouched -- the two instruments
     disagree exactly when a common direction carries a live residual."""
@@ -42,7 +42,7 @@ def test_common_offset_reads_on_cosine_not_participation():
     assert abs(participation - (rows - 1)) < 1e-4
 
 
-def test_zeroed_row_is_excluded():
+def test_zeroed_row_is_excluded() -> None:
     rng = np.random.default_rng(0)
     values = rng.normal(size=(10, 32)).astype(np.float32)
     with_hole = values.copy()
@@ -53,7 +53,7 @@ def test_zeroed_row_is_excluded():
     assert not np.allclose(_np(values), _np(subset))
 
 
-def test_batched_over_leading_axes():
+def test_batched_over_leading_axes() -> None:
     rng = np.random.default_rng(1)
     values = rng.normal(size=(3, 5, 10, 32)).astype(np.float32)
     cosine, participation = row_homogeneity(jnp.asarray(values))
@@ -64,7 +64,7 @@ def test_batched_over_leading_axes():
     )
 
 
-def test_fewer_than_two_valid_rows_is_nan_not_zero():
+def test_fewer_than_two_valid_rows_is_nan_not_zero() -> None:
     """A group with no pair (PREV_ACTION in singles: rows never valid) must
     read as no reading, not as "perfectly spread" -- a 0 cosine there would
     average into the table as if it were data."""

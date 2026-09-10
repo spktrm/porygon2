@@ -1,10 +1,13 @@
 """v-trace return math on hand-checkable inputs, plus the full target
 pipeline on the real example trajectory bundled in rl/environment/ex.bin."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import Batch, PlayerTargets
+from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.targets import (
     compute_player_targets,
     two_hot,
@@ -12,7 +15,9 @@ from rl.online.training.targets import (
 )
 
 
-def naive_vtrace(td_errors, discount_t, c_tm1):
+def naive_vtrace(
+    td_errors: np.ndarray, discount_t: np.ndarray, c_tm1: np.ndarray
+) -> np.ndarray:
     """Reference implementation: plain reverse recursion."""
     T = td_errors.shape[0]
     out = np.zeros_like(td_errors)
@@ -23,7 +28,7 @@ def naive_vtrace(td_errors, discount_t, c_tm1):
     return out
 
 
-def test_vtrace_matches_naive_recursion():
+def test_vtrace_matches_naive_recursion() -> None:
     rng = np.random.default_rng(0)
     td = rng.normal(size=(12, 4, 3)).astype(np.float32)
     disc = rng.uniform(0.0, 1.0, size=(12, 4, 3)).astype(np.float32)
@@ -34,14 +39,14 @@ def test_vtrace_matches_naive_recursion():
     np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-5)
 
 
-def test_vtrace_zero_trace_is_identity():
+def test_vtrace_zero_trace_is_identity() -> None:
     td = jnp.arange(8, dtype=jnp.float32).reshape(4, 2)
     disc = jnp.ones_like(td)
     got = vtrace(td, disc, jnp.zeros_like(td))
     np.testing.assert_allclose(np.asarray(got), np.asarray(td))
 
 
-def test_vtrace_bf16_inputs_do_not_break_the_scan_carry():
+def test_vtrace_bf16_inputs_do_not_break_the_scan_carry() -> None:
     """Regression for the 2026-08-13 session crash (fixed in 15b6a3f):
     bf16 values with f32 python-scalar-promoted discounts made the scan
     carry dtype disagree. The recursion must run and stay finite. (The
@@ -57,14 +62,14 @@ def test_vtrace_bf16_inputs_do_not_break_the_scan_carry():
 
 
 class TestTwoHot:
-    def test_bin_centres_are_one_hot(self):
+    def test_bin_centres_are_one_hot(self) -> None:
         support = jnp.array([-1.0, 0.0, 1.0])
         got = two_hot(jnp.array([-1.0, 0.0, 1.0]), support)
         np.testing.assert_allclose(
             np.asarray(got), np.eye(3, dtype=np.float32), atol=1e-6
         )
 
-    def test_interpolates_and_clips(self):
+    def test_interpolates_and_clips(self) -> None:
         support = jnp.array([-1.0, 0.0, 1.0])
         got = np.asarray(two_hot(jnp.array([0.8, -0.25, 2.0, -3.0]), support))
         np.testing.assert_allclose(got[0], [0.0, 0.2, 0.8], atol=1e-6)
@@ -75,7 +80,7 @@ class TestTwoHot:
 
 
 @pytest.fixture(scope="module")
-def ex_target_inputs():
+def ex_target_inputs() -> tuple[Batch, jax.Array, jax.Array, Porygon2LearnerConfig]:
     """Real env outputs from ex.bin (T, B=1), an on-policy isr, a zero
     Retrace baseline (the flat-at-init advantage head), and a uniform
     categorical critic — value expectation exactly 0 over the [-1, 0, 1]
@@ -94,7 +99,10 @@ def ex_target_inputs():
 
 
 class TestPlayerTargetsOnExTrajectory:
-    def test_shapes_and_finiteness(self, ex_target_inputs):
+    def test_shapes_and_finiteness(
+        self,
+        ex_target_inputs: tuple[Batch, jax.Array, jax.Array, Porygon2LearnerConfig],
+    ) -> None:
         batch, value_log_probs, isr, config = ex_target_inputs
         T, B = batch.player_transitions.env_output.done.shape
         targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
@@ -104,7 +112,10 @@ class TestPlayerTargetsOnExTrajectory:
         assert targets.value_mask.shape == (T, B)
         assert np.isfinite(np.asarray(targets.win_returns)).all()
 
-    def test_masks_follow_episode_structure(self, ex_target_inputs):
+    def test_masks_follow_episode_structure(
+        self,
+        ex_target_inputs: tuple[Batch, jax.Array, jax.Array, Porygon2LearnerConfig],
+    ) -> None:
         batch, value_log_probs, isr, config = ex_target_inputs
         done = np.asarray(batch.player_transitions.env_output.done)
         targets, _ = compute_player_targets(batch, value_log_probs, isr, config)
@@ -120,7 +131,10 @@ class TestPlayerTargetsOnExTrajectory:
         assert not (policy_mask & done).any()
         assert policy_mask.any()  # the example game has real decisions
 
-    def test_value_targets_stay_distributions(self, ex_target_inputs):
+    def test_value_targets_stay_distributions(
+        self,
+        ex_target_inputs: tuple[Batch, jax.Array, jax.Array, Porygon2LearnerConfig],
+    ) -> None:
         # The simplex contract (2026-08-26): every masked CE label is a
         # proper two-hot distribution — non-negative, mass exactly 1 —
         # because the recursion runs in scalar space and projects once at
@@ -134,7 +148,10 @@ class TestPlayerTargetsOnExTrajectory:
         assert (returns[mask] >= 0.0).all()
         np.testing.assert_allclose(returns.sum(-1)[~mask], 0.0, atol=1e-6)
 
-    def test_on_policy_diagnostics(self, ex_target_inputs):
+    def test_on_policy_diagnostics(
+        self,
+        ex_target_inputs: tuple[Batch, jax.Array, jax.Array, Porygon2LearnerConfig],
+    ) -> None:
         batch, value_log_probs, isr, config = ex_target_inputs
         _, logs = compute_player_targets(batch, value_log_probs, isr, config)
         # isr == 1 everywhere: full effective sample size, nothing clipped.
@@ -142,7 +159,12 @@ class TestPlayerTargetsOnExTrajectory:
         np.testing.assert_allclose(float(logs["player_rho_clip_frac"]), 0.0)
 
 
-def _min_batch(done, win_reward, action_mask, action_index):
+def _min_batch(
+    done: jax.Array,
+    win_reward: jax.Array,
+    action_mask: jax.Array,
+    action_index: jax.Array,
+) -> Batch:
     """Minimal Batch for compute_player_targets: env rows plus the
     taken-action index."""
     from rl.environment.interfaces import (
@@ -172,7 +194,13 @@ class TestPolicyAdvantage:
     """The v-trace policy advantage the PPO surrogate reads: hand-checked
     recursion, f32 contract, bootstrap-on-r at the terminal row."""
 
-    def _targets(self, done, win_reward, isr=None, player_lambda=0.8):
+    def _targets(
+        self,
+        done: jax.Array,
+        win_reward: jax.Array,
+        isr: jax.Array | None = None,
+        player_lambda: float = 0.8,
+    ) -> PlayerTargets:
         from rl.online.config import Porygon2LearnerConfig
 
         T, B = done.shape
@@ -190,7 +218,7 @@ class TestPolicyAdvantage:
         )
         return targets
 
-    def test_matches_hand_recursion(self):
+    def test_matches_hand_recursion(self) -> None:
         """T=3, terminal win on the done row, V=0 everywhere, lambda 0.8:
         td = [0, 0, 1]; v-trace values [0.64, 0.8, 1]; q_bootstrap =
         [0.8*0.8, 0.8*1, 0] and the done row's discount is 0, so
@@ -205,7 +233,7 @@ class TestPolicyAdvantage:
             np.asarray(targets.pg_advantages[:, 0]), [0.64, 0.8, 1.0], atol=1e-6
         )
 
-    def test_rho_truncation_attenuates_the_advantage(self):
+    def test_rho_truncation_attenuates_the_advantage(self) -> None:
         """isr > 1 is clipped to 1 (no amplification); isr < 1 scales the
         row's advantage down by exactly rho."""
         done = jnp.array([[False], [False], [True]])
@@ -227,7 +255,7 @@ class TestMagnetKl:
     KL(pi || pi_reg) over legal cells (targets.reference_kl), zero at the
     reference and insensitive to illegal-cell junk."""
 
-    def test_reference_kl_zero_at_reference_and_positive_off_it(self):
+    def test_reference_kl_zero_at_reference_and_positive_off_it(self) -> None:
         from rl.online.training.targets import reference_kl
 
         legal = jnp.asarray([[True, True, True, False]])

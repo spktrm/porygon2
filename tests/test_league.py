@@ -34,12 +34,12 @@ def make_ref(step: int, frames: int = 0, origin: str = "main") -> PlayerRef:
 
 
 @pytest.fixture
-def league():
+def league() -> League:
     return League(main_player=make_container(MAIN_KEY), players=[])
 
 
 class TestPfsp:
-    def test_normalises_to_one(self):
+    def test_normalises_to_one(self) -> None:
         for weighting in (
             "variance",
             "linear",
@@ -52,18 +52,20 @@ class TestPfsp:
             np.testing.assert_allclose(probs.sum(), 1.0, rtol=1e-6)
             assert (probs >= 0).all()
 
-    def test_squared_prefers_hard_opponents(self):
+    def test_squared_prefers_hard_opponents(self) -> None:
         probs = pfsp(np.array([0.1, 0.9]), weighting="squared")
         assert probs[0] > probs[1]
 
-    def test_degenerate_weights_fall_back_to_uniform(self):
+    def test_degenerate_weights_fall_back_to_uniform(self) -> None:
         # All win rates 1.0 under "squared" -> zero mass everywhere.
         probs = pfsp(np.array([1.0, 1.0, 1.0, 1.0]), weighting="squared")
         np.testing.assert_allclose(probs, 0.25)
 
 
 class TestRoster:
-    def test_latest_player_ignores_live_and_respects_origin(self, league):
+    def test_latest_player_ignores_live_and_respects_origin(
+        self, league: League
+    ) -> None:
         assert league.get_latest_player() is None
         league.add_player(make_ref(100, frames=1_000, origin="main"))
         league.add_player(make_ref(FOREIGN_STEP, frames=50, origin=FOREIGN_ORIGIN))
@@ -76,24 +78,24 @@ class TestRoster:
         assert league.get_latest_player(origin="main").step_count == 100
         assert league.get_latest_player(origin="main").player_frame_count == 1_000
 
-    def test_latest_player_none_for_absent_origin(self, league):
+    def test_latest_player_none_for_absent_origin(self, league: League) -> None:
         league.add_player(make_ref(FOREIGN_STEP, origin=FOREIGN_ORIGIN))
         assert league.get_latest_player(origin="main") is None
 
-    def test_live_populations_are_not_roster_entries(self, league):
+    def test_live_populations_are_not_roster_entries(self, league: League) -> None:
         league.update_live(MAIN_KEY, make_container(MAIN_KEY))
         assert len(league.players) == 0
         assert league.has_live(MAIN_KEY)
 
 
 class TestPayoff:
-    def test_prior_win_rate_is_half(self, league):
+    def test_prior_win_rate_is_half(self, league: League) -> None:
         league.add_player(make_ref(100))
         main = league.get_main_player()
         wr = league.get_winrate((main, league.players[100]))
         np.testing.assert_allclose(wr, 0.5)
 
-    def test_wins_raise_and_losses_lower_win_rate(self, league):
+    def test_wins_raise_and_losses_lower_win_rate(self, league: League) -> None:
         league.add_player(make_ref(100))
         main = league.get_main_player()
         opp = league.players[100]
@@ -105,7 +107,7 @@ class TestPayoff:
         wr_opp = float(league.get_winrate((opp, main)).item())
         np.testing.assert_allclose(wr + wr_opp, 1.0, atol=1e-6)
 
-    def test_draws_count_half(self, league):
+    def test_draws_count_half(self, league: League) -> None:
         league.add_player(make_ref(100))
         main = league.get_main_player()
         opp = league.players[100]
@@ -114,13 +116,13 @@ class TestPayoff:
         wr = float(league.get_winrate((main, opp)).item())
         np.testing.assert_allclose(wr, 0.5, atol=1e-6)
 
-    def test_update_for_evicted_player_is_ignored(self, league):
+    def test_update_for_evicted_player_is_ignored(self, league: League) -> None:
         league.add_player(make_ref(100))
         ghost = make_container(999)
         league.update_payoff(league.get_main_player(), ghost, payoff=1.0)
         assert league.games == {} or all(999 not in k for k in league.games)
 
-    def test_get_winrate_vectorises_over_opponents(self, league):
+    def test_get_winrate_vectorises_over_opponents(self, league: League) -> None:
         for step in (100, 200, 300):
             league.add_player(make_ref(step))
         main = league.get_main_player()
@@ -130,13 +132,13 @@ class TestPayoff:
 
 
 class TestEviction:
-    def test_roster_capped_at_league_size(self):
+    def test_roster_capped_at_league_size(self) -> None:
         league = League(main_player=make_container(MAIN_KEY), players=[], league_size=4)
         for step in range(100, 100 + 10 * 10, 10):
             league.add_player(make_ref(step))
         assert len(league.players) == 4
 
-    def test_beaten_and_sampled_opponent_evicted_first(self):
+    def test_beaten_and_sampled_opponent_evicted_first(self) -> None:
         league = League(main_player=make_container(MAIN_KEY), players=[], league_size=2)
         league.add_player(make_ref(100))
         league.add_player(make_ref(200))
@@ -151,7 +153,7 @@ class TestEviction:
         # The evicted player's payoff rows are garbage-collected too.
         assert all(100 not in k for k in league.games)
 
-    def test_batch_cull_saws_between_cull_size_and_league_size(self):
+    def test_batch_cull_saws_between_cull_size_and_league_size(self) -> None:
         league = League(
             main_player=make_container(MAIN_KEY),
             players=[],
@@ -166,7 +168,7 @@ class TestEviction:
         # then the cull lands in one go and the roster fills back up.
         assert sizes == [1, 2, 3, 4, 2, 3, 4, 2, 3, 4]
 
-    def test_batch_cull_keeps_the_challenging_half(self):
+    def test_batch_cull_keeps_the_challenging_half(self) -> None:
         league = League(
             main_player=make_container(MAIN_KEY),
             players=[],
@@ -188,7 +190,7 @@ class TestEviction:
         assert set(league.players) == {400, 500}
         assert all(100 not in k and 200 not in k and 300 not in k for k in league.games)
 
-    def test_cull_size_must_leave_room_below_league_size(self):
+    def test_cull_size_must_leave_room_below_league_size(self) -> None:
         for cull_size in (0, 5):
             with pytest.raises(ValueError):
                 League(
@@ -200,7 +202,7 @@ class TestEviction:
 
 
 class TestSerialization:
-    def test_roundtrip_preserves_roster_and_stats(self, league):
+    def test_roundtrip_preserves_roster_and_stats(self, league: League) -> None:
         league.add_player(make_ref(100, frames=5_000, origin="main"))
         league.add_player(make_ref(FOREIGN_STEP, frames=42, origin=FOREIGN_ORIGIN))
         main = league.get_main_player()
@@ -220,7 +222,9 @@ class TestSerialization:
         # Regression guard for the origin-filtered pacing gate surviving a resume.
         assert restored.get_latest_player(origin="main").step_count == 100
 
-    def test_resume_takes_sizing_knobs_from_the_caller_not_the_checkpoint(self):
+    def test_resume_takes_sizing_knobs_from_the_caller_not_the_checkpoint(
+        self,
+    ) -> None:
         league = League(
             main_player=make_container(MAIN_KEY),
             players=[],

@@ -86,7 +86,7 @@ def _run(collect: bool) -> dict:
     return json.loads(lines[0][len("REPORT ") :])
 
 
-def test_trunk_sows_are_captured_per_block():
+def test_trunk_sows_are_captured_per_block() -> None:
     from rl.model.config import get_player_model_config
     from rl.model.constants import NUM_SEQUENCE_ROWS
 
@@ -110,6 +110,6 @@ def test_trunk_sows_are_captured_per_block():
     assert report["final_block_max_diff"] == 0.0
 
 
-def test_training_forward_collects_nothing():
+def test_training_forward_collects_nothing() -> None:
     report = _run(collect=False)
     assert not report["has_intermediates"]

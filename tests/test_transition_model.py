@@ -28,7 +28,10 @@ that those paths are live.
 """
 
 import dataclasses
+from collections.abc import Callable
+from typing import Any
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -42,7 +45,12 @@ from rl.environment.data import (
     NUM_ENTITY_REVEALED_FEATURES,
     NUM_FIELD_FEATURES,
 )
-from rl.environment.interfaces import PlayerActorOutput, PlayerEnvOutput
+from rl.environment.interfaces import (
+    CategoricalValueHeadOutput,
+    PlayerActorInput,
+    PlayerActorOutput,
+    PlayerEnvOutput,
+)
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
@@ -58,7 +66,9 @@ from rl.model.constants import (
     POLICY_READABLE_ROWS,
 )
 from rl.model.player_model import dynamics_alignment
+from rl.model.transition import TransitionModel
 from rl.model.utils import open_zero_init_paths
+from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.telemetry import action_axis_masks
 from rl.online.training.train_step import (
     DYNAMICS_SCALE_FLOOR,
@@ -77,9 +87,24 @@ _IDX = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
 _HP = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
 _SIDE = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
 NUM_CELLS = 295
+RealModelAndTrajectory = tuple[nn.Module, dict, PlayerActorInput, PlayerActorOutput]
+ModuleAndParams = tuple[
+    TransitionModel,
+    ConfigDict,
+    dict,
+    Callable,
+    tuple[jax.Array, jax.Array, jax.Array, jax.Array],
+]
 
 
-def _env(order, entity_idx, hp=None, request_count=0, revealed=None, kind=0):
+def _env(
+    order: np.ndarray,
+    entity_idx: np.ndarray,
+    hp: np.ndarray | None = None,
+    request_count: int = 0,
+    revealed: np.ndarray | None = None,
+    kind: int = 0,
+) -> PlayerEnvOutput:
     info = np.zeros(len(InfoFeature.keys()), dtype=np.int32)
     info[_ORDER] = order
     info[InfoFeature.INFO_FEATURE__REQUEST_COUNT] = request_count
@@ -104,8 +129,13 @@ def _env(order, entity_idx, hp=None, request_count=0, revealed=None, kind=0):
 
 
 def _batch_env(
-    orders, entity_idx, hps=None, request_counts=None, revealed=None, kinds=None
-):
+    orders: list[np.ndarray],
+    entity_idx: np.ndarray,
+    hps: list[np.ndarray | None] | None = None,
+    request_counts: list[int] | None = None,
+    revealed: list[np.ndarray | None] | None = None,
+    kinds: list[int] | None = None,
+) -> PlayerEnvOutput:
     """(T, B=1) env with the given per-step public orders."""
     if hps is None:
         hps = [None] * len(orders)
@@ -124,7 +154,7 @@ def _batch_env(
     return jax.tree.map(lambda *leaves: jnp.stack(leaves)[:, None], *steps)
 
 
-def _history_field(request_counts):
+def _history_field(request_counts: list[int]) -> jax.Array:
     """(H, B=1) window whose valid steps carry the given request counts."""
     field = np.zeros((len(request_counts), 1, NUM_FIELD_FEATURES), np.int32)
     field[:, 0, FieldFeature.FIELD_FEATURE__VALID] = 1
@@ -132,7 +162,7 @@ def _history_field(request_counts):
     return jnp.asarray(field)
 
 
-def _next_index(env):
+def _next_index(env: PlayerEnvOutput) -> np.ndarray:
     _, next_index = jax.vmap(jax.vmap(dynamics_alignment))(
         jax.tree.map(lambda leaf: leaf[:-1], env),
         jax.tree.map(lambda leaf: leaf[1:], env),
@@ -140,7 +170,7 @@ def _next_index(env):
     return np.asarray(next_index)
 
 
-def _in_next_layout(values, next_index):
+def _in_next_layout(values: np.ndarray, next_index: np.ndarray) -> jax.Array:
     """(T-1, B, R, D) values indexed by the CURRENT step's rows, placed
     where the next step's layout has them, padded to T with a copy of the
     last step (the self-paired final row the loss masks)."""
@@ -149,7 +179,7 @@ def _in_next_layout(values, next_index):
     return jnp.asarray(np.concatenate([placed, placed[-1:]], axis=0))
 
 
-def _perfect(label, next_index):
+def _perfect(label: jax.Array, next_index: np.ndarray) -> jax.Array:
     """The grounding head's exact answer: each current row's t -> t+1
     change, placed where the next step's layout has that row. The copy
     predictor is the all-zero prediction."""
@@ -158,14 +188,21 @@ def _perfect(label, next_index):
     return _in_next_layout(aligned_next - label[:-1], next_index)
 
 
-def _ground(pred, target, env, acted, valid, **kwargs):
+def _ground(
+    pred: jax.Array,
+    target: jax.Array,
+    env: PlayerEnvOutput,
+    acted: jax.Array,
+    valid: jax.Array,
+    **kwargs: jax.Array,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     loss, logs, _ = dynamics_losses(
         pred, jax.lax.stop_gradient(pred), target, env, acted, valid, **kwargs
     )
     return loss, logs
 
 
-def test_alignment_follows_the_public_resort_and_the_private_key():
+def test_alignment_follows_the_public_resort_and_the_private_key() -> None:
     order_now = np.arange(12, dtype=np.int32)
     order_next = order_now.copy()
     order_next[[0, 1]] = order_next[[1, 0]]  # my actives swap
@@ -195,7 +232,7 @@ def test_alignment_follows_the_public_resort_and_the_private_key():
     )
 
 
-def test_grounding_aligns_the_label_across_the_resort():
+def test_grounding_aligns_the_label_across_the_resort() -> None:
     num_steps, width = 4, 8
     rng = np.random.default_rng(0)
     # Each stable entity has ONE fixed content vector; rows carry them in
@@ -277,7 +314,7 @@ def test_grounding_aligns_the_label_across_the_resort():
     assert np.isfinite(float(logs["player_transition_gain_hp_moved"]))
 
 
-def test_prior_panels_read_the_prior_decode():
+def test_prior_panels_read_the_prior_decode() -> None:
     """`gain_public_prior` scores the second prediction: the posterior
     decode perfect and the prior decode a copy reads 1 / 0."""
     num_steps, width = 3, 8
@@ -295,7 +332,7 @@ def test_prior_panels_read_the_prior_decode():
     )
 
 
-def test_hp_moved_gain_reads_the_hp_rows_only():
+def test_hp_moved_gain_reads_the_hp_rows_only() -> None:
     """`gain_hp_moved` is the public gain on rows whose wire HP_RATIO
     changed across the step (aligned), scaled on that subset; `hp_share`
     is the public delta's energy in the given subspace."""
@@ -337,7 +374,7 @@ def test_hp_moved_gain_reads_the_hp_rows_only():
     assert float(logs["player_transition_hp_share"]) == 0.0
 
 
-def test_zero_delta_group_is_floored_not_divided_by_zero():
+def test_zero_delta_group_is_floored_not_divided_by_zero() -> None:
     """A batch on which a group's rows did not move must not turn a small
     non-zero error into a loss of hundreds: the normaliser is floored at
     DYNAMICS_SCALE_FLOOR. Control: an ordinary-scale delta scores the
@@ -369,7 +406,7 @@ def test_zero_delta_group_is_floored_not_divided_by_zero():
     assert float(loss_moving) == pytest.approx(0.0, abs=0.05)
 
 
-def test_transition_splits_read_spanned_edges_and_opponent_reveals():
+def test_transition_splits_read_spanned_edges_and_opponent_reveals() -> None:
     """Edges stamped with request t+1 are the steps transition t -> t+1
     spans; an opponent row that changes an id token across a matched step
     is a reveal, my own row's is not. The split gains read their subsets:
@@ -426,7 +463,7 @@ def test_transition_splits_read_spanned_edges_and_opponent_reveals():
     assert set(splits) == {"short", "long", "reveal", "no_reveal"}
 
 
-def test_masked_percentile_ignores_masked_out_values():
+def test_masked_percentile_ignores_masked_out_values() -> None:
     values = jnp.asarray([[9, 1, 2], [3, 4, 100]])
     mask = jnp.asarray([[False, True, True], [True, True, False]])
     assert float(masked_percentile(values, mask, 0.0)) == 1.0
@@ -435,7 +472,7 @@ def test_masked_percentile_ignores_masked_out_values():
     assert float(masked_percentile(values, jnp.zeros_like(mask), 0.9)) == -1.0
 
 
-def test_legal_enumeration_indexes_the_taken_cell_and_counts_overflow():
+def test_legal_enumeration_indexes_the_taken_cell_and_counts_overflow() -> None:
     from rl.model.transition import legal_enumeration
 
     legal = jnp.zeros(NUM_CELLS, bool).at[jnp.asarray([4, 9, 30])].set(True)
@@ -459,7 +496,9 @@ def test_legal_enumeration_indexes_the_taken_cell_and_counts_overflow():
     assert bool(overflow)
 
 
-def test_exact_decode_loss_is_conditional_entropy_and_matches_finite_differences():
+def test_exact_decode_loss_is_conditional_entropy_and_matches_finite_differences() -> (
+    None
+):
     """The objective of plan §4 summed exactly over every code: a
     symmetric encoder (every legal cell the same distribution) sits at
     loss log(n), mutual information 0, with an exactly zero gradient (the
@@ -489,7 +528,7 @@ def test_exact_decode_loss_is_conditional_entropy_and_matches_finite_differences
         np.random.default_rng(1).normal(size=(6, num_codes)), jnp.float32
     )
 
-    def loss_of(logits):
+    def loss_of(logits: jax.Array) -> jax.Array:
         return exact_decode_loss(logits, cell_valid).loss
 
     analytic = np.asarray(jax.grad(loss_of)(random))
@@ -513,7 +552,7 @@ def test_exact_decode_loss_is_conditional_entropy_and_matches_finite_differences
     assert float(empty.loss) == 0.0 and float(empty.accuracy) == 0.0
 
 
-def test_gumbel_top_k_matches_sequential_draws_without_replacement():
+def test_gumbel_top_k_matches_sequential_draws_without_replacement() -> None:
     from rl.model.categoricals import gumbel_top_k
 
     probs = np.array([0.5, 0.3, 0.15, 0.05])
@@ -537,7 +576,7 @@ def test_gumbel_top_k_matches_sequential_draws_without_replacement():
     assert not np.any(draws[:, :3] == 1) or np.all(draws[:, 2] != 1) is False
 
 
-def test_support_set_is_the_smallest_prefix_holding_the_mass():
+def test_support_set_is_the_smallest_prefix_holding_the_mass() -> None:
     from rl.model.categoricals import support_set
 
     probs = jnp.asarray([0.05, 0.5, 0.3, 0.1, 0.05])
@@ -549,7 +588,9 @@ def test_support_set_is_the_smallest_prefix_holding_the_mass():
     assert support_set(tied, 0.3).tolist() == [True, False, False]
 
 
-def test_candidate_targets_exclude_the_prefix_and_the_loss_reads_the_exact_conditional():
+def test_candidate_targets_exclude_the_prefix_and_the_loss_reads_the_exact_conditional() -> (
+    None
+):
     from rl.model.transition_objectives import candidate_loss, candidate_targets
 
     p_target = jnp.asarray([0.4, 0.3, 0.2, 0.1, 0.0, 0.0])
@@ -595,7 +636,7 @@ def test_candidate_targets_exclude_the_prefix_and_the_loss_reads_the_exact_condi
     )
 
 
-def _small_transition_cfg(code_groups=2, unroll_steps=2):
+def _small_transition_cfg(code_groups: int = 2, unroll_steps: int = 2) -> ConfigDict:
     from rl.model.config import get_player_model_config
 
     cfg = ConfigDict(get_player_model_config(generation=9, train=True).transition)
@@ -608,14 +649,16 @@ def _small_transition_cfg(code_groups=2, unroll_steps=2):
     return cfg
 
 
-def _module(code_groups=2, unroll_steps=2):
+def _module(
+    code_groups: int = 2, unroll_steps: int = 2
+) -> tuple[TransitionModel, ConfigDict]:
     from rl.model.transition import TransitionModel
 
     cfg = _small_transition_cfg(code_groups, unroll_steps)
     return TransitionModel(cfg, dtype=jnp.float32), cfg
 
 
-def _rows(rng, num_steps, width=256):
+def _rows(rng: np.random.Generator, num_steps: int, width: int = 256) -> jax.Array:
     rows = jnp.asarray(
         rng.normal(size=(num_steps, len(POLICY_READABLE_ROWS), width)).astype(
             np.float32
@@ -628,7 +671,9 @@ def _rows(rng, num_steps, width=256):
 LEGAL_CELLS = [0, 1, 7, 8, 290]
 
 
-def _inputs(rng, num_steps=3):
+def _inputs(
+    rng: np.random.Generator, num_steps: int = 3
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     rows = _rows(rng, num_steps)
     cells = jnp.asarray([0, 7, 290][:num_steps])
     legal = jnp.zeros((num_steps, NUM_CELLS), bool).at[:, LEGAL_CELLS].set(True)
@@ -637,7 +682,7 @@ def _inputs(rng, num_steps=3):
 
 
 @pytest.fixture(scope="module")
-def module_and_params():
+def module_and_params() -> ModuleAndParams:
     module, cfg = _module()
     inputs = _inputs(np.random.default_rng(0))
     params = jax.jit(module.init)(jax.random.PRNGKey(0), *inputs)
@@ -645,7 +690,9 @@ def module_and_params():
     return module, cfg, params, apply, inputs
 
 
-def test_module_init_is_the_copy_predictor_with_token_conditioning(module_and_params):
+def test_module_init_is_the_copy_predictor_with_token_conditioning(
+    module_and_params: ModuleAndParams,
+) -> None:
     module, cfg, params, apply, inputs = module_and_params
     rows = inputs[0]
     out = apply(params, *inputs)
@@ -699,7 +746,9 @@ def test_module_init_is_the_copy_predictor_with_token_conditioning(module_and_pa
         assert len(set(node.tolist())) == cfg.num_candidates
 
 
-def test_imagine_has_no_validity_or_legality_input(module_and_params):
+def test_imagine_has_no_validity_or_legality_input(
+    module_and_params: ModuleAndParams,
+) -> None:
     """The structural no-oracle contract: g takes rows, a latent action
     and a chance code and nothing else; the unroll takes no validity, no
     next mask. Then the behavioural half: the real next rows move the
@@ -753,7 +802,9 @@ def test_imagine_has_no_validity_or_legality_input(module_and_params):
     )
 
 
-def test_posterior_reads_a_row_that_appears_at_t_plus_one(module_and_params):
+def test_posterior_reads_a_row_that_appears_at_t_plus_one(
+    module_and_params: ModuleAndParams,
+) -> None:
     """Row 5 is zero at every step of the fixture. Give it content at step
     1 only: the first transition's posterior (whose label is step 1)
     moves. The 2026-09-05 read masked the delta by `valid & next_valid`
@@ -775,7 +826,7 @@ def test_posterior_reads_a_row_that_appears_at_t_plus_one(module_and_params):
     )
 
 
-def test_row_read_is_bias_free_and_reads_a_zero_row_as_zero():
+def test_row_read_is_bias_free_and_reads_a_zero_row_as_zero() -> None:
     from rl.model.transition import RowRead
 
     read = RowRead(width=4, dtype=jnp.float32)
@@ -793,7 +844,7 @@ def test_row_read_is_bias_free_and_reads_a_zero_row_as_zero():
     )
 
 
-def _rms(tree):
+def _rms(tree: dict | jax.Array) -> float:
     return float(
         jnp.sqrt(
             jnp.mean(
@@ -816,11 +867,13 @@ BEHIND_THE_ZERO_FACTOR = (
 )
 
 
-def test_dynamics_out_proj_is_the_single_zero_factor(module_and_params):
+def test_dynamics_out_proj_is_the_single_zero_factor(
+    module_and_params: ModuleAndParams,
+) -> None:
     module, cfg, params, apply, inputs = module_and_params
     probe = jax.random.normal(jax.random.PRNGKey(3), inputs[0].shape)
 
-    def imagined_energy(params):
+    def imagined_energy(params: dict) -> jax.Array:
         return jnp.sum(module.apply(params, *inputs).steps.pred[0] * probe)
 
     grads = jax.jit(jax.grad(imagined_energy))(params)["params"]
@@ -837,7 +890,9 @@ def test_dynamics_out_proj_is_the_single_zero_factor(module_and_params):
         assert _rms(grads[behind]) > 0.0, behind
 
 
-def test_zero_row_at_t_is_imagined_from_the_slot_embedding(module_and_params):
+def test_zero_row_at_t_is_imagined_from_the_slot_embedding(
+    module_and_params: ModuleAndParams,
+) -> None:
     """Row 5 is zero at t. With the zero factor opened its imagined row
     is nonzero, depends on the rest of the state, and has a live gradient
     into the blocks and the slot embedding. The analytic control: rows 5
@@ -856,7 +911,7 @@ def test_zero_row_at_t_is_imagined_from_the_slot_embedding(module_and_params):
     assert not np.array_equal(imagined_5, np.asarray(moved.steps.pred[0, :, 5]))
     assert not np.array_equal(imagined_5, np.asarray(out.steps.pred[0, :, 6]))
 
-    def row_energy(params):
+    def row_energy(params: dict) -> jax.Array:
         return jnp.sum(
             module.apply(params, both_zero, cells, legal, log_policy).steps.pred[
                 0, :, 5
@@ -879,8 +934,8 @@ def test_zero_row_at_t_is_imagined_from_the_slot_embedding(module_and_params):
 
 
 def test_unroll_recomputes_the_encoder_and_the_posterior_at_the_imagined_state(
-    module_and_params,
-):
+    module_and_params: ModuleAndParams,
+) -> None:
     """Node 1's alignment logits are the encoder on the IMAGINED state
     hhat_1 with step 1's recorded cell -- exactly `action_logits(pred[0],
     cells[1])` -- and the second transition's posterior reads the delta
@@ -923,7 +978,9 @@ def test_unroll_recomputes_the_encoder_and_the_posterior_at_the_imagined_state(
     )
 
 
-def test_unroll_steps_one_is_the_single_step_model(module_and_params):
+def test_unroll_steps_one_is_the_single_step_model(
+    module_and_params: ModuleAndParams,
+) -> None:
     module, cfg, params, apply, inputs = module_and_params
     single, _ = _module(unroll_steps=1)
     out = apply(params, *inputs)
@@ -937,7 +994,9 @@ def test_unroll_steps_one_is_the_single_step_model(module_and_params):
     )
 
 
-def test_module_samples_only_under_a_sampling_rng(module_and_params):
+def test_module_samples_only_under_a_sampling_rng(
+    module_and_params: ModuleAndParams,
+) -> None:
     """`apply` without a "sampling" rng decodes every draw's mode (init,
     probes, the offline harness): the posterior's argmax, the encoder's
     argmax, the deterministic top-J teacher order; with one it draws, so
@@ -1000,7 +1059,9 @@ def test_module_samples_only_under_a_sampling_rng(module_and_params):
     )
 
 
-def test_generate_draws_distinct_codes_inside_the_support(module_and_params):
+def test_generate_draws_distinct_codes_inside_the_support(
+    module_and_params: ModuleAndParams,
+) -> None:
     module, cfg, params, apply, inputs = module_and_params
     rows = inputs[0][0]
     generate = jax.jit(
@@ -1033,7 +1094,7 @@ def test_generate_draws_distinct_codes_inside_the_support(module_and_params):
     np.testing.assert_array_equal(np.asarray(first.codes), np.asarray(again.codes))
 
 
-def test_code_groups_zero_drops_the_chance_path_only():
+def test_code_groups_zero_drops_the_chance_path_only() -> None:
     module, cfg = _module(code_groups=0)
     inputs = _inputs(np.random.default_rng(0), num_steps=2)
     params = jax.jit(module.init)(jax.random.PRNGKey(0), *inputs)
@@ -1064,7 +1125,7 @@ NUM_CANDIDATES = 8
 MAX_CELLS = 16
 
 
-def _value_head_from_logits(logits):
+def _value_head_from_logits(logits: jax.Array) -> CategoricalValueHeadOutput:
     from rl.environment.data import CAT_VF_SUPPORT
     from rl.environment.interfaces import CategoricalValueHeadOutput
 
@@ -1075,17 +1136,23 @@ def _value_head_from_logits(logits):
     )
 
 
-def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None):
+def _synthetic_pred(
+    rng: np.random.Generator,
+    num_steps: int,
+    code_groups: int = 2,
+    code_classes: int = 16,
+    n_bins: int | None = None,
+) -> PlayerActorOutput:
     from rl.environment.data import CAT_VF_SUPPORT
     from rl.model.categoricals import support_set
 
     if n_bins is None:
         n_bins = len(CAT_VF_SUPPORT)
 
-    def normal(*shape):
+    def normal(*shape: int) -> jax.Array:
         return jnp.asarray(rng.normal(size=shape).astype(np.float32))
 
-    def value_head(*lead):
+    def value_head(*lead: int) -> CategoricalValueHeadOutput:
         return _value_head_from_logits(normal(*lead, 1, n_bins))
 
     rows = len(POLICY_READABLE_ROWS)
@@ -1140,7 +1207,7 @@ def _synthetic_pred(rng, num_steps, code_groups=2, code_classes=16, n_bins=None)
     )
 
 
-def _bracket_inputs(num_steps=4):
+def _bracket_inputs(num_steps: int = 4) -> dict[str, Any]:
     from rl.environment.data import CAT_VF_SUPPORT
     from rl.online.config import Porygon2LearnerConfig
 
@@ -1176,7 +1243,7 @@ def _bracket_inputs(num_steps=4):
     )
 
 
-def test_unroll_masks_stop_at_a_done_row_and_the_chunk_boundary():
+def test_unroll_masks_stop_at_a_done_row_and_the_chunk_boundary() -> None:
     from rl.online.training.train_step import unroll_masks
 
     # Rows 0-2 acted, row 3 done (value-eligible, not acted), row 4 a
@@ -1196,7 +1263,7 @@ def test_unroll_masks_stop_at_a_done_row_and_the_chunk_boundary():
     assert [int(row[0]) for row in transitions[1]] == [1, 1, 0, 0, 0, 0]
 
 
-def test_bracket_is_finite_on_an_all_masked_batch_and_reads_its_labels():
+def test_bracket_is_finite_on_an_all_masked_batch_and_reads_its_labels() -> None:
     inputs = _bracket_inputs()
     loss, logs = transition_losses(**inputs)
     assert bool(jnp.isfinite(loss))
@@ -1216,7 +1283,7 @@ def test_bracket_is_finite_on_an_all_masked_batch_and_reads_its_labels():
         assert np.isfinite(np.asarray(value, np.float32)).all(), key
 
 
-def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
+def test_kl_halves_land_on_their_side_and_the_free_nats_clip() -> None:
     """dyn: the prior's gradient carries `dyn_coef`, the posterior's
     `rep_coef` (DreamerV3's balancing); under the free-nats clip a
     transition below F has no gradient at all. The prior/posterior are
@@ -1228,7 +1295,12 @@ def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
     config = dataclasses.replace(inputs["config"], player_transition_rep_coef=0.1)
     inputs = {**inputs, "config": config}
 
-    def kl_part(prior_logits, post_logits, free_nats, config=config):
+    def kl_part(
+        prior_logits: jax.Array,
+        post_logits: jax.Array,
+        free_nats: float,
+        config: Porygon2LearnerConfig = config,
+    ) -> jax.Array:
         pred = dataclasses.replace(
             inputs["pred"],
             transition_prior_logits=prior_logits,
@@ -1287,7 +1359,7 @@ def test_kl_halves_land_on_their_side_and_the_free_nats_clip():
     )
 
 
-def test_value_delta_r2_and_value_gain_bracket_copy_and_real():
+def test_value_delta_r2_and_value_gain_bracket_copy_and_real() -> None:
     """The calibration panels read the imagined value against the COPY
     predictor: an imagined head equal to the real head at t scores
     exactly 0 on the delta-R2 and on the gain, one equal to the real head
@@ -1306,17 +1378,19 @@ def test_value_delta_r2_and_value_gain_bracket_copy_and_real():
     )
     real = _value_head_from_logits(real_logits)
 
-    def shifted_by(offset):
+    def shifted_by(offset: int) -> CategoricalValueHeadOutput:
         return jax.tree.map(
             lambda leaf: jnp.concatenate([leaf[offset:]] + [leaf[-1:]] * offset), real
         )
 
-    def stacked(*heads):
+    def stacked(*heads: CategoricalValueHeadOutput) -> CategoricalValueHeadOutput:
         return jax.tree.map(lambda *leaves: jnp.stack(leaves), *heads)
 
     inputs = {**inputs, "win_returns": win_returns}
 
-    def read(imagined, prior):
+    def read(
+        imagined: CategoricalValueHeadOutput, prior: CategoricalValueHeadOutput
+    ) -> dict[str, float]:
         pred = dataclasses.replace(
             inputs["pred"],
             value_head=real,
@@ -1361,14 +1435,18 @@ def test_value_delta_r2_and_value_gain_bracket_copy_and_real():
     assert [int(value) for value in axis.taken_switch[:, 0]] == [1, 0, 1, 0, 1, 0]
 
 
-def _coef_zero_keeps_the_panel_and_drops_the_gradient(coef_name, leaf, panel):
+def _coef_zero_keeps_the_panel_and_drops_the_gradient(
+    coef_name: str, leaf: str, panel: str
+) -> None:
     inputs = _bracket_inputs()
     logs_by_coef = {}
     grad_by_coef = {}
     for coef in (0.0, 1.0):
         config = dataclasses.replace(inputs["config"], **{coef_name: coef})
 
-        def loss_of(value, config=config):
+        def loss_of(
+            value: jax.Array, config: Porygon2LearnerConfig = config
+        ) -> jax.Array:
             pred = dataclasses.replace(inputs["pred"], **{leaf: value})
             loss, _ = transition_losses(**{**inputs, "pred": pred, "config": config})
             return loss
@@ -1382,7 +1460,7 @@ def _coef_zero_keeps_the_panel_and_drops_the_gradient(coef_name, leaf, panel):
     assert float(jnp.abs(grad_by_coef[1.0]).max()) > 0.0
 
 
-def test_cons_coef_zero_keeps_the_panels_and_drops_the_gradient():
+def test_cons_coef_zero_keeps_the_panels_and_drops_the_gradient() -> None:
     _coef_zero_keeps_the_panel_and_drops_the_gradient(
         "player_transition_cons_coef",
         "transition_cons_err",
@@ -1390,7 +1468,9 @@ def test_cons_coef_zero_keeps_the_panels_and_drops_the_gradient():
     )
 
 
-def test_consistency_masks_absent_rows_but_scores_previous_choices_when_present():
+def test_consistency_masks_absent_rows_but_scores_previous_choices_when_present() -> (
+    None
+):
     """Singles' absent slots cannot dominate; doubles' present slots stay live.
 
     The positive control enables the same previous-action rows, with the
@@ -1409,7 +1489,9 @@ def test_consistency_masks_absent_rows_but_scores_previous_choices_when_present(
     scales = jnp.where(previous, 0.0, scales)
     config = inputs["config"].replace(player_transition_cons_coef=1.0)
 
-    def read(error, valid):
+    def read(
+        error: jax.Array, valid: jax.Array
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
         changed = pred.replace(
             transition_cons_err=error,
             transition_cons_scale=scales,
@@ -1450,8 +1532,8 @@ def test_consistency_masks_absent_rows_but_scores_previous_choices_when_present(
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_previous_action_consistency_mask_retains_appearances_and_disappearances(
-    real_model_and_trajectory, real_model_apply
-):
+    real_model_and_trajectory: RealModelAndTrajectory, real_model_apply: Callable
+) -> None:
     """Exercise the actual encoder/label wiring for within-request choices.
 
     This is the previous-choice feature seam used by doubles, not a claim
@@ -1466,7 +1548,7 @@ def test_previous_action_consistency_mask_retains_appearances_and_disappearances
     assert num_steps >= 4
     previous = SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS] == SequenceGroup.PREV_ACTION
 
-    def forward(flags):
+    def forward(flags: jax.Array) -> PlayerActorOutput:
         changed_info = info.at[:, InfoFeature.INFO_FEATURE__HAS_PREV_ACTION].set(flags)
         changed_input = actor_input.replace(
             env=actor_input.env.replace(info=changed_info)
@@ -1489,7 +1571,7 @@ def test_previous_action_consistency_mask_retains_appearances_and_disappearances
     )
 
 
-def test_decode_coef_zero_keeps_the_panel_and_drops_the_gradient():
+def test_decode_coef_zero_keeps_the_panel_and_drops_the_gradient() -> None:
     _coef_zero_keeps_the_panel_and_drops_the_gradient(
         "player_transition_decode_coef",
         "transition_action_logits",
@@ -1497,7 +1579,7 @@ def test_decode_coef_zero_keeps_the_panel_and_drops_the_gradient():
     )
 
 
-def test_align_coef_zero_keeps_the_panel_and_drops_the_gradient():
+def test_align_coef_zero_keeps_the_panel_and_drops_the_gradient() -> None:
     _coef_zero_keeps_the_panel_and_drops_the_gradient(
         "player_transition_align_coef",
         "transition_align_logits",
@@ -1505,7 +1587,7 @@ def test_align_coef_zero_keeps_the_panel_and_drops_the_gradient():
     )
 
 
-def test_generator_loss_reaches_every_node_and_reads_the_exact_conditional():
+def test_generator_loss_reaches_every_node_and_reads_the_exact_conditional() -> None:
     """The generator term's gradient lands on every node's logits, and a
     generator whose logits ARE the log conditional targets scores a KL
     of exactly 0 on every occupied slot (the loss is then the targets'
@@ -1515,7 +1597,7 @@ def test_generator_loss_reaches_every_node_and_reads_the_exact_conditional():
     inputs = _bracket_inputs()
     pred = inputs["pred"]
 
-    def loss_of(logits):
+    def loss_of(logits: jax.Array) -> jax.Array:
         moved = dataclasses.replace(pred, transition_generator_logits=logits)
         loss, _ = transition_losses(**{**inputs, "pred": moved})
         return loss
@@ -1545,7 +1627,7 @@ def test_generator_loss_reaches_every_node_and_reads_the_exact_conditional():
     assert 0.0 < float(logs["player_transition_generator_coverage"]) <= 1.0
 
 
-def test_termination_loss_is_the_joint_nll_and_uses_actual_terminal_rows_only():
+def test_termination_loss_is_the_joint_nll_and_uses_actual_terminal_rows_only() -> None:
     """BCE(done) + done * CE(outcome | done) is the negative log-
     likelihood of {continue, loss, draw, win} factorised through the done
     probability -- checked against the four-outcome NLL on a hand-built
@@ -1614,7 +1696,7 @@ def test_termination_loss_is_the_joint_nll_and_uses_actual_terminal_rows_only():
     assert float(logs["player_transition_terminal_ce"]) == 0.0
 
 
-def test_newly_valid_split_reads_only_transitions_with_an_appearing_row():
+def test_newly_valid_split_reads_only_transitions_with_an_appearing_row() -> None:
     inputs = _bracket_inputs()
     pred = inputs["pred"]
     real = _value_head_from_logits(pred.value_head.logits)
@@ -1644,7 +1726,7 @@ def test_newly_valid_split_reads_only_transitions_with_an_appearing_row():
     assert float(logs["player_transition_newly_valid_frac"]) == pytest.approx(1 / 3)
 
 
-def _network_with_frozen_transition_value_head():
+def _network_with_frozen_transition_value_head() -> nn.Module:
     from rl.model.config import get_player_model_config
     from rl.model.player_model import get_player_model
 
@@ -1656,8 +1738,8 @@ def _network_with_frozen_transition_value_head():
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_trains_v_head_off_is_bit_identical_to_the_frozen_clone(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: RealModelAndTrajectory,
+) -> None:
     """The knob's off is the frozen clone of 2026-09-05: the same params
     through `value_trains_v_head` True and False give the same forward,
     every leaf of the imagined value head included -- WITH the control
@@ -1700,8 +1782,8 @@ def test_trains_v_head_off_is_bit_identical_to_the_frozen_clone(
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: RealModelAndTrajectory,
+) -> None:
     from rl.environment.data import CAT_VF_SUPPORT
     from rl.model.heads import HeadParams
     from rl.online.config import Porygon2LearnerConfig
@@ -1717,7 +1799,7 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
         n_bins,
     )
 
-    def transition_only(params, network=network):
+    def transition_only(params: dict, network: nn.Module = network) -> jax.Array:
         out = network.apply(params, actor_input, actor_output, HeadParams())
         batched = jax.tree.map(lambda leaf: leaf[:, None], out)
         target = jax.lax.stop_gradient(batched.dynamics_target)
@@ -1745,7 +1827,7 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
 
     grad_fn = jax.jit(jax.grad(transition_only))
 
-    def reached_by(grads):
+    def reached_by(grads: dict) -> set[str]:
         reached = set()
         for path, leaf in jax.tree_util.tree_leaves_with_path(grads):
             keys = tuple(entry.key for entry in path)
@@ -1784,7 +1866,7 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
     # `reached_by`, the REAL value CE and the real log-policy -- the shared
     # heads and the encoder are reachable, so their absence above is the
     # stop_gradients and not a dead path.
-    def real_losses(params):
+    def real_losses(params: dict) -> jax.Array:
         out = network.apply(params, actor_input, actor_output, HeadParams())
         value_ce = optax.softmax_cross_entropy(
             logits=out.value_head.logits.astype(jnp.float32),
@@ -1798,7 +1880,7 @@ def test_transition_gradient_reaches_the_model_and_nothing_it_reads(
     assert "transition" not in control
 
 
-def test_exported_leaves_match_the_actor_output_dataclass():
+def test_exported_leaves_match_the_actor_output_dataclass() -> None:
     """The `transition_*` identity is written ONCE, in
     TransitionOutput.exported. This pins it against PlayerActorOutput: a
     field added to one side and not the other fails here rather than at the

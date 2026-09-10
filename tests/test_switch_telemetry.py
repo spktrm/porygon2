@@ -15,7 +15,7 @@ from rl.utils import average
 
 
 @pytest.mark.parametrize("objective", ["spo", "ppo"])
-def test_switch_direction_matches_full_logit_derivative(objective):
+def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
     config = SimpleNamespace(
         player_pg_objective=objective,
         player_ppo_clip=0.2,
@@ -36,7 +36,7 @@ def test_switch_direction_matches_full_logit_derivative(objective):
     advantages = jnp.array([1.2, -0.4, 0.7, 1000.0])
     logits = jnp.broadcast_to(jnp.linspace(-1.5, 1.1, NUM_ACTION_CELLS), legal.shape)
 
-    def distribution(shift):
+    def distribution(shift: float | jax.Array) -> jax.Array:
         return jax.nn.log_softmax(
             jnp.where(legal, logits + shift * switch_cells, -1e9), axis=-1
         )
@@ -44,7 +44,7 @@ def test_switch_direction_matches_full_logit_derivative(objective):
     reference = distribution(0.3)
     behaviour_taken = jnp.take_along_axis(distribution(-0.1), taken[:, None], -1)[:, 0]
 
-    def terms(shift):
+    def terms(shift: float | jax.Array) -> jax.Array:
         log_policy = distribution(shift)
         log_ratio = jnp.take_along_axis(log_policy, taken[:, None], -1)[:, 0]
         log_ratio -= behaviour_taken

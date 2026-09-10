@@ -8,6 +8,7 @@ sync.
 
 import logging
 import os
+from collections.abc import Callable
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
@@ -29,7 +30,10 @@ os.environ.setdefault("JAX_EXPLAIN_CACHE_MISSES", "false")
 # learner keeps its own env. Explicit override (not setdefault) on purpose.
 os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
 
+import flax.linen as nn
 import pytest
+
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 
 # Re-exported here because the model tests import it from conftest; the
 # definition moved to rl.model.utils (2026-08-27) so the offline
@@ -38,7 +42,9 @@ from rl.model.utils import open_zero_init_paths  # noqa: F401
 
 
 @pytest.fixture(scope="session")
-def real_model_and_trajectory():
+def real_model_and_trajectory() -> (
+    tuple[nn.Module, dict, PlayerActorInput, PlayerActorOutput]
+):
     """Full-size player model initialised once per test session on the
     bundled real example trajectory — model init + first compile dominate
     the slow suite's runtime, so every slow test shares this one."""
@@ -61,7 +67,11 @@ def real_model_and_trajectory():
 
 
 @pytest.fixture(scope="session")
-def real_model_apply(real_model_and_trajectory):
+def real_model_apply(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> Callable:
     """jax.jit(network.apply) for the session model: one compile, then
     milliseconds per call. Eager apply re-traces the whole module and
     dispatches op by op (the scans recompile per call) -- ~a minute each."""

@@ -10,11 +10,14 @@ the mon fills it again (nothing an unmatched mon carries is public).
 """
 
 import dataclasses
+from collections.abc import Callable
 
+import flax.linen as nn
 import jax
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
     EntityRevealedNodeFeature,
@@ -37,7 +40,14 @@ SHARED_ID_COLUMNS = [
 ]
 
 
-def _with_cell(actor_input, leaf, step, row, column, value):
+def _with_cell(
+    actor_input: PlayerActorInput,
+    leaf: str,
+    step: int,
+    row: int,
+    column: int,
+    value: int,
+) -> PlayerActorInput:
     env = actor_input.env
     table = np.asarray(getattr(env, leaf)).copy()
     table[step, row, column] = value
@@ -46,7 +56,9 @@ def _with_cell(actor_input, leaf, step, row, column, value):
     )
 
 
-def _hidden_move_slot(actor_input, step, mon, public_row):
+def _hidden_move_slot(
+    actor_input: PlayerActorInput, step: int, mon: int, public_row: int
+) -> tuple[int, int] | None:
     """A private move slot whose id is on no public slot, or None."""
     private = np.asarray(actor_input.env.opp_private_team[step, mon])
     public_moves = np.asarray(actor_input.env.revealed_team[step, public_row])[
@@ -58,7 +70,9 @@ def _hidden_move_slot(actor_input, step, mon, public_row):
     return None
 
 
-def _first_matched_with_hidden_move(actor_input, base):
+def _first_matched_with_hidden_move(
+    actor_input: PlayerActorInput, base: PlayerActorOutput
+) -> tuple[int, int, int, tuple[int, int]]:
     from rl.model.player_model import belief_alignment
 
     for step, mon in np.argwhere(np.asarray(base.belief_matched)):
@@ -73,8 +87,11 @@ def _first_matched_with_hidden_move(actor_input, base):
 
 
 def test_hidden_code_reads_hidden_tokens_and_not_the_state_token(
-    real_model_and_trajectory, real_model_apply
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
@@ -116,8 +133,11 @@ def test_hidden_code_reads_hidden_tokens_and_not_the_state_token(
 
 
 def test_hidden_any_empties_on_full_reveal_and_refills_when_unmatched(
-    real_model_and_trajectory, real_model_apply
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory

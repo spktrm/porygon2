@@ -13,7 +13,9 @@ from rl.online.training.targets import two_hot
 
 
 @pytest.mark.parametrize("discount", [1.0, 0.9])
-def test_paired_advantages_masks_distance_and_outer_weight(discount):
+def test_paired_advantages_masks_distance_and_outer_weight(
+    discount: float,
+) -> None:
     # Four unique chunks, one replay duplicate, and one unknown outcome.
     done = jnp.zeros((4, 6), dtype=bool).at[3, 0].set(True)
     legal = jnp.ones((4, 6, 2), dtype=bool).at[1, 0, 1].set(False)
@@ -85,5 +87,5 @@ def test_paired_advantages_masks_distance_and_outer_weight(discount):
     )
 
 
-def test_missing_metadata_produces_no_audit():
+def test_missing_metadata_produces_no_audit() -> None:
     assert paired_advantage_audit(Batch(), None, None, None, None, None, None) == {}

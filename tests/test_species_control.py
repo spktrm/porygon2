@@ -5,12 +5,16 @@ touch the lineage it controls for), and it reads the PUBLIC row's species
 token -- the disguise under Illusion -- never the private truth.
 """
 
+from collections.abc import Callable
+
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
 
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
     EntityRevealedNodeFeature,
@@ -19,7 +23,9 @@ from rl.environment.protos.features_pb2 import (
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-def _with_column(actor_input, leaf, row, column, value):
+def _with_column(
+    actor_input: PlayerActorInput, leaf: str, row: int, column: int, value: int
+) -> PlayerActorInput:
     import dataclasses
 
     env = actor_input.env
@@ -29,12 +35,16 @@ def _with_column(actor_input, leaf, row, column, value):
     )
 
 
-def test_species_control_gradient_stays_in_its_table(real_model_and_trajectory):
+def test_species_control_gradient_stays_in_its_table(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory
 
-    def species_ce(params):
+    def species_ce(params: dict) -> jax.Array:
         out = network.apply(params, actor_input, actor_output, HeadParams())
         labels = jax.lax.stop_gradient(out.hidden_code.astype(jnp.float32))
         ce = optax.softmax_cross_entropy(
@@ -53,8 +63,11 @@ def test_species_control_gradient_stays_in_its_table(real_model_and_trajectory):
 
 
 def test_species_control_reads_the_public_species_only(
-    real_model_and_trajectory, real_model_apply
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     from rl.model.heads import HeadParams
 
     network, params, actor_input, actor_output = real_model_and_trajectory

@@ -1,6 +1,7 @@
 """Checkpoint save/load roundtrips and directory discovery."""
 
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from rl import checkpoint
 
 
-def tree_equal(a, b):
+def tree_equal(a: dict | np.ndarray, b: dict | np.ndarray) -> None:
     if isinstance(a, dict):
         assert set(a) == set(b)
         for k in a:
@@ -18,14 +19,14 @@ def tree_equal(a, b):
 
 
 @pytest.fixture
-def params():
+def params() -> dict:
     rng = np.random.default_rng(0)
     return {
         "params": {"encoder": rng.normal(size=(4, 4)), "v_head": rng.normal(size=(4,))}
     }
 
 
-def test_param_snapshot_roundtrip(tmp_path, params):
+def test_param_snapshot_roundtrip(tmp_path: Path, params: dict) -> None:
     snap = str(tmp_path / "p_00000100")
     checkpoint.save_param_snapshot(
         snap,
@@ -40,7 +41,7 @@ def test_param_snapshot_roundtrip(tmp_path, params):
     assert not checkpoint.has_component(snap, "player", "opt_state")
 
 
-def test_train_state_roundtrip(tmp_path, params):
+def test_train_state_roundtrip(tmp_path: Path, params: dict) -> None:
     ckpt_dir = str(tmp_path / "ckpt_00000100")
     league_bytes = b"league-state"
     controller_bytes = b"controller-state"
@@ -60,7 +61,9 @@ def test_train_state_roundtrip(tmp_path, params):
     assert full["meta"]["learner_config"] == {"generation": 9}
 
 
-def test_missing_league_and_controller_bytes_are_none(tmp_path, params):
+def test_missing_league_and_controller_bytes_are_none(
+    tmp_path: Path, params: dict
+) -> None:
     ckpt_dir = str(tmp_path / "ckpt_00000001")
     checkpoint.save_train_state(
         ckpt_dir,
@@ -73,7 +76,7 @@ def test_missing_league_and_controller_bytes_are_none(tmp_path, params):
     assert checkpoint.load_league_bytes(str(tmp_path / "nope")) is None
 
 
-def test_ckpt_dir_discovery(tmp_path):
+def test_ckpt_dir_discovery(tmp_path: Path) -> None:
     root = str(tmp_path)
     for step in (100, 2000, 50):
         os.makedirs(os.path.join(root, f"ckpt_{step:08}"))
@@ -84,11 +87,11 @@ def test_ckpt_dir_discovery(tmp_path):
     assert checkpoint.most_recent_ckpt_dir(root).endswith("ckpt_00002000")
 
 
-def test_most_recent_ckpt_dir_empty_root(tmp_path):
+def test_most_recent_ckpt_dir_empty_root(tmp_path: Path) -> None:
     assert checkpoint.most_recent_ckpt_dir(str(tmp_path)) is None
 
 
-def test_loaders_skip_writer_scratch_files(tmp_path, params):
+def test_loaders_skip_writer_scratch_files(tmp_path: Path, params: dict) -> None:
     """A process killed mid-_dump leaves '<name>.tmp.<pid>.<tid>' beside the
     completed component; the loaders must skip it (2026-08-15: a truncated
     tmp file fed to pickle aborted an otherwise-healthy resume)."""

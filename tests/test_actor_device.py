@@ -7,12 +7,14 @@ counts (the eval thread's main and EMA pair) never alias."""
 
 import threading
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from constants import NUM_HISTORY
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.environment.utils import (
     ACTOR_HISTORY_MIN_LENGTH,
     _bucket_value,
@@ -20,18 +22,21 @@ from rl.environment.utils import (
     joint_history_level,
     pad_history_to_level,
 )
+from rl.model.heads import HeadParams
 from rl.model.utils import ParamsContainer
 from rl.online.agent import DeviceParamsCache
 from rl.online.inference import InferenceServer, _InferenceRequest
 
 
 @pytest.fixture(scope="module")
-def full_window():
+def full_window() -> PlayerActorInput:
     actor_input, _ = get_ex_player_step()
     return jax.tree.map(lambda x: np.asarray(x[:, 0]), actor_input)
 
 
-def _raw_lengths(actor_input, history_len: int, packed_len: int):
+def _raw_lengths(
+    actor_input: PlayerActorInput, history_len: int, packed_len: int
+) -> PlayerActorInput:
     """A request at an UNBUCKETED shape (what an actor sends): the window's
     leading axes cut to the given lengths, content irrelevant here."""
     return actor_input.replace(
@@ -42,20 +47,26 @@ def _raw_lengths(actor_input, history_len: int, packed_len: int):
     )
 
 
-def _shapes(actor_input) -> tuple[int, int]:
+def _shapes(actor_input: PlayerActorInput) -> tuple[int, int]:
     return (
         actor_input.history.field.shape[0],
         actor_input.packed_history.revealed_cache.shape[0],
     )
 
 
-def _shape_probe_apply(params, actor_input, _placeholder, head_params, rngs):
+def _shape_probe_apply(
+    params: dict,
+    actor_input: PlayerActorInput,
+    _placeholder: PlayerActorOutput,
+    head_params: HeadParams,
+    rngs: dict[str, jax.Array],
+) -> jax.Array:
     # Stands in for the network: reports the shape the forward SAW, with
     # the [T=1] axis _run_group squeezes off each request's output.
     return jnp.asarray(_shapes(actor_input))[None]
 
 
-def _container(player_params) -> ParamsContainer:
+def _container(player_params: dict) -> ParamsContainer:
     return ParamsContainer(
         step_count=0,
         player_frame_count=0,
@@ -75,8 +86,8 @@ def _container(player_params) -> ParamsContainer:
     ],
 )
 def test_direct_path_pads_to_the_servers_group_shape(
-    full_window, history_len, packed_len
-):
+    full_window: PlayerActorInput, history_len: int, packed_len: int
+) -> None:
     request = _raw_lengths(full_window, history_len, packed_len)
     level = joint_history_level(request, ACTOR_HISTORY_MIN_LENGTH)
     direct = _shapes(pad_history_to_level(request, level, ACTOR_HISTORY_MIN_LENGTH))
@@ -101,7 +112,7 @@ def test_direct_path_pads_to_the_servers_group_shape(
     assert tuple(int(x) for x in served.output.actor_output) == direct
 
 
-def test_joint_level_never_splits_the_axes(full_window):
+def test_joint_level_never_splits_the_axes(full_window: PlayerActorInput) -> None:
     # The property the pad exists for: a request compiles one variant per
     # LEVEL, so two requests at the same joint level land on one shape even
     # when their raw axes fall in different per-axis buckets.
@@ -123,7 +134,7 @@ def test_joint_level_never_splits_the_axes(full_window):
     assert len(padded) == 1
 
 
-def test_params_cache_is_one_copy_per_container():
+def test_params_cache_is_one_copy_per_container() -> None:
     device = jax.devices("cpu")[0]
     cache = DeviceParamsCache(device, "player_params", size=2)
     first = _container({"w": np.ones(3, np.float32)})
@@ -136,7 +147,7 @@ def test_params_cache_is_one_copy_per_container():
     assert len(cache) == 2
 
 
-def test_params_cache_evicts_least_recently_used():
+def test_params_cache_evicts_least_recently_used() -> None:
     cache = DeviceParamsCache(jax.devices("cpu")[0], "player_params", size=2)
     first, second, third = (
         _container({"w": np.full(2, fill, np.float32)}) for fill in (1.0, 2.0, 3.0)
@@ -154,7 +165,7 @@ def test_params_cache_evicts_least_recently_used():
     assert cache.get(second) is second_again
 
 
-def test_actor_parameter_view_preserves_required_branches():
+def test_actor_parameter_view_preserves_required_branches() -> None:
     from rl.model.player_model import actor_params_view
 
     branches = {
@@ -185,14 +196,22 @@ def test_actor_parameter_view_preserves_required_branches():
         actor_params_view(plain, search=True)
 
 
-def test_actor_jit_shared_across_agents_and_historical_params(full_window):
+def test_actor_jit_shared_across_agents_and_historical_params(
+    full_window: PlayerActorInput,
+) -> None:
     from rl.model.heads import HeadParams
     from rl.model.player_model import actor_params_view
     from rl.online.agent import Agent
 
     traces = []
 
-    def apply_probe(params, actor_input, placeholder, head_params, rngs):
+    def apply_probe(
+        params: dict,
+        actor_input: PlayerActorInput,
+        placeholder: PlayerActorOutput,
+        head_params: HeadParams,
+        rngs: dict[str, jax.Array],
+    ) -> jax.Array:
         traces.append(1)
         return (params["params"]["v_head"]["weight"] * head_params.temp)[None]
 
@@ -229,7 +248,12 @@ def test_actor_jit_shared_across_agents_and_historical_params(full_window):
 @pytest.mark.gpu
 @pytest.mark.slow
 @pytest.mark.parametrize("search", [False, True])
-def test_real_actor_parameter_view_is_bit_identical(real_model_and_trajectory, search):
+def test_real_actor_parameter_view_is_bit_identical(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    search: bool,
+) -> None:
     from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import actor_params_view, get_player_model

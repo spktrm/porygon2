@@ -3,7 +3,7 @@
 from rl.environment.actor_stats import STEP_TOTAL, ActorStats, timed
 
 
-def test_drain_returns_means_and_resets():
+def test_drain_returns_means_and_resets() -> None:
     stats = ActorStats()
     stats.record("actor_time_inference", 2.0)
     stats.record("actor_time_inference", 4.0)
@@ -17,7 +17,7 @@ def test_drain_returns_means_and_resets():
     assert stats.drain() == {}
 
 
-def test_timed_records_milliseconds_and_no_sink_is_a_noop():
+def test_timed_records_milliseconds_and_no_sink_is_a_noop() -> None:
     stats = ActorStats()
     with stats.timed("phase"):
         pass

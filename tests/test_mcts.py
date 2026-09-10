@@ -6,19 +6,21 @@ import numpy as np
 import pytest
 
 from rl.model.constants import CLS_ROW, NUM_POLICY_READABLE_ROWS
-from rl.model.mcts import mcts_root
+from rl.model.mcts import MCTSResult, mcts_root
 from rl.model.search import SearchFns
 from rl.model.transition import Candidates
 
 
-def stub_model(continuation=1.0, terminal=0.0, stochastic=False):
-    def encoder(rows, cell):
+def stub_model(
+    continuation: float = 1.0, terminal: float = 0.0, stochastic: bool = False
+) -> SearchFns:
+    def encoder(rows: jax.Array, cell: jax.Array) -> jax.Array:
         return jax.nn.one_hot(cell, 4)
 
-    def prior(rows, action):
+    def prior(rows: jax.Array, action: jax.Array) -> jax.Array:
         return jnp.zeros((1, 2))
 
-    def imagine(rows, action, chance):
+    def imagine(rows: jax.Array, action: jax.Array, chance: jax.Array) -> jax.Array:
         code = action.argmax()
         level = rows[CLS_ROW, 1]
         root_action = jnp.where(level == 0, code, rows[CLS_ROW, 2])
@@ -29,7 +31,7 @@ def stub_model(continuation=1.0, terminal=0.0, stochastic=False):
             value = jnp.where(level == 0, 0.0, value)
         return rows.at[CLS_ROW].set(jnp.array([value, level + 1, root_action]))
 
-    def generate(rows, rng):
+    def generate(rows: jax.Array, rng: jax.Array) -> Candidates:
         return Candidates(
             codes=jnp.array([2, 3]),
             occupied=jnp.ones(2, bool),
@@ -50,7 +52,14 @@ def stub_model(continuation=1.0, terminal=0.0, stochastic=False):
     )
 
 
-def run_search(fns, *, simulations=256, depth=2, chance_samples=1, legal=None):
+def run_search(
+    fns: SearchFns,
+    *,
+    simulations: int = 256,
+    depth: int = 2,
+    chance_samples: int = 1,
+    legal: jax.Array | None = None,
+) -> MCTSResult:
     if legal is None:
         legal = jnp.array([True, True, False, False])
     return jax.jit(
@@ -68,7 +77,7 @@ def run_search(fns, *, simulations=256, depth=2, chance_samples=1, legal=None):
     )(jax.random.key(11))
 
 
-def test_mcts_finds_delayed_value_through_latent_actions():
+def test_mcts_finds_delayed_value_through_latent_actions() -> None:
     result = run_search(stub_model())
     assert result.visits.sum() == 256
     assert result.visits[0] > result.visits[1] * 3
@@ -88,7 +97,7 @@ def test_mcts_finds_delayed_value_through_latent_actions():
     )
 
 
-def test_fractional_terminal_payoff_is_counted_once():
+def test_fractional_terminal_payoff_is_counted_once() -> None:
     result = run_search(stub_model(continuation=0.25, terminal=-1))
     # Best descendant return .8: .75*(-1) + .25*.8 = -.55, not +.8.
     assert -0.58 < result.root.cell_values[0] < -0.50
@@ -98,7 +107,7 @@ def test_fractional_terminal_payoff_is_counted_once():
     assert terminal.depth_reached == 1
 
 
-def test_chance_is_sampled_not_optimised():
+def test_chance_is_sampled_not_optimised() -> None:
     result = run_search(
         stub_model(stochastic=True),
         simulations=1024,
@@ -111,7 +120,7 @@ def test_chance_is_sampled_not_optimised():
     assert result.visits[0] == 1024
 
 
-def test_overflow_has_zero_model_calls_and_no_policy_change():
+def test_overflow_has_zero_model_calls_and_no_policy_change() -> None:
     result = run_search(stub_model(), legal=jnp.ones(4, bool))
     assert result.root.legal_truncated
     assert result.model_calls == 0
@@ -119,12 +128,12 @@ def test_overflow_has_zero_model_calls_and_no_policy_change():
     np.testing.assert_array_equal(result.visits, 0)
 
 
-def test_invalid_budget_fails():
+def test_invalid_budget_fails() -> None:
     with pytest.raises(ValueError):
         run_search(stub_model(), simulations=1)
 
 
-def test_empty_root_is_inert():
+def test_empty_root_is_inert() -> None:
     result = run_search(stub_model(), legal=jnp.zeros(4, bool))
     assert result.model_calls == 0
     np.testing.assert_array_equal(result.root.bonus, 0)
@@ -135,16 +144,16 @@ def test_empty_root_is_inert():
 
 @pytest.mark.parametrize("depth", [1, 2])
 @pytest.mark.parametrize("mapping", ["scalar", "map", "vmap", "batch"])
-def test_executed_expansions_stay_outside_traversal(depth, mapping):
+def test_executed_expansions_stay_outside_traversal(depth: int, mapping: str) -> None:
     calls = []
     generated = []
     original = stub_model()
 
-    def imagine(rows, action, chance):
+    def imagine(rows: jax.Array, action: jax.Array, chance: jax.Array) -> jax.Array:
         jax.debug.callback(lambda value: calls.append(float(value)), rows[CLS_ROW, 0])
         return original.imagine_fn(rows, action, chance)
 
-    def generate(rows, key):
+    def generate(rows: jax.Array, key: jax.Array) -> Candidates:
         jax.debug.callback(
             lambda value: generated.append(float(value)), rows[CLS_ROW, 0]
         )
@@ -152,7 +161,7 @@ def test_executed_expansions_stay_outside_traversal(depth, mapping):
 
     fns = original._replace(imagine_fn=imagine, generate_fn=generate)
 
-    def search(rows):
+    def search(rows: jax.Array) -> MCTSResult:
         return mcts_root(
             rows,
             jnp.array([True, True, False, False]),
@@ -188,19 +197,19 @@ def test_executed_expansions_stay_outside_traversal(depth, mapping):
         assert not generated
 
 
-def test_guarded_cond_preserves_mixed_nested_batches_and_captures():
+def test_guarded_cond_preserves_mixed_nested_batches_and_captures() -> None:
     from rl.model.mcts import _guarded_cond
 
-    def evaluate(condition, values, guarded):
+    def evaluate(condition: jax.Array, values: jax.Array, guarded: bool) -> jax.Array:
         # Both integer and constant-valued floating captures must be explicit
         # in the custom batching rule, including under nested vmap.
         offset = values.astype(jnp.int32)
         support = values + jnp.float32(0.25)
 
-        def selected(operand):
+        def selected(operand: jax.Array) -> jax.Array:
             return operand * support + offset
 
-        def skipped(operand):
+        def skipped(operand: jax.Array) -> jax.Array:
             return operand - support
 
         if guarded:
@@ -216,12 +225,12 @@ def test_guarded_cond_preserves_mixed_nested_batches_and_captures():
     np.testing.assert_array_equal(*results)
 
 
-def test_guarded_cond_skips_uniform_false_branch_for_batched_operands():
+def test_guarded_cond_skips_uniform_false_branch_for_batched_operands() -> None:
     from rl.model.mcts import _guarded_cond
 
     calls = []
 
-    def expensive(values):
+    def expensive(values: jax.Array) -> jax.Array:
         jax.debug.callback(lambda value: calls.append(float(value)), values)
         return values + 1
 

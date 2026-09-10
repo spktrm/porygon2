@@ -41,7 +41,7 @@ F32_ALLOWED = {
 }
 
 
-def _abstract_forward():
+def _abstract_forward() -> tuple[dict, dict]:
     """(params, captured intermediates) without running a single kernel."""
     from rl.environment.utils import get_ex_player_step
     from rl.model.config import get_player_model_config
@@ -67,12 +67,12 @@ def _abstract_forward():
 
 
 @pytest.fixture(scope="module")
-def abstract_forward():
+def abstract_forward() -> tuple[dict, dict]:
     """Shared: the abstract trace is the only expensive part of this file."""
     return _abstract_forward()
 
 
-def test_params_are_stored_in_f32(abstract_forward):
+def test_params_are_stored_in_f32(abstract_forward: tuple[dict, dict]) -> None:
     params, _ = abstract_forward
     leaves = jax.tree.leaves(params)
     assert leaves, "captured no params — the probe is broken, not the model"
@@ -81,8 +81,8 @@ def test_params_are_stored_in_f32(abstract_forward):
 
 
 def test_forward_computes_in_bf16_except_where_precision_is_paid_for(
-    abstract_forward,
-):
+    abstract_forward: tuple[dict, dict],
+) -> None:
     _, intermediates = abstract_forward
 
     bf16, f32 = [], []

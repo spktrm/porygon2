@@ -14,7 +14,7 @@ from rl.model.interval_transition import DirectIntervalValue
 from rl.offline.direct_interval import select_checkpoint
 
 
-def test_direct_copy_initialisation_and_live_action_control():
+def test_direct_copy_initialisation_and_live_action_control() -> None:
     cfg = get_player_model_config(9, train=True).transition
     cfg.block.model_size = 16
     cfg.row_read_width = 2
@@ -57,7 +57,7 @@ def test_direct_copy_initialisation_and_live_action_control():
     np.testing.assert_allclose((original - root).mean(), 0, atol=1e-6)
 
 
-def test_checkpoint_selection_ignores_train_and_final_and_uses_earliest_tie():
+def test_checkpoint_selection_ignores_train_and_final_and_uses_earliest_tie() -> None:
     records = [
         {"step": 200, "split": "validation", "prior_delta_gain": 0.1},
         {"step": 100, "split": "validation", "prior_delta_gain": 0.1},
@@ -70,7 +70,7 @@ def test_checkpoint_selection_ignores_train_and_final_and_uses_earliest_tie():
         select_checkpoint([])
 
 
-def test_root_row_bypass_preserves_shared_init_and_has_live_action_gradient():
+def test_root_row_bypass_preserves_shared_init_and_has_live_action_gradient() -> None:
     cfg = get_player_model_config(9, train=True).transition
     cfg.block.model_size = 16
     cfg.row_read_width = 2
@@ -92,7 +92,7 @@ def test_root_row_bypass_preserves_shared_init_and_has_live_action_gradient():
     apply = jax.jit(bypass.apply)
     np.testing.assert_array_equal(apply(params, rows, jnp.array(0), root), root)
 
-    def loss(variables):
+    def loss(variables: dict) -> jax.Array:
         return optax.softmax_cross_entropy(
             bypass.apply(variables, rows, jnp.array(0), root),
             jnp.array([1.0, 0.0, 0.0]),

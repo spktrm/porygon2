@@ -2,17 +2,22 @@
 prune_log_policy): the one definition both the `thresholded` eval slot
 and the learner's v-trace ratio read."""
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.utils import legal_log_policy, prune_log_policy
 
 DTYPE_MIN = jnp.finfo(jnp.float32).min
 
 
-def _row(probabilities, legal=None):
+def _row(
+    probabilities: list[float] | list[list[float]] | np.ndarray,
+    legal: np.ndarray | None = None,
+) -> tuple[jax.Array, jax.Array]:
     probabilities = np.asarray(probabilities, np.float32)
     if legal is None:
         legal = probabilities > 0
@@ -20,14 +25,14 @@ def _row(probabilities, legal=None):
     return legal_log_policy(jnp.asarray(logits), jnp.asarray(legal)), jnp.asarray(legal)
 
 
-def test_threshold_zero_is_the_sampling_form_bit_identical():
+def test_threshold_zero_is_the_sampling_form_bit_identical() -> None:
     log_policy, legal = _row([0.5, 0.3, 0.0, 0.2])
     pruned = prune_log_policy(log_policy, legal, 0.0)
     expected = jnp.where(legal, log_policy, DTYPE_MIN)
     np.testing.assert_array_equal(np.asarray(pruned), np.asarray(expected))
 
 
-def test_below_the_line_is_removed_and_the_rest_renormalised():
+def test_below_the_line_is_removed_and_the_rest_renormalised() -> None:
     log_policy, legal = _row([0.6, 0.004, 0.0, 0.396])
     pruned = np.asarray(prune_log_policy(log_policy, legal, 0.005))
     assert pruned[1] == DTYPE_MIN and pruned[2] == DTYPE_MIN
@@ -36,7 +41,7 @@ def test_below_the_line_is_removed_and_the_rest_renormalised():
     np.testing.assert_allclose(kept.sum(), 1.0, rtol=1e-6)
 
 
-def test_above_the_line_is_untouched():
+def test_above_the_line_is_untouched() -> None:
     # Positive control for the previous test: the same row with the small
     # cell lifted just past the threshold keeps every legal cell as-is.
     log_policy, legal = _row([0.6, 0.006, 0.0, 0.394])
@@ -46,7 +51,7 @@ def test_above_the_line_is_untouched():
     )
 
 
-def test_a_row_entirely_below_the_line_keeps_its_legal_set():
+def test_a_row_entirely_below_the_line_keeps_its_legal_set() -> None:
     # rnad.py FineTuning._threshold's degenerate guard.
     probabilities = np.full(300, 1 / 300, np.float32)
     log_policy, legal = _row(probabilities)
@@ -56,18 +61,18 @@ def test_a_row_entirely_below_the_line_keeps_its_legal_set():
     )
 
 
-def test_batched_rows_are_independent():
+def test_batched_rows_are_independent() -> None:
     log_policy, legal = _row([[0.6, 0.004, 0.0, 0.396], [0.25, 0.25, 0.25, 0.25]])
     pruned = np.asarray(prune_log_policy(log_policy, legal, 0.005))
     assert pruned[0, 1] == DTYPE_MIN
     np.testing.assert_allclose(np.exp(pruned[1]), 0.25, rtol=1e-6)
 
 
-def test_removed_cell_has_zero_gradient_through_its_own_logit():
+def test_removed_cell_has_zero_gradient_through_its_own_logit() -> None:
     legal = jnp.asarray([True, True, False, True])
     logits = jnp.log(jnp.asarray([0.6, 0.004, 1.0, 0.396]))
 
-    def kept_log_prob(logits):
+    def kept_log_prob(logits: jax.Array) -> jax.Array:
         return prune_log_policy(legal_log_policy(logits, legal), legal, 0.005)[0]
 
     gradient = np.asarray(jax.grad(kept_log_prob)(logits))
@@ -79,7 +84,11 @@ def test_removed_cell_has_zero_gradient_through_its_own_logit():
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_real_actor_default_head_params_are_bit_identical(real_model_and_trajectory):
+def test_real_actor_default_head_params_are_bit_identical(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model

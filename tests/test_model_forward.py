@@ -5,17 +5,30 @@ preallocation disabled by conftest so it coexists with a live learner).
 Marked slow (~1 min): deselect with `-m "not slow"` for the quick suite.
 """
 
+from collections.abc import Callable
+
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import (
+    PlayerActorInput,
+    PlayerActorOutput,
+    PlayerEnvOutput,
+)
 from rl.model.constants import NUM_FIELD_ROWS, NUM_PUBLIC_SLOTS, PRIVATE_ROWS
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-def test_init_produces_finite_params(real_model_and_trajectory, real_model_apply):
+def test_init_produces_finite_params(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     _, params, _, _ = real_model_and_trajectory
     leaves = jax.tree.leaves(params)
     assert leaves
@@ -23,7 +36,12 @@ def test_init_produces_finite_params(real_model_and_trajectory, real_model_apply
         assert np.isfinite(np.asarray(leaf, dtype=np.float32)).all()
 
 
-def test_forward_outputs_finite_and_shaped(real_model_and_trajectory, real_model_apply):
+def test_forward_outputs_finite_and_shaped(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     network, params, actor_input, actor_output = real_model_and_trajectory
     from rl.model.heads import HeadParams
 
@@ -40,7 +58,12 @@ def test_forward_outputs_finite_and_shaped(real_model_and_trajectory, real_model
     assert np.isfinite(pi_lp).all()
 
 
-def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):
+def test_forward_is_deterministic(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     network, params, actor_input, actor_output = real_model_and_trajectory
     from rl.model.heads import HeadParams
 
@@ -52,7 +75,9 @@ def test_forward_is_deterministic(real_model_and_trajectory, real_model_apply):
     )
 
 
-def _assembled_rows(network, params, actor_input):
+def _assembled_rows(
+    network: nn.Module, params: dict, actor_input: PlayerActorInput
+) -> np.ndarray:
     """The trunk's input sequence for one timestep, BEFORE any attention.
 
     Every identity a row carries -- side, group, position -- is additive and
@@ -61,7 +86,7 @@ def _assembled_rows(network, params, actor_input):
     behavioural rather than structural.
     """
 
-    def call(module, env_step):
+    def call(module: nn.Module, env_step: PlayerEnvOutput) -> jax.Array:
         encoder = module.encoder
         width = encoder.cfg.entity_size
         zero_slots = jnp.zeros((NUM_PUBLIC_SLOTS, width), env_step.field.dtype)
@@ -82,8 +107,10 @@ def _assembled_rows(network, params, actor_input):
 
 
 def test_private_sheet_is_not_tagged_with_the_opponents_side(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """My private sheet must not carry the tag that marks OPPONENT rows.
 
     The service writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so
@@ -101,7 +128,11 @@ def test_private_sheet_is_not_tagged_with_the_opponents_side(
     np.testing.assert_allclose(base, moved_side, atol=0)
 
 
-def test_private_side_bias_is_the_live_route(real_model_and_trajectory):
+def test_private_side_bias_is_the_live_route(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """The positive control for the test above: perturbing the sheet's OWN
     tag does move its rows, so that test is not passing merely because
     nothing reaches them."""
@@ -113,7 +144,7 @@ def test_private_side_bias_is_the_live_route(real_model_and_trajectory):
     assert not np.allclose(base, moved)
 
 
-def _with_group_bias(params, value):
+def _with_group_bias(params: dict, value: float) -> dict:
     tree = jax.tree.map(lambda x: x, params)
     encoder_params = tree["params"]["encoder"]
     encoder_params["sequence_group_bias"] = jnp.full_like(
@@ -122,7 +153,11 @@ def _with_group_bias(params, value):
     return tree
 
 
-def test_row_identity_is_added_after_the_input_norm(real_model_and_trajectory):
+def test_row_identity_is_added_after_the_input_norm(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """The content is normalised to RMS 1 and the group identity goes on
     AFTER (2026-09-10): the assembled rows with a group bias of all-ones minus
     the rows with no bias equal that bias exactly, and the unbiased rows
@@ -145,17 +180,19 @@ def test_row_identity_is_added_after_the_input_norm(real_model_and_trajectory):
     np.testing.assert_array_equal(biased[~valid], 0)
 
 
-def _field_tokens(network, params, actor_input):
+def _field_tokens(
+    network: nn.Module, params: dict, actor_input: PlayerActorInput
+) -> jax.Array:
     """The (global, my-side, opp-side) field token triple for one timestep."""
 
-    def call(module, field):
+    def call(module: nn.Module, field: jax.Array) -> jax.Array:
         return module.encoder._embed_field(field)[0]
 
     field = jax.tree.map(lambda x: x[0], actor_input.env.field)
     return jax.jit(lambda p, f: network.apply(p, f, method=call))(params, field)
 
 
-def _perturbed(params, path, delta=1.0):
+def _perturbed(params: dict, path: tuple[str, ...], delta: float = 1.0) -> dict:
     tree = jax.tree.map(lambda x: x, params)
     node = tree["params"]["encoder"]
     for key in path[:-1]:
@@ -165,8 +202,10 @@ def _perturbed(params, path, delta=1.0):
 
 
 def test_field_side_tokens_do_not_read_the_active_status_table(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """The my/opp side-condition tokens must not borrow pos_bias.
 
     pos_bias is indexed by ENTITY_PUBLIC_NODE_FEATURE__ACTIVE (= scoreOrder,
@@ -194,7 +233,9 @@ def test_field_side_tokens_do_not_read_the_active_status_table(
     np.testing.assert_allclose(np.asarray(base[0]), np.asarray(moved_side[0]), atol=0)
 
 
-def _with_private_column(actor_input, row, column, value):
+def _with_private_column(
+    actor_input: PlayerActorInput, row: int, column: int, value: int
+) -> PlayerActorInput:
     """actor_input with private_team[:, row, column] set to `value`."""
     import dataclasses
 
@@ -206,8 +247,10 @@ def _with_private_column(actor_input, row, column, value):
 
 
 def test_private_condition_reaches_only_its_own_sheet_row(
-    real_model_and_trajectory,
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """The truth channel is wired: a candidate's CURRENT hp on the wire moves
     its own assembled sheet row and no other -- the input-level half of what
     probe C measures behaviourally after training. Probe C's baseline read
@@ -232,7 +275,11 @@ def test_private_condition_reaches_only_its_own_sheet_row(
     ].any(), "condition must be entity-local at assembly time"
 
 
-def test_entity_idx_is_not_row_content(real_model_and_trajectory):
+def test_entity_idx_is_not_row_content(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     """The wire's ENTITY_IDX names a sheet row's public twin for the belief
     head's alignment ONLY (player_model.belief_alignment): since the
     entity_index_tag was deleted (2026-09-02) it enters no row, so rekeying

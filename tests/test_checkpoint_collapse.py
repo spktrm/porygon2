@@ -57,7 +57,7 @@ def ckpt_dir() -> str:
 
 
 @pytest.fixture(scope="session")
-def ckpt_target_params(ckpt_dir):
+def ckpt_target_params(ckpt_dir: str) -> dict:
     """The EMA (target) params — same choice the league uses for opponents,
     since it's the smoothed, deployable snapshot rather than the noisier
     live optimiser params.
@@ -84,7 +84,7 @@ def ckpt_target_params(ckpt_dir):
     return params
 
 
-def _find_leaf(params, name: str) -> np.ndarray:
+def _find_leaf(params: dict, name: str) -> np.ndarray:
     matches = [
         np.asarray(leaf)
         for path, leaf in jax.tree_util.tree_leaves_with_path(params)
@@ -105,7 +105,9 @@ def _pairwise_cosine_similarities(table: np.ndarray) -> np.ndarray:
 
 
 @pytest.mark.gpu
-def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
+def test_checkpoint_representation_not_collapsed(
+    ckpt_dir: str, ckpt_target_params: dict
+) -> None:
     """Runs the live learner's capacity probe (dormant-unit fraction +
     srank@0.99, see rl.model.capacity.embedding_stats) against this checkpoint's
     params on the bundled example trajectory, for both trunk embedding
@@ -167,7 +169,7 @@ def test_checkpoint_representation_not_collapsed(ckpt_dir, ckpt_target_params):
         )
 
 
-def test_checkpoint_embedding_tables_not_collapsed(ckpt_target_params):
+def test_checkpoint_embedding_tables_not_collapsed(ckpt_target_params: dict) -> None:
     """The small learned embedding tables (value-ladder query rows,
     target/pass action-grid rows) shouldn't collapse into near-duplicate
     row vectors — read directly off params, no forward pass needed."""

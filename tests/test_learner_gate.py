@@ -13,6 +13,7 @@ from rl.model.utils import ParamsContainer
 from rl.online.league import MAIN_KEY, League, PlayerRef
 from rl.online.training.league_ops import should_add_new_player
 from rl.online.training.learner import Learner
+from rl.online.training.run_state import AddReason, RunState
 
 # A ref written by an older revision: a foreign origin tag in a disjoint
 # (far higher) step_count range, which is exactly what the origin filter
@@ -35,7 +36,9 @@ def make_ref(step: int, frames: int, origin: str = "main") -> PlayerRef:
     )
 
 
-def make_learner(main_frames: int, players: list[PlayerRef], main_steps: int = 10_000):
+def make_learner(
+    main_frames: int, players: list[PlayerRef], main_steps: int = 10_000
+) -> tuple[SimpleNamespace, SimpleNamespace]:
     league = League(
         main_player=ParamsContainer(
             step_count=MAIN_KEY,
@@ -61,25 +64,25 @@ def make_learner(main_frames: int, players: list[PlayerRef], main_steps: int = 1
     return stub, run_state
 
 
-def gate(stub, run_state):
+def gate(stub: SimpleNamespace, run_state: SimpleNamespace) -> AddReason | None:
     return should_add_new_player(run_state, stub.league, stub.config)
 
 
-def test_empty_league_waits_for_minimum_steps():
+def test_empty_league_waits_for_minimum_steps() -> None:
     stub, run_state = make_learner(
         main_frames=MIN_FRAMES + 1, players=[], main_steps=100
     )
     assert gate(stub, run_state) is None
 
 
-def test_empty_league_initial_add_after_minimum_steps():
+def test_empty_league_initial_add_after_minimum_steps() -> None:
     stub, run_state = make_learner(
         main_frames=MIN_FRAMES + 1, players=[], main_steps=MIN_INITIAL_STEPS + 1
     )
     assert gate(stub, run_state) == "initial"
 
 
-def test_no_add_soon_after_own_checkpoint():
+def test_no_add_soon_after_own_checkpoint() -> None:
     stub, run_state = make_learner(
         main_frames=1_000_000,
         players=[make_ref(100, frames=1_000_000 - MIN_FRAMES // 2)],
@@ -87,7 +90,7 @@ def test_no_add_soon_after_own_checkpoint():
     assert gate(stub, run_state) is None
 
 
-def test_overdue_after_max_frames():
+def test_overdue_after_max_frames() -> None:
     stub, run_state = make_learner(
         main_frames=MAX_FRAMES + 1_000,
         players=[make_ref(100, frames=0)],
@@ -95,7 +98,7 @@ def test_overdue_after_max_frames():
     assert gate(stub, run_state) == "overdue"
 
 
-def test_dominant_before_max_frames():
+def test_dominant_before_max_frames() -> None:
     ref = make_ref(100, frames=0)
     stub, run_state = make_learner(main_frames=MIN_FRAMES + 1, players=[ref])
     main = stub.league.get_main_player()
@@ -104,7 +107,7 @@ def test_dominant_before_max_frames():
     assert gate(stub, run_state) == "dominant"
 
 
-def test_not_dominant_at_prior_win_rate():
+def test_not_dominant_at_prior_win_rate() -> None:
     # Prior is 0.5 with no games recorded: min win rate 0.5 < 0.7.
     stub, run_state = make_learner(
         main_frames=MIN_FRAMES + 1, players=[make_ref(100, frames=0)]
@@ -112,7 +115,7 @@ def test_not_dominant_at_prior_win_rate():
     assert gate(stub, run_state) is None
 
 
-def test_foreign_origin_publication_does_not_reset_pacing():
+def test_foreign_origin_publication_does_not_reset_pacing() -> None:
     """Regression (2026-08-14): a foreign-origin publication carries a
     +100M/+200M step key and a tiny own frame count. Pacing must stay
     anchored to main's OWN last snapshot — before the fix this scenario
@@ -132,7 +135,7 @@ def test_foreign_origin_publication_does_not_reset_pacing():
     assert gate(stub, run_state) is None
 
 
-def test_dominance_is_judged_against_all_historicals():
+def test_dominance_is_judged_against_all_historicals() -> None:
     """AlphaStar's ready_to_checkpoint takes win_rates.min() over every
     Historical, whatever its origin — beating only your own lineage is not
     dominance."""
@@ -148,7 +151,7 @@ def test_dominance_is_judged_against_all_historicals():
     assert gate(stub, run_state) is None
 
 
-def test_build_run_state_seeds_host_step_from_restored_state():
+def test_build_run_state_seeds_host_step_from_restored_state() -> None:
     """Regression (2026-08-14 overdue add storm): league keys are
     host_step and League.get_latest_player picks newest as max(key), so a
     session-local host_step restarting at 0 left the pre-restart snapshot
@@ -175,7 +178,7 @@ def test_build_run_state_seeds_host_step_from_restored_state():
     )
     stub.league.update_live = lambda key, container: None
 
-    def build(steps):
+    def build(steps: int) -> RunState:
         return Learner._build_run_state(
             stub,
             player_state=SimpleNamespace(

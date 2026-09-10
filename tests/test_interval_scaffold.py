@@ -2,8 +2,11 @@
 stub update: the schedule, the finiteness gate and the files it writes."""
 
 import json
+from collections.abc import Callable
+from pathlib import Path
 
 import flax.serialization
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -11,15 +14,19 @@ import pytest
 from rl.offline.train_interval import prepare_output, run_arm, train_read_subset
 
 
-def _stub_arm(tmp_path, steps, eval_steps, log_every, update):
+def _stub_arm(
+    tmp_path: Path, steps: int, eval_steps: set[int], log_every: int, update: Callable
+) -> tuple[Path, dict[str, jax.Array], list[dict], list[np.ndarray]]:
     output = prepare_output(tmp_path / "arm")
     calls = []
 
-    def make_batch(indices):
+    def make_batch(indices: np.ndarray) -> dict[str, jax.Array]:
         calls.append(np.asarray(indices))
         return {"indices": jnp.asarray(indices)}
 
-    def read_progress(step, params, seen):
+    def read_progress(
+        step: int, params: dict[str, jax.Array], seen: np.ndarray
+    ) -> dict[str, int | float | str]:
         return {
             "step": step,
             "split": "validation",
@@ -47,11 +54,16 @@ def _stub_arm(tmp_path, steps, eval_steps, log_every, update):
     return output, params, records, calls
 
 
-def _step_update(params, state, batch, key):
+def _step_update(
+    params: dict[str, jax.Array],
+    state: None,
+    batch: dict[str, jax.Array],
+    key: jax.Array,
+) -> tuple[dict[str, jax.Array], None, dict[str, jax.Array]]:
     return {"weight": params["weight"] + 1.0}, state, {"loss": params["weight"]}
 
 
-def test_run_arm_schedule_and_files(tmp_path):
+def test_run_arm_schedule_and_files(tmp_path: Path) -> None:
     output, params, records, calls = _stub_arm(
         tmp_path, steps=6, eval_steps={0, 4, 6}, log_every=3, update=_step_update
     )
@@ -81,19 +93,26 @@ def test_run_arm_schedule_and_files(tmp_path):
     assert not list(output.glob("*.tmp-*"))
 
 
-def test_run_arm_refuses_a_finished_experiment_and_non_finite_updates(tmp_path):
+def test_run_arm_refuses_a_finished_experiment_and_non_finite_updates(
+    tmp_path: Path,
+) -> None:
     _stub_arm(tmp_path, steps=1, eval_steps={1}, log_every=0, update=_step_update)
     with pytest.raises(FileExistsError):
         prepare_output(tmp_path / "arm")
 
-    def diverging(params, state, batch, key):
+    def diverging(
+        params: dict[str, jax.Array],
+        state: None,
+        batch: dict[str, jax.Array],
+        key: jax.Array,
+    ) -> tuple[dict[str, jax.Array], None, dict[str, jax.Array]]:
         return params, state, {"loss": jnp.float32(jnp.nan)}
 
     with pytest.raises(FloatingPointError):
         _stub_arm(tmp_path / "second", 2, {2}, 0, diverging)
 
 
-def test_train_read_subset_is_fixed_and_bounded():
+def test_train_read_subset_is_fixed_and_bounded() -> None:
     first = train_read_subset(np.arange(20), 5, seed=3)
     second = train_read_subset(np.arange(20), 5, seed=3)
     np.testing.assert_array_equal(first, second)

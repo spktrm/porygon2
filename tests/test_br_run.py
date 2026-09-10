@@ -6,6 +6,7 @@ carries the positive control that proves it could fail."""
 import argparse
 import os
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -24,6 +25,7 @@ from rl.online.training.league_ops import (
     register_br_target,
     target_step_count,
 )
+from rl.online.training.learner import Learner
 
 
 def make_container(step_count: int, frames: int = 0) -> ParamsContainer:
@@ -36,11 +38,11 @@ def make_container(step_count: int, frames: int = 0) -> ParamsContainer:
     )
 
 
-def make_config(**overrides) -> Porygon2LearnerConfig:
+def make_config(**overrides: str | int | float | None) -> Porygon2LearnerConfig:
     return Porygon2LearnerConfig().replace(**overrides)
 
 
-def write_target_ckpt(root, step: int = 123) -> str:
+def write_target_ckpt(root: Path, step: int = 123) -> str:
     """A minimal target checkpoint dir: params components plus a dirname
     the step-count fallback can parse."""
     target_dir = os.path.join(str(root), f"ckpt_{step:08}")
@@ -53,14 +55,14 @@ def write_target_ckpt(root, step: int = 123) -> str:
 
 
 class TestCkptRoot:
-    def test_subdir_scopes_the_root(self):
+    def test_subdir_scopes_the_root(self) -> None:
         base = make_config()
         child = make_config(ckpt_subdir=os.path.join("br", "x"))
         assert ckpt_root(child) == os.path.join(ckpt_root(base), "br", "x")
         # Control: without the subdir the root is unchanged.
         assert "br" not in ckpt_root(base)
 
-    def test_parent_scan_ignores_child_subtree(self, tmp_path):
+    def test_parent_scan_ignores_child_subtree(self, tmp_path: Path) -> None:
         parent = tmp_path / "gen9"
         (parent / "ckpt_00000100").mkdir(parents=True)
         (parent / "br" / "x" / "ckpt_00099999").mkdir(parents=True)
@@ -72,26 +74,28 @@ class TestCkptRoot:
 
 
 class TestExplicitInitPath:
-    def test_missing_explicit_path_raises(self):
+    def test_missing_explicit_path_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
             load_train_state(
                 make_config(), None, None, mode="params", ckpt_path="/nonexistent/ckpt"
             )
 
-    def test_scratch_with_explicit_path_raises(self):
+    def test_scratch_with_explicit_path_raises(self) -> None:
         with pytest.raises(ValueError):
             load_train_state(
                 make_config(), None, None, mode="scratch", ckpt_path="/anything"
             )
 
-    def test_explicit_path_routes_to_params_load(self, tmp_path, monkeypatch):
+    def test_explicit_path_routes_to_params_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Control: a path that exists reaches load_from_params with that
         # exact dir (never the most-recent lookup, never scratch).
         import rl.online.artifact as artifact
 
         seen = {}
 
-        def fake_load(ckpt_path, *args):
+        def fake_load(ckpt_path: str, *args: Porygon2LearnerConfig | None) -> str:
             seen["path"] = ckpt_path
             return "sentinel"
 
@@ -104,7 +108,9 @@ class TestExplicitInitPath:
 
 
 class TestPinnedMatchmaking:
-    def _actor(self, pinned, league=None) -> PlayerActor:
+    def _actor(
+        self, pinned: ParamsContainer | None, league: League | None = None
+    ) -> PlayerActor:
         actor = PlayerActor.__new__(PlayerActor)
         actor._pinned_opponent = pinned
         actor._learner = types.SimpleNamespace(
@@ -113,7 +119,7 @@ class TestPinnedMatchmaking:
         )
         return actor
 
-    def test_pin_short_circuits_every_draw(self):
+    def test_pin_short_circuits_every_draw(self) -> None:
         pinned = make_container(123)
         actor = self._actor(pinned)
         for _ in range(100):
@@ -121,7 +127,7 @@ class TestPinnedMatchmaking:
             assert opponent is pinned
             assert trainable is False
 
-    def test_unpinned_reproduces_existing_branches(self):
+    def test_unpinned_reproduces_existing_branches(self) -> None:
         # Control: with no pin and an empty roster, every branch falls
         # through to mirror self-play — (own container, trainable=True).
         league = League(main_player=make_container(MAIN_KEY), players=[])
@@ -134,7 +140,9 @@ class TestPinnedMatchmaking:
 
 
 class TestTargetRegistration:
-    def test_registers_and_scores_payoff(self, tmp_path, monkeypatch):
+    def test_registers_and_scores_payoff(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         target_dir = write_target_ckpt(tmp_path, step=123)
         config = make_config(
@@ -161,7 +169,9 @@ class TestTargetRegistration:
         league.update_payoff(own, make_container(999), payoff=1.0)
         assert league.games.get((MAIN_KEY, 999), 0.0) == 0.0
 
-    def test_reregistration_is_idempotent(self, tmp_path, monkeypatch):
+    def test_reregistration_is_idempotent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         target_dir = write_target_ckpt(tmp_path, step=123)
         config = make_config(
@@ -174,7 +184,7 @@ class TestTargetRegistration:
         assert league.players[123] is ref_before
 
 
-def make_br_run_state(value: float, step: int = 500):
+def make_br_run_state(value: float, step: int = 500) -> types.SimpleNamespace:
     tree = {"w": np.full(1, value)}
     return types.SimpleNamespace(
         player_state=types.SimpleNamespace(
@@ -193,14 +203,18 @@ def make_br_run_state(value: float, step: int = 500):
 
 
 class TestPublishAndImport:
-    def _config(self, tmp_path, monkeypatch):
+    def _config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> Porygon2LearnerConfig:
         monkeypatch.chdir(tmp_path)
         target_dir = write_target_ckpt(tmp_path, step=123)
         return make_config(
             br_target_ckpt=target_dir, ckpt_subdir=os.path.join("br", "x")
         )
 
-    def test_publish_lands_in_parent_players(self, tmp_path, monkeypatch):
+    def test_publish_lands_in_parent_players(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         config = self._config(tmp_path, monkeypatch)
         snapshot_dir = publish_br_snapshot(make_br_run_state(1.0), config)
 
@@ -211,7 +225,9 @@ class TestPublishAndImport:
         loaded = checkpoint.load_component(snapshot_dir, "player", "params")
         np.testing.assert_array_equal(loaded["w"], np.full(1, 1.0))
 
-    def test_second_publish_overwrites_in_place(self, tmp_path, monkeypatch):
+    def test_second_publish_overwrites_in_place(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         config = self._config(tmp_path, monkeypatch)
         first = publish_br_snapshot(make_br_run_state(1.0), config)
         second = publish_br_snapshot(make_br_run_state(2.0, step=900), config)
@@ -222,7 +238,9 @@ class TestPublishAndImport:
         players_root = os.path.dirname(second)
         assert sorted(os.listdir(players_root)) == [f"p_{BR_STEP_OFFSET + 123:08}"]
 
-    def test_import_registers_once_and_ignores_orphans(self, tmp_path, monkeypatch):
+    def test_import_registers_once_and_ignores_orphans(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         config = self._config(tmp_path, monkeypatch)
         publish_br_snapshot(make_br_run_state(1.0), config)
         # An ordinary (provenance-less) snapshot dir must stay invisible.
@@ -251,7 +269,7 @@ class TestPublishAndImport:
 
 
 class TestLeagueAddSuppression:
-    def _learner(self, config, frames: int):
+    def _learner(self, config: Porygon2LearnerConfig, frames: int) -> Learner:
         from rl.online.training.learner import Learner
 
         learner = Learner.__new__(Learner)
@@ -261,13 +279,13 @@ class TestLeagueAddSuppression:
         )
         return learner
 
-    def test_br_mode_never_touches_run_state(self):
+    def test_br_mode_never_touches_run_state(self) -> None:
         # run_state=None: any attempt to snapshot would raise — the gate
         # must return before the machinery runs.
         learner = self._learner(make_config(br_target_ckpt="/some/ckpt"), frames=10**9)
         assert learner._manage_league(None, step=60_000) is None
 
-    def test_main_mode_reaches_the_machinery(self):
+    def test_main_mode_reaches_the_machinery(self) -> None:
         # Control: same call in main mode DOES reach should_add_new_player
         # (past the min-frames gate, empty roster -> it reads
         # run_state.player_state and explodes on the None stub).
@@ -277,7 +295,7 @@ class TestLeagueAddSuppression:
 
 
 class TestBrWinrateStop:
-    def _learner(self, threshold: float):
+    def _learner(self, threshold: float) -> Learner:
         from rl.online.league import PlayerRef
         from rl.online.training.learner import Learner
 
@@ -298,7 +316,7 @@ class TestBrWinrateStop:
         learner.done = False
         return learner
 
-    def _play(self, learner, wins: int, losses: int):
+    def _play(self, learner: Learner, wins: int, losses: int) -> None:
         own = learner.league.get_live(MAIN_KEY)
         target = make_container(123)
         for _ in range(wins):
@@ -306,13 +324,13 @@ class TestBrWinrateStop:
         for _ in range(losses):
             learner.league.update_payoff(own, target, payoff=-1.0)
 
-    def test_stops_on_reliable_winrate(self):
+    def test_stops_on_reliable_winrate(self) -> None:
         learner = self._learner(0.7)
         self._play(learner, wins=25, losses=0)
         learner._manage_league(None, step=100)
         assert learner.done is True
 
-    def test_holds_below_games_floor(self):
+    def test_holds_below_games_floor(self) -> None:
         # Control: a perfect record on too few games must not stop —
         # the Laplace-prior reliability floor is the point.
         learner = self._learner(0.7)
@@ -320,13 +338,13 @@ class TestBrWinrateStop:
         learner._manage_league(None, step=100)
         assert learner.done is False
 
-    def test_holds_below_threshold(self):
+    def test_holds_below_threshold(self) -> None:
         learner = self._learner(0.7)
         self._play(learner, wins=13, losses=12)
         learner._manage_league(None, step=100)
         assert learner.done is False
 
-    def test_zero_threshold_is_off(self):
+    def test_zero_threshold_is_off(self) -> None:
         learner = self._learner(0.0)
         self._play(learner, wins=50, losses=0)
         learner._manage_league(None, step=100)
@@ -334,7 +352,9 @@ class TestBrWinrateStop:
 
 
 class TestTrainStepBudget:
-    def test_idle_ticks_do_not_consume_num_steps(self, monkeypatch):
+    def test_idle_ticks_do_not_consume_num_steps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Regression (first BR run, 2026-08-27): `for _ in range(num_steps)`
         # burned loop iterations on idle warm-up ticks and ended the run at
         # 1891 of 5000 train steps. num_steps must bound host_step.
@@ -385,7 +405,7 @@ class TestTrainStepBudget:
 
 
 class TestResolveRunSetup:
-    def _args(self, **overrides):
+    def _args(self, **overrides: str | int | float | None) -> argparse.Namespace:
         defaults = dict(
             debug=False,
             load_mode=None,
@@ -400,7 +420,7 @@ class TestResolveRunSetup:
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
 
-    def test_plain_run_unchanged(self, monkeypatch):
+    def test_plain_run_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from rl.online.main import resolve_run_setup
 
         monkeypatch.delenv("LOAD_STATE_MODE", raising=False)
@@ -410,7 +430,9 @@ class TestResolveRunSetup:
         assert (mode, init_ckpt, job_name) == ("checkpoint", None, "main")
         assert config.br_target_ckpt is None and config.ckpt_subdir is None
 
-    def test_fresh_br_derives_params_mode(self, tmp_path, monkeypatch):
+    def test_fresh_br_derives_params_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from rl.online.main import resolve_run_setup
 
         monkeypatch.chdir(tmp_path)
@@ -424,7 +446,9 @@ class TestResolveRunSetup:
         assert config.ckpt_subdir == os.path.join("br", f"ckpt_{123:08}")
         assert config.num_steps == 50
 
-    def test_existing_br_tree_resumes(self, tmp_path, monkeypatch):
+    def test_existing_br_tree_resumes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from rl.online.main import resolve_run_setup
 
         monkeypatch.chdir(tmp_path)
@@ -435,7 +459,9 @@ class TestResolveRunSetup:
         )
         assert (mode, init_ckpt, job_name) == ("checkpoint", None, "br-tagged")
 
-    def test_br_without_num_steps_defaults_winrate_stop(self, tmp_path, monkeypatch):
+    def test_br_without_num_steps_defaults_winrate_stop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from rl.online.main import resolve_run_setup
 
         monkeypatch.chdir(tmp_path)
@@ -447,7 +473,9 @@ class TestResolveRunSetup:
         # num_steps keeps the effectively-unbounded config default.
         assert config.num_steps == Porygon2LearnerConfig().num_steps
 
-    def test_br_with_num_steps_keeps_winrate_stop_off(self, tmp_path, monkeypatch):
+    def test_br_with_num_steps_keeps_winrate_stop_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from rl.online.main import resolve_run_setup
 
         monkeypatch.chdir(tmp_path)
@@ -457,7 +485,9 @@ class TestResolveRunSetup:
         )
         assert config.br_stop_winrate == 0.0
 
-    def test_explicit_br_winrate_wins(self, tmp_path, monkeypatch):
+    def test_explicit_br_winrate_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from rl.online.main import resolve_run_setup
 
         monkeypatch.chdir(tmp_path)
@@ -468,7 +498,7 @@ class TestResolveRunSetup:
         )
         assert config.br_stop_winrate == 0.8
 
-    def test_br_rejects_conflicting_flags(self, tmp_path):
+    def test_br_rejects_conflicting_flags(self, tmp_path: Path) -> None:
         from rl.online.main import resolve_run_setup
 
         target_dir = write_target_ckpt(tmp_path, step=123)
@@ -480,7 +510,7 @@ class TestResolveRunSetup:
 
 
 class TestTargetStepCount:
-    def test_scalars_win_over_dirname(self, tmp_path):
+    def test_scalars_win_over_dirname(self, tmp_path: Path) -> None:
         target_dir = os.path.join(str(tmp_path), "ckpt_00000123")
         checkpoint.save_param_snapshot(
             target_dir,
@@ -491,10 +521,10 @@ class TestTargetStepCount:
         )
         assert target_step_count(target_dir) == 456
 
-    def test_dirname_fallback(self, tmp_path):
+    def test_dirname_fallback(self, tmp_path: Path) -> None:
         assert target_step_count(str(write_target_ckpt(tmp_path, step=123))) == 123
 
-    def test_unparseable_raises(self, tmp_path):
+    def test_unparseable_raises(self, tmp_path: Path) -> None:
         bare = tmp_path / "no-digits-here"
         bare.mkdir()
         with pytest.raises(ValueError):

@@ -29,7 +29,7 @@ MOVE = int(
 )
 
 
-def test_trajectory_side_fields_default_empty_and_or_empty_keeps_sentinel():
+def test_trajectory_side_fields_default_empty_and_or_empty_keeps_sentinel() -> None:
     traj = Trajectory()
     assert (
         traj.game_outcome == ()
@@ -41,14 +41,16 @@ def test_trajectory_side_fields_default_empty_and_or_empty_keeps_sentinel():
     assert _or_empty(arr) is arr
 
 
-def test_masked_helpers_nan_on_empty():
+def test_masked_helpers_nan_on_empty() -> None:
     x = jnp.arange(4.0)
     assert jnp.isnan(masked_mean(x, jnp.zeros(4, bool)))
     assert jnp.isnan(masked_var(x, jnp.array([True, False, False, False])))
     assert float(masked_mean(x, jnp.array([True, True, False, False]))) == 0.5
 
 
-def _rows(T=4, B=2):
+def _rows(
+    T: int = 4, B: int = 2
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Chunk 0: voluntary switch at row 1 (both legal), moves elsewhere.
     Chunk 1: forced switch at row 0 (no legal move), moves after."""
     flat = np.zeros((T, B, A), bool)
@@ -64,7 +66,7 @@ def _rows(T=4, B=2):
     return flat, action, acted_mask, v
 
 
-def test_critic_outcome_telemetry_counts_and_splits():
+def test_critic_outcome_telemetry_counts_and_splits() -> None:
     T, B = 4, 2
     flat, action, acted_mask, v = _rows(T, B)
     logs = critic_outcome_telemetry(
@@ -118,7 +120,7 @@ def test_critic_outcome_telemetry_counts_and_splits():
     # label variance on the empty-ish voluntary slice is NaN, not 0
 
 
-def test_truncated_game_outcome_nan_drops_outcome_panels_only():
+def test_truncated_game_outcome_nan_drops_outcome_panels_only() -> None:
     T, B = 4, 2
     flat, action, acted_mask, v = _rows(T, B)
     logs = critic_outcome_telemetry(

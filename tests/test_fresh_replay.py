@@ -11,7 +11,7 @@ from rl.online.buffer import PlayerTrajectoryStore
 from rl.online.training.workers import wandb_log_worker
 
 
-def trajectory(done, tag=0):
+def trajectory(done: list[bool], tag: int = 0) -> Trajectory:
     # `game_length` carries an admission tag so a sampled chunk can be told
     # apart without the store exposing its slots.
     return Trajectory(
@@ -22,15 +22,17 @@ def trajectory(done, tag=0):
     )
 
 
-def tag_of(chunk):
+def tag_of(chunk: Trajectory) -> int:
     return chunk.game_length.item()
 
 
-def fresh_store(size=8, fraction=0.125, cap=8):
+def fresh_store(
+    size: int = 8, fraction: float = 0.125, cap: int = 8
+) -> PlayerTrajectoryStore:
     return PlayerTrajectoryStore(max_size=size, max_reuses=cap, fresh_fraction=fraction)
 
 
-def fill_store(store, count):
+def fill_store(store: PlayerTrajectoryStore, count: int) -> None:
     for _ in range(count):
         store.add(trajectory([False, False, True, False], tag=store.total_adds))
 
@@ -46,11 +48,13 @@ def fill_store(store, count):
         ([], 0),
     ],
 )
-def test_decision_count_excludes_terminal_padding_and_bootstrap(done, expected):
+def test_decision_count_excludes_terminal_padding_and_bootstrap(
+    done: list[bool], expected: int
+) -> None:
     assert acted_rows(done).sum() == expected
 
 
-def test_overlapping_chunks_count_each_decision_once():
+def test_overlapping_chunks_count_each_decision_once() -> None:
     # 70 actions: row 63 is bootstrap-only in the first chunk and acted
     # row zero in the second. Its terminal padding must never add actions.
     first = np.zeros(64, dtype=bool)
@@ -59,7 +63,7 @@ def test_overlapping_chunks_count_each_decision_once():
     assert acted_rows(first).sum() + acted_rows(second).sum() == 70
 
 
-def test_fractional_fresh_slots_without_batch_duplicates():
+def test_fractional_fresh_slots_without_batch_duplicates() -> None:
     store = fresh_store()
     fill_store(store, 8)
     initial = store.sample(4)
@@ -77,7 +81,7 @@ def test_fractional_fresh_slots_without_batch_duplicates():
         assert all(chunk.reuse_count.item() < 8 for chunk in batch)
 
 
-def test_full_seen_buffer_can_admit_fresh_data_without_deadlock():
+def test_full_seen_buffer_can_admit_fresh_data_without_deadlock() -> None:
     store = fresh_store(size=4)
     fill_store(store, 4)
     original_ids = store._ids.copy()
@@ -95,7 +99,9 @@ def test_full_seen_buffer_can_admit_fresh_data_without_deadlock():
 
 @pytest.mark.parametrize("cap", [1, 2, 8])
 @pytest.mark.parametrize("fraction", [0.125, 0.25, 1.0])
-def test_producer_consumer_progress_and_cap_under_fast_arrivals(cap, fraction):
+def test_producer_consumer_progress_and_cap_under_fast_arrivals(
+    cap: int, fraction: float
+) -> None:
     store = fresh_store(size=8, fraction=fraction, cap=cap)
     fill_store(store, 8)
     for _ in range(40):
@@ -110,7 +116,7 @@ def test_producer_consumer_progress_and_cap_under_fast_arrivals(cap, fraction):
             assert store._evicted_reuses == store._evicted_count * cap
 
 
-def test_unseen_chunks_cannot_be_evicted_and_dropped_add_not_counted():
+def test_unseen_chunks_cannot_be_evicted_and_dropped_add_not_counted() -> None:
     store = fresh_store(size=2)
     fill_store(store, 2)
     original_ids = store._ids.copy()
@@ -120,7 +126,7 @@ def test_unseen_chunks_cannot_be_evicted_and_dropped_add_not_counted():
     assert store.total_admitted_decisions == 4
 
 
-def test_fresh_stream_under_a_dynamic_cap():
+def test_fresh_stream_under_a_dynamic_cap() -> None:
     store = fresh_store(size=2, fraction=0.5)
     fill_store(store, 2)
     store.sample(2)
@@ -133,7 +139,7 @@ def test_fresh_stream_under_a_dynamic_cap():
     assert all(chunk.reuse_count.item() == 0 for chunk in store.sample(2))
 
 
-def test_zero_fraction_preserves_uniform_sampler_and_replacement():
+def test_zero_fraction_preserves_uniform_sampler_and_replacement() -> None:
     store = fresh_store(size=4, fraction=0)
     fill_store(store, 4)
     np.random.seed(728)
@@ -146,7 +152,7 @@ def test_zero_fraction_preserves_uniform_sampler_and_replacement():
     assert store.ready_to_sample(4)
 
 
-def test_accounting_distinguishes_admission_prefetch_skips_and_clear():
+def test_accounting_distinguishes_admission_prefetch_skips_and_clear() -> None:
     store = fresh_store(size=2, fraction=0)
     store.add(trajectory([False] * 29 + [True] + [False] * 18))
     store.add(trajectory([False] * 64))
@@ -183,7 +189,7 @@ def test_accounting_distinguishes_admission_prefetch_skips_and_clear():
     assert store.accounting_start_step is None
 
 
-def test_log_worker_publishes_accounting_without_replay_controller():
+def test_log_worker_publishes_accounting_without_replay_controller() -> None:
     import queue
 
     store = fresh_store(size=1)
@@ -204,6 +210,6 @@ def test_log_worker_publishes_accounting_without_replay_controller():
 
 
 @pytest.mark.parametrize("fraction", [-0.1, 1.1, np.nan, np.inf])
-def test_invalid_fresh_fraction_rejected(fraction):
+def test_invalid_fresh_fraction_rejected(fraction: float) -> None:
     with pytest.raises(ValueError, match="fresh_fraction"):
         fresh_store(fraction=fraction)

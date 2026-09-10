@@ -14,7 +14,7 @@ from rl.model.constants import (
 from rl.model.modules import SequenceInputNormalisation
 
 
-def inputs(dtype):
+def inputs(dtype: jax.typing.DTypeLike) -> tuple[jax.Array, jax.Array, jax.Array]:
     generator = np.random.default_rng(910)
     values = generator.normal(size=(NUM_SEQUENCE_ROWS, 32))
     values *= np.geomspace(0.1, 1000, NUM_SEQUENCE_ROWS)[:, None]
@@ -29,7 +29,7 @@ def inputs(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_unit_rms_dtype_and_zero_padding(dtype):
+def test_unit_rms_dtype_and_zero_padding(dtype: jax.typing.DTypeLike) -> None:
     sequence, valid, groups = inputs(dtype)
     module = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
     variables = jax.jit(module.init)(jax.random.key(0), sequence, valid, groups)
@@ -45,7 +45,7 @@ def test_unit_rms_dtype_and_zero_padding(dtype):
     assert original_rms.max() / original_rms[np.asarray(valid)].min() > 1000
 
 
-def test_group_scales_actor_equivalence_and_privileged_isolation():
+def test_group_scales_actor_equivalence_and_privileged_isolation() -> None:
     sequence, valid, groups = inputs(jnp.float32)
     module = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
     variables = jax.jit(module.init)(jax.random.key(0), sequence, valid, groups)
@@ -78,12 +78,12 @@ def test_group_scales_actor_equivalence_and_privileged_isolation():
     assert float(jnp.max(jnp.abs(public_changed[0] - original[0]))) > 0
 
 
-def test_live_group_and_directional_input_gradients():
+def test_live_group_and_directional_input_gradients() -> None:
     sequence, valid, groups = inputs(jnp.float32)
     module = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
     variables = jax.jit(module.init)(jax.random.key(0), sequence, valid, groups)
 
-    def objective(weights, rows):
+    def objective(weights: dict, rows: jax.Array) -> jax.Array:
         output = module.apply(weights, rows, valid, groups)
         return jnp.sum(output * jnp.arange(1, 33, dtype=jnp.float32))
 
@@ -99,7 +99,7 @@ def test_live_group_and_directional_input_gradients():
     np.testing.assert_array_equal(input_gradient[3], 0)
 
 
-def test_one_group_form_matches_the_full_layout_at_init():
+def test_one_group_form_matches_the_full_layout_at_init() -> None:
     """The trunk's registers use a one-group instance; at init it is the same
     function as the full-layout bank (RMS 1 per row, zero rows stay zero)."""
     sequence, valid, groups = inputs(jnp.float32)
@@ -119,7 +119,7 @@ def test_one_group_form_matches_the_full_layout_at_init():
     )
 
 
-def test_group_row_l2_sums_valid_rows_per_group():
+def test_group_row_l2_sums_valid_rows_per_group() -> None:
     """The panel's read: per-group sum of valid-row L2 and the valid count,
     invalid rows excluded, a group with no valid rows reading 0 / 0, with a
     batched leading axis. Positive control: a doubled row doubles its

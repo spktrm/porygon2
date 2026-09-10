@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from rl.environment.actor_stats import ActorStats
-from rl.environment.interfaces import HistoryCarry
+from rl.environment.interfaces import HistoryCarry, PlayerActorInput
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.environment.utils import (
     ACTOR_HISTORY_MIN_LENGTH,
@@ -21,7 +21,7 @@ WIDTH = 8
 
 
 class _StubEnv:
-    def __init__(self):
+    def __init__(self) -> None:
         self.history_rewrite_count = 0
 
 
@@ -49,12 +49,14 @@ def _valid_carry() -> HistoryCarry:
 
 
 @pytest.fixture(scope="module")
-def full_window():
+def full_window() -> PlayerActorInput:
     actor_input, _ = jax.tree.map(lambda x: np.asarray(x[:, 0]), get_ex_player_step())
     return actor_input
 
 
-def test_last_step_index_reads_the_last_valid_step(full_window):
+def test_last_step_index_reads_the_last_valid_step(
+    full_window: PlayerActorInput,
+) -> None:
     field = np.asarray(full_window.history.field)
     valid_steps = int(field[:, FieldFeature.FIELD_FEATURE__VALID].sum())
     assert _last_step_index(full_window) == int(
@@ -70,7 +72,9 @@ def test_last_step_index_reads_the_last_valid_step(full_window):
     )
 
 
-def test_game_start_is_the_full_window_with_an_invalid_carry(full_window):
+def test_game_start_is_the_full_window_with_an_invalid_carry(
+    full_window: PlayerActorInput,
+) -> None:
     stats = ActorStats()
     actor = _actor(stats)
     request = actor._carry_history(full_window, None, -1, 0)
@@ -89,7 +93,9 @@ def test_game_start_is_the_full_window_with_an_invalid_carry(full_window):
     assert "actor_history_suffix_steps" not in means
 
 
-def test_continuing_window_is_the_suffix_with_the_carry(full_window):
+def test_continuing_window_is_the_suffix_with_the_carry(
+    full_window: PlayerActorInput,
+) -> None:
     stats = ActorStats()
     actor = _actor(stats)
     carry = _valid_carry()
@@ -114,7 +120,9 @@ def test_continuing_window_is_the_suffix_with_the_carry(full_window):
     )
 
 
-def test_rewrite_and_gap_recompute_from_scratch(full_window):
+def test_rewrite_and_gap_recompute_from_scratch(
+    full_window: PlayerActorInput,
+) -> None:
     stats = ActorStats()
     actor = _actor(stats)
     carry = _valid_carry()
@@ -137,7 +145,9 @@ def test_rewrite_and_gap_recompute_from_scratch(full_window):
     assert means["actor_history_recompute_rewrite"] == 0.0
 
 
-def test_no_carry_width_never_records_carry_stats(full_window):
+def test_no_carry_width_never_records_carry_stats(
+    full_window: PlayerActorInput,
+) -> None:
     stats = ActorStats()
     actor = PlayerActor(
         agent=_StubAgent(), env=_StubEnv(), unroll_length=1, learner=None, stats=stats
@@ -146,7 +156,7 @@ def test_no_carry_width_never_records_carry_stats(full_window):
     assert "actor_history_recompute_frac" not in stats.drain()
 
 
-def test_mixed_group_stacks_with_an_invalid_fill():
+def test_mixed_group_stacks_with_an_invalid_fill() -> None:
     carry = _valid_carry()
     stacked = _stack_history_carries([HistoryCarry(), carry, HistoryCarry()])
     assert stacked.slot_states.shape == (3, 12, WIDTH)

@@ -7,18 +7,24 @@ pre-trunk public row alone -- another public row's species does not move
 it (it does move the belief head, which attends across rows).
 """
 
+from collections.abc import Callable
+
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
 
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.environment.protos.features_pb2 import EntityRevealedNodeFeature
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-def _with_column(actor_input, leaf, row, column, value):
+def _with_column(
+    actor_input: PlayerActorInput, leaf: str, row: int, column: int, value: int
+) -> PlayerActorInput:
     import dataclasses
 
     env = actor_input.env
@@ -28,10 +34,12 @@ def _with_column(actor_input, leaf, row, column, value):
     )
 
 
-def _control_and_belief_ce(network, actor_input, actor_output):
+def _control_and_belief_ce(
+    network: nn.Module, actor_input: PlayerActorInput, actor_output: PlayerActorOutput
+) -> tuple[Callable[[dict], jax.Array], Callable[[dict], jax.Array]]:
     from rl.model.heads import HeadParams
 
-    def control_ce(params):
+    def control_ce(params: dict) -> jax.Array:
         out = network.apply(params, actor_input, actor_output, HeadParams())
         labels = jax.lax.stop_gradient(out.hidden_code.astype(jnp.float32))
         ce = optax.softmax_cross_entropy(
@@ -39,7 +47,7 @@ def _control_and_belief_ce(network, actor_input, actor_output):
         )
         return jnp.mean(ce)
 
-    def belief_ce(params):
+    def belief_ce(params: dict) -> jax.Array:
         out = network.apply(params, actor_input, actor_output, HeadParams())
         labels = jax.lax.stop_gradient(out.hidden_code.astype(jnp.float32))
         ce = optax.softmax_cross_entropy(
@@ -50,7 +58,11 @@ def _control_and_belief_ce(network, actor_input, actor_output):
     return control_ce, belief_ce
 
 
-def test_revealed_control_gradient_stays_in_its_mlp(real_model_and_trajectory):
+def test_revealed_control_gradient_stays_in_its_mlp(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
     network, params, actor_input, actor_output = real_model_and_trajectory
     control_ce, belief_ce = _control_and_belief_ce(network, actor_input, actor_output)
 
@@ -75,8 +87,11 @@ def test_revealed_control_gradient_stays_in_its_mlp(real_model_and_trajectory):
 
 
 def test_revealed_control_reads_the_matched_row_only(
-    real_model_and_trajectory, real_model_apply
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     from rl.model.heads import HeadParams
     from rl.model.player_model import belief_alignment
 

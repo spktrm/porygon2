@@ -9,7 +9,9 @@ from rl.environment.protos.features_pb2 import FieldFeature, InfoFeature
 from rl.offline.interval_data import game_split, iter_intervals
 
 
-def make_chunk(requests=(0, 1, 2, 2), terminal=2, offset=0):
+def make_chunk(
+    requests: tuple[int, ...] = (0, 1, 2, 2), terminal: int | None = 2, offset: int = 0
+) -> SimpleNamespace:
     info = np.zeros((len(requests), len(InfoFeature.keys())), dtype=np.int32)
     info[:, InfoFeature.INFO_FEATURE__REQUEST_COUNT] = requests
     info[:, InfoFeature.INFO_FEATURE__NUM_ACTIVE] = 1
@@ -41,7 +43,7 @@ def make_chunk(requests=(0, 1, 2, 2), terminal=2, offset=0):
     )
 
 
-def test_terminal_padding_and_future_history_are_excluded():
+def test_terminal_padding_and_future_history_are_excluded() -> None:
     intervals = list(iter_intervals(make_chunk()))
     assert [(entry.source_row, entry.successor_row) for entry in intervals] == [
         (0, 1),
@@ -53,13 +55,13 @@ def test_terminal_padding_and_future_history_are_excluded():
     assert [entry.action_index for entry in intervals] == [0, 1]
 
 
-def test_bootstrap_overlap_produces_unique_game_steps():
+def test_bootstrap_overlap_produces_unique_game_steps() -> None:
     first = list(iter_intervals(make_chunk((0, 1, 2), terminal=None)))
     second = list(iter_intervals(make_chunk((2, 3, 4), terminal=2, offset=2)))
     assert [entry.game_step for entry in first + second] == [0, 1, 2, 3]
 
 
-def test_doubles_previous_choice_microstep_is_not_dropped():
+def test_doubles_previous_choice_microstep_is_not_dropped() -> None:
     chunk = make_chunk((0, 0, 1), terminal=2)
     info = chunk.player_transitions.env_output.info
     info[:, InfoFeature.INFO_FEATURE__NUM_ACTIVE] = 2
@@ -71,7 +73,7 @@ def test_doubles_previous_choice_microstep_is_not_dropped():
     assert second.has_previous_action and second.num_active == 2
 
 
-def test_visibility_and_legal_action_positive_controls():
+def test_visibility_and_legal_action_positive_controls() -> None:
     chunk = make_chunk()
     before = list(iter_intervals(chunk))
     chunk.player_transitions.env_output.opp_private_team[:] = -1
@@ -83,13 +85,13 @@ def test_visibility_and_legal_action_positive_controls():
         list(iter_intervals(chunk))
 
 
-def test_missing_history_coverage_is_explicit():
+def test_missing_history_coverage_is_explicit() -> None:
     chunk = make_chunk()
     chunk.player_history.field[0, FieldFeature.FIELD_FEATURE__VALID] = 0
     assert not list(iter_intervals(chunk))[0].history_prefix_retained
 
 
-def test_split_is_shared_by_game_and_order_independent():
+def test_split_is_shared_by_game_and_order_independent() -> None:
     identities = [f"collection:game-{index}" for index in range(100)]
     original = {identity: game_split(identity) for identity in identities}
     assert {
@@ -103,7 +105,7 @@ def test_split_is_shared_by_game_and_order_independent():
 
 
 @pytest.mark.parametrize("request_type", [1, 2, 3])
-def test_request_kinds_retain_unilateral_action_contract(request_type):
+def test_request_kinds_retain_unilateral_action_contract(request_type: int) -> None:
     chunk = make_chunk()
     chunk.player_transitions.env_output.info[
         :, InfoFeature.INFO_FEATURE__REQUEST_TYPE
@@ -113,7 +115,9 @@ def test_request_kinds_retain_unilateral_action_contract(request_type):
     assert all(entry.request_type == request_type for entry in intervals)
 
 
-def test_game_length_excludes_nonterminal_padding_and_rejects_reverse_requests():
+def test_game_length_excludes_nonterminal_padding_and_rejects_reverse_requests() -> (
+    None
+):
     chunk = make_chunk(terminal=None)
     chunk.game_length = np.array([2])
     assert len(list(iter_intervals(chunk))) == 1
@@ -124,7 +128,9 @@ def test_game_length_excludes_nonterminal_padding_and_rejects_reverse_requests()
         list(iter_intervals(chunk))
 
 
-def test_evaluation_partitions_reserve_final_games_and_exclude_unused_training():
+def test_evaluation_partitions_reserve_final_games_and_exclude_unused_training() -> (
+    None
+):
     from rl.offline.interval_data import evaluation_partitions
 
     arrays = {
@@ -145,7 +151,7 @@ def test_evaluation_partitions_reserve_final_games_and_exclude_unused_training()
         evaluation_partitions(arrays)
 
 
-def test_evaluation_partitions_preserve_original_split():
+def test_evaluation_partitions_preserve_original_split() -> None:
     from rl.offline.interval_data import evaluation_partitions
 
     arrays = {"game": np.array(["train", "test"]), "heldout": np.array([False, True])}

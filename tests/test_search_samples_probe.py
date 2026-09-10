@@ -17,18 +17,18 @@ from rl.offline.search_samples_probe import (
 )
 
 
-def _target_with_mean():
+def _target_with_mean() -> np.ndarray:
     rng = np.random.default_rng(0)
     return rng.normal(0.1, 0.05, 200).astype(np.float32)
 
 
-def test_uncentred_delta_gain_scores_copy_zero_and_the_target_one():
+def test_uncentred_delta_gain_scores_copy_zero_and_the_target_one() -> None:
     target = _target_with_mean()
     assert abs(delta_gain(np.zeros_like(target), target)) < 1e-6
     assert delta_gain(target, target) == 1.0
 
 
-def test_centred_r2_scores_copy_below_zero_when_the_target_has_a_mean():
+def test_centred_r2_scores_copy_below_zero_when_the_target_has_a_mean() -> None:
     target = _target_with_mean()
     expected = -target.size * target.mean() ** 2 / np.sum((target - target.mean()) ** 2)
     assert r2_centred(0.0, target) < -0.5
@@ -39,7 +39,7 @@ def test_centred_r2_scores_copy_below_zero_when_the_target_has_a_mean():
     assert abs(r2_centred(0.0, centred) - delta_gain(0.0, centred)) < 1e-5
 
 
-def test_code_grid_enumerates_every_joint_code_once():
+def test_code_grid_enumerates_every_joint_code_once() -> None:
     grid = np.asarray(code_grid(2, 3))
     assert grid.shape == (9, 2, 3)
     assert (grid.sum(-1) == 1).all()
@@ -47,7 +47,7 @@ def test_code_grid_enumerates_every_joint_code_once():
     assert len(joint) == 9
 
 
-def test_enumeration_weights_are_the_product_prior_and_give_the_exact_mixture():
+def test_enumeration_weights_are_the_product_prior_and_give_the_exact_mixture() -> None:
     grid = np.asarray(code_grid(2, 3))
     probs = np.asarray([[0.5, 0.3, 0.2], [0.1, 0.1, 0.8]], np.float32)
     weights = np.prod(np.sum(grid * probs[None], -1), -1)
@@ -61,7 +61,7 @@ def test_enumeration_weights_are_the_product_prior_and_give_the_exact_mixture():
     assert np.isclose(weights @ values, exact)
 
 
-def _transition(game, value):
+def _transition(game: int, value: float) -> Transition:
     values = {"root_v": np.float32(0.0), "real_v": np.float32(value)}
     from rl.offline.search_samples_probe import DECODES
 
@@ -78,7 +78,7 @@ def _transition(game, value):
     )
 
 
-def test_resample_games_keeps_both_sides_of_a_game_together():
+def test_resample_games_keeps_both_sides_of_a_game_together() -> None:
     transitions = [_transition(game, 0.1 * game) for game in range(5) for _ in range(2)]
     rng = np.random.default_rng(0)
     for _ in range(20):
@@ -90,7 +90,7 @@ def test_resample_games_keeps_both_sides_of_a_game_together():
         assert all(count % 2 == 0 for count in counts.values())
 
 
-def test_bootstrap_interval_brackets_an_exact_read():
+def test_bootstrap_interval_brackets_an_exact_read() -> None:
     transitions = [_transition(game, 0.1 + 0.01 * game) for game in range(8)]
     stats = bootstrap_delta_stats(transitions, replicates=50, seed=0)
     assert stats["value_delta_r2_post_lo"] == 1.0
@@ -98,7 +98,7 @@ def test_bootstrap_interval_brackets_an_exact_read():
     assert stats["copy_delta_r2_centred_hi"] < 0.0
 
 
-def test_top_action_codes_orders_by_mass_and_renormalises_over_the_set():
+def test_top_action_codes_orders_by_mass_and_renormalises_over_the_set() -> None:
     from rl.offline.search_samples_probe import top_action_codes
 
     probs = jnp.asarray([0.05, 0.5, 0.05, 0.3, 0.1])

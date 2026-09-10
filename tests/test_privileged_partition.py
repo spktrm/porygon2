@@ -10,12 +10,16 @@ hole compound). Slow half: the real model end to end -- perturbing
 deployable value head while the privileged head moves.
 """
 
+from collections.abc import Callable
+
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from ml_collections import ConfigDict
 
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.constants import (
     NUM_SEQUENCE_ROWS,
     OPP_PRIVATE_ROWS,
@@ -29,7 +33,7 @@ READ_MASK = jnp.asarray(SEQUENCE_READ_MASK)
 WIDTH = 32
 
 
-def _trunk_cfg(num_blocks=3):
+def _trunk_cfg(num_blocks: int = 3) -> ConfigDict:
     cfg = ConfigDict()
     cfg.num_blocks = num_blocks
     cfg.num_heads = 2
@@ -51,7 +55,7 @@ _POLICY_READABLE = np.array(
 )
 
 
-def test_read_mask_partition_is_leak_free_by_construction():
+def test_read_mask_partition_is_leak_free_by_construction() -> None:
     # The static matrix itself: no policy-readable in-edge from the
     # learner-only partition, VALUE_CLS out-degree 0, and (control) the
     # policy-readable block is complete.
@@ -62,7 +66,7 @@ def test_read_mask_partition_is_leak_free_by_construction():
     assert SEQUENCE_READ_MASK[VALUE_CLS_ROW].all()
 
 
-def test_secret_rows_are_invisible_to_policy_readable_rows_at_depth():
+def test_secret_rows_are_invisible_to_policy_readable_rows_at_depth() -> None:
     trunk = Trunk(_trunk_cfg())
     sequence = jax.random.normal(jax.random.key(0), (NUM_SEQUENCE_ROWS, WIDTH))
     valid = jnp.ones(NUM_SEQUENCE_ROWS, bool)
@@ -88,7 +92,7 @@ def test_secret_rows_are_invisible_to_policy_readable_rows_at_depth():
     assert not np.allclose(base[_POLICY_READABLE], control_out[_POLICY_READABLE])
 
 
-def test_value_cls_is_read_by_nothing():
+def test_value_cls_is_read_by_nothing() -> None:
     trunk = Trunk(_trunk_cfg())
     sequence = jax.random.normal(jax.random.key(2), (NUM_SEQUENCE_ROWS, WIDTH))
     valid = jnp.ones(NUM_SEQUENCE_ROWS, bool)
@@ -105,7 +109,7 @@ def test_value_cls_is_read_by_nothing():
     assert not np.allclose(base[VALUE_CLS_ROW], moved[VALUE_CLS_ROW])
 
 
-def test_belief_alignment_matches_only_the_opponent_half():
+def test_belief_alignment_matches_only_the_opponent_half() -> None:
     import numpy as np
 
     from rl.environment.protos.features_pb2 import (
@@ -144,8 +148,11 @@ def test_belief_alignment_matches_only_the_opponent_half():
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_opp_private_team_cannot_reach_the_policy(
-    real_model_and_trajectory, real_model_apply
-):
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+    real_model_apply: Callable,
+) -> None:
     """End to end on the real model: the wire leaf the opponent truth rides
     must be invisible to everything an actor ships, while the privileged
     head (the one consumer) moves -- the positive control that the leaf is

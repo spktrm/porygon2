@@ -16,7 +16,7 @@ from rl.model.state_features import (
 )
 
 
-def test_blocks_partition_every_kernel_width():
+def test_blocks_partition_every_kernel_width() -> None:
     blocks = state_kernel_blocks()
     assert set(blocks) == set(STATE_KERNELS)
     for kernel, groups in blocks.items():
@@ -34,7 +34,7 @@ def test_blocks_partition_every_kernel_width():
     assert len(hp_input_rows("public_transient_linear")) == 0
 
 
-def test_hp_rows_are_the_hp_scalar_and_its_bins():
+def test_hp_rows_are_the_hp_scalar_and_its_bins() -> None:
     # The hp block is the scalar plus 32 bins (33 columns); the public
     # persistent row also carries the 33-way divided one-hot of HP_RATIO
     # inside its persistent code, and both count as hp.

@@ -24,7 +24,7 @@ import pytest
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-def test_train_step_smoke():
+def test_train_step_smoke() -> None:
     from rl.environment.interfaces import (
         Batch,
         CategoricalValueHeadOutput,

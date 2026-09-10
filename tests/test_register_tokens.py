@@ -14,7 +14,7 @@ from rl.model.constants import (
 from rl.model.trunk import Trunk
 
 
-def config(num_registers):
+def config(num_registers: int) -> ConfigDict:
     return ConfigDict(
         dict(
             num_blocks=3,
@@ -30,7 +30,7 @@ def config(num_registers):
     )
 
 
-def inputs(dtype):
+def inputs(dtype: jax.typing.DTypeLike) -> tuple[jax.Array, jax.Array, jax.Array]:
     sequence = jnp.asarray(
         np.random.default_rng(910).normal(size=(NUM_SEQUENCE_ROWS, 16)), dtype
     )
@@ -39,7 +39,9 @@ def inputs(dtype):
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_registers_are_internal_finite_and_trainable(dtype):
+def test_registers_are_internal_finite_and_trainable(
+    dtype: jax.typing.DTypeLike,
+) -> None:
     sequence, valid, mask = inputs(dtype)
     trunk = Trunk(config(4))
     variables = jax.jit(trunk.init)(jax.random.key(0), sequence, valid, mask)
@@ -53,7 +55,7 @@ def test_registers_are_internal_finite_and_trainable(dtype):
     assert registers.dtype == jnp.float32
     assert np.unique(np.asarray(registers), axis=0).shape[0] == 4
 
-    def objective(weights):
+    def objective(weights: dict) -> jax.Array:
         result = trunk.apply(weights, sequence, valid, mask)
         return jnp.sum(result[POLICY_READABLE_ROWS].astype(jnp.float32) ** 2)
 
@@ -67,7 +69,7 @@ def test_registers_are_internal_finite_and_trainable(dtype):
     assert float(jnp.max(jnp.abs(altered - output))) > 0
 
 
-def test_registers_cannot_relay_privileged_inputs_and_match_actor():
+def test_registers_cannot_relay_privileged_inputs_and_match_actor() -> None:
     # Remove TF32 shape-dependent rounding from the actor/learner comparison.
     with jax.default_matmul_precision("highest"):
         sequence, valid, mask = inputs(jnp.float32)
@@ -104,7 +106,7 @@ def test_registers_cannot_relay_privileged_inputs_and_match_actor():
         )
 
 
-def test_zero_registers_is_exact_legacy_path():
+def test_zero_registers_is_exact_legacy_path() -> None:
     sequence, valid, mask = inputs(jnp.bfloat16)
     control = Trunk(config(0))
     legacy_config = config(0)
@@ -117,7 +119,7 @@ def test_zero_registers_is_exact_legacy_path():
     np.testing.assert_array_equal(actual, expected)
 
 
-def test_checkpoint_merge_preserves_blocks_and_seeds_registers():
+def test_checkpoint_merge_preserves_blocks_and_seeds_registers() -> None:
     from rl.online.artifact import merge_params
 
     sequence, valid, mask = inputs(jnp.float32)

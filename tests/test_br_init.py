@@ -10,6 +10,9 @@ own training path (measured cos 0.95 to the target at the BR's first
 checkpoint, 2026-08-30).
 """
 
+from collections.abc import Callable
+from typing import NoReturn
+
 import jax
 import numpy as np
 import pytest
@@ -20,7 +23,7 @@ from rl.online.config import Porygon2LearnerConfig
 LINEAGE_KEY = jax.random.key(42)
 
 
-def _fresh_tree():
+def _fresh_tree() -> dict:
     return {
         "params": {
             "encoder": {"w": np.full((2, 3), 0.1, dtype=np.float32)},
@@ -32,7 +35,7 @@ def _fresh_tree():
     }
 
 
-def _merged_tree():
+def _merged_tree() -> dict:
     return {
         "params": {
             "encoder": {"w": np.full((2, 3), 0.9, dtype=np.float32)},
@@ -44,30 +47,30 @@ def _merged_tree():
     }
 
 
-def _recording_init_fn(calls):
-    def init_fn(key):
+def _recording_init_fn(calls: list[jax.Array]) -> Callable[[jax.Array], dict]:
+    def init_fn(key: jax.Array) -> dict:
         calls.append(key)
         return _fresh_tree()
 
     return init_fn
 
 
-def _refusing_init_fn(key):
+def _refusing_init_fn(key: jax.Array) -> NoReturn:
     raise AssertionError("target mode must not pay an init call")
 
 
-def _config(**overrides):
+def _config(**overrides: str | float) -> Porygon2LearnerConfig:
     return Porygon2LearnerConfig().replace(br_target_ckpt="/x", **overrides)
 
 
-def test_target_is_identity_without_init_call():
+def test_target_is_identity_without_init_call() -> None:
     merged = _merged_tree()
     out = apply_br_init(merged, _refusing_init_fn, _config(br_init="target"))
     assert out is merged
 
 
-def test_fresh_draw_is_not_the_lineage_seed_and_is_per_run():
-    def draw_key(**overrides):
+def test_fresh_draw_is_not_the_lineage_seed_and_is_per_run() -> None:
+    def draw_key(**overrides: str) -> jax.Array:
         calls = []
         apply_br_init(
             _merged_tree(),
@@ -89,7 +92,7 @@ def test_fresh_draw_is_not_the_lineage_seed_and_is_per_run():
     np.testing.assert_array_equal(key_a, key_a_again)
 
 
-def test_head_reset_grafts_fresh_readout_only():
+def test_head_reset_grafts_fresh_readout_only() -> None:
     fresh = _fresh_tree()
     merged = _merged_tree()
     # Positive control: the graft must actually change something.
@@ -111,20 +114,20 @@ def test_head_reset_grafts_fresh_readout_only():
     )
 
 
-def test_head_reset_renamed_readout_fails_loudly():
+def test_head_reset_renamed_readout_fails_loudly() -> None:
     fresh = _fresh_tree()
     merged = _merged_tree()
     for tree in (fresh, merged):
         tree["params"]["readout"] = tree["params"].pop("action_head")
 
-    def init_fn(key):
+    def init_fn(key: jax.Array) -> dict:
         return fresh
 
     with pytest.raises(KeyError):
         apply_br_init(merged, init_fn, _config(br_init="head-reset"))
 
 
-def test_shrink_perturb_interpolates_every_leaf():
+def test_shrink_perturb_interpolates_every_leaf() -> None:
     out = apply_br_init(
         _merged_tree(),
         _recording_init_fn([]),
@@ -143,7 +146,7 @@ def test_shrink_perturb_interpolates_every_leaf():
     assert np.asarray(out["params"]["encoder"]["w"]).dtype == np.float32
 
 
-def test_shrink_perturb_endpoints():
+def test_shrink_perturb_endpoints() -> None:
     inherit = apply_br_init(
         _merged_tree(),
         _recording_init_fn([]),
@@ -164,7 +167,7 @@ def test_shrink_perturb_endpoints():
     )
 
 
-def test_bad_inputs_raise():
+def test_bad_inputs_raise() -> None:
     with pytest.raises(ValueError):
         apply_br_init(
             _merged_tree(),

@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import Batch
 from rl.model.utils import legal_log_policy
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.targets import (
@@ -18,7 +19,7 @@ from rl.online.training.targets import (
 CELLS = 6
 
 
-def _rows():
+def _rows() -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     # Three rows, four legal cells each; the taken action's target
     # probability is .40 / .004 / .40 and mu(a) = .25 everywhere.
     legal = jnp.asarray([[True] * 4 + [False] * 2] * 3)
@@ -37,7 +38,7 @@ def _rows():
     return target_log_policy, behaviour_log_prob, action_index, legal
 
 
-def test_threshold_zero_is_the_raw_ratio_bit_identical():
+def test_threshold_zero_is_the_raw_ratio_bit_identical() -> None:
     target_log_policy, behaviour, taken, legal = _rows()
     ratio, ratio_raw, kept, removed = thresholded_target_ratio(
         target_log_policy, behaviour, taken, legal, 0.0
@@ -48,7 +49,7 @@ def test_threshold_zero_is_the_raw_ratio_bit_identical():
     assert np.all(np.asarray(kept)) and not np.any(np.asarray(removed))
 
 
-def test_below_the_line_is_discarded_and_above_untouched():
+def test_below_the_line_is_discarded_and_above_untouched() -> None:
     target_log_policy, behaviour, taken, legal = _rows()
     ratio, ratio_raw, kept, removed = thresholded_target_ratio(
         target_log_policy, behaviour, taken, legal, 0.005
@@ -65,7 +66,7 @@ def test_below_the_line_is_discarded_and_above_untouched():
     np.testing.assert_allclose(np.asarray(removed), [0.0, 0.25, 0.0])
 
 
-def test_a_row_entirely_below_the_line_keeps_its_ratio():
+def test_a_row_entirely_below_the_line_keeps_its_ratio() -> None:
     # The reference's degenerate guard: every legal cell under the line.
     legal = jnp.asarray([[True] * 4 + [False] * 2])
     target_log_policy = legal_log_policy(jnp.zeros((1, CELLS)), legal)  # .25 each
@@ -76,7 +77,12 @@ def test_a_row_entirely_below_the_line_keeps_its_ratio():
     assert bool(kept[0])
 
 
-def _min_batch(done, win_reward, action_mask, action_index):
+def _min_batch(
+    done: jax.Array,
+    win_reward: jax.Array,
+    action_mask: jax.Array,
+    action_index: jax.Array,
+) -> Batch:
     from rl.environment.interfaces import (
         Batch,
         PlayerActorOutput,
@@ -100,7 +106,7 @@ def _min_batch(done, win_reward, action_mask, action_index):
     )
 
 
-def test_discarded_row_loses_its_own_target_and_nothing_else():
+def test_discarded_row_loses_its_own_target_and_nothing_else() -> None:
     # A 6-row chunk, terminal win on the last row, V = 0, lambda 1, gamma 1:
     # every row's return is the outcome unless the trace is cut. rho is
     # thresholded, c is raw (2026-09-09), so only the discarded row changes.
@@ -152,7 +158,7 @@ def test_discarded_row_loses_its_own_target_and_nothing_else():
     assert np.all(np.asarray(both_cut.pg_advantages)[:3, 0] == 0.0)
 
 
-def test_trace_run_length_counts_to_the_first_cut():
+def test_trace_run_length_counts_to_the_first_cut() -> None:
     continues = jnp.asarray([[True], [True], [False], [True], [True]])
     runs = np.asarray(trace_run_length(continues))[:, 0]
     np.testing.assert_array_equal(runs, [2.0, 1.0, 0.0, 2.0, 1.0])
@@ -160,7 +166,7 @@ def test_trace_run_length_counts_to_the_first_cut():
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_scope_is_the_v_trace_ratio_and_nothing_else():
+def test_scope_is_the_v_trace_ratio_and_nothing_else() -> None:
     """The learner ratio, the surrogate, the magnet, the entropy term, the
     hinge and the forward KL are bit-identical under thresholding; the
     v-trace ESS is not. Two static configs, two compiles (the minimum for

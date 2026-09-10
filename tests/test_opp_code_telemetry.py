@@ -6,11 +6,13 @@ its known init is pinned: all four leaves are lecun-uniform at fan-in 256
 (rms 0.0625). The doubling control proves the reading follows the leaf.
 """
 
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.online.training.telemetry import (
     _GRAD_SUBTREES,
     _OPP_CODE_LEAVES,
@@ -19,15 +21,19 @@ from rl.online.training.telemetry import (
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
+RealModelAndTrajectory = tuple[nn.Module, dict, PlayerActorInput, PlayerActorOutput]
+
 _INIT_RMS = 0.0625
 
 
-def _leaf_path(key):
+def _leaf_path(key: str) -> tuple[str, ...]:
     (path,) = _OPP_CODE_LEAVES[key]
     return path
 
 
-def test_opp_code_leaves_read_their_init(real_model_and_trajectory):
+def test_opp_code_leaves_read_their_init(
+    real_model_and_trajectory: RealModelAndTrajectory,
+) -> None:
     _, params, _, _ = real_model_and_trajectory
     grads = jax.tree.map(jnp.zeros_like, params)
     logs = head_param_telemetry(params, grads)
@@ -42,14 +48,20 @@ def test_opp_code_leaves_read_their_init(real_model_and_trajectory):
         assert float(logs[key]) == 0.0, key
 
 
-def test_opp_code_rms_follows_its_leaf(real_model_and_trajectory):
+def test_opp_code_rms_follows_its_leaf(
+    real_model_and_trajectory: RealModelAndTrajectory,
+) -> None:
     _, params, _, _ = real_model_and_trajectory
     grads = jax.tree.map(jnp.zeros_like, params)
     before = head_param_telemetry(params, grads)
     for key in _OPP_CODE_LEAVES:
         path = ("params",) + _leaf_path(key)
 
-        def double_this_leaf(key_path, leaf, path=path):
+        def double_this_leaf(
+            key_path: jax.tree_util.KeyPath,
+            leaf: jax.Array,
+            path: tuple[str, ...] = path,
+        ) -> jax.Array:
             if tuple(entry.key for entry in key_path) == path:
                 return leaf * 2.0
             return leaf

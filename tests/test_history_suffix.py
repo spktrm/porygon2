@@ -7,6 +7,7 @@ import jax
 import numpy as np
 import pytest
 
+from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.environment.utils import (
     _ALL_RELEVANT_IDX_COLUMNS,
@@ -24,16 +25,18 @@ NUM_RELEVANT = FieldFeature.FIELD_FEATURE__NUM_RELEVANT
 
 
 @pytest.fixture(scope="module")
-def full_window():
+def full_window() -> PlayerActorInput:
     actor_input, _ = get_ex_player_step()
     return jax.tree.map(lambda x: np.asarray(x[:, 0]), actor_input)
 
 
-def _valid_steps(actor_input) -> int:
+def _valid_steps(actor_input: PlayerActorInput) -> int:
     return int(np.asarray(actor_input.history.field)[:, VALID].sum())
 
 
-def test_nothing_consumed_is_the_full_window(full_window):
+def test_nothing_consumed_is_the_full_window(
+    full_window: PlayerActorInput,
+) -> None:
     valid_steps = _valid_steps(full_window)
     assert valid_steps > 0
     suffix, new_steps = clip_history_suffix(full_window, last_step_index=-1)
@@ -51,7 +54,9 @@ def test_nothing_consumed_is_the_full_window(full_window):
 
 
 @pytest.mark.parametrize("consumed", [1, 2, 37, 100, 160])
-def test_suffix_is_the_tail_token_for_token(full_window, consumed):
+def test_suffix_is_the_tail_token_for_token(
+    full_window: PlayerActorInput, consumed: int
+) -> None:
     field_full = np.asarray(full_window.history.field)
     valid_steps = _valid_steps(full_window)
     assert consumed < valid_steps
@@ -100,7 +105,9 @@ def test_suffix_is_the_tail_token_for_token(full_window, consumed):
     )
 
 
-def test_zero_new_steps_is_an_empty_window(full_window):
+def test_zero_new_steps_is_an_empty_window(
+    full_window: PlayerActorInput,
+) -> None:
     field_full = np.asarray(full_window.history.field)
     last = int(field_full[_valid_steps(full_window) - 1, INDEX])
     suffix, new_steps = clip_history_suffix(full_window, last_step_index=last)
@@ -113,7 +120,9 @@ def test_zero_new_steps_is_an_empty_window(full_window):
     assert suffix.packed_history.revealed_cache.shape[0] == ACTOR_HISTORY_MIN_LENGTH
 
 
-def test_an_empty_window_resumes_only_from_nothing(full_window):
+def test_an_empty_window_resumes_only_from_nothing(
+    full_window: PlayerActorInput,
+) -> None:
     field = np.asarray(full_window.history.field).copy()
     field[:, VALID] = 0
     empty = full_window.replace(history=full_window.history.replace(field=field))
@@ -122,7 +131,7 @@ def test_an_empty_window_resumes_only_from_nothing(full_window):
     assert clip_history_suffix(empty, last_step_index=3) == (None, 0)
 
 
-def test_a_gap_refuses_to_resume(full_window):
+def test_a_gap_refuses_to_resume(full_window: PlayerActorInput) -> None:
     field_full = np.asarray(full_window.history.field)
     valid_steps = _valid_steps(full_window)
     # The service dropped the window's oldest 10 steps: a carry ending

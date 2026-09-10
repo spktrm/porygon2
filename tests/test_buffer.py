@@ -6,23 +6,23 @@ from rl.environment.interfaces import Trajectory
 from rl.online.buffer import PlayerTrajectoryStore
 
 
-def make_store(max_size=4, max_reuses=2) -> PlayerTrajectoryStore:
+def make_store(max_size: int = 4, max_reuses: int = 2) -> PlayerTrajectoryStore:
     return PlayerTrajectoryStore(max_size=max_size, max_reuses=max_reuses)
 
 
-def fill(store: PlayerTrajectoryStore, n: int):
+def fill(store: PlayerTrajectoryStore, n: int) -> None:
     for _ in range(n):
         store.add(Trajectory())
 
 
-def test_empty_store_not_ready():
+def test_empty_store_not_ready() -> None:
     store = make_store()
     assert not store.ready_to_sample()
     assert store.ready_to_add()
     assert len(store) == 0
 
 
-def test_fill_and_capacity():
+def test_fill_and_capacity() -> None:
     store = make_store(max_size=4)
     fill(store, 4)
     assert len(store) == 4
@@ -32,7 +32,7 @@ def test_fill_and_capacity():
     assert not store.ready_to_add()
 
 
-def test_sample_increments_reuse_and_respects_cap():
+def test_sample_increments_reuse_and_respects_cap() -> None:
     store = make_store(max_size=2, max_reuses=2)
     fill(store, 2)
     for _ in range(2):  # each pass burns one reuse on both entries
@@ -42,7 +42,7 @@ def test_sample_increments_reuse_and_respects_cap():
     assert store.ready_to_add()
 
 
-def test_sample_stamps_pre_increment_reuse_count():
+def test_sample_stamps_pre_increment_reuse_count() -> None:
     store = make_store(max_size=1, max_reuses=3)
     fill(store, 1)
     for expected in range(3):
@@ -50,7 +50,7 @@ def test_sample_stamps_pre_increment_reuse_count():
         assert traj.reuse_count == np.array([expected], dtype=np.int32)
 
 
-def test_replacement_resets_reuse():
+def test_replacement_resets_reuse() -> None:
     store = make_store(max_size=1, max_reuses=1)
     fill(store, 1)
     store.sample(1)
@@ -60,7 +60,7 @@ def test_replacement_resets_reuse():
     assert len(store) == 1
 
 
-def test_add_when_full_and_nothing_replaceable_is_dropped():
+def test_add_when_full_and_nothing_replaceable_is_dropped() -> None:
     store = make_store(max_size=1, max_reuses=5)
     fill(store, 2)
     assert len(store) == 1
@@ -69,14 +69,14 @@ def test_add_when_full_and_nothing_replaceable_is_dropped():
     assert store.total_adds == 1
 
 
-def test_ready_to_sample_n():
+def test_ready_to_sample_n() -> None:
     store = make_store(max_size=4, max_reuses=1)
     fill(store, 3)
     assert store.ready_to_sample(3)
     assert not store.ready_to_sample(4)
 
 
-def test_set_max_reuses_reopens_sampling():
+def test_set_max_reuses_reopens_sampling() -> None:
     store = make_store(max_size=1, max_reuses=1)
     fill(store, 1)
     store.sample(1)
@@ -86,7 +86,7 @@ def test_set_max_reuses_reopens_sampling():
     assert store.max_reuses == 2
 
 
-def test_clear_resets_everything():
+def test_clear_resets_everything() -> None:
     store = make_store(max_size=4)
     fill(store, 3)
     store.sample(2)
@@ -98,7 +98,7 @@ def test_clear_resets_everything():
     assert store.ready_to_add()
 
 
-def test_counters_track_adds_and_samples():
+def test_counters_track_adds_and_samples() -> None:
     store = make_store(max_size=4, max_reuses=10)
     fill(store, 4)
     store.sample(3)

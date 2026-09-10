@@ -3,13 +3,21 @@ beside the majority rate a constant predictor scores on the same rows, so
 a head that has learnt the batch marginal reads as ~0 above it.
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
 from rl.online.training.telemetry import belief_accuracy_logs, code_usage_logs
 
 
-def _skewed_labels(seed=0, time=5, batch=3, mons=6, groups=4, classes=8):
+def _skewed_labels(
+    seed: int = 0,
+    time: int = 5,
+    batch: int = 3,
+    mons: int = 6,
+    groups: int = 4,
+    classes: int = 8,
+) -> tuple[jax.Array, jax.Array]:
     rng = np.random.default_rng(seed)
     # A different skew per group so the majority class is not class 0 in
     # every group by accident.
@@ -26,7 +34,7 @@ def _skewed_labels(seed=0, time=5, batch=3, mons=6, groups=4, classes=8):
     return jnp.asarray(labels, jnp.float32), jnp.asarray(mask)
 
 
-def test_constant_majority_predictor_is_zero_above_marginal():
+def test_constant_majority_predictor_is_zero_above_marginal() -> None:
     labels, mask = _skewed_labels()
     weights = mask[..., None, None].astype(jnp.float32)
     marginal = (labels * weights).sum((0, 1, 2)) / weights.sum((0, 1, 2))
@@ -42,7 +50,7 @@ def test_constant_majority_predictor_is_zero_above_marginal():
     )
 
 
-def test_perfect_predictor_is_one_minus_majority_above_marginal():
+def test_perfect_predictor_is_one_minus_majority_above_marginal() -> None:
     """Positive control: the same labels read as logits score 1.0, so the
     test above is not passing because nothing can move the number."""
     labels, mask = _skewed_labels()
@@ -55,7 +63,7 @@ def test_perfect_predictor_is_one_minus_majority_above_marginal():
     )
 
 
-def test_majority_rate_reads_the_belief_mask_rows_only():
+def test_majority_rate_reads_the_belief_mask_rows_only() -> None:
     """The baseline population is the SCORED rows: masking out every row of
     one class must remove that class from the marginal."""
     labels, mask = _skewed_labels()
@@ -73,7 +81,7 @@ def test_majority_rate_reads_the_belief_mask_rows_only():
     )
 
 
-def test_code_usage_perplexity_reads_one_at_a_dead_group():
+def test_code_usage_perplexity_reads_one_at_a_dead_group() -> None:
     """The factored marginal keeps the usage panel's meaning: a group using
     one class reads perplexity exactly 1, a uniform one reads K."""
     time, batch, mons, groups, classes = 4, 2, 6, 3, 8
@@ -91,7 +99,7 @@ def test_code_usage_perplexity_reads_one_at_a_dead_group():
     assert float(logs["player_code_row_frac"]) == 1.0
 
 
-def test_code_usage_row_mask_narrows_the_population_and_renames():
+def test_code_usage_row_mask_narrows_the_population_and_renames() -> None:
     """The hidden-token label's panel (2026-09-05): `row_mask` restricts
     the marginal to the rows the belief loss scores, and `prefix` names
     the panel. Rows outside the mask use a second class in every group;

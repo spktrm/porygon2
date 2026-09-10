@@ -15,7 +15,7 @@ import optax
 from rl.online.artifact import merge_opt_state, merge_params
 
 
-def _tree(extra: dict | None = None, scale: float = 1.0):
+def _tree(extra: dict[str, jax.Array] | None = None, scale: float = 1.0) -> dict:
     params = {
         "encoder": {"kernel": jnp.full((2, 3), scale), "bias": jnp.full((3,), scale)},
         "head": {"kernel": jnp.full((3, 1), scale)},
@@ -25,7 +25,7 @@ def _tree(extra: dict | None = None, scale: float = 1.0):
     return {"params": params}
 
 
-def test_merge_params_reports_added_and_dropped():
+def test_merge_params_reports_added_and_dropped() -> None:
     fresh = _tree({"new_leaf": jnp.zeros((4,))}, scale=0.0)
     loaded = _tree({"old_leaf": jnp.ones((5,))}, scale=1.0)
     merged, kept_fresh, dropped = merge_params(fresh, loaded)
@@ -38,7 +38,7 @@ def test_merge_params_reports_added_and_dropped():
     assert np.all(merged["params"]["head"]["kernel"] == 1)
 
 
-def test_merge_keeps_an_added_subtree_fresh_everywhere():
+def test_merge_keeps_an_added_subtree_fresh_everywhere() -> None:
     """A whole new top-level module (the 2026-09-03 dynamics head, the
     2026-09-04 RENAME to dynamics_delta_head that re-inits it at the copy
     baseline, and the 2026-09-04 revealed_belief control) resumed in
@@ -72,7 +72,7 @@ def test_merge_keeps_an_added_subtree_fresh_everywhere():
     assert np.all(adam.mu["params"]["encoder"]["kernel"] != 0)
 
 
-def test_merge_opt_state_walks_optax_containers():
+def test_merge_opt_state_walks_optax_containers() -> None:
     optimiser = optax.chain(optax.clip_by_global_norm(10.0), optax.adam(1e-3))
     fresh = optimiser.init(_tree({"new_leaf": jnp.zeros((4,))}))
     loaded_params = _tree({"old_leaf": jnp.ones((5,))})
@@ -96,7 +96,7 @@ def test_merge_opt_state_walks_optax_containers():
     optimiser.update(grads, merged, fresh_params)
 
 
-def test_merge_opt_state_identity_when_trees_agree():
+def test_merge_opt_state_identity_when_trees_agree() -> None:
     optimiser = optax.adam(1e-3)
     params = _tree()
     loaded = optimiser.init(params)
