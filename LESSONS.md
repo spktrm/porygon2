@@ -4479,3 +4479,92 @@ Code: rl/offline/first_block_causal.py and first_block_diagnostics.py.
 Protocol docs/first-block-causal-protocol-2026-09-10.md; main report section12
 in docs/switch-pair-probe-2026-09-10.md; all features/results/norms under
 runtime/type-probe-switch/first-block-causal/.
+
+## Group input normalisation — 2026-09-10 (landed opt-in, made unconditional the same day)
+
+User requested normalisation per embedding group after the first-block norm
+inspection. Added cfg.encoder.input_normalisation=False and the row-local
+SequenceInputNormalisation at the end of encoder._assemble_sequence, after
+identities and before the trunk. RMS over channels, then 1+zero-init group
+channel scale; 12x256 f32 parameters only when enabled. Shared full-layout
+scale bank on actor/learner; both teams' histories share HISTORY_ENTITY.
+Zero invalid rows, no cross-row statistics, no privileged mixing. Initial
+valid-row RMS approximately1 / L2 approximately16; learned group scales can
+later change the norm. Dynamics target seam unchanged. Disabled or missing
+config field is exact identity without new leaves; enabling on old weights
+requires explicitly seeding the new leaf, not a transparent checkpoint toggle.
+No production restart, checkpoint migration or training was performed.
+
+Frozen sensitivity: same 240 games / three whole-game splits, depths0/1/6,
+18 new paired fits with original100-epoch/five-L2 protocol. Balanced accuracy
+original -> normalised: depth0 .4650/.4997 -> .4675/.4987;
+depth1 .3801/.3921 -> .3921/.4126; depth6 .2972/.3019 -> .2959/.3076.
+Final raw accuracy .5385/.5581 -> .5345/.5668; final CE1.0974/1.0609 ->
+1.0856/1.0451. Early accessibility improves modestly, final balanced verdict
+is mixed, and generalisation is not repaired. These are zero-scale frozen
+checkpoint results, not training with normalisation. No learned group scales
+or playing-strength measurements in this pass.
+
+Five focused numeric tests cover equalisation, bf16/f32, padding, exact off
+mode, actor/learner equality, privileged isolation with positive controls,
+and live scale/directional-input gradients. Four full-model abstract dtype
+checks cover enabled/disabled paths. Focused Black/isort/Ruff and whitespace
+checks passed. Code: rl/model/{config,encoder}.py; offline runner
+rl/offline/input_normalisation_probe.py; tests/test_input_normalisation.py.
+Results in main switch-pair document section13 and
+runtime/type-probe-switch/input-normalisation/. No commit or data/ps changes.
+
+**Amended later on 2026-09-10 (magnitude, placement, no flag).** The user
+asked for the trunk's inputs to be the size of a regular transformer's
+embedding lookup while keeping the per-group separation, and for the norm to
+be unconditional. `SequenceInputNormalisation` now lives in
+`rl/model/modules.py` (imported by the encoder and the trunk), takes only
+`num_groups`, and has no `enabled` field; `cfg.encoder.input_normalisation`
+is deleted and the unnormalised matched control no longer exists in config.
+The output is the RMSNorm's own: RMS 1 per valid row, no further constant.
+Gemma's `.01 * sqrt(D)` form was tried and withdrawn the same day: measured
+at init on our block (width 256, lecun blocks, block-1 update RMS 0.62
+independent of the input scale under pre-norm), the input-to-first-update
+ratio is 1.62 at RMS 1 (PaLM's N(0, 1) table, torch's default Embedding),
+0.75-1.1 for Gemma at its own widths but 0.26 with its formula transplanted
+to 256, 0.10 at L2 1 (this repo's variance_scaling embeddings), and 0.25
+for GPT-2 once its 1/sqrt(2L) residual shrink is counted — an embedding
+std alone does not transfer across block inits, the ratio does, and RMS 1
+is inside the reference band with no invented number. The trunk's
+registers pass through a one-group instance (`register_norm`), so nothing
+enters at a magnitude of its own; a test pins that instance equal to the
+full-layout bank at init. The frozen sensitivity table above was read at
+this same RMS-1 scale.
+
+## Four internal registers and normalised new-lineage defaults — 2026-09-10
+
+User requested four ViT-style register tokens, then explicitly selected input
+normalisation ON by default for a new lineage. Current model factory defaults:
+encoder.input_normalisation=True; encoder.trunk.num_registers=4. False/zero
+retain controls. Missing fields in legacy config objects retain False/zero.
+No run was launched, checkpoint rewritten or existing lineage restarted.
+
+Registers are four independent learned f32 vectors, normal std0.02 (untuned).
+They are appended INSIDE Trunk, mixed through every block and discarded before
+returning to heads/transition. Always valid, refreshed from parameters per
+forward, no recurrent carry or direct target/readout. External layout remains
+80 learner /73 actor; internal attention84/77. No protocol, head index, dynamic
+target or transition/search sequence-size change. All original rows may read
+registers; registers read only original columns readable by ALL original queries
+(policy-observable rows in the current mask). Thus no secret->register->policy
+route. Registers may read each other. Their initial distinct vectors break the
+permutation symmetry of identical workspace tokens; no position bias is added.
+
+When input normalisation is enabled, the register group has its own RMSNorm
+shared-channel scale, effective1 at init, before entering the residual stream.
+Adds1024 embedding parameters plus256 norm parameters at width256. Normalisation
+reduces forward dependence on initial magnitude, but parameter-scale gradients,
+relative optimiser updates, vector directions and epsilon near zero still matter.
+The normaliser and register initialisation have not been compared in training.
+
+The regular audited checkpoint merge can preserve original block leaves and
+seed new register leaves. This changes behaviour even if old blocks are retained;
+it is not a bit-identical resume claim. Implementation rl/model/{config,encoder,
+trunk}.py; tests/test_register_tokens.py. Reference arXiv2309.16588; local main
+switch-pair document section14. Prior section13 frozen normalisation measurements
+remain the no-register checkpoint experiment, not evidence for this combination.

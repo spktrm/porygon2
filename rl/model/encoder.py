@@ -81,6 +81,7 @@ from rl.model.history_encoder import (
 )
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
+    SequenceInputNormalisation,
     SumEmbeddings,
     one_hot_concat_jax,
 )
@@ -446,7 +447,14 @@ class Encoder(nn.Module):
         # no gates and no block masks -- see rl/model/trunk.py for why the
         # three gated streams and their two feeding cross-attention reads all
         # collapse into this at 61 rows.
+        # Every row enters the trunk at RMS 1, a fresh embedding table's
+        # magnitude, normalised per row and rescaled per group -- the
+        # registers the trunk appends pass through the same module, so
+        # nothing enters at a magnitude of its own.
         self.trunk = Trunk(self.cfg.trunk, name="trunk")
+        self.input_normalisation = SequenceInputNormalisation(
+            num_groups=NUM_SEQUENCE_GROUPS, name="input_normalisation"
+        )
 
     def _embed_species(self, token: jax.Array):
         mask = ~(
@@ -1285,6 +1293,9 @@ class Encoder(nn.Module):
             + self.sequence_row_bias.astype(dtype)[jnp.asarray(kept_rows)]
         )
         sequence = jnp.where(row_valid[:, None], sequence, 0)
+        sequence = self.input_normalisation(
+            sequence, row_valid, jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
+        )
         return sequence, row_valid, opp_code_labels, dynamics_rows
 
     def _batched_forward(

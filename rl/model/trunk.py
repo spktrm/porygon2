@@ -26,6 +26,7 @@ from rl.model.modules import (
     FFWMLP,
     MultiHeadAttention,
     RMSNorm,
+    SequenceInputNormalisation,
     create_attention_mask,
 )
 
@@ -103,6 +104,51 @@ class Trunk(nn.Module):
     def __call__(
         self, sequence: jax.Array, row_valid: jax.Array, read_mask: jax.Array
     ) -> jax.Array:
+        input_rows = sequence.shape[-2]
+        num_registers = self.cfg.get("num_registers", 0)
+        if num_registers < 0:
+            raise ValueError("num_registers must be nonnegative")
+        if num_registers:
+            # ViT-style workspace: learned initial tokens, refreshed each
+            # forward, mixed through every block and discarded at the output.
+            registers = self.param(
+                "register_embeddings",
+                nn.initializers.normal(stddev=0.02),
+                (num_registers, sequence.shape[-1]),
+            ).astype(sequence.dtype)
+            # The same input norm every row passes through: registers
+            # enter at RMS 1 like everything else.
+            registers = SequenceInputNormalisation(num_groups=1, name="register_norm")(
+                registers,
+                jnp.ones(num_registers, dtype=jnp.bool_),
+                jnp.zeros(num_registers, dtype=jnp.int32),
+            )
+            registers = jnp.broadcast_to(
+                registers, (*sequence.shape[:-2], *registers.shape)
+            )
+            sequence = jnp.concatenate([sequence, registers], axis=-2)
+            row_valid = jnp.concatenate(
+                [
+                    row_valid,
+                    jnp.ones((*row_valid.shape[:-1], num_registers), dtype=jnp.bool_),
+                ],
+                axis=-1,
+            )
+            # A shared register may read only sources readable by EVERY
+            # original query. This preserves the original partition
+            # transitively while letting all original rows read registers.
+            shared_sources = jnp.all(read_mask, axis=-2, keepdims=True)
+            register_reads = jnp.broadcast_to(
+                shared_sources, (*read_mask.shape[:-2], num_registers, input_rows)
+            )
+            read_mask = jnp.concatenate([read_mask, register_reads], axis=-2)
+            read_mask = jnp.concatenate(
+                [
+                    read_mask,
+                    jnp.ones((*read_mask.shape[:-1], num_registers), dtype=jnp.bool_),
+                ],
+                axis=-1,
+            )
         block = nn.remat(TrunkBlock, policy=jax.checkpoint_policies.nothing_saveable)
         # A sow is a silent no-op unless its collection is lifted through
         # every transform above it, and this scan lifted only params from
@@ -119,7 +165,7 @@ class Trunk(nn.Module):
             in_axes=nn.broadcast,
             length=self.cfg.num_blocks,
         )(self.cfg, name="blocks")((sequence, row_valid), jnp.asarray(read_mask))
-        return sequence
+        return sequence[..., :input_rows, :]
 
 
 def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:

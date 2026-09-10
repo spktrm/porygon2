@@ -32,6 +32,45 @@ class RMSNorm(nn.Module):
         return normed_inputs * (1 + scale)
 
 
+class SequenceInputNormalisation(nn.Module):
+    """Every row enters the trunk at the magnitude of a fresh embedding table.
+
+    Each valid row is RMS-normalised across channels and scaled per group by
+    a learned channel vector (effective scale 1 + a zero-init parameter, so
+    the groups start equal and may drift apart). RMS 1 per row is what a
+    regular transformer's embedding lookup gives -- torch's N(0, 1) table,
+    the original Transformer's sqrt(d_model)-scaled embedding, PaLM's -- and
+    it puts the input at 1.6x the first block's update at init (Gemma's
+    .01*sqrt(D) rows sit at 0.75-1.1x; measured 2026-09-10, block-1 update
+    RMS 0.62 at width 256 under the pre-norm blocks, independent of the
+    input scale). Under those blocks a row's residual magnitude decides how
+    much any block can move it: unnormalised, the history rows entered at
+    L2 ~1040 against CLS at 2.85 and a block update of ~60, so six blocks
+    moved them 2% -- frozen input the trunk could read but never revise.
+    Statistics never cross rows, so the privileged partition is untouched,
+    and invalid rows stay exactly zero. The full-layout scale bank is
+    shared by the actor and the learner; the trunk's registers pass through
+    a one-group instance.
+    """
+
+    num_groups: int
+
+    @nn.compact
+    def __call__(
+        self, sequence: jax.Array, row_valid: jax.Array, group_ids: jax.Array
+    ) -> jax.Array:
+        normalised = nn.RMSNorm(
+            use_scale=False, epsilon=1e-6, dtype=sequence.dtype, name="row_norm"
+        )(sequence)
+        scale = self.param(
+            "group_scale",
+            nn.initializers.zeros_init(),
+            (self.num_groups, sequence.shape[-1]),
+        )
+        normalised = normalised * (1 + scale.astype(sequence.dtype)[group_ids])
+        return jnp.where(row_valid[..., None], normalised, 0)
+
+
 def activation_fn(array: jax.Array) -> jax.Array:
     """
     Apply activation function.
