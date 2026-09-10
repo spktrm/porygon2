@@ -168,6 +168,27 @@ class Trunk(nn.Module):
         return sequence[..., :input_rows, :]
 
 
+def group_row_l2(
+    sequence: jax.Array, row_valid: jax.Array, group_ids: jax.Array, num_groups: int
+) -> tuple[jax.Array, jax.Array]:
+    """Per-group residual magnitude: (sum of valid-row L2 norms, valid-row
+    count), each (..., num_groups) over the trailing (rows, dim) axes. The
+    live twin of the 2026-09-10 offline norm table (first_block_diagnostics):
+    every row now ENTERS at RMS 1, so the trunk's output norm per group is
+    the read of which rows the blocks write to -- unnormalised, the history
+    rows sat at ~1040 in and out while CLS went 2.85 -> 1012. Summed rather
+    than averaged so the caller's mean weights every valid row once."""
+    l2 = jnp.linalg.norm(sequence.astype(jnp.float32), axis=-1)
+    membership = jax.nn.one_hot(group_ids, num_groups, dtype=jnp.float32)
+    valid = row_valid.astype(jnp.float32)
+    # HIGHEST: the default f32 einsum runs at TF32 on the GPU (~1e-3
+    # relative), and this is a norm read, not a matmul worth the speed.
+    highest = jax.lax.Precision.HIGHEST
+    l2_sum = jnp.einsum("...r,rg->...g", l2 * valid, membership, precision=highest)
+    rows = jnp.einsum("...r,rg->...g", valid, membership, precision=highest)
+    return l2_sum, rows
+
+
 def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:
     """How alike a sequence's rows are: (mean off-diagonal cosine,
     participation ratio), each over the trailing (rows, dim) axes, batched

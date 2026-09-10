@@ -26,6 +26,7 @@ from rl.environment.protos.features_pb2 import (
     PackedSetFeature,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
+from rl.model.constants import SequenceGroup
 from rl.model.state_features import (
     STATE_KERNEL_GROUPS,
     STATE_KERNELS,
@@ -298,7 +299,34 @@ _TRUNK_LEAVES = {
     "player_trunk_mlp_out_rms": (
         ("encoder", "trunk", "blocks", "ffw", "Dense_1", "kernel"),
     ),
+    # The four registers (2026-09-10): normal .02 at init, then RMS-normalised
+    # on the way in, so only their DIRECTION reaches the trunk -- rms drift
+    # says they train, not what they carry. Their one-group norm scale
+    # starts at 0 like the sequence bank's.
+    "player_trunk_register_rms": (("encoder", "trunk", "register_embeddings"),),
+    "player_trunk_register_norm_scale_rms": (
+        ("encoder", "trunk", "register_norm", "group_scale"),
+    ),
 }
+_INPUT_NORM_SCALE = ("encoder", "input_normalisation", "group_scale")
+
+
+def input_norm_telemetry(param_tree) -> dict[str, jax.Array]:
+    """player_input_norm_scale_rms_<group>: rms of each SequenceGroup's row of
+    the input norm's channel scale (modules.SequenceInputNormalisation; zero
+    at init, effective scale 1 + it). A group's row drifting from 0 is the
+    model re-sizing that group's input against the others -- the only way
+    the pre-norm disparity this norm removed can come back, now on a panel."""
+    if not _has(param_tree, _INPUT_NORM_SCALE):
+        return {}
+    scale = jnp.asarray(_get(param_tree, _INPUT_NORM_SCALE), jnp.float32)
+    row_rms = jnp.sqrt(jnp.mean(jnp.square(scale), axis=-1))
+    return {
+        f"player_input_norm_scale_rms_{group.name.lower()}": row_rms[int(group)]
+        for group in SequenceGroup
+    }
+
+
 # The 2026-09-01 opponent-code leaves. The code trains ONLY through the
 # privileged value CE via a straight-through argmax, and the belief head
 # predicts it: `player_code_perplexity` cannot tell a random hash at init
@@ -476,6 +504,7 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
             continue
         logs[key] = optax.global_norm(_get(grad_tree, path))
     logs.update(state_kernel_telemetry(param_tree))
+    logs.update(input_norm_telemetry(param_tree))
     return logs
 
 

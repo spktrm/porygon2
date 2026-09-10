@@ -215,6 +215,11 @@ def get_player_model_config(
     cfg.transition = ConfigDict()
     cfg.transition.block = ConfigDict(cfg.encoder.trunk.to_dict())
     cfg.transition.block.num_blocks = 2
+    # The registers are the ENCODER trunk's workspace (2026-09-10); the
+    # copied config would have given the two dynamics blocks four of
+    # their own, un-asked-for -- the merge audit against ckpt_02339569
+    # surfaced the leaves. Explicitly none here.
+    cfg.transition.block.num_registers = 0
     cfg.transition.code_groups = 2
     cfg.transition.code_classes = 16
     cfg.transition.action_classes = 64

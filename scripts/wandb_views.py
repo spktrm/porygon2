@@ -332,7 +332,12 @@ def rl_sections():
                 ),
                 lp(
                     "Trunk projection parameter RMS",
-                    ["player_trunk_attn_out_rms", "player_trunk_mlp_out_rms"],
+                    [
+                        "player_trunk_attn_out_rms",
+                        "player_trunk_mlp_out_rms",
+                        "player_trunk_register_rms",
+                        "player_trunk_register_norm_scale_rms",
+                    ],
                 ),
                 lp(
                     "Trunk and action-head gradient norms",
@@ -352,6 +357,25 @@ def rl_sections():
                 lp(
                     "Trunk centred participation ratio",
                     ["player_trunk_row_participation"],
+                ),
+                lp(
+                    # 2026-09-10: every row enters at RMS 1 (L2 16 at 256),
+                    # so a group's OUTPUT L2 is what the six blocks wrote on
+                    # it. Unnormalised, the history rows sat at ~1040 in and
+                    # out (moved 2%) while CLS went 2.85 -> 1012; a group
+                    # pinned near 16 is one the trunk does not revise.
+                    "Trunk output row L2 per group",
+                    [],
+                    regex="^player_trunk_out_row_l2_",
+                    log_y=True,
+                ),
+                lp(
+                    # The input norm's per-group channel scale, zero at init
+                    # (effective 1 + it): the only route by which the input
+                    # scale disparity the norm removed can come back.
+                    "Input norm group scale: drift from zero",
+                    [],
+                    regex="^player_input_norm_scale_rms_",
                 ),
                 lp(
                     # The 2026-09-01 opponent-code leaves against their

@@ -117,3 +117,39 @@ def test_one_group_form_matches_the_full_layout_at_init():
         rtol=1e-6,
         atol=0,
     )
+
+
+def test_group_row_l2_sums_valid_rows_per_group():
+    """The panel's read: per-group sum of valid-row L2 and the valid count,
+    invalid rows excluded, a group with no valid rows reading 0 / 0, with a
+    batched leading axis. Positive control: a doubled row doubles its
+    group's sum and nothing else."""
+    from rl.model.trunk import group_row_l2
+
+    generator = np.random.default_rng(3)
+    rows = jnp.asarray(generator.normal(size=(2, NUM_SEQUENCE_ROWS, 8)), jnp.float32)
+    valid = np.ones((2, NUM_SEQUENCE_ROWS), bool)
+    valid[0, 5] = False
+    group_of = np.asarray(SEQUENCE_GROUP_IDS)
+    only_group = int(group_of[5])
+    valid[0, group_of == only_group] = False
+    l2_sum, count = jax.jit(group_row_l2, static_argnums=3)(
+        rows, jnp.asarray(valid), jnp.asarray(group_of), NUM_SEQUENCE_GROUPS
+    )
+    assert l2_sum.shape == count.shape == (2, NUM_SEQUENCE_GROUPS)
+    expected_l2 = np.linalg.norm(np.asarray(rows), axis=-1) * valid
+    for group in range(NUM_SEQUENCE_GROUPS):
+        member = group_of == group
+        np.testing.assert_allclose(
+            np.asarray(l2_sum)[:, group], expected_l2[:, member].sum(-1), rtol=1e-5
+        )
+        np.testing.assert_array_equal(
+            np.asarray(count)[:, group], valid[:, member].sum(-1)
+        )
+    assert float(l2_sum[0, only_group]) == 0 and float(count[0, only_group]) == 0
+    doubled = rows.at[1, 0].multiply(2)
+    l2_double, _ = jax.jit(group_row_l2, static_argnums=3)(
+        doubled, jnp.asarray(valid), jnp.asarray(group_of), NUM_SEQUENCE_GROUPS
+    )
+    delta = np.asarray(l2_double - l2_sum)
+    assert delta[1, int(group_of[0])] > 0 and np.count_nonzero(delta) == 1

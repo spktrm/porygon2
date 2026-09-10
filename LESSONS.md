@@ -4568,3 +4568,84 @@ it is not a bit-identical resume claim. Implementation rl/model/{config,encoder,
 trunk}.py; tests/test_register_tokens.py. Reference arXiv2309.16588; local main
 switch-pair document section14. Prior section13 frozen normalisation measurements
 remain the no-register checkpoint experiment, not evidence for this combination.
+
+## Input-norm panels and the ckpt_02339569 merge audit — 2026-09-10
+
+The live twin of the offline norm table: `trunk.group_row_l2` (per-step sum
+of valid-row L2 and valid-row count per SequenceGroup, einsum at HIGHEST —
+the default f32 einsum is TF32 on the GPU) rides out of `get_head_outputs`
+as two learner-only fields and lands as `player_trunk_out_row_l2_<group>`
+(every valid row of every valid step weighted once). Rows enter at RMS 1 =
+L2 16 at width 256, so a group reading ~16 at the output is one the blocks
+do not write; before the norm the history rows read ~1040 in and out.
+Beside it `player_input_norm_scale_rms_<group>` (each group's row of the
+zero-init channel scale — the only route by which the input disparity can
+return) and `player_trunk_register_rms` / `_register_norm_scale_rms` on
+the trunk drift panel. Panels: "Trunk output row L2 per group" (log y),
+"Input norm group scale: drift from zero"; views re-saved.
+
+Launch check for the relaunch from ckpt_02339569 (learner stopped there):
+the manifest carries no register/norm field, so a checkpoint-mode resume
+passes `check_manifest` strict and the by-path merge inits the new leaves
+fresh. Audited offline with `merge_params(eval_shape(fresh), loaded)`:
+kept fresh `encoder/input_normalisation`, `encoder/trunk/register_embeddings`,
+`encoder/trunk/register_norm` AND — un-asked-for — `transition/dynamics_blocks/
+register_embeddings` + `register_norm`, because `cfg.transition.block` is a
+copy of `cfg.encoder.trunk` and inherited `num_registers = 4`. Set
+`cfg.transition.block.num_registers = 0` explicitly (the registers are the
+encoder trunk's workspace; giving g four of its own is a separate decision).
+Nothing dropped. Config is rebuilt from code on resume, not from the
+checkpoint's copy, so the defaults are what the code says: `num_registers`
+4 on the encoder trunk, the norm unconditional. Expect the resume log line
+`kept fresh init: 3 subtrees` naming exactly those three.
+
+
+## Actor/learner parity at the normalised trunk boundary — 2026-09-10
+
+After adding RMS-1 group input normalisation and four registers, the fresh-model
+full actor/learner parity test failed despite f32/highest-precision forwards:
+maximum entropy difference 1.25599, value-logit difference 0.232134. Input rows
+agreed exactly and standalone encoder/trunk calls agreed within 9.1e-6; history
+inputs agreed within 3.3e-7. Returning pre-trunk rows from a diagnostic forward
+restored agreement. A barrier after the encoder did not help; an identity
+`jax.lax.optimization_barrier` on assembled rows immediately before the trunk
+reduced diagnostic entropy/value differences to 2.03e-6. Added at
+`Encoder._batched_forward`; remove that line to reproduce the unprotected seam.
+The exact compiler transformation remains unidentified. No tolerance or mask
+was relaxed. Jitted reverse-mode identity was checked separately.
+
+Final focused GPU validation: 18 passed across actor-sequence, register-token,
+input-normalisation and privileged-partition tests, including the formerly
+failing full-model comparison and f32/bf16 register gradients. Focused Ruff
+passed. Diagnostics/log: runtime/register-validation/final-tests.log; main
+report: docs/switch-pair-probe-2026-09-10.md, section 14. Historical checkpoint
+impact, bf16 full actor/learner parity and throughput impact were not established.
+No training restart or checkpoint rewrite was performed for this fix.
+
+
+### Follow-up: XLA nested-concatenation root cause and upstream report — 2026-09-10
+
+Supersedes the earlier unidentified-transformation diagnosis. The failing
+Triton fusion combines a 73-row validity-mask concatenation with normalisation
+and a final 77-row register append. Generated LLVM decodes the outer block ID
+with divisor/modulus 77 but nested mask indices with 73, corrupting masking
+after the first time tile. Extracted HLO independently fails against NumPy;
+a ~45-line NumPy/JAX reproducer has max error 4.51070 vs 7.15e-7 with the barrier.
+XLA's own Triton numerical verifier rejects it. Posted with user authorisation:
+https://github.com/jax-ml/jax/issues/40588. RTX 3080 Ti, JAX/jaxlib 0.10.2.
+
+Matched full-actor barrier-off/on controls: norm+4 registers entropy/value
+maxima 1.25599/.232134; norm+0 registers 2.38e-6/2.38e-6; no norm+4 registers
+7.15e-7/2.15e-6. The mathematical normalisation is sound; this combination
+triggers faulty nested-concatenation code generation. Keep the local barrier;
+neither the broad flags from related #39486 nor disabling a pass named
+triton-fusion removed the failing kernel in the extracted control.
+
+Impact qualification: minimal bf16 also fails, and failure onset varies with
+chosen tile size. However the tested full bf16 learner forward has identical
+policy entropy/value logits with/without the barrier; only five reduction
+metric leaves differ (<=6.10e-5). Original failing actor test ran GPU f32 at
+T=58; deployed actors default CPU. No historical training damage established,
+and train-step gradients/other learner shapes remain unaudited. Details in
+main switch-pair doc section 15; minimal example and HLO/LLVM evidence under
+runtime/register-validation/hlo-investigation/. No restart or upgrade.

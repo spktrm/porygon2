@@ -38,9 +38,11 @@ from rl.model.constants import (
     MOVE_ROWS,
     NUM_PRIVATE_SLOTS,
     NUM_PUBLIC_SLOTS,
+    NUM_SEQUENCE_GROUPS,
     POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
     PUBLIC_ROWS,
+    SEQUENCE_GROUP_IDS,
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
@@ -58,7 +60,7 @@ from rl.model.mcts import mcts_root
 from rl.model.modules import MLP
 from rl.model.search import SearchBudget, SearchFns, search_diagnostics, search_root
 from rl.model.transition import TransitionModel
-from rl.model.trunk import row_homogeneity
+from rl.model.trunk import group_row_l2, row_homogeneity
 from rl.model.utils import get_num_params, prune_log_policy
 
 
@@ -619,6 +621,12 @@ class Porygon2PlayerModel(nn.Module):
             # phase-1 support-anchor shape -- so it gets its own reading.
             # Offline twin: rl/offline/trunk_homogeneity.py, per block.
             row_cosine, row_participation = row_homogeneity(sequence)
+            group_l2_sum, group_rows = group_row_l2(
+                sequence,
+                row_valid,
+                jnp.asarray(SEQUENCE_GROUP_IDS),
+                NUM_SEQUENCE_GROUPS,
+            )
             learner_only = {
                 # The grounding label: the target rows' pre-trunk content.
                 # The transition model's grounding head is scored against
@@ -638,6 +646,8 @@ class Porygon2PlayerModel(nn.Module):
                 "belief_hidden_any": opp_code_labels.hidden_any,
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
+                "trunk_out_group_l2_sum": group_l2_sum,
+                "trunk_out_group_rows": group_rows,
                 # The History panels: the step GAT's read and the
                 # backbone's write gate (history_encoder.history_step_stats).
                 "history_step_attn_entropy": history_stats["step_attn_entropy"],

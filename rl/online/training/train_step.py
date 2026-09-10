@@ -389,6 +389,20 @@ def _probs_entropy(probs: jax.Array) -> jax.Array:
     return -(probs * jnp.log(jnp.maximum(probs, 1e-8))).sum(-1)
 
 
+def trunk_group_l2_logs(pred, value_mask) -> dict[str, jax.Array]:
+    """player_trunk_out_row_l2_<group>: the trunk output's mean row L2 per
+    SequenceGroup over the valid rows of the valid steps (the per-step sums
+    and counts come from trunk.group_row_l2, so each row weighs once)."""
+    step = value_mask[..., None]
+    l2_sum = jnp.where(step, pred.trunk_out_group_l2_sum, 0).sum(axis=(0, 1))
+    rows = jnp.where(step, pred.trunk_out_group_rows, 0).sum(axis=(0, 1))
+    mean_l2 = l2_sum / rows.clip(min=1)
+    return {
+        f"player_trunk_out_row_l2_{group.name.lower()}": mean_l2[int(group)]
+        for group in SequenceGroup
+    }
+
+
 def _consistency_losses(pred, first_step: jax.Array) -> tuple[jax.Array, dict]:
     """The first transition's imagined rows against the real next post-trunk
     rows, per sequence group, normalised by the copy predictor's error."""
@@ -1562,6 +1576,12 @@ def train_step(
             player_trunk_row_participation=average(
                 learner_player_pred.trunk_row_participation, value_mask
             ),
+            # The trunk's output L2 per SequenceGroup, every valid row of
+            # every valid step weighted once (trunk.group_row_l2). Rows
+            # enter at RMS 1 = L2 16 at width 256, so this is what the six
+            # blocks wrote onto each group; a group sitting at its input
+            # norm is one the trunk does not revise.
+            **trunk_group_l2_logs(learner_player_pred, value_mask),
             # The history encoder's step GAT and write gate
             # (history_encoder.history_step_stats): per-trajectory scalars
             # broadcast over T, so this is the valid-step-weighted batch mean.
