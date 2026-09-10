@@ -4287,3 +4287,195 @@ Write-up: docs/switch-pair-probe-2026-09-10.md (local); log
 runtime/type-probe-switch/ckpt_02339569.log. Harness note: run probes in a
 tmux window — the agent harness's memory guard killed two attempts with
 23 GB free.
+
+## Matched learned switch readouts — 2026-09-10
+
+Follow-up to the switch-pair probe above, using frozen EMA parameters at
+ckpt_02339569 on the same 240-game heuristic cohort. Removed terminal and
+overlapping bootstrap rows: 18,372 unique game/step/candidate records.
+Three 144/48/48 whole-game train/validation/test splits; learned rank-64
+bilinear per effectiveness class, identical pair-head capacity (133,124
+parameters), train-only feature standardisation, Adam .001, 100 epochs.
+Validation selects epoch and L2 from {0, 1e-5, 1e-3, .01, .1}; the initial
+narrow grid hit its early-epoch/strong-regularisation boundary and is saved.
+
+Mean held-out offensive/defensive accuracy: majority .532/.552;
+candidate-only post .533/.560; candidate-only pre .540/.558;
+candidate×opponent post .538/.558; candidate×CLS post .532/.552;
+candidate×opponent pre **.628/.640**. Balanced accuracy for the raw pair
+is .465/.500 versus .297/.302 for the post pair. Raw-pair ordinal r is
+.429/.447. The raw pair wins both accuracy measures in every split but
+has .937/.939 training accuracy: generalisation remains a material gap.
+Its selected L2 is .01 in every split. Many selected epochs are near the
+100-epoch budget, so this is not a demonstrated optimisation ceiling.
+
+Same-split fixed-alpha ridge controls: candidate type pre .885/post .630;
+opponent type pre .956/post .858; opponent type from CLS .080. A synthetic
+interaction-only task gives learned pair 1.000 vs candidate-only .249,
+confirming the training implementation can learn a product. Four legal
+cells have zero encoded HP ratio; the old rounded 1.000 alive check was
+not exact and is not a proof of slot identity.
+
+Interpretation correction to the preceding entry: a scalar of a contextual
+row CAN depend on the opponent through attention; these probes establish
+limited readout generalisation, not that the trunk computes NOTHING or that
+all heads lack both sides. Current critics read CLS/VALUE_CLS, not the
+switch sheet bank directly. The results favour a raw-pair experiment but
+establish neither strength nor an exact .8–.9 type-chart decoder. Preserve
+the existing learned scalar when adding zero-init terms for unchanged
+initial behaviour. No production model or checkpoint was changed.
+
+Reproduction: rl/offline/switch_readout_probe.py; local report
+docs/switch-pair-learned-readouts-2026-09-10.md; frozen cache, per-split JSON,
+initial grid, controls and logs under runtime/type-probe-switch/.
+Focused Ruff/Black/isort checks and the synthetic positive/negative control
+passed. GPU extraction/fitting completed; the small synthetic control used
+CPU fallback, with no real-model CPU forward. No commit or training launch.
+
+## Switch depth curve and intermediate supervision — 2026-09-10
+
+User authorised depth probes and an isolated supervised intervention, with
+results appended to docs/switch-pair-probe-2026-09-10.md section 10. Same
+240-game cohort, 18,372 unique legal switch cells, three 144/48/48 whole-game
+splits, frozen EMA checkpoint 02339569. Actual TrunkBlock extraction matched
+the old depth-0/6 operands bit-for-bit; the shared frozen readout fitter
+reproduced all endpoint test accuracies exactly.
+
+Frozen paired offensive/defensive accuracy by depth 0–6:
+.628/.640, .553/.577, .560/.572, .536/.568, .535/.556, .531/.553,
+.538/.558. Largest adjacent drop at block 1, no intermediate peak above
+the raw input. Candidate primary-type ridge accuracy declines monotonically
+.885 → .780 → .738 → .715 → .694 → .657 → .630; opponent type stays
+more accessible, .956 → .858. Candidate-only matchup reads stay near the
+majority baseline. Training curves use validation-selected regularisation;
+their decline does not establish a loss of memorisation capacity.
+
+Intervention: freeze assembled inputs/embedders/history, train isolated
+six-block trunk copies with the original policy/privileged mask. Final-layer
+loss versus mean loss at layers 2/4/6, identical independent paired heads,
+two label tasks, averaged head L2=.01, head Adam LR=.001, trunk LR grid
+{1e-5,1e-4}, gradient clip 1, 20 epochs of identical 32-state batches.
+Select both arms by final-layer validation cross entropy, then freeze and
+refit fresh candidate-only and paired readouts at EVERY depth. All six
+arm/split selections chose LR1e-5, epoch1; later training overfit validation.
+All selected trunks changed in every block; this was not a closed-gradient
+or unchanged-parameter control.
+
+Final-depth fresh paired accuracy: frozen .5385/.5581, final-only
+.5317/.5625, intermediate .5353/.5657. Balanced accuracy: frozen
+.2972/.3019, final-only .2972/.3133, intermediate .2996/.3168.
+Intermediate-minus-final-only balanced accuracy is +.00244/+.00345,
+positive in 2/3 splits for each label: the registered directional gate
+passes, but the effect is only **0.24/0.35 percentage points**, and the
+depth-related accessibility decline remains largely unchanged. This does
+not establish a substantial repair, adaptive-depth benefit, self-distillation
+benefit, or policy strength. These are supervised offline type labels,
+not a production auxiliary objective. No post-test tuning was performed.
+
+Implementation rl/offline/switch_depth_probe.py reuses the existing frozen
+fitter in switch_readout_probe.py. Protocol in local
+docs/switch-depth-supervision-protocol-2026-09-10.md; all frozen/selected
+features, per-split results, learning curves, checkpoints of the isolated
+copies, parameter deltas and PNG/SVG figures under
+runtime/type-probe-switch/depth/. 252 fresh readout results including the
+unchanged depth-0 controls; 126 type controls. A layer-2 loss has nonzero
+gradients in blocks1–2 and zero in blocks3–6. Privileged perturbations
+leave every policy-readable depth identical, with a live public-opponent
+perturbation positive control. Focused Ruff/Black/isort and whitespace
+checks passed; plots visually inspected. No production parameter changes,
+training restart, commit or modification of the dirty data/ps submodule.
+
+## Six-layer attention routing visualisation — 2026-09-10
+
+User requested measured per-layer attention and a 3D routing visualiser.
+Read the production TrunkBlock's existing attention sow at EMA02339569
+on the 5,643 cached switch-legal states from the same 240-game cohort.
+All six layers/four heads, cohort means and six sampled states from distinct
+games (seed910). Token means condition on valid queries; group means weight
+valid query instances. The separate legal-switch summary gates sheet queries
+on the 18,372 legal switch cells, whereas the visual's default sheet group
+includes all valid sheet queries, including illegal switch targets.
+
+Legal-switch sheet query mass, mean over heads: block1 request info38.88%,
+CLS30.87%, field14.29%, opponent active3.85%. Input CLS is a learned
+constant; input INFO contains only request type and number of actives
+(encoder._assemble_sequence). Fixed values may still contribute useful
+query-dependent updates; this does not prove an attention sink or the cause
+of the type-readability decline. Opponent-active mass by block is
+3.85/5.12/1.96/7.58/3.52/2.76%. Block4 head2 is specialised at23.74%,
+versus3.04/1.36/2.16% in its other heads. Later field/move/history rows
+are contextual, so their labels do not bound the information they carry.
+
+Captured final candidate rows reproduce the saved frozen cache exactly
+(max delta0). Forbidden attention max0. Raw bf16 query-sum error max.015686;
+reporting renormalises valid queries, without changing the forward.
+The visual draws key/value source→receiving row between consecutive depths,
+with separately labelled unweighted residual skips. Attention probabilities
+are not value-vector contribution norms or causal attributions; MLP effects
+are not represented. Cohort averaging is not an attention rollout.
+
+Implementation rl/offline/attention_routes.py. Local report in
+docs/switch-pair-probe-2026-09-10.md section11. Self-contained interactive
+fragment, editable template/builder, numeric summary, full-precision cohort
+and six sampled matrices, and QA screenshots under
+runtime/type-probe-switch/attention/. The inline token export stores top8
+keys per query and uint16 weights; head means are calculated before
+truncation, full group matrices are retained, and visible routes never
+renormalise the displayed mass. Fragment size729kB, below the1MB limit.
+
+Checked group/token, head, state, block, route count, camera sliders, drag
+rotation, tooltips and node selection; no JavaScript errors or overflow at
+736px/360px in light/dark. Screenshots inspected. Connected browsers were
+unavailable, so QA used isolated local headless Chromium. Focused source
+checks passed. Production parameters and service/training state unchanged;
+no commit, package manifest change, or edit to the dirty data/ps submodule.
+
+## First-block causal routing test — 2026-09-10
+
+Frozen EMA02339569, same 240-game cohort / 5,643 states / 18,372 legal
+switch cells. Remove INFO, CLS, both, or FIELD only from own-sheet queries
+in block1 via the native mask (renormalising). Controls: attenuate the whole
+attention output by one minus original INFO+CLS probability mass per query
+(mean heads); bypass the whole block. Attenuation is probability-fraction
+matched, not vector-norm matched. FIELD is one-source semantic control.
+All later blocks unchanged. Three original game splits, same 100-epoch,
+five-L2 paired readouts independently refit at depths1/6. 72 fresh fits;
+12 baseline fits reused after bit-exact candidate/opponent cache reproduction.
+
+Final balanced accuracy offensive/defensive: baseline .2972/.3019;
+INFO removed .2894/.2958; CLS .2979/.3039; both .2811/.2813;
+FIELD .2969/.3010; attenuation .2931/.3046; block bypass .2499/.2482.
+Removing both worsens each label in all3 splits. Attenuation improves depth1
+balanced accuracy .3801/.3921 to .3897/.4044 but does not consistently
+improve final depth. No evidence to delete the high-attention INFO/CLS routes.
+Bypass introduces distribution shift into later frozen blocks; it does not
+price a five-block model trained from scratch. No policy-play claim.
+
+Descriptive f32 reconstruction from bf16 values/weights/output kernel:
+legal-sheet median INFO+CLS projected norm1.819, total attention3.213,
+input residual7.039, whole block update59.316, approximate MLP58.939.
+Median route/attention norm .571; route/input .256. Norms are non-additive
+because routes can cancel. MLP magnitude dominates the first update, but
+its causal effect on generalisation is not established by magnitude.
+
+Register-token hypothesis prompted by user (Darcet et al., arXiv2309.16588):
+valid-row median input norms differ sharply: CLS2.8, field4.3, sheets7.1,
+INFO9.9, moves14.0, own history1041.0. History is already high-norm before
+trunk; final CLS rises from160.7 at depth5 to1011.7 at depth6, but that final
+output is never read by subsequent trunk attention. These are not sufficient
+evidence for content-token repurposing or a register fix. Blocks apply
+pre-RMSNorm, while the residual stream keeps heterogeneous scales; learned
+per-channel scales do not guarantee equal normalised-output norms.
+
+Native baseline and separate norm/capture endpoints exactly reproduce the
+cache. Each targeted ablation changes candidate rows with zero first-depth
+opponent delta; bypass depth1 exactly equals raw inputs. Initial combined
+value instrumentation changed bf16 rounding and was rejected before fitting.
+Descriptive reconstruction now runs separately from intervention extraction.
+Focused Black/isort/Ruff and whitespace checks passed. No production weight
+changes, training restart, commit or data/ps changes.
+
+Code: rl/offline/first_block_causal.py and first_block_diagnostics.py.
+Protocol docs/first-block-causal-protocol-2026-09-10.md; main report section12
+in docs/switch-pair-probe-2026-09-10.md; all features/results/norms under
+runtime/type-probe-switch/first-block-causal/.
