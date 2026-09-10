@@ -4746,3 +4746,46 @@ is ever wanted it is ONE slot embedding indexed by public slot i added to
 both rows — a positional join at the same step, distinct from the retired
 `entity_index_tag` (a join across the wire's stable index, 09-02).
 Revert handle: this commit.
+
+## Output sequence normalisation — 2026-09-11 (numbers move; merge relaunch from ckpt_00280000)
+
+User asked for an output norm "like the input" after the ckpt_00280000
+health check. `modules.SequenceInputNormalisation` renamed
+`SequenceNormalisation` and instantiated a second time as
+`encoder.output_normalisation`, applied in `_batched_forward` right after
+the trunk: per-row RMS 1, then 1 + zero-init per-group channel scale, the
+same 12x256 bank shape, invalid rows exactly 0, no cross-row statistics
+(the privileged partition is untouched). The final norm every pre-norm
+transformer carries (GPT-2 ln_f, LLaMA model.norm, ViT head norm); the
+trunk had none. Grounding measured on ckpt_00280000 over 399 offline
+steps: trunk-output row RMS by group CLS 9.8, registers 11.4, INFO 10.0,
+FIELD 6.5, PUBLIC_ENTITY 5.6, PRIVATE_ENTITY 3.6, TARGET_SLOT 1.3,
+MOVE_SLOT 0.99 — and block 5 alone took MOVE_SLOT from 2.05 to 0.99 and
+TARGET_SLOT from 2.0 to 1.3 while doubling CLS 4.5 to 9.8, so the heads
+read a 10x magnitude disparity the last block sets. Every head now reads
+rows at RMS 1 x (1 + its group's scale).
+
+Seams: the `trunk_out_group_l2` panels read the RAW trunk output
+(computed in the encoder before the norm, learner-only, threaded through
+the encoder's return) — after the norm they would read 1 for every group.
+`trunk_row_cosine` reads the normed rows (per-row scale-invariant, so
+identical at init). `harness.encode_policy_rows` and
+`transition_probe.value_of` apply the output norm after their direct
+`encoder.trunk` calls so the offline reads match what the live heads and
+search read. Telemetry: `norm_scale_telemetry` reads both banks,
+`player_{input,output}_norm_scale_rms_<group>`, one panel each.
+
+Test: `test_every_row_leaves_the_trunk_at_unit_rms` (valid rows RMS 1 at
+init, invalid 0; +1 on the output bank doubles every row; +1 on the
+input bank changes content but leaves output RMS at 1). Found in
+passing: `test_opp_private_team_cannot_reach_the_policy`'s positive
+control reversed the opponent's six rows, which since the per-row bias
+went (d5bb6a9) is a permutation of a set and moves no attention read —
+it was failing on main; the control now copies mon 0 over all six rows.
+
+Relaunch: checkpoint-mode param merge from ckpt_00280000 (the new bank
+keeps fresh zero init, `player: 1 subtrees kept fresh init`); the heads
+see their inputs rescaled at the merge, so expect a transient on the
+policy/value losses. Revert handle: delete `output_normalisation` in
+`encoder.setup` and the one application line; everything else is
+structure.

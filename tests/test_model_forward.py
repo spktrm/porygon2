@@ -180,6 +180,61 @@ def test_row_identity_is_added_after_the_input_norm(
     np.testing.assert_array_equal(biased[~valid], 0)
 
 
+def _trunk_rows(
+    network: nn.Module, params: dict, actor_input: PlayerActorInput
+) -> np.ndarray:
+    """The encoder's output rows for the trajectory, (T, rows, width): what
+    every head reads, i.e. AFTER the output norm."""
+
+    def call(
+        module: nn.Module, env: PlayerEnvOutput, packed: object, history: object
+    ) -> jax.Array:
+        return module.encoder(env, packed, history)[0]
+
+    apply = jax.jit(
+        lambda p, env, packed, history: network.apply(
+            p, env, packed, history, method=call
+        )
+    )
+    return np.asarray(
+        apply(params, actor_input.env, actor_input.packed_history, actor_input.history),
+        np.float32,
+    )
+
+
+def test_every_row_leaves_the_trunk_at_unit_rms(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
+    """The output norm (2026-09-11): every valid row leaves the trunk at RMS
+    1 at init and invalid rows at exactly 0, whatever the blocks wrote.
+    Positive controls: +1 on every group of the OUTPUT bank doubles every
+    valid row; +1 on the INPUT bank changes the trunk's content but leaves
+    the output RMS at 1 -- it is the output norm doing the sizing."""
+    network, params, actor_input, _ = real_model_and_trajectory
+    rows = _trunk_rows(network, params, actor_input)
+    valid = np.any(rows != 0, axis=-1)
+    assert valid.sum() > 1
+
+    def row_rms(values: np.ndarray) -> np.ndarray:
+        return np.sqrt(np.mean(np.square(values), axis=-1))
+
+    np.testing.assert_allclose(row_rms(rows)[valid], 1, atol=0.03)
+    doubled = _trunk_rows(
+        network,
+        _perturbed(params, ("output_normalisation", "group_scale")),
+        actor_input,
+    )
+    np.testing.assert_allclose(row_rms(doubled)[valid], 2, atol=0.06)
+    np.testing.assert_array_equal(doubled[~valid], 0)
+    rescaled_in = _trunk_rows(
+        network, _perturbed(params, ("input_normalisation", "group_scale")), actor_input
+    )
+    assert np.max(np.abs(rescaled_in[valid] - rows[valid])) > 0.1
+    np.testing.assert_allclose(row_rms(rescaled_in)[valid], 1, atol=0.03)
+
+
 def _field_tokens(
     network: nn.Module, params: dict, actor_input: PlayerActorInput
 ) -> jax.Array:

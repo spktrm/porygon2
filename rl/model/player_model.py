@@ -38,11 +38,9 @@ from rl.model.constants import (
     MOVE_ROWS,
     NUM_PRIVATE_SLOTS,
     NUM_PUBLIC_SLOTS,
-    NUM_SEQUENCE_GROUPS,
     POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
     PUBLIC_ROWS,
-    SEQUENCE_GROUP_IDS,
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
@@ -60,7 +58,7 @@ from rl.model.mcts import mcts_root
 from rl.model.modules import MLP
 from rl.model.search import SearchBudget, SearchFns, search_diagnostics, search_root
 from rl.model.transition import TransitionModel
-from rl.model.trunk import group_row_l2, row_homogeneity
+from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params, prune_log_policy
 
 
@@ -575,6 +573,7 @@ class Porygon2PlayerModel(nn.Module):
         row_valid: jax.Array,
         opp_code_labels: OppCodeLabels,
         dynamics_rows: jax.Array,
+        trunk_out_group_l2: tuple[jax.Array, jax.Array] | None,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -630,12 +629,7 @@ class Porygon2PlayerModel(nn.Module):
             # phase-1 support-anchor shape -- so it gets its own reading.
             # Offline twin: rl/offline/trunk_homogeneity.py, per block.
             row_cosine, row_participation = row_homogeneity(sequence)
-            group_l2_sum, group_rows = group_row_l2(
-                sequence,
-                row_valid,
-                jnp.asarray(SEQUENCE_GROUP_IDS),
-                NUM_SEQUENCE_GROUPS,
-            )
+            group_l2_sum, group_rows = trunk_out_group_l2
             learner_only = {
                 # The grounding label: the target rows' pre-trunk content.
                 # The transition model's grounding head is scored against
@@ -689,6 +683,7 @@ class Porygon2PlayerModel(nn.Module):
             row_valid,
             opp_code_labels,
             dynamics_rows,
+            trunk_out_group_l2,
             history_stats,
             history_carry,
         ) = self.encoder(
@@ -710,6 +705,7 @@ class Porygon2PlayerModel(nn.Module):
             row_valid,
             opp_code_labels,
             dynamics_rows,
+            trunk_out_group_l2,
             actor_input.env,
             actor_output,
         )

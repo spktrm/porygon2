@@ -16,7 +16,7 @@ from rl.model.constants import (
     PUBLIC_ROWS,
     SEQUENCE_GROUP_IDS,
 )
-from rl.model.modules import SequenceInputNormalisation
+from rl.model.modules import SequenceNormalisation
 from rl.offline.switch_depth_probe import ROOT as DEPTH_ROOT
 from rl.offline.switch_depth_probe import split_masks, trunk_depths
 from rl.offline.switch_readout_probe import fit_readout
@@ -26,7 +26,7 @@ ROOT = Path("runtime/type-probe-switch/input-normalisation")
 
 
 def normalised_depths(params, sequence, valid):
-    normaliser = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
+    normaliser = SequenceNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
     normalised = normaliser.apply(
         {
             "params": {

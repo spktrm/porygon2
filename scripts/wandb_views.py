@@ -378,6 +378,13 @@ def rl_sections():
                     regex="^player_input_norm_scale_rms_",
                 ),
                 lp(
+                    # The output norm's twin (2026-09-11): how each group's
+                    # rows are re-sized on the way OUT to the heads.
+                    "Output norm group scale: drift from zero",
+                    [],
+                    regex="^player_output_norm_scale_rms_",
+                ),
+                lp(
                     # The 2026-09-01 opponent-code leaves against their
                     # known init (all lecun 0.0625). Still there tens of
                     # thousands of steps in = never trained: the code is a

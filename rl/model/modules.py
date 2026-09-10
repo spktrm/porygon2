@@ -69,8 +69,17 @@ class EntitySumPool(nn.Module):
         )
 
 
-class SequenceInputNormalisation(nn.Module):
-    """Every row enters the trunk at the magnitude of a fresh embedding table.
+class SequenceNormalisation(nn.Module):
+    """Every valid row at RMS 1, then a learned per-group channel scale.
+
+    One module at both ends of the trunk. As `input_normalisation` every
+    row ENTERS the trunk at the magnitude of a fresh embedding table; as
+    `output_normalisation` (2026-09-11) every row LEAVES it at that
+    magnitude for the heads -- the final norm every pre-norm transformer
+    carries (GPT-2's ln_f, LLaMA's model.norm, ViT's head norm), which the
+    trunk had without: on ckpt_00280000 the heads read CLS at RMS 9.8
+    against move rows at 0.99, the disparity this norm removed at the input
+    coming back at the output.
 
     Each valid row is RMS-normalised across channels and scaled per group by
     a learned channel vector (effective scale 1 + a zero-init parameter, so

@@ -235,7 +235,8 @@ class PlayerActorOutput:
     # Per-group residual magnitude of the trunk's output (trunk.group_row_l2):
     # the sum of valid-row L2 norms and the valid-row count per SequenceGroup,
     # so the learner's mean weights every row once. Every row enters at RMS 1
-    # (modules.SequenceInputNormalisation); this reads what the blocks wrote.
+    # (modules.SequenceNormalisation) and leaves at RMS 1 again; this reads
+    # what the blocks wrote, taken BEFORE the output norm.
     trunk_out_group_l2_sum: ArrayLike = ()
     trunk_out_group_rows: ArrayLike = ()
     # History-encoder telemetry (history_encoder.history_step_stats), one

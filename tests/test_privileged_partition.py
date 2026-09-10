@@ -164,10 +164,14 @@ def test_opp_private_team_cannot_reach_the_policy(
 
     opp = np.asarray(actor_input.env.opp_private_team).copy()
     assert opp.any(), "fixture must carry real opponent truth (regenerate ex.bin)"
-    # Scramble the truth: reverse the mon rows on every step. Same schema,
-    # different content -- a pure information perturbation.
+    # Scramble the truth: every opponent row becomes a copy of the first
+    # mon, on every step. Same schema, different content -- a pure
+    # information perturbation. NOT a permutation of the rows: since the
+    # per-row bias went (d5bb6a9, 2026-09-10) the sequence is a set, so
+    # reversing the six rows moved nothing any attention read and the
+    # control passed vacuously.
     perturbed_env = actor_input.env.replace(
-        opp_private_team=jnp.asarray(opp[:, ::-1, :])
+        opp_private_team=jnp.asarray(np.broadcast_to(opp[:, :1, :], opp.shape))
     )
     perturbed_input = actor_input.replace(env=perturbed_env)
     moved = real_model_apply(params, perturbed_input, actor_output, HeadParams())

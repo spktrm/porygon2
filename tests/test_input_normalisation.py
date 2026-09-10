@@ -11,7 +11,7 @@ from rl.model.constants import (
     POLICY_READABLE_ROWS,
     SEQUENCE_GROUP_IDS,
 )
-from rl.model.modules import SequenceInputNormalisation
+from rl.model.modules import SequenceNormalisation
 
 
 def inputs(dtype: jax.typing.DTypeLike) -> tuple[jax.Array, jax.Array, jax.Array]:
@@ -31,7 +31,7 @@ def inputs(dtype: jax.typing.DTypeLike) -> tuple[jax.Array, jax.Array, jax.Array
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 def test_unit_rms_dtype_and_zero_padding(dtype: jax.typing.DTypeLike) -> None:
     sequence, valid, groups = inputs(dtype)
-    module = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
+    module = SequenceNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
     variables = jax.jit(module.init)(jax.random.key(0), sequence, valid, groups)
     output = jax.jit(module.apply)(variables, sequence, valid, groups)
     assert output.dtype == dtype
@@ -47,7 +47,7 @@ def test_unit_rms_dtype_and_zero_padding(dtype: jax.typing.DTypeLike) -> None:
 
 def test_group_scales_actor_equivalence_and_privileged_isolation() -> None:
     sequence, valid, groups = inputs(jnp.float32)
-    module = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
+    module = SequenceNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
     variables = jax.jit(module.init)(jax.random.key(0), sequence, valid, groups)
     scale = jnp.arange(NUM_SEQUENCE_GROUPS, dtype=jnp.float32)[:, None] / 10
     variables["params"]["group_scale"] = jnp.broadcast_to(
@@ -80,7 +80,7 @@ def test_group_scales_actor_equivalence_and_privileged_isolation() -> None:
 
 def test_live_group_and_directional_input_gradients() -> None:
     sequence, valid, groups = inputs(jnp.float32)
-    module = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
+    module = SequenceNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
     variables = jax.jit(module.init)(jax.random.key(0), sequence, valid, groups)
 
     def objective(weights: dict, rows: jax.Array) -> jax.Array:
@@ -103,8 +103,8 @@ def test_one_group_form_matches_the_full_layout_at_init() -> None:
     """The trunk's registers use a one-group instance; at init it is the same
     function as the full-layout bank (RMS 1 per row, zero rows stay zero)."""
     sequence, valid, groups = inputs(jnp.float32)
-    full = SequenceInputNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
-    one = SequenceInputNormalisation(num_groups=1)
+    full = SequenceNormalisation(num_groups=NUM_SEQUENCE_GROUPS)
+    one = SequenceNormalisation(num_groups=1)
     zeros = jnp.zeros_like(groups)
     full_vars = jax.jit(full.init)(jax.random.key(0), sequence, valid, groups)
     one_vars = jax.jit(one.init)(jax.random.key(0), sequence, valid, zeros)

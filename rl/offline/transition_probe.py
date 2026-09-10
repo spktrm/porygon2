@@ -130,9 +130,12 @@ def _probe_forward(module, actor_input, actor_output):
     opp_actives = PUBLIC_ROWS.start + jnp.asarray(OPP_ACTIVE_PUBLIC_ROWS)
 
     def value_of(rows, valid):
-        trunk_out = jax.vmap(lambda seq, ok: encoder.trunk(seq, ok, read_mask))(
-            rows, valid
-        )
+        def normed_trunk(seq, ok):
+            return encoder.output_normalisation(
+                encoder.trunk(seq, ok, read_mask), ok, encoder.group_ids()
+            )
+
+        trunk_out = jax.vmap(normed_trunk)(rows, valid)
         return trunk_out, module.v_head(trunk_out[:, CLS_ROW]).expectation
 
     def blind_value_of(rows, valid):

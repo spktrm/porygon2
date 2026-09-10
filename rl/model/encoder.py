@@ -82,7 +82,7 @@ from rl.model.history_encoder import (
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
     EntitySumPool,
-    SequenceInputNormalisation,
+    SequenceNormalisation,
     SumEmbeddings,
     one_hot_concat_jax,
 )
@@ -92,7 +92,7 @@ from rl.model.state_features import (
     public_persistent_features,
     public_transient_features,
 )
-from rl.model.trunk import Trunk
+from rl.model.trunk import Trunk, group_row_l2
 
 # Typed action-slot groups (canonical partition lives in
 # rl/environment/data.py next to the modality masks): move slots are
@@ -424,8 +424,15 @@ class Encoder(nn.Module):
         # appends pass through the same module, so nothing enters at a
         # magnitude of its own.
         self.trunk = Trunk(self.cfg.trunk, name="trunk")
-        self.input_normalisation = SequenceInputNormalisation(
+        self.input_normalisation = SequenceNormalisation(
             num_groups=NUM_SEQUENCE_GROUPS, name="input_normalisation"
+        )
+        # The same module on the way OUT (2026-09-11): every row leaves the
+        # trunk at RMS 1, rescaled per group, so the heads read every row
+        # at one magnitude rather than at whatever the blocks' writes left
+        # it -- CLS at 9.8 against move rows at 0.99 on ckpt_00280000.
+        self.output_normalisation = SequenceNormalisation(
+            num_groups=NUM_SEQUENCE_GROUPS, name="output_normalisation"
         )
 
     def _embed_species(self, token: jax.Array):
@@ -1266,7 +1273,7 @@ class Encoder(nn.Module):
         # -- the token-plus-type embedding form. Param shapes are the FULL
         # layout's on both paths (one checkpoint); the actor indexes the
         # rows it kept.
-        group_ids = jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
+        group_ids = self.group_ids()
         sequence = self.input_normalisation(sequence, row_valid, group_ids)
         sequence = sequence + self.sequence_group_bias.astype(dtype)[group_ids]
         sequence = jnp.where(row_valid[:, None], sequence, 0)
@@ -1297,12 +1304,17 @@ class Encoder(nn.Module):
         )
         kept_rows = self.kept_rows()
         read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
-        return (
-            self.trunk(sequence, row_valid, read_mask),
-            row_valid,
-            opp_code_labels,
-            dynamics_rows,
-        )
+        trunk_out = self.trunk(sequence, row_valid, read_mask)
+        # The panel's read of which rows the blocks WRITE, taken before the
+        # output norm puts every row back at RMS 1. Learner-only.
+        if self.cfg.train:
+            trunk_out_group_l2 = group_row_l2(
+                trunk_out, row_valid, self.group_ids(), NUM_SEQUENCE_GROUPS
+            )
+        else:
+            trunk_out_group_l2 = None
+        sequence = self.output_normalisation(trunk_out, row_valid, self.group_ids())
+        return (sequence, row_valid, opp_code_labels, dynamics_rows, trunk_out_group_l2)
 
     def kept_rows(self) -> np.ndarray:
         """Which rows of SEQUENCE_LAYOUT this forward assembles: all of them
@@ -1312,6 +1324,12 @@ class Encoder(nn.Module):
         if self.cfg.train:
             return np.arange(NUM_SEQUENCE_ROWS)
         return POLICY_READABLE_ROWS
+
+    def group_ids(self) -> jax.Array:
+        """The SequenceGroup of every kept row: the index into both norms'
+        group scale banks, which are sized from the FULL layout on either
+        path (one checkpoint; the actor indexes the rows it kept)."""
+        return jnp.asarray(SEQUENCE_GROUP_IDS[self.kept_rows()])
 
     def _run_history_encoder(
         self,
@@ -1536,14 +1554,15 @@ class Encoder(nn.Module):
         *history_inputs, history_output = self._history_inputs(
             env_step, packed_history_step, history_step, carry
         )
-        sequence, row_valid, opp_code_labels, dynamics_rows = _forward_vmap()(
-            self, env_step, *history_inputs
+        sequence, row_valid, opp_code_labels, dynamics_rows, trunk_out_group_l2 = (
+            _forward_vmap()(self, env_step, *history_inputs)
         )
         return (
             sequence,
             row_valid,
             opp_code_labels,
             dynamics_rows,
+            trunk_out_group_l2,
             history_step_stats(history_output),
             history_carry_from(history_output),
         )

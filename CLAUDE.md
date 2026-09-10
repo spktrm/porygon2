@@ -54,7 +54,10 @@ TypeScript game service speaking protobuf over websockets.
   `constants.py`: the layout — `SEQUENCE_LAYOUT` is the single source, every
   offset and named slice derives from it, and a head never carries a literal.
   `encoder.py`: the feature embedders, the entity-local pools (the same ones
-  the packed history cache uses), and `_assemble_sequence`, split out from
+  the packed history cache uses), `SequenceNormalisation` at BOTH ends of
+  the trunk (rows enter and leave at RMS 1 x a per-group scale; the
+  group-L2 panels read the raw trunk output before the output norm), and
+  `_assemble_sequence`, split out from
   `_batched_forward` so a test can read the rows as they go IN — every
   identity a row carries is additive and applied there. `trunk.py`: N
   unshared pre-RMSNorm blocks over that sequence, no gates and no block

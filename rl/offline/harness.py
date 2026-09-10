@@ -307,9 +307,13 @@ def encode_policy_rows(module, actor_input, actor_output):
     sequence, row_valid, _, _ = assemble(encoder, env, *history_inputs)
     kept = encoder.kept_rows()
     read_mask = SEQUENCE_READ_MASK[np.ix_(kept, kept)]
-    trunk_out = jax.vmap(lambda seq, ok: encoder.trunk(seq, ok, read_mask))(
-        sequence, row_valid
-    )
+
+    def normed_trunk(seq, ok):
+        return encoder.output_normalisation(
+            encoder.trunk(seq, ok, read_mask), ok, encoder.group_ids()
+        )
+
+    trunk_out = jax.vmap(normed_trunk)(sequence, row_valid)
     return trunk_out[:, POLICY_READABLE_ROWS], row_valid[:, POLICY_READABLE_ROWS]
 
 

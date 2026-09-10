@@ -22,6 +22,7 @@ pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 _SCRIPT = """
 import json
 import jax
+import jax.numpy as jnp
 import numpy as np
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
@@ -34,21 +35,27 @@ params = jax.jit(net.init)(jax.random.key(0), actor_input, actor_output, HeadPar
 
 
 def encode(module, actor_input):
-    sequence, *_ = module.encoder(
+    sequence, row_valid, *_ = module.encoder(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
-    return sequence
+    return sequence, row_valid
+
+
+def output_norm(module, rows, row_valid):
+    return module.encoder.output_normalisation(
+        rows, row_valid, module.encoder.group_ids()
+    )
 
 
 @jax.jit
 def run(params):
-    sequence, mutated = net.apply(
+    (sequence, row_valid), mutated = net.apply(
         params, actor_input, method=encode, mutable=["intermediates"]
     )
-    return sequence, mutated
+    return sequence, row_valid, mutated
 
 
-sequence, mutated = run(params)
+sequence, row_valid, mutated = run(params)
 report = {"has_intermediates": "intermediates" in mutated}
 if report["has_intermediates"]:
     blocks = mutated["intermediates"]["encoder"]["trunk"]["blocks"]
@@ -57,8 +64,17 @@ if report["has_intermediates"]:
     report["attn_shape"] = list(weights.shape)
     report["residual_shape"] = list(residual.shape)
     # The sown residual carries the registers the trunk appends internally
-    # (2026-09-10); the returned sequence is the original rows only.
-    final = np.asarray(residual[:, -1], dtype=np.float32)[:, : sequence.shape[-2]]
+    # (2026-09-10); the returned sequence is the original rows only, and
+    # since 2026-09-11 it is the final block's rows AFTER the output norm,
+    # so the same norm goes over the sow (in the trunk's dtype) before
+    # the two are compared.
+    final_raw = jnp.asarray(residual[:, -1][:, : sequence.shape[-2]], sequence.dtype)
+    final = np.asarray(
+        jax.jit(lambda p, rows, ok: net.apply(p, rows, ok, method=output_norm))(
+            params, final_raw, row_valid
+        ),
+        dtype=np.float32,
+    )
     report["final_block_max_diff"] = float(
         np.abs(final - np.asarray(sequence, dtype=np.float32)).max()
     )

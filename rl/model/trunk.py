@@ -26,7 +26,7 @@ from rl.model.modules import (
     FFWMLP,
     MultiHeadAttention,
     RMSNorm,
-    SequenceInputNormalisation,
+    SequenceNormalisation,
     create_attention_mask,
 )
 
@@ -118,7 +118,7 @@ class Trunk(nn.Module):
             ).astype(sequence.dtype)
             # The same input norm every row passes through: registers
             # enter at RMS 1 like everything else.
-            registers = SequenceInputNormalisation(num_groups=1, name="register_norm")(
+            registers = SequenceNormalisation(num_groups=1, name="register_norm")(
                 registers,
                 jnp.ones(num_registers, dtype=jnp.bool_),
                 jnp.zeros(num_registers, dtype=jnp.int32),

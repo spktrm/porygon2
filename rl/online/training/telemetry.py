@@ -310,23 +310,28 @@ _TRUNK_LEAVES = {
         ("encoder", "trunk", "register_norm", "group_scale"),
     ),
 }
-_INPUT_NORM_SCALE = ("encoder", "input_normalisation", "group_scale")
+_NORM_ENDS = ("input", "output")
 
 
-def input_norm_telemetry(param_tree) -> dict[str, jax.Array]:
-    """player_input_norm_scale_rms_<group>: rms of each SequenceGroup's row of
-    the input norm's channel scale (modules.SequenceInputNormalisation; zero
-    at init, effective scale 1 + it). A group's row drifting from 0 is the
-    model re-sizing that group's input against the others -- the only way
-    the pre-norm disparity this norm removed can come back, now on a panel."""
-    if not _has(param_tree, _INPUT_NORM_SCALE):
-        return {}
-    scale = jnp.asarray(_get(param_tree, _INPUT_NORM_SCALE), jnp.float32)
-    row_rms = jnp.sqrt(jnp.mean(jnp.square(scale), axis=-1))
-    return {
-        f"player_input_norm_scale_rms_{group.name.lower()}": row_rms[int(group)]
-        for group in SequenceGroup
-    }
+def norm_scale_telemetry(param_tree) -> dict[str, jax.Array]:
+    """player_{input,output}_norm_scale_rms_<group>: rms of each SequenceGroup's
+    row of the channel scale of the norm at either end of the trunk
+    (modules.SequenceNormalisation; zero at init, effective scale 1 + it). A
+    group's row drifting from 0 is the model re-sizing that group against the
+    others: at the input the only way the pre-norm disparity the norm removed
+    can come back, at the output the magnitude the heads read the group at."""
+    logs = {}
+    for end in _NORM_ENDS:
+        path = ("encoder", f"{end}_normalisation", "group_scale")
+        if not _has(param_tree, path):
+            continue
+        scale = jnp.asarray(_get(param_tree, path), jnp.float32)
+        row_rms = jnp.sqrt(jnp.mean(jnp.square(scale), axis=-1))
+        for group in SequenceGroup:
+            logs[f"player_{end}_norm_scale_rms_{group.name.lower()}"] = row_rms[
+                int(group)
+            ]
+    return logs
 
 
 # The 2026-09-01 opponent-code leaves. The code trains ONLY through the
@@ -506,7 +511,7 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
             continue
         logs[key] = optax.global_norm(_get(grad_tree, path))
     logs.update(state_kernel_telemetry(param_tree))
-    logs.update(input_norm_telemetry(param_tree))
+    logs.update(norm_scale_telemetry(param_tree))
     return logs
 
 
