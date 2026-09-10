@@ -831,7 +831,7 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
     makes public_order far from uniform per row.
 
     History row i and public row i sit at FIXED sequence positions, so
-    their join is positional (`sequence_row_bias`). The sheet's is not:
+    their join is positional (the layout itself). The sheet's is not:
     PRIVATE row j relates to its board row only through shared content (one
     species/ability/item/move embedder feeds both), so the same identity
     read on the sheet rows (label: the wire's ENTITY_IDX, fielded mons

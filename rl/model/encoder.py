@@ -332,15 +332,18 @@ class Encoder(nn.Module):
         self.cls_embedding = self.param(
             "cls_embedding", embedding_init, (1, entity_size)
         )
-        # The sequence's own identity: one bias per row group, one per row.
-        # Group says WHAT KIND of thing a row is, row says WHICH -- and the row
-        # bias is what separates two slots naming the same mon (ALLY_i_TARGET
-        # and reserve i) before anything else has trained.
+        # The sequence's own identity: one bias per row GROUP, what kind of
+        # thing a row is. There is no per-row table (2026-09-10): the rows
+        # are a set with a fixed layout, not a sequence, and WHICH row of a
+        # group is either read positionally by the action readout (move,
+        # sheet and target rows) or carried by the row's own embedder (the
+        # field triple's and the previous-action pair's biases) -- measured
+        # on ckpt_02339569 after 2.34M steps, the per-row table's
+        # within-group spread sat at its init noise (0.06-0.08 against an
+        # init of 0.0625) for six of the twelve groups. Embedding init, since
+        # this is the only identity a row has at step 0.
         self.sequence_group_bias = self.param(
-            "sequence_group_bias", bias_init, (NUM_SEQUENCE_GROUPS, entity_size)
-        )
-        self.sequence_row_bias = self.param(
-            "sequence_row_bias", embedding_init, (NUM_SEQUENCE_ROWS, entity_size)
+            "sequence_group_bias", embedding_init, (NUM_SEQUENCE_GROUPS, entity_size)
         )
 
         # Initialize linear layers for encoding various entity features.
@@ -1092,8 +1095,9 @@ class Encoder(nn.Module):
         # Entity i's diary: GRU slot state + the latest raw node snapshot
         # (the TGN embedding module's memory + raw-features pair), aligned
         # to public row i by Encoder.__call__'s PUBLIC_ORDER gather; the
-        # group/row biases below are its identity, and row i's bias is what
-        # pairs it with public row i.
+        # group bias below is its identity. Nothing pairs it with public row
+        # i beyond the shared position in the layout (a per-row bias never
+        # could: two rows, two independent vectors).
         history_entity_rows = history_row_states.astype(
             dtype
         ) + history_node_snapshots.astype(dtype)
@@ -1259,16 +1263,12 @@ class Encoder(nn.Module):
         # into the bias shrunk by the same factor, which is the very
         # disparity the norm removes from the content. Added after, every
         # row carries the same identity share with an unattenuated gradient
-        # -- the token-plus-position embedding form. Param shapes are the
-        # FULL layout's on both paths (one checkpoint); the actor indexes
-        # the rows it kept.
+        # -- the token-plus-type embedding form. Param shapes are the FULL
+        # layout's on both paths (one checkpoint); the actor indexes the
+        # rows it kept.
         group_ids = jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
         sequence = self.input_normalisation(sequence, row_valid, group_ids)
-        sequence = (
-            sequence
-            + self.sequence_group_bias.astype(dtype)[group_ids]
-            + self.sequence_row_bias.astype(dtype)[jnp.asarray(kept_rows)]
-        )
+        sequence = sequence + self.sequence_group_bias.astype(dtype)[group_ids]
         sequence = jnp.where(row_valid[:, None], sequence, 0)
         return sequence, row_valid, opp_code_labels, dynamics_rows
 

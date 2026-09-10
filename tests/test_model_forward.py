@@ -113,21 +113,18 @@ def test_private_side_bias_is_the_live_route(real_model_and_trajectory):
     assert not np.allclose(base, moved)
 
 
-def _with_row_bias(params, value):
+def _with_group_bias(params, value):
     tree = jax.tree.map(lambda x: x, params)
     encoder_params = tree["params"]["encoder"]
-    encoder_params["sequence_row_bias"] = jnp.full_like(
-        encoder_params["sequence_row_bias"], value
-    )
-    encoder_params["sequence_group_bias"] = jnp.zeros_like(
-        encoder_params["sequence_group_bias"]
+    encoder_params["sequence_group_bias"] = jnp.full_like(
+        encoder_params["sequence_group_bias"], value
     )
     return tree
 
 
 def test_row_identity_is_added_after_the_input_norm(real_model_and_trajectory):
-    """The content is normalised to RMS 1 and the group/row identity goes on
-    AFTER (2026-09-10): the assembled rows with a row bias of all-ones minus
+    """The content is normalised to RMS 1 and the group identity goes on
+    AFTER (2026-09-10): the assembled rows with a group bias of all-ones minus
     the rows with no bias equal that bias exactly, and the unbiased rows
     that carry content sit at RMS 1. A bias added BEFORE the norm is divided
     by the content's RMS along with it, so the difference would be
@@ -135,8 +132,8 @@ def test_row_identity_is_added_after_the_input_norm(real_model_and_trajectory):
     content are the discriminator, which is why the test requires some (the
     harness's zero history and field rows are bias-only either way)."""
     network, params, actor_input, _ = real_model_and_trajectory
-    base = _assembled_rows(network, _with_row_bias(params, 0.0), actor_input)
-    biased = _assembled_rows(network, _with_row_bias(params, 1.0), actor_input)
+    base = _assembled_rows(network, _with_group_bias(params, 0.0), actor_input)
+    biased = _assembled_rows(network, _with_group_bias(params, 1.0), actor_input)
     valid = np.any(biased != 0, axis=-1)
     with_content = np.any(base != 0, axis=-1)
     assert with_content.sum() > 1

@@ -4698,3 +4698,51 @@ Venv lesson: a venv `mv`'d after creation keeps absolute paths in every
 console-script shebang and in `activate` — `env/bin/pip` died with "bad
 interpreter" and start.sh's `source env/bin/activate` would have fallen
 through to the system python; fixed by sed, next time create it in place.
+
+## Row identity: bias after the norm, per-row table deleted — 2026-09-10
+
+Two changes to the sequence identity in `_assemble_sequence`, both a
+fresh lineage (nothing migrated), landed on the same day as the input norm
+(984b0f2) before its lineage launched.
+
+**Order (3581269).** The group/row biases were added BEFORE
+`SequenceInputNormalisation`. The norm divides a row by its own content
+RMS, so the bias was divided too: at the measured content scales (CLS RMS
+0.18, history rows ~66) the identity was 35% of a CLS row and 0.1% of a
+history row, with the gradient into the bias shrunk by the same factor —
+the per-group disparity the norm removes from the content, reproduced on
+the identity channel. Now: normalise, then add the identity, then re-zero
+invalid rows (token-plus-type form). `test_row_identity_is_added_after_the_input_norm`
+pins it with the harness's zero history/field rows accounted for (they are
+bias-only under either order; the rows with content discriminate).
+
+**Per-row table deleted (this commit).** `sequence_row_bias`
+(61 x 256, variance-scaling init RMS 0.0625, independent per row) was an
+absolute slot embedding over a SET with a fixed layout. Measured on
+ckpt_02339569 (2.34M steps, pre-norm lineage) as within-group spread of the
+trained rows against the 0.0625 an untrained table keeps:
+
+| group | rows | spread | | group | rows | spread |
+|---|---|---|---|---|---|---|
+| MOVE_SLOT | 16 | 0.066 | | PUBLIC_ENTITY | 12 | 0.140 |
+| PRIVATE_ENTITY | 6 | 0.067 | | HISTORY_ENTITY | 12 | 0.100 |
+| TARGET_SLOT | 17 | 0.073 | | HISTORY_FIELD | 3 | 0.201 |
+| OPP_PRIVATE_ENTITY | 6 | 0.064 | | CLS / INFO / VALUE_CLS | 1 | n/a |
+| PREV_ACTION | 2 | 0.044 (= init for 2 rows) | | | | |
+| FIELD | 3 | 0.077 | | | | |
+
+Six groups never learned a per-row identity in 2.34M steps while the group
+bias trained in every group but PREV_ACTION (0.03-0.12 from zero), so the
+gradient reached the tables and the per-row component had nothing to
+carry: move, sheet and target rows are read POSITIONALLY by the action
+readout, and the field triple and previous-action pair carry their own
+biases inside their embedders. The three groups that did train are the
+actives-first public order (which the ACTIVE feature already carries) and
+the history rows. The encoder comment's claim that row i's bias "pairs"
+history row i with public row i was false — two rows, two independent
+vectors, nothing shared. The group bias is the only step-0 identity now and
+takes the embedding init instead of zeros. If a history-to-public pairing
+is ever wanted it is ONE slot embedding indexed by public slot i added to
+both rows — a positional join at the same step, distinct from the retired
+`entity_index_tag` (a join across the wire's stable index, 09-02).
+Revert handle: this commit.

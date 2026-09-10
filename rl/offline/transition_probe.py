@@ -165,10 +165,9 @@ def _probe_forward(module, actor_input, actor_output):
     # target rows are taken; encoder._assemble_sequence).
     dest = jnp.asarray(DYNAMICS_TARGET_ROWS)[next_index]
     dtype = sequence.dtype
-    bias = (
-        encoder.sequence_group_bias.astype(dtype)[jnp.asarray(SEQUENCE_GROUP_IDS)[dest]]
-        + encoder.sequence_row_bias.astype(dtype)[dest]
-    )
+    bias = encoder.sequence_group_bias.astype(dtype)[
+        jnp.asarray(SEQUENCE_GROUP_IDS)[dest]
+    ]
     real_next = sequence[1:]
     next_valid = row_valid[1:]
 

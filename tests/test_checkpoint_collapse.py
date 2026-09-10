@@ -32,7 +32,7 @@ _DEFAULT_CKPT_ROOT = "./ckpts/gen{generation}/"
 _EMBEDDING_TABLE_NAMES = (
     "cls_embedding",
     "target_slot_embeddings",
-    "sequence_row_bias",
+    "sequence_group_bias",
 )
 
 
