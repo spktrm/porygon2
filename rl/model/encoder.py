@@ -1323,11 +1323,6 @@ class Encoder(nn.Module):
         )
         kept_rows = self.kept_rows()
         read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
-        # Prevent XLA from fusing the nested validity-mask concatenation into
-        # the register append: Triton can index the inner mask using the wrong
-        # row count after the first time tile (jax-ml/jax#40588). This boundary
-        # is an identity and preserves the gradient path.
-        sequence = jax.lax.optimization_barrier(sequence)
         return (
             self.trunk(sequence, row_valid, read_mask),
             row_valid,
