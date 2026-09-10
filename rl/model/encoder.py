@@ -81,6 +81,7 @@ from rl.model.history_encoder import (
 )
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
+    EntitySumPool,
     SequenceInputNormalisation,
     SumEmbeddings,
     one_hot_concat_jax,
@@ -149,41 +150,6 @@ def _lifted_entity_vmap(method):
             split_rngs={"params": False},
         )
     )
-
-
-class EntitySumPool(nn.Module):
-    """Pool one entity's attribute tokens into a single entity vector by a
-    masked SUM.
-
-    Each token carries its token-type bias (the field identity), invalid
-    attributes (unrevealed, or the active-only state token on a benched
-    entity) contribute nothing, and a fully masked set pools to zeros. The
-    divisor is the STATIC token count, as in `simple_sum_embeddings`, so the
-    entity vector stays LINEAR in its attribute multi-hots: a matchup the
-    readout's bilinear turns on (my move's type x their species' types) is
-    then a fixed subspace of the row, not a function the pool has to route.
-    Measured 2026-09-03 (`rl/offline/type_probe.py` and the supervised
-    ceiling beside it): the same readout form reached held-out 0.60 on the
-    attention-pooled rows and 0.79 on summed ones, against 0.80 from the raw
-    multi-hots — the attention pool was eroding type legibility, not adding
-    within-entity interactions the trunk could use.
-    """
-
-    @nn.compact
-    def __call__(
-        self, tokens: jax.Array, token_mask: jax.Array, token_types: jax.Array
-    ) -> jax.Array:
-        token_bias = self.param(
-            "token_bias",
-            nn.initializers.zeros_init(),
-            (NUM_TOKEN_TYPES, tokens.shape[-1]),
-        )
-        tokens = tokens + token_bias[token_types].astype(tokens.dtype)
-        weights = token_mask.astype(tokens.dtype)[..., None]
-        num_tokens = tokens.shape[-2]
-        return jnp.sum(tokens * weights, axis=-2) / jnp.sqrt(num_tokens).astype(
-            tokens.dtype
-        )
 
 
 def belief_alignment(opp_private_team: jax.Array, info: jax.Array):
@@ -400,7 +366,9 @@ class Encoder(nn.Module):
         # attention block it replaces). Token provenance is carried by the
         # token-type bias table; per-provenance input norms downstream keep
         # the two entity kinds separable.
-        self.entity_pool = EntitySumPool(name="entity_pool")
+        self.entity_pool = EntitySumPool(
+            num_token_types=NUM_TOKEN_TYPES, name="entity_pool"
+        )
         self.public_persistent_linear = nn.Dense(
             name="public_persistent_linear", use_bias=False, **dense_kwargs
         )
