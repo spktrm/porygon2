@@ -56,7 +56,9 @@ if report["has_intermediates"]:
     residual = blocks["residual"][0]
     report["attn_shape"] = list(weights.shape)
     report["residual_shape"] = list(residual.shape)
-    final = np.asarray(residual[:, -1], dtype=np.float32)
+    # The sown residual carries the registers the trunk appends internally
+    # (2026-09-10); the returned sequence is the original rows only.
+    final = np.asarray(residual[:, -1], dtype=np.float32)[:, : sequence.shape[-2]]
     report["final_block_max_diff"] = float(
         np.abs(final - np.asarray(sequence, dtype=np.float32)).max()
     )
@@ -85,16 +87,19 @@ def test_trunk_sows_are_captured_per_block():
     from rl.model.constants import NUM_SEQUENCE_ROWS
 
     cfg = get_player_model_config(generation=9, train=True)
+    # The sows see the trunk's INTERNAL sequence: the layout rows plus the
+    # registers it appends and discards (2026-09-10).
+    internal_rows = NUM_SEQUENCE_ROWS + cfg.encoder.trunk.num_registers
     report = _run(collect=True)
     assert report["has_intermediates"]
     time, blocks, heads, n_q, n_k = report["attn_shape"]
     assert blocks == cfg.encoder.trunk.num_blocks
     assert heads == cfg.encoder.trunk.num_heads
-    assert (n_q, n_k) == (NUM_SEQUENCE_ROWS, NUM_SEQUENCE_ROWS)
+    assert (n_q, n_k) == (internal_rows, internal_rows)
     assert report["residual_shape"] == [
         time,
         blocks,
-        NUM_SEQUENCE_ROWS,
+        internal_rows,
         cfg.encoder.trunk.model_size,
     ]
     # The last block's sown residual IS the trunk's output.

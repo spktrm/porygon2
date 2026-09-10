@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from rl.environment.interfaces import HistoryCarry
+from rl.environment.interfaces import HistoryCarry, PlayerActorOutput
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.model.heads import HeadParams
@@ -343,8 +343,16 @@ def test_server_mixed_group_matches_single_forwards(
     taken = jax.tree.map(lambda x: np.asarray(x)[21:22], full_output)
 
     def teacher_forced_apply(params, actor_input, _placeholder, head_params, rngs):
-        return network.apply(
+        output = network.apply(
             params, actor_input, taken, head_params=head_params, rngs=rngs
+        )
+        # The train model also emits the transition leaves, laid out
+        # [K, T, ...] (PlayerActorOutput.OFFSET_LEADING_LEAVES, K = 2 since
+        # the 2026-09-07 unroll). The server squeezes the deploy layout
+        # [T=1, ...] and is never handed a train model in production; this
+        # test reads the history carry, so those leaves are dropped here.
+        return output.replace(
+            **{name: () for name in PlayerActorOutput.OFFSET_LEADING_LEAVES}
         )
 
     server = InferenceServer(player_apply_fn=teacher_forced_apply)

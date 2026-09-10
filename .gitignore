@@ -49,3 +49,4 @@ viz/
 **/.DS_Store
 docs/
 service/dist-offline/
+env-py311-retired/

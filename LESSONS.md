@@ -4649,3 +4649,52 @@ T=58; deployed actors default CPU. No historical training damage established,
 and train-step gradients/other learner shapes remain unaudited. Details in
 main switch-pair doc section 15; minimal example and HLO/LLVM evidence under
 runtime/register-validation/hlo-investigation/. No restart or upgrade.
+
+### Independent adversarial confirmation — 2026-09-10
+
+At `b7d5225`, a fresh standalone run and numerical-verifier rejection reproduced
+the nested-mask fusion defect. Independent row-wise float64 oracle and LLVM
+pointer/predicate simulation predict every observed validity decision across
+random/all-true/all-false/checkerboard runtime masks. Wrong-row counts:
+1,242/480/0/240 out of 4,234; retained values accurate within 5.82e-7 and
+registers bit-exact. All-true runtime masks can lose rows: faulty predicates
+and wraparound addresses make this more than a row permutation. Fresh LLVM
+is byte-identical to the prior standalone dump. Separate jitted calls and the
+barrier both restore all masks; a matched precomputed-mask control also passes.
+Fresh full f32 actor barrier pair: entropy/value differences 1.255993/.232134.
+Standalone tracing-cache messages reflect first compilation/static-argument
+changes, not Python side effects; the pure reproducer has no stateful trace
+operations. Source-level compiler fix and historical learner impact remain
+unestablished. Local report: `docs/xla-independent-audit-2026-09-10.md`;
+raw evidence: `runtime/register-validation/hlo-investigation/adversarial-audit/`.
+No production change, upgrade or restart in this audit.
+
+## Python 3.13 + jax 0.11.1: the nested-concatenate miscompile is fixed upstream — 2026-09-10
+
+`env/` rebuilt on Python 3.13.15 (the 3.11 venv that trained every lineage
+to ckpt_02339569 is `env-py311-retired/`, gitignored). jax 0.11.0/0.11.1
+require Python >= 3.12, so `pip index` from the 3.11 venv topped out at
+0.10.2 and hid the release that matters: jax-v0.11.1 (2026-08-17) pins an
+XLA 510 commits past openxla/xla 5d74754 "[XLA:GPU] Fix iteration space
+bounds propagation for nested concatenates" (2026-07-31, the fix for jax
+issue 39486), while jax-v0.10.2's XLA (2026-06-15) is 1265 commits behind
+it. Measured with the issue-40588 reproducer
+(`runtime/register-validation/hlo-investigation/bug_repro.py`) on this box:
+
+| jax | barrier off | barrier on |
+|---|---:|---:|
+| 0.10.2, py3.11 and py3.13 | max err 4.51, bad steps 16..57 | 7.2e-7 |
+| 0.11.1, py3.13 | 7.2e-7, no bad steps | 7.2e-7 |
+
+So issue 40588 is the 39486 defect, already fixed in the current release,
+not a distinct live bug; the encoder's `optimization_barrier` (b7d5225) is
+now a no-op workaround and can go as its own structure-only commit once
+the full-model compare (`compare.py --barrier 0`) agrees on 0.11.1.
+Stack moved with it, latest of each on 3.13: flax 0.12.9 (0.12.6 called
+`jax.core.get_opaque_trace_state`, removed in 0.11.0 — 48 fast-suite
+failures, all that one AttributeError), optax 0.2.8, chex 0.1.92,
+ml_dtypes 0.6.0, jaxtyping 0.3.11. `requirements.txt` is the exact freeze.
+Venv lesson: a venv `mv`'d after creation keeps absolute paths in every
+console-script shebang and in `activate` — `env/bin/pip` died with "bad
+interpreter" and start.sh's `source env/bin/activate` would have fallen
+through to the system python; fixed by sed, next time create it in place.
