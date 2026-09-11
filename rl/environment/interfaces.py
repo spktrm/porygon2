@@ -85,6 +85,27 @@ class CategoricalValueHeadOutput:
 
 
 @dataclass
+class PairValueHeadOutput:
+    """The pairwise entity critic (2026-09-12, rl/model/heads.py
+    PairValueHead): a generalised additive model over 12 entity rows, my
+    side first. `value` is the scalar; `unary` (12,) the per-mon terms;
+    `cross` (6, 6) the antisymmetric my-vs-their pair term m_ij in [-1, 1]
+    and `cross_weight` its softmax weights over alive pairs; `synergy`
+    (2, 6, 6) the symmetric same-side term per side and `synergy_weight`
+    its weights; `partials` (5,) the signed parts (unary mine, unary
+    theirs, cross, synergy mine, synergy theirs) that sum to `value`. All
+    float32; every leaf () on the actor."""
+
+    value: ArrayLike = ()
+    unary: ArrayLike = ()
+    cross: ArrayLike = ()
+    cross_weight: ArrayLike = ()
+    synergy: ArrayLike = ()
+    synergy_weight: ArrayLike = ()
+    partials: ArrayLike = ()
+
+
+@dataclass
 class PolicyHeadOutput:
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
@@ -150,6 +171,12 @@ class PlayerActorOutput:
     potential_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
+    # Learner-only (2026-09-12): the pairwise entity critics -- over the
+    # post-trunk public rows, and over both players' pre-trunk sheet
+    # latents (the opponent's before its code). Built only when the
+    # learner's player_pair_value_loss_coef > 0.
+    pair_value_public: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
+    pair_value_private: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
     opp_code: ArrayLike = ()
     hidden_code: ArrayLike = ()
     # The belief head: (T, 6, G, K) logits predicting hidden_code from the
@@ -397,6 +424,10 @@ class BuilderTransition:
 @dataclass
 class PlayerTargets:
     win_returns: ArrayLike = ()
+    # The scalar the two-hot `win_returns` is built from, clipped to the
+    # support range (so it equals win_returns @ support exactly on-mask) --
+    # the pairwise critics' regression label (2026-09-12). () off-mask.
+    scalar_returns: ArrayLike = ()
     pg_advantages: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()

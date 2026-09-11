@@ -304,7 +304,7 @@ def encode_policy_rows(module, actor_input, actor_output):
         in_axes=0,
         out_axes=0,
     )
-    sequence, row_valid, _, _ = assemble(encoder, env, *history_inputs)
+    sequence, row_valid, _, _, _ = assemble(encoder, env, *history_inputs)
     kept = encoder.kept_rows()
     read_mask = SEQUENCE_READ_MASK[np.ix_(kept, kept)]
 

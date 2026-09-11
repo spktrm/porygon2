@@ -110,7 +110,7 @@ def _assembled_step_rows(
         encoder = module.encoder
         width = encoder.cfg.entity_size
         zero_slots = jnp.zeros((NUM_PUBLIC_SLOTS, width), env_step.field.dtype)
-        sequence, _, _, _ = encoder._assemble_sequence(
+        sequence, _, _, _, _ = encoder._assemble_sequence(
             env_step,
             zero_slots.astype(encoder.cfg.dtype),
             jnp.zeros(NUM_PUBLIC_SLOTS, jnp.bool_),

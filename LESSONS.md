@@ -5382,3 +5382,89 @@ clip criterion's failure is recorded here rather than reinterpreted. Watch
 player_potential_head_grad_share and player_potential_adv_share falling; the
 clip binding at eta 0 on half the fresh batches is itself new information
 about the lineage. Revert: eta 0.
+
+## Addition ledger — 2026-09-12 pairwise entity critics (numbers move)
+
+Two learner-only value heads beside the CLS critics (`rl/model/heads.py`
+`PairValueHead`; plan `~/.claude/plans/help-me-construct-adding-agile-
+jellyfish.md`), each a generalised additive model over 12 entity rows, my
+side first:
+
+    V = sum_mine u_i - sum_theirs u_j
+        + sum_{i mine, j theirs} alpha_ij tanh(g(i,j) - g(j,i))
+        + sum_{mine pairs} beta s - sum_{their pairs} beta s
+
+u a per-mon MLP over the row plus a zero-init projection of its context
+(the global field row beside its OWN side's); g one bilinear over all 12
+rows read in both orientations (strength of i over j and pressure of j on i
+are the one number, antisymmetric by construction); alpha a softmax over
+ALIVE cross pairs of a second bilinear symmetrised (a fainted or absent mon's
+pairs weigh exactly 0; concentrating on the decisive matchup is the intended
+reading, so no entropy term); s = tanh(g_s(i,i') + g_s(i',i)) the same-side
+synergy from one bilinear shared by both sides with its own symmetric
+weights. Sharing every function across sides makes a side swap negate V
+exactly (`tests/test_pair_value_head.py`). User's form (2026-09-12),
+replacing the first draft's per-edge gates + entropy + squared-norm
+penalties: identifiability comes from what each term is allowed to see,
+not from a penalty. The `bilinear_pair` form is the action readout's,
+hoisted (378243a, bit-identical).
+
+Inputs. PUBLIC head: the post-trunk public rows with the post-trunk field
+triple (user's call over pre-trunk rows: the pair term can see the roster
+through attention, so its locality is nominal and the antisymmetry acts as
+weight tying). PRIVATE head: both sheets through the ONE private embedder,
+before either side bias and before the opponent's code (`encoder.
+PairValueInputs`; the user's call over the discrete-code rows), so its two
+sides are one representation. Alive = hit-point ratio token > 0 off the
+wire.
+
+Loss. MSE of each head's scalar on `PlayerTargets.scalar_returns` -- the
+v-trace scalar the CLS critics' two-hot is built from, clipped as `two_hot`
+clips so it equals `win_returns @ support` exactly -- under `value_mask`,
+coefficient `player_pair_value_loss_coef` (1.0; 0 builds neither head).
+Gradient LIVE into what each head reads: the public head shapes the trunk
+through 12 entity rows (the CLS critic reaches it through one), and the
+private head trains the private embedder directly where today only the
+code's straight-through argmax does. CLS critics unchanged = the matched
+control; value bootstraps keep `player_privileged_targets`.
+
+Four questions: (1) bounded -- pair parts are convex combinations of
+numbers in [-1, 1], unary an MLP over RMS-1 rows against labels in [-1, 1]
+under MSE; (2) a value force, not a logit force; (3) Adam as for v_head,
+every term smooth; (4) a public row is read by 6 cross and 5 same-side
+pairs (the many-readers shape of a target column): per-function
+query/key rms + applied-delta panels, `player_pair_value_{head}_gradient_
+norm`, `player_trunk_out_row_l2_<group>`.
+
+Init facts (tested): V == 0, weights exactly uniform over alive pairs;
+queries and the unary's last kernel move at step 1; keys, the weight
+scores and the context projection are frozen ONE step (gradients
+proportional to the pair terms / queries, both 0) and unfreeze at step 2.
+Each head 722,433 params (qk 256, unary hidden 256).
+
+Panels: `player_pair_value_{public,private}_r2` on "Value R2 (main head)"
+beside the CLS pair; part shares (var(part)/var(V)), signed partials,
+weight entropies (normalised), unary cancellation (mean sum|u_i| / mean
+|V|), |m| / |s| means, kernel rms, applied deltas. Offline:
+`rl/offline/pair_value_probe.py` -- hit-point monotonicity of m by
+one-bin finite differences (a derivative along the scalar column alone
+would miss the one-hot half); violation fraction and share, a measurement
+and not a loss (Flail, Reversal, Endeavor, berries).
+
+Pre-registered (hold 100k after launch): both pair R2s > 0 and rising by
+20k with the cross share off the floor; end of hold public pair R2 within
+.05 of `player_value_head_r2`, private pair R2 >= public, matched control
+not down > .02, eval winrate and steps/s within 5%. Fallbacks: control
+regression -> halve the coef once, a second regression falsifies the
+placement -> coef 0; cross share at the floor while R2 rises -> the
+pre-trunk raw-row pair term added to g (probe-recommended two-term shape),
+its own commit; material monotonicity violations beyond the known
+exceptions -> the derivative penalty as its own numbers-move commit, the
+user's call. Step 2 (after the hold): `player_privileged_targets` ->
+`player_value_target_route` in {deploy, privileged, pair_public,
+pair_private}, `compute_player_targets` taking a scalar bootstrap.
+
+Reference numbers at landing: uddwfke8 CLS R2 deploy .540 / privileged .513
+at 485k (wandb summaries; the 2026-09-01 gate is FAILING on the CLS
+instrument and unrecorded until this row). Revert handle: this commit;
+`player_pair_value_loss_coef 0` is the bit-exact off.

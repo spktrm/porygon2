@@ -263,6 +263,72 @@ def potential_telemetry(
     return logs
 
 
+def _weight_entropy_norm(weights: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Entropy of a pair-weight distribution (softmax over the last two
+    axes) over the log of its support size: 1 = uniform over the alive
+    pairs, 0 = one pair. Returns (normalised entropy, support size)."""
+    support = (weights > 0).sum(axis=(-2, -1))
+    log_weights = jnp.log(jnp.where(weights > 0, weights, 1.0))
+    entropy = -(weights * log_weights).sum(axis=(-2, -1))
+    return entropy / jnp.log(jnp.maximum(support, 2)), support
+
+
+def pair_value_telemetry(
+    output, target: jax.Array, mask: jax.Array, name: str
+) -> dict[str, jax.Array]:
+    """The readers over one PairValueHeadOutput (2026-09-12), keyed
+    player_pair_value_<name>_*: r2 against the CLS critics' scalar target
+    under the same mask; the share of the value's variance each part
+    carries (unary / cross / synergy, variance of the part over the
+    variance of V -- shares need not sum to 1); unary_cancellation (mean
+    sum_i |u_i| over mean |V|, >= 1, large = the unary terms cancel
+    across sides); each weight distribution's normalised entropy over rows
+    with at least two alive pairs; the mean |m| / |s| over alive pairs; and
+    the mean of every signed partial."""
+    prefix = f"player_pair_value_{name}"
+    value = output.value
+    logs = {f"{prefix}_r2": calculate_r2(value, target, mask)}
+    value_variance = jnp.var(value, where=mask) + 1e-8
+    partials = output.partials
+    parts = {
+        "unary": partials[..., 0] + partials[..., 1],
+        "cross": partials[..., 2],
+        "synergy": partials[..., 3] + partials[..., 4],
+    }
+    for key, part in parts.items():
+        logs[f"{prefix}_share_{key}"] = jnp.var(part, where=mask) / value_variance
+    logs[f"{prefix}_unary_cancellation"] = average(
+        jnp.abs(output.unary).sum(axis=-1), mask
+    ) / (average(jnp.abs(value), mask) + 1e-8)
+
+    cross_entropy_norm, cross_support = _weight_entropy_norm(output.cross_weight)
+    logs[f"{prefix}_cross_weight_entropy_norm"] = average(
+        cross_entropy_norm, mask & (cross_support >= 2)
+    )
+    logs[f"{prefix}_cross_abs_mean"] = average(
+        jnp.abs(output.cross).sum(axis=(-2, -1)) / jnp.maximum(cross_support, 1),
+        mask & (cross_support >= 1),
+    )
+    synergy_entropy_norm, synergy_support = _weight_entropy_norm(output.synergy_weight)
+    logs[f"{prefix}_synergy_weight_entropy_norm"] = average(
+        synergy_entropy_norm, mask[..., None] & (synergy_support >= 2)
+    )
+    logs[f"{prefix}_synergy_abs_mean"] = average(
+        jnp.abs(output.synergy).sum(axis=(-2, -1)) / jnp.maximum(synergy_support, 1),
+        mask[..., None] & (synergy_support >= 1),
+    )
+    partial_names = (
+        "unary_mine",
+        "unary_theirs",
+        "cross",
+        "synergy_mine",
+        "synergy_theirs",
+    )
+    for index, partial_name in enumerate(partial_names):
+        logs[f"{prefix}_partial_{partial_name}"] = average(partials[..., index], mask)
+    return logs
+
+
 def calculate_r2(
     value_prediction: jax.Array,
     value_target: jax.Array,
@@ -342,6 +408,18 @@ _ACTION_HEAD_LEAVES = {
     "player_switch_key_rms": (("action_head", "switch_key", "kernel"),),
     "player_switch_local_tgt_rms": (("action_head", "switch_local_tgt", "kernel"),),
     "player_other_head_rms": (("action_head", "other", "kernel"),),
+}
+# The pairwise critics' pair functions (2026-09-12): per head, the cross
+# and same-side bilinears and their weight scores. Query zero-init (moves
+# at step 1), key lecun (rms 0.0625 at fan-in 256, unfreezes at step 2).
+# A head absent from the tree (player_pair_value_loss_coef 0) logs nothing.
+_PAIR_VALUE_LEAVES = {
+    f"player_pair_value_{head}_{pair}_{factor}_rms": (
+        (f"pair_value_{head}", f"{pair}_{factor}", "kernel"),
+    )
+    for head in ("public", "private")
+    for pair in ("cross", "cross_weight", "synergy", "synergy_weight")
+    for factor in ("query", "key")
 }
 # Trunk leaves carry a leading axis of cfg.trunk.num_blocks (nn.scan stacks
 # them), so an rms over the whole leaf is the across-block mean by
@@ -495,6 +573,17 @@ _APPLIED_DELTA_LEAVES = {
     "player_applied_delta_rms_pointer_local_tgt": (
         ("action_head", "local_tgt", "kernel"),
     ),
+    # The pairwise critics' pair kernels (2026-09-12): a public row is read
+    # by 6 cross and 5 same-side pairs, the same many-readers shape as a
+    # target column, so what Adam applied to them is panelled from launch.
+    **{
+        f"player_applied_delta_rms_pair_value_{head}_{pair}_{factor}": (
+            (f"pair_value_{head}", f"{pair}_{factor}", "kernel"),
+        )
+        for head in ("public", "private")
+        for pair in ("cross", "cross_weight", "synergy", "synergy_weight")
+        for factor in ("query", "key")
+    },
 }
 
 
@@ -542,6 +631,7 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
     logs = _rms_panels(
         {
             **_ACTION_HEAD_LEAVES,
+            **_PAIR_VALUE_LEAVES,
             **_TRUNK_LEAVES,
             **_OPP_CODE_LEAVES,
             **_HISTORY_LEAVES,

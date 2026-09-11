@@ -249,3 +249,23 @@ def test_opp_private_team_cannot_reach_the_policy(
         np.asarray(base.opp_code, dtype=np.float32),
         np.asarray(moved.opp_code, dtype=np.float32),
     )
+    # The pairwise critics (2026-09-12) are exactly 0 at init, so they are
+    # read on OPENED params: the public head (post-trunk public rows and
+    # field rows, all policy-readable) is pinned; the private head reads
+    # the opponent's sheet latents and is the moving control.
+    from tests.conftest import open_zero_init_paths
+
+    opened = open_zero_init_paths(params, ["pair_value_public", "pair_value_private"])
+    base_opened = real_model_apply(opened, actor_input, actor_output, HeadParams())
+    moved_opened = real_model_apply(opened, perturbed_input, actor_output, HeadParams())
+    for leaf in ("value", "unary", "cross", "cross_weight", "partials"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(base_opened.pair_value_public, leaf), dtype=np.float32),
+            np.asarray(getattr(moved_opened.pair_value_public, leaf), dtype=np.float32),
+            err_msg=f"pair_value_public.{leaf}",
+        )
+    assert np.abs(np.asarray(base_opened.pair_value_public.value)).max() > 0
+    assert not np.allclose(
+        np.asarray(base_opened.pair_value_private.value, dtype=np.float32),
+        np.asarray(moved_opened.pair_value_private.value, dtype=np.float32),
+    )

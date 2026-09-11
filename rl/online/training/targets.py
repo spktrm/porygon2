@@ -293,6 +293,9 @@ def compute_player_targets(
     return (
         PlayerTargets(
             win_returns=win_returns,
+            # The pairwise critics' label (2026-09-12): the same scalar,
+            # clipped as two_hot clips, so it IS win_returns @ support.
+            scalar_returns=jnp.clip(scalar_returns, support[0], support[-1]) * mask,
             pg_advantages=pg_advantages,
             policy_mask=policy_mask,
             value_mask=value_mask,

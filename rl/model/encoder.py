@@ -180,6 +180,32 @@ def belief_alignment(opp_private_team: jax.Array, info: jax.Array):
     return matched, public_row_index
 
 
+class PairValueInputs(NamedTuple):
+    """What the pairwise critics read beyond the trunk's rows (2026-09-12,
+    learner-only, () on the actor). `sheet_rows` (12, D): my sheet's
+    latents then the opponent's -- the SAME private embedder's output for
+    both, before either side bias and before the opponent's code, each
+    row at unit RMS -- so the private head's two sides are one
+    representation and a side swap negates it exactly. `sheet_valid` /
+    `sheet_alive` (12,): the row exists / its hit-point ratio is above 0.
+    `public_alive` (12,): the same flag for the public rows. `field_rows`
+    (3, D): the assembled pre-trunk field triple (global, mine, theirs) at
+    unit RMS, the private head's context."""
+
+    sheet_rows: jax.Array
+    sheet_valid: jax.Array
+    sheet_alive: jax.Array
+    public_alive: jax.Array
+    field_rows: jax.Array
+
+
+def unit_rms(rows: jax.Array, eps: float = 1e-6) -> jax.Array:
+    """Each row divided by its own root-mean-square (parameter-free; an
+    all-zero row stays zero), f32 statistics, the rows' dtype out."""
+    square_mean = jnp.mean(jnp.square(rows.astype(jnp.float32)), axis=-1, keepdims=True)
+    return (rows * jax.lax.rsqrt(square_mean + eps)).astype(rows.dtype)
+
+
 class OppCodeLabels(NamedTuple):
     """What the learner knows about the opponent's sheet, per mon (6 rows).
 
@@ -915,9 +941,11 @@ class Encoder(nn.Module):
         straight-through argmax: forward sees one hard class per group, the
         backward flows through the probabilities, so the privileged value
         loss trains the embedder THROUGH the code and grounds it. Returns
-        (rows, row_valid, code_one_hot); the one-hot is the belief head's
-        label. All-zero deploy/old-shard buffers give row_valid all-False
-        and the trunk mask makes the rows inert.
+        (rows, row_valid, code_one_hot, latents); the one-hot is the belief
+        head's label, the latents (the embedder's output BEFORE the code)
+        the private pairwise critic's opponent rows (2026-09-12). All-zero
+        deploy/old-shard buffers give row_valid all-False and the trunk mask
+        makes the rows inert.
         """
         opp_latents, opp_valid = self._embed_private_entities(opp_private_team)
         code_groups = self.cfg.opp_code.num_groups
@@ -936,7 +964,7 @@ class Encoder(nn.Module):
             code_one_hot.astype(self.cfg.dtype),
             self.opp_code_embedding.astype(self.cfg.dtype),
         ).reshape(opp_latents.shape[0], -1)
-        return rows, opp_valid, code_one_hot
+        return rows, opp_valid, code_one_hot, opp_latents
 
     def _hidden_code(
         self, private: jax.Array, public: jax.Array, matched: jax.Array
@@ -1076,10 +1104,12 @@ class Encoder(nn.Module):
         # exists -- so attention routes board-now vs diary instead of one
         # vector carrying their sum.
 
-        private_rows, private_valid = self._embed_private_entities(
+        private_latents, private_valid = self._embed_private_entities(
             env_step.private_team
         )
-        private_rows = private_rows + self.private_side_bias.astype(private_rows.dtype)
+        private_rows = private_latents + self.private_side_bias.astype(
+            private_latents.dtype
+        )
         # No learned join key between a sheet row and its public row
         # (entity_index_tag, 2026-08-31 -> 2026-09-02): it never trained
         # (rms 0.0634 -> 0.0661 over 182k steps, ~3% of the row's norm) and
@@ -1110,9 +1140,11 @@ class Encoder(nn.Module):
         # out the same as the learner's, up to GEMM shape numerics.
         learner_only_parts = []
         opp_code_labels = ()
+        opp_latents = ()
+        opp_private_valid = ()
         if self.cfg.train:
-            opp_private_rows, opp_private_valid, opp_code_one_hot = self._opp_code_rows(
-                env_step.opp_private_team
+            opp_private_rows, opp_private_valid, opp_code_one_hot, opp_latents = (
+                self._opp_code_rows(env_step.opp_private_team)
             )
             opp_code_labels = self._opp_code_labels(opp_code_one_hot, env_step)
             opp_private_rows = opp_private_rows + self.opp_private_side_bias.astype(
@@ -1262,12 +1294,33 @@ class Encoder(nn.Module):
         # the sort rather than the state. Sliced by name, zeroed where the
         # row is invalid, and read by the learner only.
         dynamics_rows = ()
+        pair_value_inputs = ()
         if self.cfg.train:
             dynamics_rows = jnp.take(
                 sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0
             )
             dynamics_valid = jnp.take(row_valid, jnp.asarray(DYNAMICS_TARGET_ROWS))
             dynamics_rows = jnp.where(dynamics_valid[:, None], dynamics_rows, 0)
+            # The pairwise critics' inputs (2026-09-12, PairValueInputs):
+            # both sheets through the one private embedder, before either
+            # side bias and before the opponent's code; alive = hit-point
+            # ratio above zero, off the wire.
+            hp_public = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
+            hp_private = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO
+            pair_value_inputs = PairValueInputs(
+                sheet_rows=unit_rms(
+                    jnp.concatenate((private_latents, opp_latents), axis=0)
+                ).astype(dtype),
+                sheet_valid=jnp.concatenate((private_valid, opp_private_valid)),
+                sheet_alive=jnp.concatenate(
+                    (
+                        env_step.private_team[:, hp_private] > 0,
+                        env_step.opp_private_team[:, hp_private] > 0,
+                    )
+                ),
+                public_alive=env_step.public_team[:, hp_public] > 0,
+                field_rows=unit_rms(field_rows).astype(dtype),
+            )
 
         # The content is normalised FIRST and the identity goes on AFTER
         # (2026-09-10): the norm divides a row by its own content RMS, so a
@@ -1283,7 +1336,7 @@ class Encoder(nn.Module):
         sequence = self.input_normalisation(sequence, row_valid, group_ids)
         sequence = sequence + self.sequence_group_bias.astype(dtype)[group_ids]
         sequence = jnp.where(row_valid[:, None], sequence, 0)
-        return sequence, row_valid, opp_code_labels, dynamics_rows
+        return sequence, row_valid, opp_code_labels, dynamics_rows, pair_value_inputs
 
     def _batched_forward(
         self,
@@ -1301,12 +1354,14 @@ class Encoder(nn.Module):
         has mixed with every other and the reading is behavioural rather than
         structural.
         """
-        sequence, row_valid, opp_code_labels, dynamics_rows = self._assemble_sequence(
-            env_step,
-            history_row_states,
-            history_row_valid,
-            history_field_state,
-            history_node_snapshots,
+        sequence, row_valid, opp_code_labels, dynamics_rows, pair_value_inputs = (
+            self._assemble_sequence(
+                env_step,
+                history_row_states,
+                history_row_valid,
+                history_field_state,
+                history_node_snapshots,
+            )
         )
         kept_rows = self.kept_rows()
         read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
@@ -1320,7 +1375,14 @@ class Encoder(nn.Module):
         else:
             trunk_out_group_l2 = None
         sequence = self.output_normalisation(trunk_out, row_valid, self.group_ids())
-        return (sequence, row_valid, opp_code_labels, dynamics_rows, trunk_out_group_l2)
+        return (
+            sequence,
+            row_valid,
+            opp_code_labels,
+            dynamics_rows,
+            trunk_out_group_l2,
+            pair_value_inputs,
+        )
 
     def kept_rows(self) -> np.ndarray:
         """Which rows of SEQUENCE_LAYOUT this forward assembles: all of them
@@ -1560,15 +1622,23 @@ class Encoder(nn.Module):
         *history_inputs, history_output = self._history_inputs(
             env_step, packed_history_step, history_step, carry
         )
-        sequence, row_valid, opp_code_labels, dynamics_rows, trunk_out_group_l2 = (
-            _forward_vmap()(self, env_step, *history_inputs)
-        )
+        (
+            sequence,
+            row_valid,
+            opp_code_labels,
+            dynamics_rows,
+            trunk_out_group_l2,
+            pair_value_inputs,
+        ) = _forward_vmap()(self, env_step, *history_inputs)
+        # The sixth (2026-09-12) is the pairwise critics' inputs
+        # (PairValueInputs), learner-only like the third and fourth.
         return (
             sequence,
             row_valid,
             opp_code_labels,
             dynamics_rows,
             trunk_out_group_l2,
+            pair_value_inputs,
             history_step_stats(history_output),
             history_carry_from(history_output),
         )

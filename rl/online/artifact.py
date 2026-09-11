@@ -166,6 +166,9 @@ def player_model_config_for(learner_config: Porygon2LearnerConfig):
         learner_config.player_transition_value_trains_v_head
     )
     model_config.potential_head.enabled = learner_config.player_potential_strength > 0
+    model_config.pair_value_head.enabled = (
+        learner_config.player_pair_value_loss_coef > 0
+    )
     return model_config
 
 

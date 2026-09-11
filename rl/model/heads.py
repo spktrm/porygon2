@@ -9,6 +9,7 @@ from ml_collections import ConfigDict
 from rl.environment.data import NUM_ACTION_CELLS
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
+    PairValueHeadOutput,
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
@@ -407,3 +408,164 @@ class RegressionValueLogitHead(nn.Module):
         if getattr(self.cfg, "output_activation", None) is not None:
             x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))
+
+
+# The signed parts of a PairValueHead's value, in `partials` order.
+PAIR_VALUE_PARTIALS = (
+    "unary_mine",
+    "unary_theirs",
+    "cross",
+    "synergy_mine",
+    "synergy_theirs",
+)
+
+
+def masked_softmax(scores: jax.Array, mask: jax.Array) -> jax.Array:
+    """Softmax over the last two axes restricted to `mask`: exact zeros off
+    the mask, exact 1/n at equal scores, and all zeros (not NaN) when the
+    mask is empty. f32 in, f32 out."""
+    scores = jnp.where(mask, scores, -1e9)
+    scores = scores - jnp.max(scores, axis=(-2, -1), keepdims=True)
+    weights = jnp.where(mask, jnp.exp(scores), 0.0)
+    return weights / jnp.maximum(weights.sum(axis=(-2, -1), keepdims=True), 1e-9)
+
+
+class PairValueHead(nn.Module):
+    """The pairwise entity critic (2026-09-12): a generalised additive model
+    over 12 entity rows, my side A = rows[:6], theirs B = rows[6:].
+
+        V = sum_A v_i u_i - sum_B v_j u_j
+            + sum_{i in A, j in B} alpha_ij m_ij
+            + sum_{i,i' in A} beta_ii' s_ii' - sum_{j,j' in B} beta_jj' s_jj'
+
+    u_i = u(x_i + proj(c_i)): the unary term, single-mon strength, so the
+        pair terms are interactions and not main effects in disguise.
+        c_i is the entity's context -- the global field row beside its OWN
+        side's -- through a zero-init projection ADDED to the row, so every
+        term reads the row untouched at init.
+    m_ij = tanh(g(i, j) - g(j, i)): the cross-side pair, antisymmetric by
+        construction. Strength of i over j and pressure of j on i are this
+        one number. g is ONE bilinear (`cross_query` x `cross_key`) over
+        all 12 rows, read in both orientations.
+    alpha = softmax over ALIVE cross pairs of h(i, j) + h(j, i), a second
+        bilinear symmetrised; a fainted or absent mon's pairs weigh exactly
+        0. Concentrating on the decisive matchup is the intended reading.
+    s_ii' = tanh(g_s(i, i') + g_s(i', i)): the same-side pair (synergy),
+        symmetric by construction, one bilinear shared by both sides, with
+        its own symmetric softmax weights beta per side.
+
+    Because u, g, h, g_s are each ONE function shared across sides, swapping
+    the two sides (rows, flags and the two side field rows) negates V
+    exactly (tests/test_pair_value_head.py). At init V == 0 (the unary's
+    last kernel and every query are zero, tanh 0 = 0, weights uniform);
+    queries and the unary's last layer move at step 1, keys, the context
+    projection and the weight scores from step 2 (their gradients are
+    proportional to the queries, which are 0 for one step). The pair parts
+    are convex combinations of numbers in [-1, 1], so each is bounded by
+    one unit and the unary terms carry the scale. bf16 through the
+    projections, one f32 cast before the tanh / softmax / sums.
+    """
+
+    cfg: ConfigDict
+
+    @nn.compact
+    def __call__(
+        self,
+        rows: jax.Array,
+        field_rows: jax.Array,
+        valid: jax.Array,
+        alive: jax.Array,
+    ) -> PairValueHeadOutput:
+        per_side = rows.shape[0] // 2
+        width = rows.shape[-1]
+        dtype = rows.dtype
+        zeros = nn.initializers.zeros_init()
+        qk_size = self.cfg.qk_size
+
+        side_field = jnp.concatenate(
+            (
+                jnp.broadcast_to(field_rows[1][None], (per_side, width)),
+                jnp.broadcast_to(field_rows[2][None], (per_side, width)),
+            ),
+            axis=0,
+        )
+        context = jnp.concatenate(
+            (jnp.broadcast_to(field_rows[0][None], rows.shape), side_field), axis=-1
+        )
+        rows = rows + nn.Dense(
+            width, kernel_init=zeros, use_bias=False, dtype=dtype, name="context"
+        )(context)
+
+        unary = MLP(
+            layer_sizes=(self.cfg.unary_hidden, 1),
+            final_kernel_init=zeros,
+            name="unary",
+        )(rows)[..., 0].astype(jnp.float32)
+        unary = jnp.where(valid, unary, 0.0)
+
+        def pair(name: str) -> jax.Array:
+            return bilinear_pair(
+                rows,
+                rows,
+                qk_size=qk_size,
+                query_name=f"{name}_query",
+                key_name=f"{name}_key",
+            ).astype(jnp.float32)
+
+        mine = slice(0, per_side)
+        theirs = slice(per_side, 2 * per_side)
+        present = valid & alive
+        cross_mask = present[mine][:, None] & present[theirs][None, :]
+        off_diagonal = ~jnp.eye(per_side, dtype=jnp.bool_)
+        synergy_mask = (
+            jnp.stack(
+                (
+                    present[mine][:, None] & present[mine][None, :],
+                    present[theirs][:, None] & present[theirs][None, :],
+                )
+            )
+            & off_diagonal
+        )
+
+        cross_scores = pair("cross")
+        cross = jnp.tanh(cross_scores[mine, theirs] - cross_scores[theirs, mine].T)
+        cross = jnp.where(cross_mask, cross, 0.0)
+        weight_scores = pair("cross_weight")
+        cross_weight = masked_softmax(
+            weight_scores[mine, theirs] + weight_scores[theirs, mine].T, cross_mask
+        )
+
+        synergy_scores = pair("synergy")
+        synergy_blocks = jnp.stack(
+            (synergy_scores[mine, mine], synergy_scores[theirs, theirs])
+        )
+        synergy = jnp.tanh(synergy_blocks + jnp.swapaxes(synergy_blocks, -2, -1))
+        synergy = jnp.where(synergy_mask, synergy, 0.0)
+        synergy_weight_scores = pair("synergy_weight")
+        synergy_weight_blocks = jnp.stack(
+            (synergy_weight_scores[mine, mine], synergy_weight_scores[theirs, theirs])
+        )
+        synergy_weight = masked_softmax(
+            synergy_weight_blocks + jnp.swapaxes(synergy_weight_blocks, -2, -1),
+            synergy_mask,
+        )
+
+        synergy_sums = jnp.sum(synergy_weight * synergy, axis=(-2, -1))
+        partials = jnp.stack(
+            (
+                jnp.sum(unary[mine]),
+                -jnp.sum(unary[theirs]),
+                jnp.sum(cross_weight * cross),
+                synergy_sums[0],
+                -synergy_sums[1],
+            )
+        )
+        return PairValueHeadOutput(
+            value=jnp.sum(partials),
+            unary=unary,
+            cross=cross,
+            cross_weight=cross_weight,
+            synergy=synergy,
+            synergy_weight=synergy_weight,
+            partials=partials,
+        )

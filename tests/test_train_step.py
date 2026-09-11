@@ -68,16 +68,16 @@ def _ex_batch(actor_input, actor_output):
 def test_train_step_smoke() -> None:
     from rl.environment.utils import get_ex_player_step
     from rl.model.builder_model import get_builder_model
-    from rl.model.config import get_builder_model_config, get_player_model_config
+    from rl.model.config import get_builder_model_config
     from rl.model.player_model import get_player_model
-    from rl.online.artifact import create_train_state
+    from rl.online.artifact import create_train_state, player_model_config_for
     from rl.online.config import Porygon2LearnerConfig
     from rl.online.training.train_step import TRAIN_STEP_JIT
 
     config = Porygon2LearnerConfig()
-    player_net = get_player_model(
-        get_player_model_config(config.generation, train=True)
-    )
+    # The learner's own config function: every config-gated head the
+    # defaults switch on (the pairwise critics, 2026-09-12) is built.
+    player_net = get_player_model(player_model_config_for(config))
     builder_net = get_builder_model(
         get_builder_model_config(config.generation, train=True)
     )
@@ -309,16 +309,14 @@ def test_train_step_runs_the_potential_channel() -> None:
     from rl.environment.protos.features_pb2 import InfoFeature
     from rl.environment.utils import get_ex_player_step
     from rl.model.builder_model import get_builder_model
-    from rl.model.config import get_builder_model_config, get_player_model_config
+    from rl.model.config import get_builder_model_config
     from rl.model.player_model import get_player_model
-    from rl.online.artifact import create_train_state
+    from rl.online.artifact import create_train_state, player_model_config_for
     from rl.online.config import Porygon2LearnerConfig
     from rl.online.training.train_step import TRAIN_STEP_JIT
 
     config = Porygon2LearnerConfig().replace(player_potential_strength=0.05)
-    player_config = get_player_model_config(config.generation, train=True)
-    player_config.potential_head.enabled = True
-    player_net = get_player_model(player_config)
+    player_net = get_player_model(player_model_config_for(config))
     builder_net = get_builder_model(
         get_builder_model_config(config.generation, train=True)
     )

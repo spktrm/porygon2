@@ -44,12 +44,14 @@ F32_ALLOWED = {
 def _abstract_forward() -> tuple[dict, dict]:
     """(params, captured intermediates) without running a single kernel."""
     from rl.environment.utils import get_ex_player_step
-    from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model
+    from tests.conftest import session_player_model_config
 
     actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
-    net = get_player_model(get_player_model_config(9, train=True))
+    # The session config (every config-gated head on), so a new head's
+    # Dense intermediates are checked and cannot hide behind a toggle.
+    net = get_player_model(session_player_model_config())
     params = jax.eval_shape(
         lambda: net.init(jax.random.PRNGKey(0), actor_input, actor_output, HeadParams())
     )

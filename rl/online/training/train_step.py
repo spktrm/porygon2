@@ -73,6 +73,7 @@ from rl.online.training.telemetry import (
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
     head_param_telemetry,
+    pair_value_telemetry,
     potential_telemetry,
     promote_map,
     ratio_ess_and_tail,
@@ -1313,6 +1314,29 @@ def train_step(
                     mask=potential_mask,
                 ),
             }
+        # The pairwise entity critics (2026-09-12): each head's scalar
+        # regressed on the v-trace scalar return the CLS critics' two-hot
+        # is built from, under the same mask, gradient live into what the
+        # head reads. One coefficient for both (config.py carries the
+        # form); 0 builds neither head, so this block is static.
+        loss_pair_value = 0.0
+        pair_value_logs = {}
+        if config.player_pair_value_loss_coef > 0:
+            pair_value_label = player_targets.scalar_returns.astype(jnp.float32)
+            for pair_name, pair_output in (
+                ("public", learner_player_pred.pair_value_public),
+                ("private", learner_player_pred.pair_value_private),
+            ):
+                pair_loss = mse_value_loss(
+                    pred=pair_output.value, target=pair_value_label, valid=value_mask
+                )
+                loss_pair_value = loss_pair_value + pair_loss
+                pair_value_logs[f"player_loss_pair_value_{pair_name}"] = pair_loss
+                pair_value_logs.update(
+                    pair_value_telemetry(
+                        pair_output, pair_value_label, value_mask, pair_name
+                    )
+                )
         # Belief-state shaping: CE from each matched public row's belief
         # logits to the STOPPED hidden-token code (the code net trains
         # through the privileged value CE, never through its own
@@ -1591,6 +1615,8 @@ def train_step(
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
             # The potential channel's head, unscaled (see above).
             + loss_potential
+            # The pairwise critics (2026-09-12), both heads' MSE.
+            + config.player_pair_value_loss_coef * loss_pair_value
             + config.player_belief_coef * loss_belief
             + config.player_dynamics_coef * loss_transition
             # The species control, unscaled: its only param is the table
@@ -1746,6 +1772,7 @@ def train_step(
                 prefix="player_hidden_code",
             ),
             **potential_logs,
+            **pair_value_logs,
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)

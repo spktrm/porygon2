@@ -35,6 +35,7 @@ from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
     DYNAMICS_GROUP_SLICES,
+    FIELD_ROWS,
     MOVE_ROWS,
     NUM_PRIVATE_SLOTS,
     NUM_PUBLIC_SLOTS,
@@ -45,11 +46,12 @@ from rl.model.constants import (
     VALUE_CLS_ROW,
 )
 from rl.model.encoder import belief_alignment  # noqa: F401  (tests import it here)
-from rl.model.encoder import Encoder, OppCodeLabels
+from rl.model.encoder import Encoder, OppCodeLabels, PairValueInputs
 from rl.model.heads import (
     CategoricalValueLogitHead,
     FlatActionReadout,
     HeadParams,
+    PairValueHead,
     RegressionValueLogitHead,
     SlotConditioning,
     compute_policy_metrics,
@@ -169,6 +171,13 @@ class Porygon2PlayerModel(nn.Module):
         # absent unless the channel runs, so strength 0 keeps today's tree.
         if self.cfg.potential_head.enabled:
             self.potential_head = RegressionValueLogitHead(self.cfg.potential_head)
+        # The pairwise entity critics (2026-09-12, heads.PairValueHead):
+        # learner-only, absent unless the learner's coefficient is > 0. One
+        # class, two inputs -- the post-trunk public rows, and both players'
+        # pre-trunk sheet latents (encoder.PairValueInputs).
+        if self.cfg.pair_value_head.enabled:
+            self.pair_value_public = PairValueHead(self.cfg.pair_value_head)
+            self.pair_value_private = PairValueHead(self.cfg.pair_value_head)
         # The belief head (2026-09-01): from each opponent mon's PUBLIC row
         # (post-trunk, policy-readable -- deduction from what the agent can
         # see), predict that mon's discrete code. CE against the sg'd code
@@ -590,6 +599,7 @@ class Porygon2PlayerModel(nn.Module):
         opp_code_labels: OppCodeLabels,
         dynamics_rows: jax.Array,
         trunk_out_group_l2: tuple[jax.Array, jax.Array] | None,
+        pair_value_inputs: PairValueInputs | tuple,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -683,6 +693,24 @@ class Porygon2PlayerModel(nn.Module):
                 learner_only["potential_head"] = self.potential_head(
                     jax.lax.stop_gradient(sequence[CLS_ROW])
                 )
+            if self.cfg.pair_value_head.enabled:
+                # The public head: post-trunk public rows (mine first, by
+                # layout) with the post-trunk field triple as context. The
+                # private head: both sheets' pre-trunk latents with the
+                # pre-trunk field triple. Gradient live into what each
+                # reads (the CLS critics are the matched control).
+                learner_only["pair_value_public"] = self.pair_value_public(
+                    sequence[PUBLIC_ROWS],
+                    sequence[FIELD_ROWS],
+                    row_valid[PUBLIC_ROWS],
+                    pair_value_inputs.public_alive,
+                )
+                learner_only["pair_value_private"] = self.pair_value_private(
+                    pair_value_inputs.sheet_rows,
+                    pair_value_inputs.field_rows,
+                    pair_value_inputs.sheet_valid,
+                    pair_value_inputs.sheet_alive,
+                )
         return PlayerActorOutput(
             action_head=action_head,
             # The CLS row, and only the CLS row.
@@ -707,6 +735,7 @@ class Porygon2PlayerModel(nn.Module):
             opp_code_labels,
             dynamics_rows,
             trunk_out_group_l2,
+            pair_value_inputs,
             history_stats,
             history_carry,
         ) = self.encoder(
@@ -729,6 +758,7 @@ class Porygon2PlayerModel(nn.Module):
             opp_code_labels,
             dynamics_rows,
             trunk_out_group_l2,
+            pair_value_inputs,
             actor_input.env,
             actor_output,
         )

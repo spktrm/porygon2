@@ -420,6 +420,24 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # run continues on the deployable estimator without a lineage break and
     # the privileged head stays an observer.
     player_privileged_targets: bool = True
+    # The pairwise entity critics (2026-09-12, heads.PairValueHead): two
+    # learner-only value heads beside the CLS critics, each a generalised
+    # additive model over 12 entity rows --
+    #   V = sum_mine u_i - sum_theirs u_j
+    #       + sum_{i mine, j theirs} alpha_ij tanh(g(i,j) - g(j,i))
+    #       + sum_{mine pairs} beta s - sum_{their pairs} beta s,
+    # u a per-mon MLP, g / g_s ONE bilinear each shared across sides (the
+    # sharing is what makes a side swap negate V exactly), alpha / beta
+    # softmax weights over alive pairs, s = tanh(g_s(i,i') + g_s(i',i)).
+    # The public head reads the post-trunk PUBLIC rows; the private head
+    # both players' pre-trunk sheet latents (the opponent's BEFORE its
+    # code), so its gradient trains the private embedder directly. Both
+    # regress on `scalar_returns` (the v-trace scalar the two-hot label is
+    # built from) under this coefficient, gradient live into what they
+    # read; the CLS critics stay the matched control and the value
+    # bootstraps keep their route (player_privileged_targets). 0.0 builds
+    # neither head -- today's model and loss exactly.
+    player_pair_value_loss_coef: float = 1.0
     # PBRS as a potential channel (2026-09-11; docs/human-switch-pbrs-
     # 2026-09-11.md, LESSONS "PBRS potential channel"): eta, the scale on the
     # service's unit position potential Phi (INFO_FEATURE__STATE_POTENTIAL,
