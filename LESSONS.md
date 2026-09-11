@@ -5338,7 +5338,7 @@ bit-identical on ex.bin; 7 channel tests with controls; Python/TS fixture
 parity. NOT yet run, all gated on a learner-free window:
 tests/test_potential_slot.py (slot invariance, gradient reach), the eta > 0
 train_step slow test, the slow suite, and the Step 3 gradient screen
-(runtime/pbrs-screen) that gates any launch.
+(rl/offline/potential_screen.py) that gates any launch.
 
 **Panels.** player_potential_{mean,std,switch_delta_mean} (eta-free; the
 switch delta is descriptive, humans read -0.038); player_potential_adv_share
