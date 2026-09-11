@@ -20,7 +20,6 @@ from rl.environment.data import (
 )
 from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import (
-    EntityPrivateNodeFeature,
     FieldFeature,
     InfoFeature,
     PackedSetFeature,
@@ -465,28 +464,6 @@ def norm_scale_telemetry(param_tree) -> dict[str, jax.Array]:
     return logs
 
 
-# The 2026-09-01 opponent-code leaves. The code trains ONLY through the
-# privileged value CE via a straight-through argmax, and the belief head
-# predicts it: `player_code_perplexity` cannot tell a random hash at init
-# from a trained code (both read ~8), so these are the panels that can.
-# Expected at init, all lecun 0.0625 at fan-in 256 (measured 0.0627 /
-# 0.0626 / 0.0623): opp_code_logits is a Dense; opp_code_embedding
-# (16, 16, 16) has in_axis=-2, fan-in 16*16 = 256. Still 0.0625 tens of
-# thousands of steps in = the leaf never trained and whatever reads it is
-# reading init noise. Straight-through gives opp_code_embedding gradient on
-# ONE row per (mon, group), so the whole-table rms UNDERSTATES its drift and
-# a perplexity-1 group shows as a single row absorbing the grad norm -- read
-# beside player_code_perplexity_min. (entity_index_tag was read here for one
-# day: it sat at 0.0661 after 182k steps and was deleted 2026-09-02.)
-_OPP_CODE_LEAVES = {
-    "player_opp_code_logits_rms": (("encoder", "opp_code_logits", "kernel"),),
-    "player_opp_code_embedding_rms": (("encoder", "opp_code_embedding"),),
-    "player_belief_head_out_rms": (("belief_head", "Dense_2", "kernel"),),
-    # The species-only control table (2026-09-02): flax Embed init is
-    # variance_scaling fan_in over its 256 features, so 0.0625 again.
-    "player_species_belief_rms": (("species_belief", "embedding"),),
-    "player_revealed_belief_rms": (("revealed_belief", "Dense_2", "kernel"),),
-}
 # The 2026-09-02 history-encoder leaves. step_attention/attn_out is
 # ZERO-init (the FlatActionReadout argument: one zero factor over live
 # inputs, so its gradient is live at step 1) -- still 0.0 past ~200 steps
@@ -507,16 +484,12 @@ _HISTORY_LEAVES = {
         ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
     ),
 }
-# player_belief_head_gradient_norm already exists in train_step; not
-# duplicated here.
 _GRAD_SUBTREES = {
     "player_action_head_grad_norm": ("action_head",),
     # The gradient into the deployable value head (its real-row CE); read
     # beside player_loss_v_win / player_value_head_r2.
     "player_value_head_grad_norm": ("v_head",),
     "player_trunk_grad_norm": ("encoder", "trunk"),
-    "player_opp_code_logits_grad_norm": ("encoder", "opp_code_logits"),
-    "player_opp_code_embedding_grad_norm": ("encoder", "opp_code_embedding"),
     "player_history_step_attn_grad_norm": (
         "encoder",
         "history_encoder",
@@ -603,7 +576,6 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
             **_ACTION_HEAD_LEAVES,
             **_PAIR_VALUE_LEAVES,
             **_TRUNK_LEAVES,
-            **_OPP_CODE_LEAVES,
             **_HISTORY_LEAVES,
         },
         param_tree,
@@ -860,82 +832,3 @@ def critic_outcome_telemetry(
     logs["player_vol_switch_rows"] = vol_mask.sum().astype(f32)
     logs["player_forced_switch_rows"] = forced_mask.sum().astype(f32)
     return logs
-
-
-def _code_marginal(one_hot: jax.Array, row_weights: jax.Array) -> jax.Array:
-    """The batch marginal of a (T, B, 6, G, K) one-hot code over the rows
-    `row_weights` (T, B, 6) counts: (G, K) class frequencies per group. The
-    one identity the usage perplexity and the belief baseline both read --
-    each over ITS OWN row population, which is the point of the factoring."""
-    weights = row_weights[..., None, None].astype(jnp.float32)
-    usage = (one_hot.astype(jnp.float32) * weights).sum(axis=(0, 1, 2))
-    total = jnp.maximum(weights.sum(axis=(0, 1, 2)), 1e-6)
-    return usage / total
-
-
-def code_usage_logs(
-    opp_code: jax.Array,
-    opp_private_team: jax.Array,
-    value_mask: jax.Array,
-    row_mask: jax.Array | None = None,
-    prefix: str = "player_code",
-) -> dict[str, jax.Array]:
-    """Per-group usage perplexity of the opponent code -- the collapse
-    instrument: a group whose batch-marginal perplexity pins at 1 has
-    stopped using its classes, i.e. the code is ungrounded there.
-
-    Default population: every wired mon on a value step. `row_mask`
-    (T, B, 6) narrows it -- the hidden-token label is read over the rows
-    the belief loss scores, and only there."""
-    species = opp_private_team[
-        ..., EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
-    ]
-    row_live = (species != 0) & value_mask[..., None]
-    if row_mask is not None:
-        row_live = row_live & row_mask
-    usage_probs = _code_marginal(opp_code, row_live)
-    safe_probs = jnp.maximum(usage_probs, 1e-9)
-    group_entropy = -(usage_probs * jnp.log(safe_probs)).sum(axis=-1)
-    group_perplexity = jnp.exp(group_entropy)
-    return {
-        f"{prefix}_perplexity_mean": group_perplexity.mean(),
-        f"{prefix}_perplexity_min": group_perplexity.min(),
-        f"{prefix}_row_frac": average(
-            row_live.any(axis=-1).astype(jnp.float32), value_mask
-        ),
-    }
-
-
-def belief_accuracy_logs(
-    belief_logits: jax.Array,
-    belief_labels: jax.Array,
-    belief_mask: jax.Array,
-    prefix: str = "player_belief",
-) -> dict[str, jax.Array]:
-    """The belief head's accuracy, and the same number made honest.
-
-    `prefix` names the predictor: the belief head, or the species-only
-    matched control scored on the SAME labels and rows.
-
-    `player_belief_accuracy` alone cannot tell a belief from a lookup of the
-    batch marginal: a group whose code has collapsed to one class is
-    predicted at 100% by a constant, and a skewed marginal is predicted at
-    its majority rate by one. So beside it: the per-group MAJORITY rate of
-    the labels over the SAME masked rows (not `code_usage_logs`' population
-    -- that one includes unmatched mons, a different set from the one being
-    scored), and the accuracy above it. Above-marginal ~0 says the head has
-    learnt the marginal and nothing else. Shapes (T, B, 6, G, K), mask
-    (T, B, 6); accuracy is meaned over groups, matching the loss.
-    """
-    weights = belief_mask[..., None].astype(jnp.float32)
-    hit = (
-        jnp.argmax(belief_logits, axis=-1) == jnp.argmax(belief_labels, axis=-1)
-    ).astype(jnp.float32)
-    total = jnp.maximum(weights.sum(axis=(0, 1, 2)), 1e-6)
-    group_accuracy = (hit * weights).sum(axis=(0, 1, 2)) / total
-    majority = _code_marginal(belief_labels, belief_mask).max(axis=-1)
-    return {
-        f"{prefix}_accuracy": group_accuracy.mean(),
-        f"{prefix}_majority_rate": majority.mean(),
-        f"{prefix}_accuracy_above_marginal": (group_accuracy - majority).mean(),
-    }

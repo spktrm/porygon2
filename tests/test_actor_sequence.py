@@ -129,10 +129,8 @@ def test_actor_forward_matches_the_learner_forward_on_the_kept_rows(
     # The actor carries none of the learner-only outputs.
     assert isinstance(actor_out.history_carry.valid, jax.Array)
     for name in (
-        "belief_logits",
         "dynamics_target",
-        "opp_code",
-        "hidden_code",
+        "priv_value_head",
         "log_policy",
     ):
         assert getattr(actor_out, name, ()) == ()

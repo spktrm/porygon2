@@ -52,9 +52,7 @@ from rl.online.training.targets import (
 from rl.online.training.telemetry import (
     action_axis_masks,
     applied_delta_telemetry,
-    belief_accuracy_logs,
     calculate_r2,
-    code_usage_logs,
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
     head_param_telemetry,
@@ -514,65 +512,6 @@ def train_step(
                         pair_output, pair_value_label, value_mask, pair_name
                     )
                 )
-        # Belief-state shaping: CE from each matched public row's belief
-        # logits to the STOPPED hidden-token code (the code net trains
-        # through the privileged value CE, never through its own
-        # prediction; the label is its reading of the tokens the public
-        # row does NOT show, so the CE cannot be paid by re-reading the
-        # row -- 2026-09-05, after the revealed-row control caught the
-        # full-sheet label: margin 0.20 -> 0.017). Mean over groups so the
-        # scale is K-independent; masked to rows where the alignment
-        # holds, the mon still has a hidden token, AND the step counts
-        # for value.
-        belief_labels = jax.lax.stop_gradient(
-            learner_player_pred.hidden_code.astype(jnp.float32)
-        )
-        belief_ce = optax.softmax_cross_entropy(
-            logits=learner_player_pred.belief_logits.astype(jnp.float32),
-            labels=belief_labels,
-        ).mean(axis=-1)
-        belief_mask = (
-            learner_player_pred.belief_matched
-            & learner_player_pred.belief_hidden_any
-            & value_mask[..., None]
-        )
-        loss_belief = average(belief_ce, belief_mask)
-        belief_logs = belief_accuracy_logs(
-            learner_player_pred.belief_logits, belief_labels, belief_mask
-        )
-        # The species-only matched control: the same CE on the same labels
-        # and rows from a table keyed on the public row's species token.
-        # `player_belief_gain_over_species` is what the belief head reads
-        # from the public row BEYOND its species; ~0 says it is a lookup.
-        species_ce = optax.softmax_cross_entropy(
-            logits=learner_player_pred.species_belief_logits.astype(jnp.float32),
-            labels=belief_labels,
-        ).mean(axis=-1)
-        loss_species_belief = average(species_ce, belief_mask)
-        species_logs = belief_accuracy_logs(
-            learner_player_pred.species_belief_logits,
-            belief_labels,
-            belief_mask,
-            prefix="player_species_belief",
-        )
-        # The revealed-row matched control: the same CE again from an MLP
-        # over the matched mon's own pre-trunk public row (stop-gradient),
-        # so it scores everything that row says in isolation.
-        # `player_belief_context_margin` = belief minus this: what the head
-        # infers from CONTEXT (history, the other rows); ~0 says the head
-        # only reads the mon's own revealed tokens.
-        revealed_ce = optax.softmax_cross_entropy(
-            logits=learner_player_pred.revealed_belief_logits.astype(jnp.float32),
-            labels=belief_labels,
-        ).mean(axis=-1)
-        loss_revealed_belief = average(revealed_ce, belief_mask)
-        revealed_logs = belief_accuracy_logs(
-            learner_player_pred.revealed_belief_logits,
-            belief_labels,
-            belief_mask,
-            prefix="player_revealed_belief",
-        )
-
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
             learner_action_head.normalized_entropy, policy_mask
@@ -763,14 +702,6 @@ def train_step(
             + loss_potential
             # The pairwise critics (2026-09-12), both heads' MSE.
             + config.player_pair_value_loss_coef * loss_pair_value
-            + config.player_belief_coef * loss_belief
-            # The species control, unscaled: its only param is the table
-            # (an integer input has no gradient), and its gradient norm is
-            # O(0.05) against a total of ~10, so the global clip is unmoved.
-            + loss_species_belief
-            # The revealed-row control, likewise unscaled: its input is under
-            # stop_gradient, so only its own MLP receives the gradient.
-            + loss_revealed_belief
             # The actor backward KL is a diagnostic only since 2026-09-09
             # (config.py, the removed player_kl_loss_coef): the trust region
             # against the behaviour policy is the clip and the magnet.
@@ -780,26 +711,6 @@ def train_step(
             **pg_logs,
             player_loss_v_win=loss_v_win,
             player_loss_v_win_priv=loss_v_win_priv,
-            player_loss_belief=loss_belief,
-            **belief_logs,
-            player_loss_species_belief=loss_species_belief,
-            **species_logs,
-            player_belief_gain_over_species=belief_logs["player_belief_accuracy"]
-            - species_logs["player_species_belief_accuracy"],
-            player_loss_revealed_belief=loss_revealed_belief,
-            **revealed_logs,
-            player_belief_context_margin=belief_logs["player_belief_accuracy"]
-            - revealed_logs["player_revealed_belief_accuracy"],
-            player_belief_matched_frac=average(
-                learner_player_pred.belief_matched.astype(jnp.float32).mean(-1),
-                value_mask,
-            ),
-            # Of the matched mons, the share still carrying a hidden token
-            # (the belief loss's population); 1 - this is fully-revealed.
-            player_belief_hidden_frac=average(
-                learner_player_pred.belief_hidden_any.astype(jnp.float32),
-                learner_player_pred.belief_matched & value_mask[..., None],
-            ),
             # Trunk over-smoothing (cosine up / participation down = rows
             # converging); the offline per-block twin is
             # rl/offline/trunk_homogeneity.py.
@@ -899,21 +810,6 @@ def train_step(
             )
             .sum(axis=0)
             .mean(),
-            **code_usage_logs(
-                learner_player_pred.opp_code,
-                batch.player_transitions.env_output.opp_private_team,
-                value_mask,
-            ),
-            # The label's own usage over the rows the belief loss scores:
-            # a hidden code pinned at perplexity 1 is a dead label, not a
-            # solved belief.
-            **code_usage_logs(
-                learner_player_pred.hidden_code,
-                batch.player_transitions.env_output.opp_private_team,
-                value_mask,
-                row_mask=belief_mask,
-                prefix="player_hidden_code",
-            ),
             **potential_logs,
             **pair_value_logs,
         )

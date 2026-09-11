@@ -12,7 +12,6 @@ from ml_collections import ConfigDict
 from rl.environment.data import (
     CELL_MODALITY_MASK,
     NUM_MODALITY_FEATURES,
-    NUM_SPECIES,
     NUM_SWITCH_CELLS,
 )
 from rl.environment.interfaces import (
@@ -23,14 +22,10 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
-from rl.environment.protos.features_pb2 import (
-    EntityRevealedNodeFeature,
-)
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
-    DYNAMICS_GROUP_SLICES,
     FIELD_ROWS,
     MOVE_ROWS,
     PRIVATE_ROWS,
@@ -38,8 +33,7 @@ from rl.model.constants import (
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
-from rl.model.encoder import belief_alignment  # noqa: F401  (tests import it here)
-from rl.model.encoder import Encoder, OppCodeLabels, PairValueInputs
+from rl.model.encoder import Encoder, PairValueInputs
 from rl.model.heads import (
     CategoricalValueLogitHead,
     FlatActionReadout,
@@ -50,7 +44,6 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.modules import MLP
 from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params, prune_log_policy
 
@@ -106,40 +99,6 @@ class Porygon2PlayerModel(nn.Module):
         if self.cfg.pair_value_head.enabled:
             self.pair_value_public = PairValueHead(self.cfg.pair_value_head)
             self.pair_value_private = PairValueHead(self.cfg.pair_value_head)
-        # The belief head (2026-09-01): from each opponent mon's PUBLIC row
-        # (post-trunk, policy-readable -- deduction from what the agent can
-        # see), predict that mon's discrete code. CE against the sg'd code
-        # is belief-state shaping: the act-time information set is
-        # untouched (the partition test pins it), the gradient just asks
-        # public representations to be DECODABLE to the truth.
-        self.belief_head = MLP(**self.cfg.belief_head.mlp.to_dict())
-        # The species-only matched control (2026-09-02): the same (G, K)
-        # logits from NOTHING but the matched public row's species token,
-        # a table lookup. The belief head reads a post-trunk row that
-        # already carries the species (one shared species embedder feeds
-        # both rows), so `player_belief_accuracy` alone cannot tell "this
-        # species' typical code" from a belief formed from what the
-        # opponent has shown. Its input is an integer: no shared param
-        # ever receives its gradient, and its CE enters the loss unscaled
-        # because a coefficient could only ever be 1.0.
-        code = self.cfg.encoder.opp_code
-        self.species_belief = nn.Embed(
-            NUM_SPECIES,
-            code.num_groups * code.num_classes,
-            dtype=self.cfg.dtype,
-            name="species_belief",
-        )
-        # The revealed-row matched control (2026-09-04): the same (G, K)
-        # logits from the matched mon's own PRE-trunk public row and
-        # nothing else -- species, revealed moves, item, ability, learnset,
-        # state, active, exactly what that row says in isolation. The
-        # species table brackets the belief head from below by species
-        # only; this one brackets it by everything the mon has SHOWN, so
-        # `player_belief_context_margin` (belief minus this) is the part
-        # of the belief formed from context: history, the other rows, what
-        # the opponent has and has not done. Input under stop_gradient: no
-        # shared param receives its gradient; its CE enters unscaled.
-        self.revealed_belief = MLP(**self.cfg.revealed_belief.mlp.to_dict())
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -411,7 +370,6 @@ class Porygon2PlayerModel(nn.Module):
         self,
         sequence: jax.Array,
         row_valid: jax.Array,
-        opp_code_labels: OppCodeLabels,
         dynamics_rows: jax.Array,
         trunk_out_group_l2: tuple[jax.Array, jax.Array] | None,
         pair_value_inputs: PairValueInputs | tuple,
@@ -437,27 +395,6 @@ class Porygon2PlayerModel(nn.Module):
         )
         learner_only = {}
         if self.cfg.train:
-            matched = opp_code_labels.matched
-            public_row_index = opp_code_labels.public_row_index
-            matched_rows = sequence[PUBLIC_ROWS][public_row_index]
-            code_shape = opp_code_labels.code.shape
-            belief_logits = self.belief_head(matched_rows).reshape(code_shape)
-            # Keyed on the PUBLIC row's species, never the private one: under
-            # Illusion the board shows the disguise, and a control that sees
-            # more than the row it is matched against is not matched.
-            public_species = env_step.revealed_team[
-                public_row_index,
-                EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES,
-            ]
-            species_belief_logits = self.species_belief(public_species).reshape(
-                code_shape
-            )
-            revealed_rows = jax.lax.stop_gradient(
-                dynamics_rows[DYNAMICS_GROUP_SLICES["public"]][public_row_index]
-            )
-            revealed_belief_logits = self.revealed_belief(revealed_rows).reshape(
-                code_shape
-            )
             # Rows converging to one direction reads on the existing panels
             # as "entropy at ceiling while the pointer params grow" -- the
             # phase-1 support-anchor shape -- so it gets its own reading.
@@ -470,16 +407,6 @@ class Porygon2PlayerModel(nn.Module):
                 "dynamics_target": dynamics_rows,
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
-                # The critic's code (the secret rows' content) and the
-                # belief head's label -- the code of the HIDDEN tokens only
-                # (encoder.OppCodeLabels).
-                "opp_code": opp_code_labels.code,
-                "hidden_code": opp_code_labels.hidden_code,
-                "belief_logits": belief_logits,
-                "species_belief_logits": species_belief_logits,
-                "revealed_belief_logits": revealed_belief_logits,
-                "belief_matched": matched,
-                "belief_hidden_any": opp_code_labels.hidden_any,
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
                 "trunk_out_group_l2_sum": group_l2_sum,
@@ -538,7 +465,6 @@ class Porygon2PlayerModel(nn.Module):
         (
             sequence,
             row_valid,
-            opp_code_labels,
             dynamics_rows,
             trunk_out_group_l2,
             pair_value_inputs,
@@ -561,7 +487,6 @@ class Porygon2PlayerModel(nn.Module):
         )(
             sequence,
             row_valid,
-            opp_code_labels,
             dynamics_rows,
             trunk_out_group_l2,
             pair_value_inputs,

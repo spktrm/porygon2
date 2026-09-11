@@ -418,9 +418,8 @@ def test_entity_idx_is_not_row_content(
         nn.Module, dict, PlayerActorInput, PlayerActorOutput
     ],
 ) -> None:
-    """The wire's ENTITY_IDX names a sheet row's public twin for the belief
-    head's alignment ONLY (player_model.belief_alignment): since the
-    entity_index_tag was deleted (2026-09-02) it enters no row, so rekeying
+    """The wire's ENTITY_IDX enters no row: since the entity_index_tag was
+    deleted (2026-09-02) nothing reads it into the sequence, so rekeying
     a private row leaves every assembled row bit-identical. The positive
     control that the same column-set mechanism DOES move a row is the hp
     test directly above."""

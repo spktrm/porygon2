@@ -430,8 +430,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # sharing is what makes a side swap negate V exactly), alpha / beta
     # softmax weights over alive pairs, s = tanh(g_s(i,i') + g_s(i',i)).
     # The public head reads the post-trunk PUBLIC rows; the private head
-    # both players' pre-trunk sheet latents (the opponent's BEFORE its
-    # code), so its gradient trains the private embedder directly. Both
+    # both players' pre-trunk sheet latents, so its gradient trains the
+    # private embedder directly. Both
     # regress on `scalar_returns` (the v-trace scalar the two-hot label is
     # built from) under this coefficient, gradient live into what they
     # read; the CLS critics stay the matched control and the value
@@ -453,11 +453,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # perturbation .031 vs the .10 budget, shared-param update .0047 --
     # LESSONS "PBRS screen on ckpt_00480000".
     player_potential_strength: float = 0.05
-    # Belief-state shaping (2026-09-01): CE from the matched public rows'
-    # belief logits to the sg'd opponent code. Bounded (<= log K per group),
-    # pi-free, touches representations not logits; 0.0 is an inert-loss off
-    # (predictor params stay in the tree).
-    player_belief_coef: float = 0.25
     # THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
     # pi/mu with a batch-normalised v-trace advantage from V, plus a

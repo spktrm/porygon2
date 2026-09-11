@@ -130,10 +130,7 @@ class PlayerActorOutput:
     )
     action_head: PlayerPolicyHeadOutput = field(default_factory=PlayerPolicyHeadOutput)
     # Learner-only (cfg.train), like log_policy: the privileged critic over
-    # the VALUE_CLS row, the opponent discrete-code one-hot (T, 6, G, K)
-    # the secret rows are built from, and the belief head's LABEL: the
-    # same code over each mon's HIDDEN tokens only (2026-09-05,
-    # encoder.OppCodeLabels). Actors ship the () defaults.
+    # the VALUE_CLS row. Actors ship the () defaults.
     priv_value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
@@ -145,24 +142,10 @@ class PlayerActorOutput:
     )
     # Learner-only (2026-09-12): the pairwise entity critics -- over the
     # post-trunk public rows, and over both players' pre-trunk sheet
-    # latents (the opponent's before its code). Built only when the
+    # latents. Built only when the
     # learner's player_pair_value_loss_coef > 0.
     pair_value_public: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
     pair_value_private: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
-    opp_code: ArrayLike = ()
-    hidden_code: ArrayLike = ()
-    # The belief head: (T, 6, G, K) logits predicting hidden_code from the
-    # matched PUBLIC rows, the per-mon alignment mask, and whether the mon
-    # has any hidden token left to predict.
-    belief_logits: ArrayLike = ()
-    # The species-only matched control: the same (T, 6, G, K) logits from
-    # a table keyed on the matched public row's species token alone.
-    species_belief_logits: ArrayLike = ()
-    # The revealed-row matched control (2026-09-04): the same logits from
-    # an MLP over the matched mon's own PRE-trunk public row alone.
-    revealed_belief_logits: ArrayLike = ()
-    belief_matched: ArrayLike = ()
-    belief_hidden_any: ArrayLike = ()
     # (T, NUM_DYNAMICS_ROWS, D) pre-trunk content of the target rows; the
     # revealed-belief control reads its public slice. Learner-only.
     dynamics_target: ArrayLike = ()

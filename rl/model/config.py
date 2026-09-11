@@ -182,29 +182,6 @@ def get_player_model_config(
     cfg.pair_value_head.enabled = False
     cfg.pair_value_head.qk_size = entity_size
     cfg.pair_value_head.unary_hidden = entity_size
-    # The opponent discrete code: per mon, num_groups categoricals of
-    # num_classes -- 16x16 = a 64-bit-ish joint space over a randbats build
-    # pool, with entity_size divisible by num_groups so the code embedding
-    # concatenates to one row.
-    cfg.encoder.opp_code = ConfigDict()
-    cfg.encoder.opp_code.num_groups = 16
-    cfg.encoder.opp_code.num_classes = 16
-    # The belief head: matched public row -> the mon's (G, K) code logits.
-    cfg.belief_head = ConfigDict()
-    cfg.belief_head.mlp = ConfigDict()
-    cfg.belief_head.mlp.layer_sizes = (
-        2 * entity_size,
-        entity_size,
-        cfg.encoder.opp_code.num_groups * cfg.encoder.opp_code.num_classes,
-    )
-    # The revealed-row control (2026-09-04): the belief head's (G, K)
-    # logits again, from NOTHING but the matched mon's own PRE-trunk
-    # public row (stop-gradient) -- no history, no other rows. Same
-    # widths as the belief head, so the two differ only in what they may
-    # read; their accuracy gap is inference from CONTEXT.
-    cfg.revealed_belief = ConfigDict()
-    cfg.revealed_belief.mlp = ConfigDict()
-    cfg.revealed_belief.mlp.layer_sizes = cfg.belief_head.mlp.layer_sizes
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step

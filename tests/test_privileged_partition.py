@@ -109,42 +109,6 @@ def test_value_cls_is_read_by_nothing() -> None:
     assert not np.allclose(base[VALUE_CLS_ROW], moved[VALUE_CLS_ROW])
 
 
-def test_belief_alignment_matches_only_the_opponent_half() -> None:
-    import numpy as np
-
-    from rl.environment.protos.features_pb2 import (
-        EntityPrivateNodeFeature,
-        InfoFeature,
-    )
-    from rl.model.player_model import belief_alignment
-
-    num_features = 23
-    opp = np.zeros((6, num_features), dtype=np.int32)
-    idx_col = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
-    # Mon 0: fielded, stable index 4 (sits in the opp half below).
-    opp[0, idx_col] = 5
-    # Mon 1: never fielded.
-    opp[1, idx_col] = 0
-    # Mon 2: index 1 -- present ONLY in the MY half below; must NOT match
-    # (the cross-side alias control).
-    opp[2, idx_col] = 2
-
-    info = np.zeros(InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11 + 1, dtype=np.int32)
-    order = np.full(12, -1, dtype=np.int32)
-    order[0] = 1  # my half carries stable index 1
-    order[7] = 4  # opp half row 7 carries stable index 4
-    info[
-        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
-        + 1
-    ] = order
-
-    matched, rows = jax.tree.map(
-        np.asarray, belief_alignment(jnp.asarray(opp), jnp.asarray(info))
-    )
-    assert matched.tolist() == [True, False, False, False, False, False]
-    assert rows[0] == 7
-
-
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_opp_private_team_cannot_reach_the_policy(
@@ -192,14 +156,10 @@ def test_opp_private_team_cannot_reach_the_policy(
         np.asarray(base.dynamics_target, dtype=np.float32),
         np.asarray(moved.dynamics_target, dtype=np.float32),
     )
-    # Controls: the privileged head and the code labels DO move.
+    # Control: the privileged head DOES move.
     assert not np.allclose(
         np.asarray(base.priv_value_head.expectation, dtype=np.float32),
         np.asarray(moved.priv_value_head.expectation, dtype=np.float32),
-    )
-    assert not np.array_equal(
-        np.asarray(base.opp_code, dtype=np.float32),
-        np.asarray(moved.opp_code, dtype=np.float32),
     )
     # The pairwise critics (2026-09-12) are exactly 0 at init, so they are
     # read on OPENED params: the public head (post-trunk public rows and

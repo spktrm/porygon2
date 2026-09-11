@@ -39,25 +39,22 @@ def test_merge_params_reports_added_and_dropped() -> None:
 
 
 def test_merge_keeps_an_added_subtree_fresh_everywhere() -> None:
-    """A whole new top-level module (the 2026-09-03 dynamics head, the
-    2026-09-04 RENAME to dynamics_delta_head that re-inits it at the copy
-    baseline, and the 2026-09-04 revealed_belief control) resumed in
-    checkpoint mode: its params keep their fresh init and its Adam moments
+    """A whole new top-level module (a head added or RENAMED so it re-inits,
+    and a second added control head) resumed in checkpoint mode: its
+    params keep their fresh init and its Adam moments
     start at zero, while the shared leaves take the checkpoint's; a subtree
     only the checkpoint carries is dropped."""
     fresh = _tree({}, scale=0.0)
-    fresh["params"]["dynamics_delta_head"] = {
-        "Dense_0": {"kernel": jnp.full((3, 2), 0.5)}
-    }
-    fresh["params"]["revealed_belief"] = {"Dense_0": {"kernel": jnp.full((2, 2), 0.25)}}
+    fresh["params"]["renamed_head"] = {"Dense_0": {"kernel": jnp.full((3, 2), 0.5)}}
+    fresh["params"]["added_control"] = {"Dense_0": {"kernel": jnp.full((2, 2), 0.25)}}
     loaded = _tree({}, scale=1.0)
-    loaded["params"]["dynamics_head"] = {"Dense_0": {"kernel": jnp.full((3, 2), 7.0)}}
+    loaded["params"]["old_head"] = {"Dense_0": {"kernel": jnp.full((3, 2), 7.0)}}
     merged, kept_fresh, dropped = merge_params(fresh, loaded)
-    assert kept_fresh == ["/params/dynamics_delta_head", "/params/revealed_belief"]
-    assert dropped == ["/params/dynamics_head"]
-    assert "dynamics_head" not in merged["params"]
-    assert np.all(merged["params"]["dynamics_delta_head"]["Dense_0"]["kernel"] == 0.5)
-    assert np.all(merged["params"]["revealed_belief"]["Dense_0"]["kernel"] == 0.25)
+    assert kept_fresh == ["/params/renamed_head", "/params/added_control"]
+    assert dropped == ["/params/old_head"]
+    assert "old_head" not in merged["params"]
+    assert np.all(merged["params"]["renamed_head"]["Dense_0"]["kernel"] == 0.5)
+    assert np.all(merged["params"]["added_control"]["Dense_0"]["kernel"] == 0.25)
     assert np.all(merged["params"]["encoder"]["kernel"] == 1)
 
     optimiser = optax.adam(1e-3)
@@ -68,7 +65,7 @@ def test_merge_keeps_an_added_subtree_fresh_everywhere() -> None:
     merged_state = merge_opt_state(fresh_state, loaded_state)
     adam = merged_state[0]
     assert int(adam.count) == 1
-    assert np.all(adam.mu["params"]["dynamics_delta_head"]["Dense_0"]["kernel"] == 0)
+    assert np.all(adam.mu["params"]["renamed_head"]["Dense_0"]["kernel"] == 0)
     assert np.all(adam.mu["params"]["encoder"]["kernel"] != 0)
 
 

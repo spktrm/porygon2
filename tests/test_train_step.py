@@ -152,31 +152,6 @@ def test_train_step_smoke() -> None:
         "player_trunk_mlp_out_rms",
         "player_action_head_grad_norm",
         "player_trunk_grad_norm",
-        # The 2026-09-01 opponent-code leaves and the join key (plan step
-        # b): the code trains only through the priv-value CE, and these
-        # are the only readings that separate a trained code from init
-        # noise with the same perplexity.
-        "player_opp_code_logits_rms",
-        "player_opp_code_embedding_rms",
-        "player_belief_head_out_rms",
-        "player_opp_code_logits_grad_norm",
-        "player_opp_code_embedding_grad_norm",
-        # The species-only matched control (plan step a2).
-        "player_species_belief_rms",
-        "player_loss_species_belief",
-        "player_species_belief_accuracy",
-        "player_species_belief_accuracy_above_marginal",
-        "player_belief_gain_over_species",
-        # The revealed-row matched control (2026-09-04).
-        "player_revealed_belief_rms",
-        "player_loss_revealed_belief",
-        "player_revealed_belief_accuracy",
-        "player_revealed_belief_accuracy_above_marginal",
-        "player_belief_context_margin",
-        # The hidden-token label (2026-09-05).
-        "player_belief_hidden_frac",
-        "player_hidden_code_perplexity_mean",
-        "player_hidden_code_perplexity_min",
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",
