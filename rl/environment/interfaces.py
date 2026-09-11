@@ -146,9 +146,6 @@ class PlayerActorOutput:
     # learner's player_pair_value_loss_coef > 0.
     pair_value_public: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
     pair_value_private: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
-    # (T, NUM_DYNAMICS_ROWS, D) pre-trunk content of the target rows; the
-    # revealed-belief control reads its public slice. Learner-only.
-    dynamics_target: ArrayLike = ()
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows
     # of the trunk's output. The over-smoothing instrument; learner-only.

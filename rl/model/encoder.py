@@ -42,7 +42,6 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.model.constants import (
     ALLY_TARGET_ROWS,
-    DYNAMICS_TARGET_ROWS,
     ENEMY_TARGET_ROWS,
     IS_WILDCARD_MOVE_SLOT,
     MY_ACTIVE_PUBLIC_ROWS,
@@ -1120,20 +1119,8 @@ class Encoder(nn.Module):
         kept_rows = self.kept_rows()
         assert sequence.shape[0] == len(kept_rows), sequence.shape
 
-        # The dynamics head's target (2026-09-03): the entity rows' CONTENT
-        # before the additive group/row identity goes on. Public rows re-sort
-        # every step (actives first), so a mon's row index moves on a switch;
-        # a positional bias in the target would ask the predictor to guess
-        # the sort rather than the state. Sliced by name, zeroed where the
-        # row is invalid, and read by the learner only.
-        dynamics_rows = ()
         pair_value_inputs = ()
         if self.cfg.train:
-            dynamics_rows = jnp.take(
-                sequence, jnp.asarray(DYNAMICS_TARGET_ROWS), axis=0
-            )
-            dynamics_valid = jnp.take(row_valid, jnp.asarray(DYNAMICS_TARGET_ROWS))
-            dynamics_rows = jnp.where(dynamics_valid[:, None], dynamics_rows, 0)
             # The pairwise critics' inputs (2026-09-12, PairValueInputs):
             # both sheets through the one private embedder, before either
             # side bias; alive = hit-point ratio above zero, off the wire.
@@ -1168,7 +1155,7 @@ class Encoder(nn.Module):
         sequence = self.input_normalisation(sequence, row_valid, group_ids)
         sequence = sequence + self.sequence_group_bias.astype(dtype)[group_ids]
         sequence = jnp.where(row_valid[:, None], sequence, 0)
-        return sequence, row_valid, dynamics_rows, pair_value_inputs
+        return sequence, row_valid, pair_value_inputs
 
     def _batched_forward(
         self,
@@ -1186,7 +1173,7 @@ class Encoder(nn.Module):
         has mixed with every other and the reading is behavioural rather than
         structural.
         """
-        sequence, row_valid, dynamics_rows, pair_value_inputs = self._assemble_sequence(
+        sequence, row_valid, pair_value_inputs = self._assemble_sequence(
             env_step,
             history_row_states,
             history_row_valid,
@@ -1208,7 +1195,6 @@ class Encoder(nn.Module):
         return (
             sequence,
             row_valid,
-            dynamics_rows,
             trunk_out_group_l2,
             pair_value_inputs,
         )
@@ -1421,7 +1407,7 @@ class Encoder(nn.Module):
         *history_inputs, _ = self._history_inputs(
             env_step, packed_history_step, history_step
         )
-        sequence, row_valid, _, _ = assemble(self, env_step, *history_inputs)
+        sequence, row_valid, _ = assemble(self, env_step, *history_inputs)
         return sequence, row_valid
 
     def __call__(
@@ -1431,14 +1417,12 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
         carry: HistoryCarry = HistoryCarry(),
     ):
-        # ((T, rows, entity_size), (T, rows) bool, (T, NUM_DYNAMICS_ROWS,
-        # entity_size), trunk group l2, pair-value inputs, history stats,
-        # history carry); rows = NUM_SEQUENCE_ROWS for the learner,
-        # NUM_POLICY_READABLE_ROWS for the actor (kept_rows). The heads
-        # slice the rows they own by name (rl/model/constants.py), so no
-        # offset is ever written twice. The second is the trunk's row
-        # validity; the third the target rows' pre-trunk content, `()` on
-        # the actor, which never builds it. The history-panel scalars
+        # ((T, rows, entity_size), (T, rows) bool, trunk group l2,
+        # pair-value inputs, history stats, history carry); rows =
+        # NUM_SEQUENCE_ROWS for the learner, NUM_POLICY_READABLE_ROWS for
+        # the actor (kept_rows). The heads slice the rows they own by name
+        # (rl/model/constants.py), so no offset is ever written twice. The
+        # second is the trunk's row validity. The history-panel scalars
         # (history_step_stats) are per trajectory; the actor path drops
         # them, and XLA drops the computation with them. The post-window
         # history state (history_carry_from) is the actor's next carry; the
@@ -1449,16 +1433,14 @@ class Encoder(nn.Module):
         (
             sequence,
             row_valid,
-            dynamics_rows,
             trunk_out_group_l2,
             pair_value_inputs,
         ) = _forward_vmap()(self, env_step, *history_inputs)
         # The pairwise critics' inputs (2026-09-12, PairValueInputs) are
-        # learner-only like the target rows.
+        # learner-only, () on the actor.
         return (
             sequence,
             row_valid,
-            dynamics_rows,
             trunk_out_group_l2,
             pair_value_inputs,
             history_step_stats(history_output),

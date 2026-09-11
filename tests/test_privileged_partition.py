@@ -152,10 +152,6 @@ def test_opp_private_team_cannot_reach_the_policy(
         np.asarray(base.value_head.log_probs, dtype=np.float32),
         np.asarray(moved.value_head.log_probs, dtype=np.float32),
     )
-    np.testing.assert_array_equal(
-        np.asarray(base.dynamics_target, dtype=np.float32),
-        np.asarray(moved.dynamics_target, dtype=np.float32),
-    )
     # Control: the privileged head DOES move.
     assert not np.allclose(
         np.asarray(base.priv_value_head.expectation, dtype=np.float32),

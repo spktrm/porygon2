@@ -95,7 +95,7 @@ def test_real_actor_default_head_params_are_bit_identical(
     from rl.model.utils import open_zero_init_paths
 
     _, variables, actor_input, actor_output = real_model_and_trajectory
-    variables = open_zero_init_paths(variables, ["action_head", "dynamics_out_proj"])
+    variables = open_zero_init_paths(variables, ["action_head"])
     actor_input = actor_input.replace(
         env=jax.tree.map(lambda leaf: leaf[:4], actor_input.env)
     )

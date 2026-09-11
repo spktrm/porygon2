@@ -607,10 +607,8 @@ def state_kernel_telemetry(params) -> dict[str, jax.Array]:
     """`player_state_kernel_rms_{hp,status,boosts,other}`: rms of the three
     state linears' kernels over the input rows of each coarse feature
     group, pooled across the kernels (a kernel without the group -- no
-    boosts on the private path -- contributes nothing). The delta dynamics
-    loss normalises by the target's own scale, and that scale is these
-    kernels: hp falling relative to other is the normaliser being gamed
-    rather than the change predicted."""
+    boosts on the private path -- contributes nothing): what share of a
+    state linear reads hp against status, boosts and the rest."""
     blocks = state_kernel_blocks()
     groups = list(STATE_KERNEL_GROUPS) + ["other"]
     logs = {}

@@ -18,7 +18,6 @@ import pytest
 from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.constants import (
     CLS_ROW,
-    DYNAMICS_TARGET_ROWS,
     HISTORY_ENTITY_ROWS,
     MOVE_ROWS,
     NUM_POLICY_READABLE_ROWS,
@@ -57,7 +56,6 @@ def test_actor_rows_are_the_policy_readable_prefix_plus_history() -> None:
         PRIVATE_ROWS.stop - 1,
         MOVE_ROWS.stop - 1,
         TARGET_ROWS.stop - 1,
-        int(np.max(DYNAMICS_TARGET_ROWS)),
     ):
         assert row < first_dropped
     # The history rows are the ones that move, and nothing indexes them
@@ -129,7 +127,6 @@ def test_actor_forward_matches_the_learner_forward_on_the_kept_rows(
     # The actor carries none of the learner-only outputs.
     assert isinstance(actor_out.history_carry.valid, jax.Array)
     for name in (
-        "dynamics_target",
         "priv_value_head",
         "log_policy",
     ):

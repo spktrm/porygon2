@@ -370,7 +370,6 @@ class Porygon2PlayerModel(nn.Module):
         self,
         sequence: jax.Array,
         row_valid: jax.Array,
-        dynamics_rows: jax.Array,
         trunk_out_group_l2: tuple[jax.Array, jax.Array] | None,
         pair_value_inputs: PairValueInputs | tuple,
         env_step: PlayerEnvOutput,
@@ -402,9 +401,6 @@ class Porygon2PlayerModel(nn.Module):
             row_cosine, row_participation = row_homogeneity(sequence)
             group_l2_sum, group_rows = trunk_out_group_l2
             learner_only = {
-                # The target rows' pre-trunk content (the revealed-belief
-                # control reads its public slice).
-                "dynamics_target": dynamics_rows,
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
                 "trunk_row_cosine": row_cosine,
@@ -465,7 +461,6 @@ class Porygon2PlayerModel(nn.Module):
         (
             sequence,
             row_valid,
-            dynamics_rows,
             trunk_out_group_l2,
             pair_value_inputs,
             history_stats,
@@ -487,7 +482,6 @@ class Porygon2PlayerModel(nn.Module):
         )(
             sequence,
             row_valid,
-            dynamics_rows,
             trunk_out_group_l2,
             pair_value_inputs,
             actor_input.env,
