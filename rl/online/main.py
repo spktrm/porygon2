@@ -92,7 +92,12 @@ class JaxCacheNoiseFilter(logging.Filter):
 
 # Wandb metric-key names for the service's evalActionMapping indices
 # (service/src/server/eval.ts).
-EVAL_BASELINE_NAMES = {0: "random", 1: "default", 2: "simpleheuristic"}
+EVAL_BASELINE_NAMES = {
+    0: "random",
+    1: "default",
+    2: "simpleheuristic",
+    3: "potentialmcts",
+}
 
 
 def run_training_actor_pair(

@@ -1,3 +1,4 @@
+import { GetPotentialMctsAction } from "./baselines/potential_mcts";
 import { GetRandomAction } from "./baselines/random";
 import { GetSimpleHeuristicAction } from "./baselines/simple_heuristic";
 import { TrainablePlayerAI } from "./runner";
@@ -26,6 +27,7 @@ export const evalActionMapping: EvalActionFnType[] = [
         return action;
     }, // Default - 1
     GetSimpleHeuristicAction, // Type-aware max-damage + switching - 2
+    GetPotentialMctsAction, // Fair sampled-world potential MCTS - 3
 ];
 
 export const numEvals = evalActionMapping.length;

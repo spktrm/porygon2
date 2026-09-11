@@ -4900,6 +4900,219 @@ costs, raw outcome evaluation and meaningful disabled estimator control.
 No training modification/restart. Full alternatives, pros/cons and source map:
 docs/human-switch-pbrs-2026-09-11.md.
 
+## Fair-information service potential MCTS — 2026-09-11
+
+User requested a service-only MCTS baseline with tests and explicitly selected
+fair information. Added eval index3/potentialmcts; Python only registers its eval
+name. No model inference, default eval selection, training reward or live run
+changed. Source/usage/support: service/src/server/baselines/README.md.
+
+Own request + public client snapshot only; no live sim/opponent/private opposing
+request/submitted choice/RNG access. Reconstruct sampled worlds with own known
+stats/HP/moves/PP, public boosts/ordinary tera/hazards and random-battle priors
+for hidden sets. Coarse determinisation, not exact posterior/history recovery.
+Open-loop decoupled UCT selects both players before resolving; terminal±1/0,
+unit-scale potential at leaves. PBRS eta/centred differences do not enter search.
+64-iteration/depth3-transition/100ms soft budget, up to3 sampled root worlds.
+
+MCTS only ordinary Gen9 singles roots. Explicit SimpleHeuristic fallback for
+preview/root replacement, doubles, weather/terrain, pseudo-weather/timed side
+conditions, sleep/toxic counters, complex volatiles/identity and unsupported set
+priors. Rollout-internal forced replacements work. Counters are worker-module
+local, not W&B/per-game persistence; strength evaluation must price fallback
+coverage. Potential coefficients now shared via rl/offline/position_potential_fit.json
+between the Python reference and TypeScript leaf scorer.
+
+Found/fixed simulator clone alias: toJSON() hands out the live log array and
+fromJSON(object) reuses it. Reusing that object across rollouts grew logs until
+its1000-unsent-line guard threw "Infinite loop". Cache JSON STRING snapshots;
+fromJSON now parses fresh arrays.80-rollout log/HP isolation regression passes.
+
+Validation:12 focused Vitest tests incl terminal/adversarial/leaf/deadline,
+public-only getter guards with public-change positive control, sampler facts,
+clone isolation, legal moves/forced replacements and real service decoder game.
+Final inspected game18 MCTS decisions +5 explicit unsupported fallbacks, last
+49 iterations/101ms. No strength claim. Nine Python potential tests passed;
+TypeScript typecheck/focused ESLint/Ruff/Black/Prettier/diff checks passed.
+No training restart or commit. Existing doubles alignment defect untouched.
+
+### Potential-MCTS versus SimpleHeuristic paired screen — 2026-09-11
+
+User requested head-to-head. Ran100 Gen9 random battles,50 independent seeded
+team pairs; algorithms exchange fixed rosters/sides within each pair, same
+battle seed. Unchanged64-iteration/depth3/100ms soft search budget, no learner,
+no policy tuning during the sample. MCTS45 wins / SimpleHeuristic55, no draws,
+truncations, failed games or rejected live choices. Pair-cluster percentile
+bootstrap95% interval37–53% (50k resamples, seed9711); not evidence of a strength
+advantage or conclusive inferiority. Pair outcomes:6 MCTS sweeps,11 heuristic
+sweeps,33 split. MCTS24/50 wins as p1 and21/50 as p2.
+
+Search used1221/2647 MCTS decisions (46.1%), or1221/2192 ordinary decisions
+(55.7%). Fallbacks:455 request,386 pokemon state,176 status timer,161 species
+prior,160 weather/terrain,25 side condition,33 rejected own sampled choice,
+30 rejected opponent sampled choice. The63 reconstruction/rollout choice
+rejections are search failures hidden by legal heuristic fallback, not live
+invalid actions; investigate before expanding/promoting this baseline.
+Mean successful search101.13ms and35.78 iterations; all MCTS decisions47.58ms
+mean/102.73ms p95 versus SimpleHeuristic0.0868ms mean/0.1724ms p95.
+Games took130.945s total. Voluntary switches167/2192 (7.62%) for hybrid MCTS
+versus26/2192 (1.19%) heuristic. More switching did not establish better play
+or more human switching. Cannot isolate leaf potential quality from shallow
+search, sampled-world errors and fallback coverage with this comparison.
+
+Reproducible runner:service/src/scripts/potential_mcts_h2h.ts. Local manifest,
+packed teams/seeds, per-game decisions and summary under
+runtime/potential-mcts-h2h-20260911/. No training changes. Runner typecheck,
+ESLint and Prettier passed; all100 games exercised its actual battle path.
+
+### Search-only potentials and Jaxcalibur-style PUCT — 2026-09-11
+
+User authorised new search potentials while preserving original PBRS, ideally
+70% versus SimpleHeuristic; subsequently requested PUCT like
+https://jaxcalibur.github.io/#search. Enumerated differences from its public
+rule before implementing: heuristic rather than learned priors/value, action
+history rather than public-state hashes,3 coarse sampled worlds, small serial
+budget, no learned surprise/revelation cutoff. Simulated opponent can therefore
+overestimate its knowledge of our hidden set; actual policy still receives only
+own request/public observations, never live opposing truth/action/RNG.
+
+New search_potentials.ts registry retains original and adds material, strategic
+(status/boosts/hazards), tactical (damage/speed), roster-coverage leaves. No
+changes to Python PBRS potential or shared coefficient JSON. New search_priors.ts
+contains uniform/tactical priors; tactical uses softmax with5% uniform mass.
+New puct.ts samples weights max(Q−V,0)+cpuct/sqrt(max(1,N))*P for each side;
+opponent Q/V reverse sign. Unvisited Q=V; no forced initial coverage. V is mean
+backed-up return, units[-1,1], cpuct1 initial tested coefficient. Existing UCT
+is preserved as a control within shared rollout/backups/disposal code.
+
+Twelve configurations,40 tuning games each, seeds101–120, paired fixed teams
+and battle RNG with algorithms exchanging sides/rosters.100ms soft budget:
+UCT depth3 original19/material15/strategic19/tactical20/roster17 wins;
+UCT depth1 original23/strategic14/tactical21. PUCT depth1 original+uniform18,
+original+tactical30, tactical+tactical26; PUCT depth3 original+tactical23.
+Selected/froze original leaf + tactical priors + PUCT cpuct1/depth1/256 cap/100ms.
+The75% tuning score did NOT generalise to70%.
+
+Fresh validation seeds1001–1100:120/200 wins (60%), pair-bootstrap95%CI54.5–65.5%,
+50k resamples seed9711. Original UCT depth3/64cap/100ms matched control on first
+100 games won43; selected PUCT won59 on that exact subset. Verified packed
+teams/seeds/sides equal. Paired improvement16pp,95%CI+7 to+25pp. Of50 team pairs,
+20 improved,5 worsened,25 tied. Combined selector/prior/depth improvement, not a
+pure selector-only ablation. No70% claim and no changes after viewing heldout
+outcomes. Those validation seeds are now spent for future candidate selection.
+
+PUCT searched2428/4626 ordinary decisions (52.5%;44.0% of5524 requests), mean
+100.63ms/57.78iterations per successful search.200 games256.45s.59 sampled
+trapping-choice rejections, zero rejected live actions/failed games/truncations.
+Voluntary switches177/4626=3.83%. UCT control100 games126.35s,1173 searches,
+mean101.16ms/35.97iterations,153/2572=5.95% voluntary switches. More switching
+was not the mechanism of improvement. Additional sampled failures at depth3
+identified Revival Blessing's fainted replacement target; not fixed mid-run.
+
+Baseline3 defaults now select tested PUCT configuration; baseline2 remains
+learner eval default. New code takes effect after service rebuild; none launched.
+Reproduction:service/src/scripts/potential_mcts_h2h.ts defaults to chosen config,
+accepts explicit controls and seed offsets, persists resolved manifests and all
+game records. Local780-game results/comparison:runtime/search-potentials-20260911/.
+Docs:docs/search-potentials-2026-09-11.md (local), baselines/README.md (repo).
+25 focused Vitest tests passed incl prior override by terminal wins, matching
+pennies opponent-sign positive control, prior/leaf purity and real service game.
+Typecheck/focused ESLint/Prettier/diff checks passed. No training restart,
+learner shaping modification or commit. Retain all controls; do not equate this
+adaptation's60% with Jaxcalibur's neural system or infer PBRS learning benefit.
+
+### Service-side one-turn matrix regret matching — 2026-09-11
+
+User asked to try CFR-style search service-side after discussing a one-turn
+cached-payoff experiment. Reference examined: Zinkevich et al.2007
+https://papers.nips.cc/paper_files/paper/2007/file/08d98638c6fcd194a4b1e6992063e944-Paper.pdf.
+Explicit differences: ordinary regret matching on a restricted one-step Bayesian
+game, not full-game CFR/safe re-solving; no recursive information-set traversal;
+3 equally weighted sampled opposing worlds; top3 own actions shared across
+worlds/top3 opposing replies per world; original potential at nonterminal leaves.
+Opponent can condition on sampled own set; existing overknowledge of our hidden
+set remains. No real opposing private data/submitted action/live RNG access.
+
+regret_matching.ts: signed cumulative regrets, positive-part normalisation,
+uniform zero-positive-regret policy, simultaneous updates, arithmetic average
+strategies;1024 iterations. Own policy shared across worlds; opponent policies
+world-specific. Tests expose false clairvoyant per-world solving and verify
+an asymmetric mixed equilibrium, opponent response sign, dominance and gap.
+matrix_search.ts: cached per-world payoffs; no missing-cell zero imputation.
+Top3 action restriction is explicit, with legal/retained counts in diagnostics.
+256 clone-call cap includes3 inspection clones;100ms soft deadline reserves5ms
+for solving. Incomplete first sweep falls back with matrix_budget_incomplete.
+Final action is sampled from averaged policy, not most-visited/argmax.
+
+Caught deployment random draw coupled to observation-hash search RNG in a
+preliminary49-game run (runtime/matrix-search-20260911/matrix/). Stopped own
+process; results superseded, not used for selection. Corrected live sampling to
+independent private cryptographic randomness, benchmark to separate seeded actor
+streams (9712,pair+offset+1,game+1,side+1). Regression holds simulated payoffs and
+root probabilities fixed while changing only deployment draw. Corrected
+configuration frozen before fresh seeds3001–3050; no outcome-based retuning.
+
+Fresh matched100 games each: matrix51 wins, PUCT56. Matrix95%CI42–60%, PUCT46–65%.
+Verified packed teams/battle seeds/sides equal. Paired matrix−PUCT difference−5pp,
+95%CI−17 to+7pp,50k whole-pair bootstrap resamples seed9711. No demonstrated
+improvement or conclusive inferiority; do not generalise this to full CFR.
+Neither meets70%. Keep PUCT/default baseline3 unchanged and retain matrix as
+selection:"matrix" experiment via shared service factory/H2H runner.
+
+Matrix1519/2396 ordinary searches(63.4%), PUCT1393/2312(60.3%). Matrix two
+incomplete-coverage fallbacks/no sampled choice failures; PUCT six sampled
+trapping-choice failures. Both zero live invalid choices, failed games, draws,
+truncations. Matrix mean97.02ms/67.16 clone calls/64.16 transitions,26.62 cells,
+2.96 retained own actions versus7.20 legal. Mean estimated-game gap0.000353 is
+not whole-battle exploitability; only~2.4 payoff samples per cell. PUCT mean
+100.66ms/59.10 simulations. Game totals153.29s vs145.95s. Voluntary switches
+129/2396=5.38% vs90/2312=3.89%; increased switching did not establish improvement.
+Investigate payoff estimates/action restriction before more regret iterations.
+
+Local results/docs:runtime/matrix-search-20260911/{matrix-fresh,puct-fresh}/,
+comparison.json, docs/matrix-regret-search-2026-09-11.md; repo baselines/README.md.
+6 new tests plus25 existing=31 passed, including real service decoder battle.
+Typecheck/focused ESLint/Prettier/diff checks passed. PBRS functions/coefficients,
+learner rewards, training/live service unchanged. No rebuild, restart or commit.
+Fresh seeds3001–3050 are now spent for future unseen-validation claims.
+
+### 2026-09-11 — Service payoff reliability: response distribution before more worlds
+
+40 paired PUCT/SimpleHeuristic games seeds5001–5020; public-only audit recorded
+146 attempted roots,68 eligible,first2/game ->54. Supported nonterminal singles
+slice excludes faint/pivot/request/status/weather boundaries; not whole-game or
+doubles evidence. Offline16 worlds×16 chance draws, actual resolved public reply
+used only as retrospective conditional diagnostic. 864worlds attempted,768built,
+675support actual reply;46matched roots/29games. Original potential unchanged.
+Next-potential RMSE:copy.08585,conditional.03400,initial tactical reply prior.06638,
+adaptive production-budget PUCT first replay.07049,average4replays.07237.
+Prior-minus-conditional MSE game-bootstrap95%CI[.00158,.00517]. These are scalar
+potential forecasts, not win calibration; adaptive opposing search need not model
+SimpleHeuristic. Actual reply top3 coverage58.8%worlds; exactprior mass15.8%,
+normal+Tera family31.6%. More regret iterations cannot restore missing responses.
+Conditional hidden-world variance share2.3%; does NOT include uncertainty removed
+by conditioning on actual move or excluded mechanics. Main residuals include
+misses, speed ties, full paralysis. Restricted38-root disjoint-world ranking audit:
+3world×2chance differsfrom reference6.89%,potential loss>.01 in2.66%;3×16 reduces
+to4.00%/.55%. Finite conditional subset reference is not optimal policy truth.
+PUCT action changed across4replays in26/46roots;medianoriginalarm visits32,mean
+estimate repeatSD.0190. Deadline iteration variability also contributes.
+
+Concretefix:mcts_simulator.setPriorSpecies maps Dex cosmetic formes and explicit
+Polteageist-Antique equivalence tocanonical random-set lookup,then retains observed
+species. All96failedworlds in6roots were faintedFlorges-Yellow/Polteageist-Antique/
+Minior-Orange,notactiveopponentunknownsets. Same864seeds nowallbuild. Otherbattle
+formes remain distinct; regressions coveridentity/HP/faint and noncosmeticcontrols.
+Forecastmetrics deliberately pre-fix;noexpanded-sample/post-fixwin claim. Recommend
+opposingactioncoverage/response modelling and chance replication before moreworlds;
+potential-to-winning alignment/depth still untested. Localdoc:
+docs/payoff-reliability-2026-09-11.md;data runtime/payoff-reliability-20260911/.
+Added public recorder and offline conditional/prior/PUCT replay tools. PBRS,
+learner/live service untouched; no rebuild/restart/commit.
+Validation:37 focused service tests passed including full decoder battle;
+TypeScript no-emit and focused ESLint passed. All864saved world constructions
+succeeded afterfix. No post-fix forecast or strength claim.
+
 ## Removal ledger — 2026-09-11 ActionEnum (structure-only, bit-identical)
 
 `ActionEnum` (41 values: 16 move sources, 6 reserves, 17 target slots and

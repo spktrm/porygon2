@@ -553,7 +553,11 @@ function generateTeamFromStratgies(strategies: string[]) {
 }
 
 export async function runBattle(
-    options: { smogonFormat?: string; controlledOpponent?: boolean } = {},
+    options: {
+        smogonFormat?: string;
+        controlledOpponent?: boolean;
+        baselineIndex?: number;
+    } = {},
 ) {
     console.log("Creating battle...");
 
@@ -568,7 +572,12 @@ export async function runBattle(
         teamGenerationStrategies.push(Teams.pack(Teams.generate(smogonFormat)));
     }
 
-    const evalIndex = Math.floor(Math.random() * numEvals);
+    let evalIndex: number;
+    if (options.baselineIndex === undefined) {
+        evalIndex = Math.floor(Math.random() * numEvals);
+    } else {
+        evalIndex = options.baselineIndex;
+    }
     const battleOptions = {
         p1Name: "Bot1",
         p2Name: options.controlledOpponent

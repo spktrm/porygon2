@@ -15,9 +15,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     num_player_actors: int = 12
     num_builder_actors: int = 4
     # The service baseline both eval slots play (service/src/server/eval.ts:
-    # 0=random, 1=default, 2=simple_heuristic); the index travels in the env
-    # username suffix and the baseline name in the metric key. The
-    # strongest: Random/Default were saturated (93%/72% at 163k steps).
+    # 0=random, 1=default, 2=simple_heuristic, 3=potential_mcts); the index
+    # travels in the env username suffix and the name in the metric key.
+    # SimpleHeuristic is the established harder control; potential MCTS is
+    # experimental. Random/Default were saturated (93%/72% at 163k steps).
     # The slate itself is fixed at two slots (rl/online/main.py, 2026-09-09):
     # `plain-t1`, the EMA params sampled exactly as the training actors
     # sample them, and `thresholded`, the same params sampled with
