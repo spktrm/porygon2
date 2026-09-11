@@ -1,4 +1,3 @@
-import functools
 import math
 from typing import NamedTuple
 
@@ -203,6 +202,52 @@ class SlotConditioning(nn.Module):
         )
 
 
+def zero_scalar(rows: jax.Array, name: str) -> jax.Array:
+    """A zero-init single-factor scalar over live rows, (..., rows, 1): no
+    stall mode (one zero factor over a live input moves at step 1)."""
+    return nn.Dense(
+        1,
+        kernel_init=nn.initializers.zeros_init(),
+        use_bias=False,
+        dtype=rows.dtype,
+        name=name,
+    )(rows)
+
+
+def bilinear_pair(
+    src_rows: jax.Array,
+    tgt_rows: jax.Array,
+    *,
+    qk_size: int,
+    query_name: str,
+    key_name: str,
+    src_name: str | None = None,
+    tgt_name: str | None = None,
+) -> jax.Array:
+    """THE pair form, written once (hoisted from FlatActionReadout
+    2026-09-12 so the pairwise critic is a call to it, not a copy): a
+    bilinear between every source row and every target row, (..., S, T) in
+    the rows' dtype, plus -- when named -- a scalar on each side. The
+    source-side `query` is the zero factor: the product is exactly 0 at
+    init, d/d query is a rank-1 outer product of LIVE inputs so it moves at
+    step 1, and `key` (gradient proportional to query) unfreezes at step 2
+    (FlatActionReadout's docstring carries the argument). Submodules
+    register on the calling compact module under the given names, so the
+    parameter tree is the caller's."""
+    dtype = src_rows.dtype
+    zeros = nn.initializers.zeros_init()
+    query = nn.Dense(
+        qk_size, kernel_init=zeros, use_bias=False, dtype=dtype, name=query_name
+    )(src_rows)
+    key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=key_name)(tgt_rows)
+    logits = jnp.einsum("...sq,...tq->...st", query, key) / math.sqrt(qk_size)
+    if src_name is not None:
+        logits = logits + zero_scalar(src_rows, src_name)
+    if tgt_name is not None:
+        logits = logits + zero_scalar(tgt_rows, tgt_name)[..., 0][..., None, :]
+    return logits
+
+
 class FlatActionReadout(nn.Module):
     """The whole action readout: three small heads over named trunk rows.
 
@@ -266,30 +311,7 @@ class FlatActionReadout(nn.Module):
         temp: float = 1.0,
         decision_slot: int = 0,
     ) -> jax.Array:
-        dtype = private_rows.dtype
-        zeros = nn.initializers.zeros_init()
-        scalar_head = functools.partial(
-            nn.Dense, features=1, kernel_init=zeros, use_bias=False, dtype=dtype
-        )
-
         qk_size = self.cfg.qk_size
-
-        def pair_logits(src_rows, tgt_rows, query_name, key_name, src_name, tgt_name):
-            """THE pair form, written once for both pair blocks: a bilinear
-            between every source row and every target row, plus a scalar on
-            each side. The source-side `query` is the zero factor."""
-            query = nn.Dense(
-                qk_size, kernel_init=zeros, use_bias=False, dtype=dtype, name=query_name
-            )(src_rows)
-            key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=key_name)(
-                tgt_rows
-            )
-            logits = jnp.einsum("...sq,...tq->...st", query, key) / math.sqrt(qk_size)
-            return (
-                logits
-                + scalar_head(name=src_name)(src_rows)
-                + scalar_head(name=tgt_name)(tgt_rows)[..., 0][..., None, :]
-            )
 
         # The switch block is sheet rows x the ALLY row of the active slot a
         # switch replaces (2026-09-11). `switch` keeps its name as the
@@ -299,18 +321,25 @@ class FlatActionReadout(nn.Module):
         ally_row = jnp.take(
             target_rows, ALLY_TARGET_ROWS[decision_slot : decision_slot + 1], axis=-2
         )
-        switch_logit = pair_logits(
+        switch_logit = bilinear_pair(
             private_rows,
             ally_row,
-            "switch_query",
-            "switch_key",
-            "switch",
-            "switch_local_tgt",
+            qk_size=qk_size,
+            query_name="switch_query",
+            key_name="switch_key",
+            src_name="switch",
+            tgt_name="switch_local_tgt",
         )[..., 0]
-        move_target = pair_logits(
-            move_rows, target_rows, "query", "key", "local_src", "local_tgt"
+        move_target = bilinear_pair(
+            move_rows,
+            target_rows,
+            qk_size=qk_size,
+            query_name="query",
+            key_name="key",
+            src_name="local_src",
+            tgt_name="local_tgt",
         )
-        other_logit = scalar_head(name="other")(target_rows)[..., 0]
+        other_logit = zero_scalar(target_rows, "other")[..., 0]
 
         cells = jnp.concatenate(
             (
