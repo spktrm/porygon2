@@ -41,6 +41,19 @@ from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.utils import open_zero_init_paths  # noqa: F401
 
 
+def session_player_model_config():
+    """The session model's config, written once: the fixture builds from it,
+    and so does any test that builds a second network to compare against
+    the fixture's params (a differing head set misaligns the output trees).
+    The PBRS channel's potential head (2026-09-11) is on, as it is whenever
+    the channel runs, so the slot-invariance and gradient-reach tests read it."""
+    from rl.model.config import get_player_model_config
+
+    config = get_player_model_config(generation=9, train=True)
+    config.potential_head.enabled = True
+    return config
+
+
 @pytest.fixture(scope="session")
 def real_model_and_trajectory() -> (
     tuple[nn.Module, dict, PlayerActorInput, PlayerActorOutput]
@@ -51,16 +64,10 @@ def real_model_and_trajectory() -> (
     import jax
 
     from rl.environment.utils import get_ex_player_step
-    from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model
 
-    config = get_player_model_config(generation=9, train=True)
-    # The PBRS channel's potential head (2026-09-11) exists whenever the
-    # channel runs; the session model carries it so the slot-invariance and
-    # gradient-reach tests read it.
-    config.potential_head.enabled = True
-    network = get_player_model(config)
+    network = get_player_model(session_player_model_config())
     actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     # Jitted init (2026-08-24): eager init dispatches the forward op by op
     # and compiles each nn.scan separately -- it was ~6 min of the slow

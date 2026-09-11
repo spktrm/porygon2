@@ -1727,10 +1727,11 @@ def test_newly_valid_split_reads_only_transitions_with_an_appearing_row() -> Non
 
 
 def _network_with_frozen_transition_value_head() -> nn.Module:
-    from rl.model.config import get_player_model_config
     from rl.model.player_model import get_player_model
+    from tests.conftest import session_player_model_config
 
-    cfg = get_player_model_config(generation=9, train=True)
+    # The session config, so the head set matches the fixture's params.
+    cfg = session_player_model_config()
     cfg.transition.value_trains_v_head = False
     return get_player_model(cfg)
 
@@ -1757,7 +1758,7 @@ def test_trains_v_head_off_is_bit_identical_to_the_frozen_clone(
         opened, actor_input, actor_output, HeadParams()
     )
     for (path, live_leaf), frozen_leaf in zip(
-        jax.tree_util.tree_leaves_with_path(live), jax.tree.leaves(frozen)
+        jax.tree_util.tree_leaves_with_path(live), jax.tree.leaves(frozen), strict=True
     ):
         np.testing.assert_array_equal(
             np.asarray(live_leaf),
