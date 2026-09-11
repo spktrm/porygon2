@@ -4917,3 +4917,41 @@ ckpt_00360000's EMA params over the bundled ex.bin: exactly `switch_query`,
 legal the mean switch probability goes .0524 -> .0644 (median .0458 ->
 .0555, about exp(0.2)), every legal logit finite. Revert handle: this
 commit.
+
+## Change ledger — 2026-09-11 smooth support hinge (numbers move)
+
+`support_hinge_loss` takes a `temperature` T (`player_support_temperature`,
+0.1): each legal cell scores T * softplus(log(tau_row / pi_a) / T) in place
+of max(0, log(tau_row / pi_a)); T = 0 is exactly the old hinge (no softplus)
+and every existing hinge test still runs there. From
+docs/porygon2_support_loss_recommendations.md, adopted at the user's call
+over an objection recorded here so the verdict can be read later:
+
+- The motivating harm (cells chattering across the kink) was never
+  measured. On uddwfke8 at 250k-360k the cells under the line rested about
+  20% below tau (mean ~.008 from loss / active fraction), held by a
+  pi-proportional PG push against the hinge's constant lift -- a stable
+  resting point below the line, not a pile-up at it -- where T = .1 gives
+  .90 of the hinge's lift. Minibatch averaging over states already smooths
+  the kink in what the optimiser sees.
+- It is not a pure smoothing: the lift now reaches ABOVE tau (~10% of full
+  at 1.25 tau, ~2% at 1.5 tau, ~.1% at 2 tau), so a cell the critic is
+  indifferent to rests near 1.2-1.5 tau, effectively a slightly higher floor,
+  and the 09-09 hinge's "exactly silent above the line" property -- chosen
+  because a force at every probability pinned entropy_micro_taken in sp75c --
+  is given up at small magnitude.
+- It lands in the same relaunch as the output norm, the live previous
+  action and the switch pair readout, so no strength or switching change
+  after the relaunch can be attributed to it alone.
+
+Kept: log-space (the rescue term on a starved cell stays pi-free, s -> 1),
+the feasibility clamp, bounded (<= 1) zero-sum derivative
+`mean(s) * pi_b - s_b / N`, tau .01, coefficient .05, and a HARD
+`player_support_active_fraction` (cells actually below the line). Tests:
+the derivative against jax.grad on a row with a cell at 1.2 tau (the soft
+band exercised), 0 < smooth - hard <= T log 2 at T = .1 and .01, a cell at
+1.2 tau lifted by the smooth loss and only pushed down by the hinge, illegal
+cells and a +-1e4 saturating row at both temperatures. Read it by
+`player_support_frac_below_p01` / `_p005` and the switch cells on the floor
+at the ~430k check; revert by setting the temperature to 0.0 (exact) or by
+reverting this commit.

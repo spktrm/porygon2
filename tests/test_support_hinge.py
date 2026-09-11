@@ -15,6 +15,7 @@ from rl.online.training.loss import support_hinge_loss
 
 TAU = 0.01
 TAU_MAX_MASS = 0.5
+TEMPERATURE = 0.1
 
 
 def _legal(cells: list[int], rows: int = 1) -> jax.Array:
@@ -24,11 +25,18 @@ def _legal(cells: list[int], rows: int = 1) -> jax.Array:
 
 
 def _loss(
-    legal: jax.Array, tau: float = TAU, tau_max_mass: float = TAU_MAX_MASS
+    legal: jax.Array,
+    tau: float = TAU,
+    tau_max_mass: float = TAU_MAX_MASS,
+    temperature: float = 0.0,
 ) -> Callable[[jax.Array], jax.Array]:
     def loss(logits: jax.Array) -> jax.Array:
         rows, _, _ = support_hinge_loss(
-            legal_log_policy(logits, legal), legal, tau, tau_max_mass
+            legal_log_policy(logits, legal),
+            legal,
+            tau,
+            tau_max_mass,
+            temperature=temperature,
         )
         return rows.sum()
 
@@ -63,10 +71,11 @@ def test_coefficient_zero_and_forced_rows_are_exactly_off() -> None:
     assert not np.any(np.asarray(jax.grad(_loss(legal))(logits)))
 
 
-def test_illegal_cells_are_never_scored() -> None:
+@pytest.mark.parametrize("temperature", [0.0, TEMPERATURE])
+def test_illegal_cells_are_never_scored(temperature: float) -> None:
     legal = _legal(FOUR)
     logits = jnp.zeros((1, NUM_ACTION_CELLS)).at[0, MOVE_CELL_OFFSET + 1].set(-9.0)
-    loss = _loss(legal)
+    loss = _loss(legal, temperature=temperature)
     # Moving an illegal logit by a lot changes nothing; its gradient is 0.
     shifted = logits.at[0, 5].set(40.0)
     assert float(loss(shifted)) == float(loss(logits))
@@ -130,13 +139,15 @@ def test_feasibility_clamp_binds_on_a_wide_row() -> None:
     np.testing.assert_allclose(float(tau_row[0]), TAU)
 
 
-def test_saturating_row_is_finite_and_bounded() -> None:
+@pytest.mark.parametrize("temperature", [0.0, TEMPERATURE])
+def test_saturating_row_is_finite_and_bounded(temperature: float) -> None:
     # A row saturated to one cell, logits at +-1e4: the loss is finite and
     # the gradient bounded by 1 with the starved cells lifted.
     legal = _legal(FOUR)
     logits = jnp.zeros((1, NUM_ACTION_CELLS)).at[0, FOUR].set([1e4, -1e4, -1e4, -1e4])
-    value = float(_loss(legal)(logits))
-    gradient = np.asarray(jax.grad(_loss(legal))(logits))[0]
+    loss = _loss(legal, temperature=temperature)
+    value = float(loss(logits))
+    gradient = np.asarray(jax.grad(loss)(logits))[0]
     assert np.isfinite(value) and value > 0.0
     assert np.all(np.isfinite(gradient)) and np.all(np.abs(gradient) <= 1.0)
     assert gradient[0] > 0.0 and all(gradient[cell] < 0.0 for cell in FOUR[1:])
@@ -151,3 +162,64 @@ def test_batched_rows_are_independent(rows: int) -> None:
     )
     assert float(row_losses[0]) > 0.0
     assert not np.any(np.asarray(row_losses)[1:])
+
+
+# --- the smooth hinge (temperature > 0, 2026-09-11) --------------------------
+
+# One cell 20% above tau (in the soft band), one starved at tau / 10.
+NEAR, STARVED = FOUR[2], FOUR[3]
+SOFT_ROW = [0.6, 0.387, 0.012, 0.001]
+
+
+def _soft_logits() -> jax.Array:
+    return (
+        jnp.zeros((1, NUM_ACTION_CELLS)).at[0, FOUR].set(jnp.log(jnp.asarray(SOFT_ROW)))
+    )
+
+
+def test_smooth_derivative_is_mean_activation_pi_minus_activation_over_n() -> None:
+    """At T > 0 the per-logit derivative is mean(s) * pi_b - s_b / N with
+    s = sigmoid(log(tau / pi) / T): bounded by 1 and zero-sum over the legal
+    cells, like the hinge's with the indicator smoothed."""
+    legal = _legal(FOUR)
+    logits = _soft_logits()
+    pi = np.asarray(SOFT_ROW, np.float64)
+    activation = 1.0 / (1.0 + np.exp(-np.log(TAU / pi) / TEMPERATURE))
+    assert 0.05 < activation[2] < 0.95  # the control: the soft band is exercised
+    expected = np.zeros(NUM_ACTION_CELLS)
+    expected[FOUR] = activation.mean() * pi - activation / 4
+    gradient = np.asarray(jax.grad(_loss(legal, temperature=TEMPERATURE))(logits))[0]
+    np.testing.assert_allclose(gradient, expected, atol=1e-6)
+    np.testing.assert_allclose(gradient.sum(), 0.0, atol=1e-6)
+    assert np.all(np.abs(gradient) <= 1.0)
+
+
+@pytest.mark.parametrize(
+    ("temperature", "minimum_excess"), [(TEMPERATURE, 1e-3), (0.01, 0.0)]
+)
+def test_smooth_loss_exceeds_the_hinge_by_at_most_t_log_two(
+    temperature: float, minimum_excess: float
+) -> None:
+    """T * softplus(x / T) - max(0, x) lies in (0, T log 2] per cell, so the
+    row loss (a mean over the four cells) sits above the hinge's and within
+    T log 2 of it -- the smooth loss tends to the hinge as T falls. At T = .1
+    the cell at 1.2 tau puts the excess well clear of zero; at T = .01 it is
+    ~1e-10, below f32 resolution on this loss, so only the bound is pinned."""
+    legal = _legal(FOUR)
+    logits = _soft_logits()
+    hard = float(_loss(legal)(logits))
+    smooth = float(_loss(legal, temperature=temperature)(logits))
+    assert hard > 0.0
+    assert minimum_excess <= smooth - hard <= temperature * np.log(2.0) + 1e-6
+
+
+def test_smooth_hinge_lifts_a_cell_just_above_tau_that_the_hinge_does_not() -> None:
+    """The property that changed, pinned so it cannot change back unnoticed:
+    at 1.2 tau the hinge only pushes the cell DOWN (its share of the zero-sum
+    term) while the smooth loss lifts it; far below tau the two lifts agree."""
+    legal = _legal(FOUR)
+    logits = _soft_logits()
+    hard = np.asarray(jax.grad(_loss(legal))(logits))[0]
+    smooth = np.asarray(jax.grad(_loss(legal, temperature=TEMPERATURE))(logits))[0]
+    assert hard[NEAR] > 0.0 and smooth[NEAR] < 0.0
+    np.testing.assert_allclose(smooth[STARVED], hard[STARVED], rtol=1e-2)

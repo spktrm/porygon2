@@ -597,6 +597,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # resting level. Confirm against player_switch_mass_choice in the
     # first 250k fresh decisions.
     player_support_tau: float = 2 * player_prune_threshold
+    # The hinge's smoothing width, in LOG-PROBABILITY space (2026-09-11, the
+    # user's call on docs/porygon2_support_loss_recommendations.md; the hard
+    # hinge's kink was not measured to cost anything first): each legal cell
+    # scores T * softplus(log(tau_row / pi) / T). At T = .1 a cell at tau/2
+    # takes .999 of the lift, at tau .5, at 1.25 tau ~.1 and at 2 tau ~.001,
+    # so the term is no longer exactly silent above the line and a cell the
+    # critic is indifferent to rests near 1.2-1.5 tau rather than at tau.
+    # 0.0 is exactly the hard hinge (loss.support_hinge_loss, no softplus).
+    player_support_temperature: float = 0.1
     # The FLAT SUPPORT HINGE (2026-09-09, loss.support_hinge_loss): over a
     # row's legal cells as flat complete actions, (1/N) sum_a max(0,
     # log(tau / pi_a)) -- every legal action held at tau, the term exactly

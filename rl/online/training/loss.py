@@ -61,6 +61,7 @@ def support_hinge_loss(
     legal_mask: jax.Array,
     tau: float,
     tau_max_mass: float = SUPPORT_TAU_MAX_MASS,
+    temperature: float = 0.0,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """The FLAT SUPPORT HINGE (2026-09-09): per row, over the legal cells
     read as flat complete actions (a move x target or a switch is one
@@ -84,17 +85,33 @@ def support_hinge_loss(
     the pressure permanent, so per row `tau_row = min(tau, tau_max_mass /
     N)`, returned so the caller can panel N * tau_row.
 
-    Returns (loss per row, fraction of legal cells under the line per row,
-    tau_row), all f32.
+    `temperature` T smooths the hinge in LOG-PROBABILITY space
+    (2026-09-11, docs/porygon2_support_loss_recommendations.md): each legal
+    cell scores T * softplus(deficit / T), deficit = log(tau_row / pi_a),
+    which tends to the hinge as T -> 0 and exceeds it by at most T * log 2
+    per cell; T = 0 IS the hinge, with no softplus at all. The derivative
+    becomes `mean(s) * pi_b - s_b / N`, s_a = sigmoid(deficit_a / T): still
+    bounded by 1, zero-sum and pi-free on a starved cell (s -> 1), but no
+    longer silent above the line -- at T = .1 a cell at 1.25 tau takes ~10%
+    of the lift and one at 2 tau ~0.1%.
+
+    Returns (loss per row, fraction of legal cells under the line per row --
+    a HARD count at any temperature -- and tau_row), all f32.
     """
     log_policy32 = log_policy.astype(jnp.float32)
     legal_count = jnp.maximum(legal_mask.sum(axis=-1), 1)
     tau_row = jnp.minimum(tau, tau_max_mass / legal_count)
     deficit = jnp.log(tau_row)[..., None] - log_policy32
-    active = legal_mask & (deficit > 0)
-    loss = jnp.where(active, deficit, 0.0).sum(axis=-1) / legal_count
-    active_fraction = active.sum(axis=-1) / legal_count
-    return loss, active_fraction, tau_row
+    below = legal_mask & (deficit > 0)
+    if temperature > 0:
+        # Masked BEFORE the softplus: an illegal cell's deficit can be +inf.
+        legal_deficit = jnp.where(legal_mask, deficit, -jnp.inf)
+        cell_loss = temperature * jax.nn.softplus(legal_deficit / temperature)
+    else:
+        cell_loss = jnp.where(below, deficit, 0.0)
+    loss = cell_loss.sum(axis=-1) / legal_count
+    below_fraction = below.sum(axis=-1) / legal_count
+    return loss, below_fraction, tau_row
 
 
 def spo_objective(

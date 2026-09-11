@@ -1426,12 +1426,17 @@ def train_step(
 
         # The flat support hinge (2026-09-09, loss.support_hinge_loss): the
         # one restoring force in this bracket, holding every legal cell at
-        # player_support_tau and exactly silent above it. It is not
+        # player_support_tau and, at temperature 0, exactly silent above it
+        # (smoothed in log space by player_support_temperature since
+        # 2026-09-11, nearly silent from 2 tau up). It is not
         # pi-prefactored on the cell it lifts, so it is the only term still
         # acting on an abandoned action; unlike the modality-marginal KL it
         # replaced it says nothing above the line, where the critic ranks.
         support_rows, support_active_rows, support_tau_row = support_hinge_loss(
-            learner_log_policy, flat_action_mask, config.player_support_tau
+            learner_log_policy,
+            flat_action_mask,
+            config.player_support_tau,
+            temperature=config.player_support_temperature,
         )
         loss_support = average(support_rows, policy_mask)
 

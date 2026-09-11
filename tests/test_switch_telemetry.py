@@ -23,6 +23,7 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
         player_ent_coef=0.01,
         player_mag_coef=0.2,
         player_support_tau=0.01,
+        player_support_temperature=0.1,
         player_support_hinge_coef=0.0025,
     )
     legal = jnp.zeros((4, NUM_ACTION_CELLS), dtype=bool)
@@ -70,7 +71,12 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
                 config.player_pg_coef
                 * config.player_support_hinge_coef
                 * average(
-                    support_hinge_loss(log_policy, legal, config.player_support_tau)[0],
+                    support_hinge_loss(
+                        log_policy,
+                        legal,
+                        config.player_support_tau,
+                        temperature=config.player_support_temperature,
+                    )[0],
                     valid,
                 ),
             ]
@@ -103,9 +109,10 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
         ]
     )
     np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-5)
-    # Every legal cell here sits above tau, so the hinge is exactly silent
-    # (its active case is tests/test_support_hinge.py's).
-    assert logs["player_switch_logit_grad_support"] == 0.0
+    # Every legal cell here sits ~25x above tau: the hard hinge would be
+    # exactly silent, the smooth one (T = .1) is silent to ~1e-14 of its
+    # activation (the active cases are tests/test_support_hinge.py's).
+    assert abs(float(logs["player_switch_logit_grad_support"])) < 1e-9
     assert logs["player_switch_logit_grad_pg_taken_switch"] < 0
     assert abs(float(logs["player_switch_logit_grad_actor_total"])) > 0.01
     np.testing.assert_allclose(
