@@ -155,6 +155,20 @@ class Porygon2BuilderTrainState(train_state.TrainState):
     frame_count: int = 0
 
 
+def player_model_config_for(learner_config: Porygon2LearnerConfig):
+    """The learner's player model config with every learner-config toggle
+    applied: main.py builds the learner network from this, and so do the
+    offline screens, so a screen replays a checkpoint-mode relaunch exactly."""
+    from rl.model.config import get_player_model_config
+
+    model_config = get_player_model_config(learner_config.generation, train=True)
+    model_config.transition.value_trains_v_head = (
+        learner_config.player_transition_value_trains_v_head
+    )
+    model_config.potential_head.enabled = learner_config.player_potential_strength > 0
+    return model_config
+
+
 def create_train_state(
     player_network: nn.Module,
     builder_network: nn.Module,

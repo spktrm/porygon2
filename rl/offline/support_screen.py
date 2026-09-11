@@ -45,12 +45,15 @@ from rl.environment.utils import acted_rows
 from rl.model.builder_model import get_builder_model
 from rl.model.config import (
     get_builder_model_config,
-    get_player_model_config,
 )
 from rl.model.player_model import get_player_model
 from rl.model.utils import prune_log_policy
 from rl.offline import harness
-from rl.online.artifact import create_train_state, load_from_checkpoint
+from rl.online.artifact import (
+    create_train_state,
+    load_from_checkpoint,
+    player_model_config_for,
+)
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.batching import stack_batch
 from rl.online.training.train_step import TRAIN_STEP_JIT
@@ -93,9 +96,7 @@ SECOND_STEP_KEYS = (
 def restored_states(checkpoint: str, config: Porygon2LearnerConfig):
     """The learner's own restore: params, EMA target, reference, optimiser
     moments — so the applied update is the restored Adam's, not a fresh one."""
-    player_net = get_player_model(
-        get_player_model_config(config.generation, train=True)
-    )
+    player_net = get_player_model(player_model_config_for(config))
     builder_net = get_builder_model(
         get_builder_model_config(config.generation, train=True)
     )
@@ -108,12 +109,19 @@ def restored_states(checkpoint: str, config: Porygon2LearnerConfig):
     return jax.device_get(player_state), jax.device_get(builder_state)
 
 
-def record_chunks(config, target_params, games: int, seed: int, device: str):
+def record_chunks(
+    config,
+    target_params,
+    games: int,
+    seed: int,
+    device: str,
+    tag: str = "support-screen",
+):
     sides = harness.play_games(
         target_params,
         games,
         pairs=4,
-        tag="support-screen",
+        tag=tag,
         seed=seed,
         opponent="self",
         temperature=1.0,
