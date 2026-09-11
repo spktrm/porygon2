@@ -5,6 +5,7 @@ preallocation disabled by conftest so it coexists with a live learner).
 Marked slow (~1 min): deselect with `-m "not slow"` for the quick suite.
 """
 
+import dataclasses
 from collections.abc import Callable
 
 import flax.linen as nn
@@ -12,13 +13,24 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from flax import traverse_util
 
+from rl.environment.data import MOVE_CELL_OFFSET, NUM_TARGET_SLOTS, OTHER_CELL_OFFSET
 from rl.environment.interfaces import (
     PlayerActorInput,
     PlayerActorOutput,
     PlayerEnvOutput,
 )
-from rl.model.constants import NUM_FIELD_ROWS, NUM_PUBLIC_SLOTS, PRIVATE_ROWS
+from rl.environment.protos.features_pb2 import InfoFeature
+from rl.model.constants import (
+    MOVE_ROWS,
+    NUM_FIELD_ROWS,
+    NUM_PUBLIC_SLOTS,
+    PRIVATE_ROWS,
+    SEQUENCE_SLICES,
+    TARGET_ROWS,
+    SequenceGroup,
+)
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
@@ -78,6 +90,14 @@ def test_forward_is_deterministic(
 def _assembled_rows(
     network: nn.Module, params: dict, actor_input: PlayerActorInput
 ) -> np.ndarray:
+    """`_assembled_step_rows` at the trajectory's first timestep."""
+    env_step = jax.tree.map(lambda x: x[0], actor_input.env)
+    return _assembled_step_rows(network, params, env_step)
+
+
+def _assembled_step_rows(
+    network: nn.Module, params: dict, env_step: PlayerEnvOutput
+) -> np.ndarray:
     """The trunk's input sequence for one timestep, BEFORE any attention.
 
     Every identity a row carries -- side, group, position -- is additive and
@@ -99,10 +119,73 @@ def _assembled_rows(
         )
         return sequence
 
-    env_step = jax.tree.map(lambda x: x[0], actor_input.env)
     return np.asarray(
         jax.jit(lambda p, e: network.apply(p, e, method=call))(params, env_step),
         dtype=np.float32,
+    )
+
+
+def _zeroed(params: dict, *names: str) -> dict:
+    """`params` with every leaf whose own name is in `names` set to zero."""
+    flat = traverse_util.flatten_dict(params)
+    return traverse_util.unflatten_dict(
+        {
+            path: jnp.zeros_like(leaf) if path[-1] in names else leaf
+            for path, leaf in flat.items()
+        }
+    )
+
+
+def test_prev_action_rows_are_the_rows_the_cell_names(
+    real_model_and_trajectory: tuple[
+        nn.Module, dict, PlayerActorInput, PlayerActorOutput
+    ],
+) -> None:
+    """The previous action is described by the rows its cell's logit is read
+    from (heads.chosen_bank_rows) -- for a move cell, its move row and its
+    target row -- not by a slot id.
+
+    With the three additive identities zeroed (the src/tgt tags and the group
+    bias) and every group's norm scale at its init of 1, each prev-action row
+    must equal the row it names exactly: same content, same dtype, same norm.
+    """
+    network, params, actor_input, _ = real_model_and_trajectory
+    move_block = np.asarray(actor_input.env.action_mask)[
+        :, MOVE_CELL_OFFSET:OTHER_CELL_OFFSET
+    ]
+    step = int(np.flatnonzero(move_block.any(-1))[0])
+    relative = int(np.flatnonzero(move_block[step])[0])
+    move_slot, target_slot = divmod(relative, NUM_TARGET_SLOTS)
+
+    env_step = jax.tree.map(lambda x: x[step], actor_input.env)
+    info = (
+        jnp.asarray(env_step.info).at[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION].set(1)
+    )
+    info = info.at[InfoFeature.INFO_FEATURE__PREV_ACTION_CELL].set(
+        MOVE_CELL_OFFSET + relative
+    )
+    named = dataclasses.replace(env_step, info=info)
+    prev_rows = SEQUENCE_SLICES[SequenceGroup.PREV_ACTION]
+
+    bare = _zeroed(
+        params, "prev_action_src_bias", "prev_action_tgt_bias", "sequence_group_bias"
+    )
+    rows = _assembled_step_rows(network, bare, named)
+    assert np.abs(rows[prev_rows]).max() > 0
+    np.testing.assert_array_equal(rows[prev_rows][0], rows[MOVE_ROWS][move_slot])
+    np.testing.assert_array_equal(rows[prev_rows][1], rows[TARGET_ROWS][target_slot])
+
+    # Controls: the src/tgt tags are live, so with them in place the rows
+    # differ; and with no previous action both rows are exactly zero.
+    tagged = _assembled_step_rows(
+        network, _zeroed(params, "sequence_group_bias"), named
+    )
+    assert not np.array_equal(tagged[prev_rows][0], tagged[MOVE_ROWS][move_slot])
+    absent = dataclasses.replace(
+        named, info=info.at[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION].set(0)
+    )
+    np.testing.assert_array_equal(
+        _assembled_step_rows(network, params, absent)[prev_rows], 0.0
     )
 
 

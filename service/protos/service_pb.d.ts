@@ -170,11 +170,6 @@ export class EnvironmentState extends jspb.Message {
   getInfo_asB64(): string;
   setInfo(value: Uint8Array | string): void;
 
-  getPackedActionMask(): Uint8Array | string;
-  getPackedActionMask_asU8(): Uint8Array;
-  getPackedActionMask_asB64(): string;
-  setPackedActionMask(value: Uint8Array | string): void;
-
   getHistoryEntityPublicCache(): Uint8Array | string;
   getHistoryEntityPublicCache_asU8(): Uint8Array;
   getHistoryEntityPublicCache_asB64(): string;
@@ -260,7 +255,6 @@ export class EnvironmentState extends jspb.Message {
 export namespace EnvironmentState {
   export type AsObject = {
     info: Uint8Array | string,
-    packedActionMask: Uint8Array | string,
     historyEntityPublicCache: Uint8Array | string,
     historyEntityRevealedCache: Uint8Array | string,
     historyEntityEdgeCache: Uint8Array | string,
@@ -455,51 +449,61 @@ export interface ModalityEnumMap {
 
 export const ModalityEnum: ModalityEnumMap;
 
-export interface ActionEnumMap {
-  ACTION_ENUM___UNSPECIFIED: 0;
-  ACTION_ENUM__DEFAULT: 1;
-  ACTION_ENUM__ALLY_1_TARGET: 2;
-  ACTION_ENUM__ALLY_1_PASS: 3;
-  ACTION_ENUM__ALLY_1_MOVE_1: 4;
-  ACTION_ENUM__ALLY_1_MOVE_2: 5;
-  ACTION_ENUM__ALLY_1_MOVE_3: 6;
-  ACTION_ENUM__ALLY_1_MOVE_4: 7;
-  ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: 8;
-  ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: 9;
-  ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: 10;
-  ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: 11;
-  ACTION_ENUM__ALLY_2_TARGET: 12;
-  ACTION_ENUM__ALLY_2_PASS: 13;
-  ACTION_ENUM__ALLY_2_MOVE_1: 14;
-  ACTION_ENUM__ALLY_2_MOVE_2: 15;
-  ACTION_ENUM__ALLY_2_MOVE_3: 16;
-  ACTION_ENUM__ALLY_2_MOVE_4: 17;
-  ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: 18;
-  ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: 19;
-  ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: 20;
-  ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: 21;
-  ACTION_ENUM__ENEMY_1_TARGET: 22;
-  ACTION_ENUM__ENEMY_2_TARGET: 23;
-  ACTION_ENUM__TARGET_AUTO: 24;
-  ACTION_ENUM__TARGET_ALL: 25;
-  ACTION_ENUM__TARGET_ALLY_SIDE: 26;
-  ACTION_ENUM__TARGET_FOE_SIDE: 27;
-  ACTION_ENUM__TARGET_ALLY_TEAM: 28;
-  ACTION_ENUM__TARGET_RANDOM_NORMAL: 29;
-  ACTION_ENUM__TARGET_ALL_ADJACENT: 30;
-  ACTION_ENUM__TARGET_ALL_ADJACENT_FOES: 31;
-  ACTION_ENUM__TARGET_ALLIES: 32;
-  ACTION_ENUM__RESERVE_1_SWITCH_IN: 33;
-  ACTION_ENUM__RESERVE_2_SWITCH_IN: 34;
-  ACTION_ENUM__RESERVE_3_SWITCH_IN: 35;
-  ACTION_ENUM__RESERVE_4_SWITCH_IN: 36;
-  ACTION_ENUM__RESERVE_5_SWITCH_IN: 37;
-  ACTION_ENUM__RESERVE_6_SWITCH_IN: 38;
-  ACTION_ENUM__ALLY_1_SWITCH: 39;
-  ACTION_ENUM__ALLY_2_SWITCH: 40;
+export interface MoveSlotMap {
+  MOVE_SLOT___UNSPECIFIED: 0;
+  MOVE_SLOT__ALLY_1_MOVE_1: 1;
+  MOVE_SLOT__ALLY_1_MOVE_2: 2;
+  MOVE_SLOT__ALLY_1_MOVE_3: 3;
+  MOVE_SLOT__ALLY_1_MOVE_4: 4;
+  MOVE_SLOT__ALLY_1_MOVE_1_WILDCARD: 5;
+  MOVE_SLOT__ALLY_1_MOVE_2_WILDCARD: 6;
+  MOVE_SLOT__ALLY_1_MOVE_3_WILDCARD: 7;
+  MOVE_SLOT__ALLY_1_MOVE_4_WILDCARD: 8;
+  MOVE_SLOT__ALLY_2_MOVE_1: 9;
+  MOVE_SLOT__ALLY_2_MOVE_2: 10;
+  MOVE_SLOT__ALLY_2_MOVE_3: 11;
+  MOVE_SLOT__ALLY_2_MOVE_4: 12;
+  MOVE_SLOT__ALLY_2_MOVE_1_WILDCARD: 13;
+  MOVE_SLOT__ALLY_2_MOVE_2_WILDCARD: 14;
+  MOVE_SLOT__ALLY_2_MOVE_3_WILDCARD: 15;
+  MOVE_SLOT__ALLY_2_MOVE_4_WILDCARD: 16;
 }
 
-export const ActionEnum: ActionEnumMap;
+export const MoveSlot: MoveSlotMap;
+
+export interface ReserveSlotMap {
+  RESERVE_SLOT___UNSPECIFIED: 0;
+  RESERVE_SLOT__RESERVE_1: 1;
+  RESERVE_SLOT__RESERVE_2: 2;
+  RESERVE_SLOT__RESERVE_3: 3;
+  RESERVE_SLOT__RESERVE_4: 4;
+  RESERVE_SLOT__RESERVE_5: 5;
+  RESERVE_SLOT__RESERVE_6: 6;
+}
+
+export const ReserveSlot: ReserveSlotMap;
+
+export interface TargetSlotMap {
+  TARGET_SLOT___UNSPECIFIED: 0;
+  TARGET_SLOT__DEFAULT: 1;
+  TARGET_SLOT__ALLY_1: 2;
+  TARGET_SLOT__ALLY_1_PASS: 3;
+  TARGET_SLOT__ALLY_2: 4;
+  TARGET_SLOT__ALLY_2_PASS: 5;
+  TARGET_SLOT__ENEMY_1: 6;
+  TARGET_SLOT__ENEMY_2: 7;
+  TARGET_SLOT__AUTO: 8;
+  TARGET_SLOT__ALL: 9;
+  TARGET_SLOT__ALLY_SIDE: 10;
+  TARGET_SLOT__FOE_SIDE: 11;
+  TARGET_SLOT__ALLY_TEAM: 12;
+  TARGET_SLOT__RANDOM_NORMAL: 13;
+  TARGET_SLOT__ALL_ADJACENT: 14;
+  TARGET_SLOT__ALL_ADJACENT_FOES: 15;
+  TARGET_SLOT__ALLIES: 16;
+}
+
+export const TargetSlot: TargetSlotMap;
 
 export interface ActionRequestKindMap {
   ACTION_REQUEST_KIND___UNSPECIFIED: 0;

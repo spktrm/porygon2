@@ -1,7 +1,6 @@
 /* simple_heuristic.ts
  * ------------------------------------------------------------------
- * A dependency-free "harder" baseline for the flattened (src, tgt)
- * action space. Roughly equivalent to poke-env's SimpleHeuristicsPlayer:
+ * A dependency-free "harder" baseline for the block action space. Roughly equivalent to poke-env's SimpleHeuristicsPlayer:
  *
  *   - Damaging moves are scored by an estimated-damage proxy:
  *         base power x type-effectiveness x STAB x accuracy x atk/def ratio
@@ -14,7 +13,7 @@
  *
  * Unlike max_dmg.ts / kaizo_plus.ts this uses only @pkmn/client + @pkmn/dex
  * (no @smogon/calc), so it runs without any extra dependency, and it emits
- * actions purely by scoring the legal (src, tgt) pairs from the action mask
+ * actions purely by scoring the legal block cells from the action mask
  * — so it is correct across singles / doubles / forceSwitch / teamPreview.
  * ------------------------------------------------------------------ */
 
@@ -22,93 +21,106 @@ import { Battle, Pokemon } from "@pkmn/client";
 import { AnyObject } from "@pkmn/sim";
 import { EvalActionFnType } from "../eval";
 import { StateHandler } from "../state";
+import { Action, MoveSlot, TargetSlot } from "../../../protos/service_pb";
 import {
-    Action,
-    ActionEnum,
-    ActionEnumMap,
-    ActionRequestKindMap,
-} from "../../../protos/service_pb";
-import { cellToEnumPair } from "../data";
+    MOVE_CELL_OFFSET,
+    MOVE_SLOT_INDICES,
+    NUM_TARGET_SLOTS,
+    OTHER_CELL_OFFSET,
+    TARGET_SLOT_INDICES,
+} from "../data";
 
 /* ----------------------------------------------------------------- */
-/* ----------------------- src classification ----------------------- */
+/* ----------------------- cell classification ---------------------- */
 /* ----------------------------------------------------------------- */
 
-/** ally index (0 / 1) and move slot (0-3) for a move/wildcard src, else null. */
-function decodeMoveSrc(src: number): { ally: number; slot: number } | null {
-    switch (src) {
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1:
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2:
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3:
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4:
+/** What a legal block cell asks for, in the terms the scoring reads. */
+type CellChoice =
+    | { kind: "switch"; teamIndex: number; ally: number }
+    | {
+          kind: "move";
+          ally: number;
+          slot: number;
+          wildcard: boolean;
+          target: number;
+      }
+    | { kind: "other"; target: number };
+
+/** ally index (0 / 1), move index (0-3) and wildcard flag of a move slot. */
+function decodeMoveSlot(moveSlot: number): {
+    ally: number;
+    slot: number;
+    wildcard: boolean;
+} {
+    switch (moveSlot) {
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_1:
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_2:
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_3:
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_4:
             return {
                 ally: 0,
-                slot: src - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
+                slot: moveSlot - MoveSlot.MOVE_SLOT__ALLY_1_MOVE_1,
+                wildcard: false,
             };
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD:
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD:
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD:
-        case ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_1_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_2_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_3_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_1_MOVE_4_WILDCARD:
             return {
                 ally: 0,
-                slot: src - ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
+                slot: moveSlot - MoveSlot.MOVE_SLOT__ALLY_1_MOVE_1_WILDCARD,
+                wildcard: true,
             };
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1:
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2:
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3:
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_1:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_2:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_3:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_4:
             return {
                 ally: 1,
-                slot: src - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
+                slot: moveSlot - MoveSlot.MOVE_SLOT__ALLY_2_MOVE_1,
+                wildcard: false,
             };
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD:
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD:
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD:
-        case ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_1_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_2_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_3_WILDCARD:
+        case MoveSlot.MOVE_SLOT__ALLY_2_MOVE_4_WILDCARD:
             return {
                 ally: 1,
-                slot: src - ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
+                slot: moveSlot - MoveSlot.MOVE_SLOT__ALLY_2_MOVE_1_WILDCARD,
+                wildcard: true,
             };
-        default:
-            return null;
     }
+    throw new Error(`Not a move slot: ${moveSlot}`);
 }
 
-function isWildcardSrc(src: number): boolean {
+/** A block cell decoded: the switch block names the team member coming in
+ * (battle switch or lead alike; the mask's active_slot says which ally half
+ * it replaces), the move block a (move slot, target slot) pair, the
+ * standalone block a target slot. */
+function decodeCell(cell: number, activeSlot: number): CellChoice {
+    if (cell < MOVE_CELL_OFFSET) {
+        return { kind: "switch", teamIndex: cell, ally: activeSlot };
+    }
+    if (cell < OTHER_CELL_OFFSET) {
+        const relative = cell - MOVE_CELL_OFFSET;
+        return {
+            kind: "move",
+            ...decodeMoveSlot(
+                MOVE_SLOT_INDICES[Math.floor(relative / NUM_TARGET_SLOTS)],
+            ),
+            target: TARGET_SLOT_INDICES[relative % NUM_TARGET_SLOTS],
+        };
+    }
+    return {
+        kind: "other",
+        target: TARGET_SLOT_INDICES[cell - OTHER_CELL_OFFSET],
+    };
+}
+
+function isPassTarget(target: number): boolean {
     return (
-        (src >= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD &&
-            src <= ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD) ||
-        (src >= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD &&
-            src <= ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD)
-    );
-}
-
-/** team-roster index (0-5) for a reserve slot index, else null. */
-function decodeReserveIndex(index: number): number | null {
-    if (
-        index >= ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN &&
-        index <= ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN
-    ) {
-        return index - ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN;
-    }
-    return null;
-}
-
-/** ally slot (0/1) for a battle-switch src, else null. */
-function decodeSwitchSrc(src: number): number | null {
-    if (src === ActionEnum.ACTION_ENUM__ALLY_1_SWITCH) {
-        return 0;
-    }
-    if (src === ActionEnum.ACTION_ENUM__ALLY_2_SWITCH) {
-        return 1;
-    }
-    return null;
-}
-
-function isPassSrc(src: number): boolean {
-    return (
-        src === ActionEnum.ACTION_ENUM__ALLY_1_PASS ||
-        src === ActionEnum.ACTION_ENUM__ALLY_2_PASS
+        target === TargetSlot.TARGET_SLOT__ALLY_1_PASS ||
+        target === TargetSlot.TARGET_SLOT__ALLY_2_PASS
     );
 }
 
@@ -352,38 +364,17 @@ function voluntarySwitchScore(
 /* --------------------------- main entry --------------------------- */
 /* ----------------------------------------------------------------- */
 
-function legalPairs(
+function legalChoices(
     legalCells: boolean[],
-    kind: number,
     activeSlot: number,
-): {
-    cell: number;
-    src: ActionEnumMap[keyof ActionEnumMap];
-    tgt: ActionEnumMap[keyof ActionEnumMap];
-}[] {
-    const pairs: {
-        cell: number;
-        src: ActionEnumMap[keyof ActionEnumMap];
-        tgt: ActionEnumMap[keyof ActionEnumMap];
-    }[] = [];
+): { cell: number; choice: CellChoice }[] {
+    const choices: { cell: number; choice: CellChoice }[] = [];
     for (let cell = 0; cell < legalCells.length; cell++) {
-        if (!legalCells[cell]) {
-            continue;
+        if (legalCells[cell]) {
+            choices.push({ cell, choice: decodeCell(cell, activeSlot) });
         }
-        // The scoring below still thinks in ActionEnum (src, tgt) terms;
-        // cellToEnumPair is the exact naming the grid used to carry.
-        const [src, tgt] = cellToEnumPair(
-            cell,
-            kind as ActionRequestKindMap[keyof ActionRequestKindMap],
-            activeSlot,
-        );
-        pairs.push({
-            cell,
-            src: src as ActionEnumMap[keyof ActionEnumMap],
-            tgt: tgt as ActionEnumMap[keyof ActionEnumMap],
-        });
     }
-    return pairs;
+    return choices;
 }
 
 export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
@@ -411,33 +402,31 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
     const activeReq = (request?.active ?? []) as AnyObject[];
 
     const defenderForTgt = (tgt: number): Pokemon | null => {
-        if (tgt === ActionEnum.ACTION_ENUM__ENEMY_2_TARGET) {
+        if (tgt === TargetSlot.TARGET_SLOT__ENEMY_2) {
             return oppSide.active[1] ?? oppSide.active[0] ?? null;
         }
         return oppSide.active[0] ?? oppSide.active[1] ?? null;
     };
 
-    let best: {
-        cell: number;
-        src: ActionEnumMap[keyof ActionEnumMap];
-        tgt: ActionEnumMap[keyof ActionEnumMap];
-        score: number;
-    } | null = null;
+    let best: { cell: number; score: number } | null = null;
 
-    for (const { cell, src, tgt } of legalPairs(
+    for (const { cell, choice } of legalChoices(
         legalCells,
-        structuredMask.getKind(),
         structuredMask.getActiveSlot(),
     )) {
-        let score = -1e4; // Default fallback for unhandled pairs
+        let score = -1e4; // Default fallback for unhandled cells
 
-        if (src === ActionEnum.ACTION_ENUM__DEFAULT || isPassSrc(src)) {
-            score = -1e6;
+        if (choice.kind === "other") {
+            if (
+                choice.target === TargetSlot.TARGET_SLOT__DEFAULT ||
+                isPassTarget(choice.target)
+            ) {
+                score = -1e6;
+            }
         } else {
-            const moveSrc = decodeMoveSrc(src);
-            if (moveSrc !== null) {
-                const attacker = mySide.active[moveSrc.ally];
-                const moveReq = activeReq[moveSrc.ally]?.moves?.[moveSrc.slot];
+            if (choice.kind === "move") {
+                const attacker = mySide.active[choice.ally];
+                const moveReq = activeReq[choice.ally]?.moves?.[choice.slot];
                 if (!attacker || !moveReq?.id) {
                     score = -1e5;
                 } else {
@@ -447,40 +436,33 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
                     score = scoreMove(
                         battle,
                         attacker,
-                        defenderForTgt(tgt),
+                        defenderForTgt(choice.target),
                         move,
                     );
-                    if (isWildcardSrc(src)) score -= 0.01;
+                    if (choice.wildcard) score -= 0.01;
                 }
             } else {
-                // Battle switch: (ALLY_i_SWITCH, RESERVE_j); team preview
-                // still encodes the chosen mon as the src.
-                const switchAlly = decodeSwitchSrc(src);
-                const teamIdx =
-                    switchAlly !== null
-                        ? decodeReserveIndex(tgt)
-                        : decodeReserveIndex(src);
-                if (teamIdx !== null) {
-                    const candidate = mySide.team[teamIdx];
-                    if (!candidate) {
-                        score = -1e5;
-                    } else if (isTeamPreview) {
-                        score = leadScore(candidate) - 0.001 * teamIdx;
+                // A battle switch or a team-preview lead: the team member it
+                // brings in, and the ally half it replaces.
+                const teamIdx = choice.teamIndex;
+                const candidate = mySide.team[teamIdx];
+                if (!candidate) {
+                    score = -1e5;
+                } else if (isTeamPreview) {
+                    score = leadScore(candidate) - 0.001 * teamIdx;
+                } else {
+                    const opp = oppSide.active[0] ?? null;
+                    const current = mySide.active[choice.ally];
+                    if (!current) {
+                        score =
+                            100 + (opp ? matchup(battle, candidate, opp) : 0);
                     } else {
-                        const opp = oppSide.active[0] ?? null;
-                        const current = mySide.active[switchAlly ?? 0];
-                        if (!current) {
-                            score =
-                                100 +
-                                (opp ? matchup(battle, candidate, opp) : 0);
-                        } else {
-                            score = voluntarySwitchScore(
-                                battle,
-                                current,
-                                candidate,
-                                opp,
-                            );
-                        }
+                        score = voluntarySwitchScore(
+                            battle,
+                            current,
+                            candidate,
+                            opp,
+                        );
                     }
                 }
             }
@@ -488,7 +470,7 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
 
         // TypeScript can track this synchronous mutation perfectly
         if (best === null || score > best.score) {
-            best = { cell, src, tgt, score };
+            best = { cell, score };
         }
     }
 

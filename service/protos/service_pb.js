@@ -22,7 +22,6 @@ var global =
     Function('return this')();
 
 goog.exportSymbol('proto.servicev2.Action', null, global);
-goog.exportSymbol('proto.servicev2.ActionEnum', null, global);
 goog.exportSymbol('proto.servicev2.ActionMask', null, global);
 goog.exportSymbol('proto.servicev2.ActionRequestKind', null, global);
 goog.exportSymbol('proto.servicev2.ClientRequest', null, global);
@@ -33,8 +32,11 @@ goog.exportSymbol('proto.servicev2.EnvironmentState', null, global);
 goog.exportSymbol('proto.servicev2.EnvironmentTrajectory', null, global);
 goog.exportSymbol('proto.servicev2.ErrorResponse', null, global);
 goog.exportSymbol('proto.servicev2.ModalityEnum', null, global);
+goog.exportSymbol('proto.servicev2.MoveSlot', null, global);
+goog.exportSymbol('proto.servicev2.ReserveSlot', null, global);
 goog.exportSymbol('proto.servicev2.ResetRequest', null, global);
 goog.exportSymbol('proto.servicev2.StepRequest', null, global);
+goog.exportSymbol('proto.servicev2.TargetSlot', null, global);
 goog.exportSymbol('proto.servicev2.WorkerRequest', null, global);
 goog.exportSymbol('proto.servicev2.WorkerRequest.RequestCase', null, global);
 goog.exportSymbol('proto.servicev2.WorkerResponse', null, global);
@@ -1448,7 +1450,6 @@ proto.servicev2.EnvironmentState.prototype.toObject = function(opt_includeInstan
 proto.servicev2.EnvironmentState.toObject = function(includeInstance, msg) {
   var f, obj = {
 info: msg.getInfo_asB64(),
-packedActionMask: msg.getPackedActionMask_asB64(),
 historyEntityPublicCache: msg.getHistoryEntityPublicCache_asB64(),
 historyEntityRevealedCache: msg.getHistoryEntityRevealedCache_asB64(),
 historyEntityEdgeCache: msg.getHistoryEntityEdgeCache_asB64(),
@@ -1504,10 +1505,6 @@ proto.servicev2.EnvironmentState.deserializeBinaryFromReader = function(msg, rea
     case 1:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setInfo(value);
-      break;
-    case 2:
-      var value = /** @type {!Uint8Array} */ (reader.readBytes());
-      msg.setPackedActionMask(value);
       break;
     case 3:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
@@ -1607,13 +1604,6 @@ proto.servicev2.EnvironmentState.serializeBinaryToWriter = function(message, wri
   if (f.length > 0) {
     writer.writeBytes(
       1,
-      f
-    );
-  }
-  f = message.getPackedActionMask_asU8();
-  if (f.length > 0) {
-    writer.writeBytes(
-      2,
       f
     );
   }
@@ -1772,48 +1762,6 @@ proto.servicev2.EnvironmentState.prototype.getInfo_asU8 = function() {
  */
 proto.servicev2.EnvironmentState.prototype.setInfo = function(value) {
   return jspb.Message.setProto3BytesField(this, 1, value);
-};
-
-
-/**
- * optional bytes packed_action_mask = 2;
- * @return {!(string|Uint8Array)}
- */
-proto.servicev2.EnvironmentState.prototype.getPackedActionMask = function() {
-  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
-};
-
-
-/**
- * optional bytes packed_action_mask = 2;
- * This is a type-conversion wrapper around `getPackedActionMask()`
- * @return {string}
- */
-proto.servicev2.EnvironmentState.prototype.getPackedActionMask_asB64 = function() {
-  return /** @type {string} */ (jspb.Message.bytesAsB64(
-      this.getPackedActionMask()));
-};
-
-
-/**
- * optional bytes packed_action_mask = 2;
- * Note that Uint8Array is not supported on all browsers.
- * @see http://caniuse.com/Uint8Array
- * This is a type-conversion wrapper around `getPackedActionMask()`
- * @return {!Uint8Array}
- */
-proto.servicev2.EnvironmentState.prototype.getPackedActionMask_asU8 = function() {
-  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
-      this.getPackedActionMask()));
-};
-
-
-/**
- * @param {!(string|Uint8Array)} value
- * @return {!proto.servicev2.EnvironmentState} returns this
- */
-proto.servicev2.EnvironmentState.prototype.setPackedActionMask = function(value) {
-  return jspb.Message.setProto3BytesField(this, 2, value);
 };
 
 
@@ -3553,48 +3501,60 @@ proto.servicev2.ModalityEnum = {
 /**
  * @enum {number}
  */
-proto.servicev2.ActionEnum = {
-  ACTION_ENUM___UNSPECIFIED: 0,
-  ACTION_ENUM__DEFAULT: 1,
-  ACTION_ENUM__ALLY_1_TARGET: 2,
-  ACTION_ENUM__ALLY_1_PASS: 3,
-  ACTION_ENUM__ALLY_1_MOVE_1: 4,
-  ACTION_ENUM__ALLY_1_MOVE_2: 5,
-  ACTION_ENUM__ALLY_1_MOVE_3: 6,
-  ACTION_ENUM__ALLY_1_MOVE_4: 7,
-  ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD: 8,
-  ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD: 9,
-  ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD: 10,
-  ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD: 11,
-  ACTION_ENUM__ALLY_2_TARGET: 12,
-  ACTION_ENUM__ALLY_2_PASS: 13,
-  ACTION_ENUM__ALLY_2_MOVE_1: 14,
-  ACTION_ENUM__ALLY_2_MOVE_2: 15,
-  ACTION_ENUM__ALLY_2_MOVE_3: 16,
-  ACTION_ENUM__ALLY_2_MOVE_4: 17,
-  ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD: 18,
-  ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD: 19,
-  ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD: 20,
-  ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD: 21,
-  ACTION_ENUM__ENEMY_1_TARGET: 22,
-  ACTION_ENUM__ENEMY_2_TARGET: 23,
-  ACTION_ENUM__TARGET_AUTO: 24,
-  ACTION_ENUM__TARGET_ALL: 25,
-  ACTION_ENUM__TARGET_ALLY_SIDE: 26,
-  ACTION_ENUM__TARGET_FOE_SIDE: 27,
-  ACTION_ENUM__TARGET_ALLY_TEAM: 28,
-  ACTION_ENUM__TARGET_RANDOM_NORMAL: 29,
-  ACTION_ENUM__TARGET_ALL_ADJACENT: 30,
-  ACTION_ENUM__TARGET_ALL_ADJACENT_FOES: 31,
-  ACTION_ENUM__TARGET_ALLIES: 32,
-  ACTION_ENUM__RESERVE_1_SWITCH_IN: 33,
-  ACTION_ENUM__RESERVE_2_SWITCH_IN: 34,
-  ACTION_ENUM__RESERVE_3_SWITCH_IN: 35,
-  ACTION_ENUM__RESERVE_4_SWITCH_IN: 36,
-  ACTION_ENUM__RESERVE_5_SWITCH_IN: 37,
-  ACTION_ENUM__RESERVE_6_SWITCH_IN: 38,
-  ACTION_ENUM__ALLY_1_SWITCH: 39,
-  ACTION_ENUM__ALLY_2_SWITCH: 40
+proto.servicev2.MoveSlot = {
+  MOVE_SLOT___UNSPECIFIED: 0,
+  MOVE_SLOT__ALLY_1_MOVE_1: 1,
+  MOVE_SLOT__ALLY_1_MOVE_2: 2,
+  MOVE_SLOT__ALLY_1_MOVE_3: 3,
+  MOVE_SLOT__ALLY_1_MOVE_4: 4,
+  MOVE_SLOT__ALLY_1_MOVE_1_WILDCARD: 5,
+  MOVE_SLOT__ALLY_1_MOVE_2_WILDCARD: 6,
+  MOVE_SLOT__ALLY_1_MOVE_3_WILDCARD: 7,
+  MOVE_SLOT__ALLY_1_MOVE_4_WILDCARD: 8,
+  MOVE_SLOT__ALLY_2_MOVE_1: 9,
+  MOVE_SLOT__ALLY_2_MOVE_2: 10,
+  MOVE_SLOT__ALLY_2_MOVE_3: 11,
+  MOVE_SLOT__ALLY_2_MOVE_4: 12,
+  MOVE_SLOT__ALLY_2_MOVE_1_WILDCARD: 13,
+  MOVE_SLOT__ALLY_2_MOVE_2_WILDCARD: 14,
+  MOVE_SLOT__ALLY_2_MOVE_3_WILDCARD: 15,
+  MOVE_SLOT__ALLY_2_MOVE_4_WILDCARD: 16
+};
+
+/**
+ * @enum {number}
+ */
+proto.servicev2.ReserveSlot = {
+  RESERVE_SLOT___UNSPECIFIED: 0,
+  RESERVE_SLOT__RESERVE_1: 1,
+  RESERVE_SLOT__RESERVE_2: 2,
+  RESERVE_SLOT__RESERVE_3: 3,
+  RESERVE_SLOT__RESERVE_4: 4,
+  RESERVE_SLOT__RESERVE_5: 5,
+  RESERVE_SLOT__RESERVE_6: 6
+};
+
+/**
+ * @enum {number}
+ */
+proto.servicev2.TargetSlot = {
+  TARGET_SLOT___UNSPECIFIED: 0,
+  TARGET_SLOT__DEFAULT: 1,
+  TARGET_SLOT__ALLY_1: 2,
+  TARGET_SLOT__ALLY_1_PASS: 3,
+  TARGET_SLOT__ALLY_2: 4,
+  TARGET_SLOT__ALLY_2_PASS: 5,
+  TARGET_SLOT__ENEMY_1: 6,
+  TARGET_SLOT__ENEMY_2: 7,
+  TARGET_SLOT__AUTO: 8,
+  TARGET_SLOT__ALL: 9,
+  TARGET_SLOT__ALLY_SIDE: 10,
+  TARGET_SLOT__FOE_SIDE: 11,
+  TARGET_SLOT__ALLY_TEAM: 12,
+  TARGET_SLOT__RANDOM_NORMAL: 13,
+  TARGET_SLOT__ALL_ADJACENT: 14,
+  TARGET_SLOT__ALL_ADJACENT_FOES: 15,
+  TARGET_SLOT__ALLIES: 16
 };
 
 /**

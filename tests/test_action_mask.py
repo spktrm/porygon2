@@ -2,7 +2,7 @@
 
 The mirror of `cellsFromStructuredMask` in `service/src/tests/harness.ts`,
 which asserts the same contract from the other side. Bit positions index the
-ActionEnum slot lists, never raw enum values, and the block offsets derive
+slot-enum value lists, never raw enum values, and the block offsets derive
 from the slot-list lengths, so these tests are also what pins the layout as
 the cross-language contract.
 """
@@ -11,20 +11,16 @@ import numpy as np
 import pytest
 
 from rl.environment.data import (
-    ALLY_SWITCH_INDICES,
     MOVE_CELL_OFFSET,
     MOVE_INDICES,
     NUM_ACTION_CELLS,
-    NUM_ACTION_FEATURES,
     NUM_SWITCH_CELLS,
     NUM_TARGET_SLOTS,
     OTHER_CELL_OFFSET,
     RESERVE_ENTITY_INDICES,
-    TARGET_SLOT_INDICES,
 )
 from rl.environment.protos.service_pb2 import ActionMask, ActionRequestKind
 from rl.environment.utils import (
-    _cells_from_packed_grid,
     _cells_from_structured_mask,
     get_action_mask,
 )
@@ -108,27 +104,6 @@ def test_a_request_with_no_choice_is_all_legal(kind: int) -> None:
     assert mask_vector.all()
 
 
-def test_legacy_grid_folds_onto_block_cells() -> None:
-    """The replay-shard shim: every reachable class of grid cell must land on
-    its block cell -- battle switch (ALLY_i_SWITCH src, RESERVE_j tgt) and
-    team-preview lead (RESERVE_j src) both onto switch cell j, a move onto
-    its (slot, target) cell, a diagonal standalone onto the other block."""
-    grid = np.zeros((NUM_ACTION_FEATURES, NUM_ACTION_FEATURES), dtype=bool)
-    grid[ALLY_SWITCH_INDICES[0], RESERVE_ENTITY_INDICES[2]] = True
-    grid[RESERVE_ENTITY_INDICES[4], TARGET_SLOT_INDICES[0]] = True
-    grid[MOVE_INDICES[3], TARGET_SLOT_INDICES[2]] = True
-    grid[TARGET_SLOT_INDICES[5], TARGET_SLOT_INDICES[5]] = True
-    assert cells(_cells_from_packed_grid(grid)) == {
-        2,
-        4,
-        move_cell(3, 2),
-        OTHER_CELL_OFFSET + 5,
-    }
-
-    # The WAIT sentinel -- an all-lit grid -- folds onto all-lit cells.
-    assert _cells_from_packed_grid(np.ones_like(grid)).all()
-
-
 def test_bundled_states_decode_to_real_decisions() -> None:
     """End to end on ex.bin: the fixture must carry the structured mask, and
     every state must offer at least one choice over the 295 cells."""
@@ -138,7 +113,6 @@ def test_bundled_states_decode_to_real_decisions() -> None:
     assert states, "ex.bin has no states"
     for state in states:
         assert state.HasField("structured_action_mask")
-        assert not state.packed_action_mask, "the packed grid is retired"
         mask_vector = get_action_mask(state)
         assert mask_vector.shape == (NUM_ACTION_CELLS,)
         assert mask_vector.sum() >= 1

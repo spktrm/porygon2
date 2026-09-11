@@ -77,7 +77,8 @@ import {
 import { TrainablePlayerAI } from "./runner";
 import {
     EnvironmentState,
-    ActionEnum,
+    MoveSlot,
+    TargetSlot,
     ActionMask,
     ActionRequestKind,
     ActionRequestKindMap,
@@ -3976,44 +3977,40 @@ export class StateHandler {
 
         const moveIndices = [
             [
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_1,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_2,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_3,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_4,
             ],
             [
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_1,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_2,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_3,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_4,
             ],
         ];
         const wildCardIndices = [
             [
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
-                ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_1_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_2_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_3_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_1_MOVE_4_WILDCARD,
             ],
             [
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
-                ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_1_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_2_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_3_WILDCARD,
+                MoveSlot.MOVE_SLOT__ALLY_2_MOVE_4_WILDCARD,
             ],
         ];
         const allyTargets = [
-            !!allyActive[0] ? ActionEnum.ACTION_ENUM__ALLY_1_TARGET : undefined,
-            !!allyActive[1] ? ActionEnum.ACTION_ENUM__ALLY_2_TARGET : undefined,
+            !!allyActive[0] ? TargetSlot.TARGET_SLOT__ALLY_1 : undefined,
+            !!allyActive[1] ? TargetSlot.TARGET_SLOT__ALLY_2 : undefined,
         ];
 
         const enemyTargets = [
-            !!enemyActive[0]
-                ? ActionEnum.ACTION_ENUM__ENEMY_1_TARGET
-                : undefined,
-            !!enemyActive[1]
-                ? ActionEnum.ACTION_ENUM__ENEMY_2_TARGET
-                : undefined,
+            !!enemyActive[0] ? TargetSlot.TARGET_SLOT__ENEMY_1 : undefined,
+            !!enemyActive[1] ? TargetSlot.TARGET_SLOT__ENEMY_2 : undefined,
         ];
 
         if (request === undefined || request === null) {
@@ -4034,8 +4031,8 @@ export class StateHandler {
                     activeSlot = i;
 
                     const rowColValPassValue = [
-                        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
-                        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+                        TargetSlot.TARGET_SLOT__ALLY_1_PASS,
+                        TargetSlot.TARGET_SLOT__ALLY_2_PASS,
                     ][i];
 
                     if (!mustSwitch) {
@@ -4085,8 +4082,8 @@ export class StateHandler {
                     activeSlot = i;
 
                     const rowColValPassValue = [
-                        ActionEnum.ACTION_ENUM__ALLY_1_PASS,
-                        ActionEnum.ACTION_ENUM__ALLY_2_PASS,
+                        TargetSlot.TARGET_SLOT__ALLY_1_PASS,
+                        TargetSlot.TARGET_SLOT__ALLY_2_PASS,
                     ][i];
                     if (
                         pokemon[i].condition.endsWith(` fnt`) ||
@@ -4171,53 +4168,53 @@ export class StateHandler {
                                     break;
                                 case "all":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_ALL,
+                                        TargetSlot.TARGET_SLOT__ALL,
                                     );
                                     break;
                                 case "allySide":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_ALLY_SIDE,
+                                        TargetSlot.TARGET_SLOT__ALLY_SIDE,
                                     );
                                     break;
                                 case "foeSide":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_FOE_SIDE,
+                                        TargetSlot.TARGET_SLOT__FOE_SIDE,
                                     );
                                     break;
                                 case "allyTeam":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_ALLY_TEAM,
+                                        TargetSlot.TARGET_SLOT__ALLY_TEAM,
                                     );
                                     break;
                                 case "randomNormal":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
+                                        TargetSlot.TARGET_SLOT__RANDOM_NORMAL,
                                     );
                                     break;
                                 case "allAdjacent":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT,
+                                        TargetSlot.TARGET_SLOT__ALL_ADJACENT,
                                     );
                                     break;
                                 case "allAdjacentFoes":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_ALL_ADJACENT_FOES,
+                                        TargetSlot.TARGET_SLOT__ALL_ADJACENT_FOES,
                                     );
                                     break;
                                 case "allies":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_ALLIES,
+                                        TargetSlot.TARGET_SLOT__ALLIES,
                                     );
                                     break;
                                 case "scripted":
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                        TargetSlot.TARGET_SLOT__AUTO,
                                     );
                                     break;
 
                                 default:
                                     tgtIndices.push(
-                                        ActionEnum.ACTION_ENUM__TARGET_AUTO,
+                                        TargetSlot.TARGET_SLOT__AUTO,
                                     );
                                     break;
                             }
@@ -4228,12 +4225,10 @@ export class StateHandler {
                                 }
                             } else if (["outrage"].includes(move.id)) {
                                 tgtIndices.push(
-                                    ActionEnum.ACTION_ENUM__TARGET_RANDOM_NORMAL,
+                                    TargetSlot.TARGET_SLOT__RANDOM_NORMAL,
                                 );
                             } else {
-                                tgtIndices.push(
-                                    ActionEnum.ACTION_ENUM__TARGET_AUTO,
-                                );
+                                tgtIndices.push(TargetSlot.TARGET_SLOT__AUTO);
                             }
                         }
 
@@ -4370,12 +4365,8 @@ export class StateHandler {
         // Publish here, not at the call site: the baselines build a mask on
         // their own StateHandler and never reach StateHandler.build, so an
         // assignment there would leave them decoding against an empty map.
-        // One assignment, at the one place a cell becomes legal. The kind and
-        // ally half ride along so the prev-action features can name the
-        // choice in ActionEnum terms after the fact.
+        // One assignment, at the one place a cell becomes legal.
         this.player.legalChoiceByCell = choiceByCell;
-        this.player.lastMaskKind = kind;
-        this.player.lastMaskActiveSlot = activeSlot;
 
         return { legalCells, choiceByCell, structuredMask };
     }
@@ -4737,15 +4728,12 @@ export class StateHandler {
         }
 
         infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 0;
-        if (!request?.teamPreview && this.player.actionEnumPairs.length > 0) {
+        if (!request?.teamPreview && this.player.actionCells.length > 0) {
             infoBuffer[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION] = 1;
-            // Named in ActionEnum (src, tgt) terms -- the feature vocabulary
-            // predates the block space and the replay shards carry it, so the
-            // conversion happens at decode time (runner.ts) rather than
-            // changing the wire meaning here.
-            const [prevSrc, prevTgt] = this.player.actionEnumPairs.at(-1)!;
-            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC] = prevSrc;
-            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT] = prevTgt;
+            // The block cell itself: the model names it by the readout rows
+            // that produce its logit (rl/model/constants.py CELL_BANK_*).
+            infoBuffer[InfoFeature.INFO_FEATURE__PREV_ACTION_CELL] =
+                this.player.actionCells.at(-1)!;
         }
 
         // INFO_FEATURE__STATE_POTENTIAL is left at 0: the hand-crafted

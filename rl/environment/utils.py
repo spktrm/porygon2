@@ -50,13 +50,10 @@ import numpy as np
 
 from constants import NUM_HISTORY
 from rl.environment.data import (
-    ALLY_SWITCH_INDICES,
     EX_BATCH,
     MOVE_CELL_OFFSET,
-    MOVE_INDICES,
     NUM_ABILITIES,
     NUM_ACTION_CELLS,
-    NUM_ACTION_FEATURES,
     NUM_ENTITY_EDGE_FEATURES,
     NUM_ENTITY_PRIVATE_FEATURES,
     NUM_ENTITY_PUBLIC_FEATURES,
@@ -73,8 +70,6 @@ from rl.environment.data import (
     NUM_TARGET_SLOTS,
     NUM_TYPECHART,
     OTHER_CELL_OFFSET,
-    RESERVE_ENTITY_INDICES,
-    TARGET_SLOT_INDICES,
 )
 from rl.environment.interfaces import (
     BuilderActorInput,
@@ -452,7 +447,7 @@ def _cells_from_structured_mask(mask: ActionMask) -> np.ndarray:
     The block layout is the flattening of ActionMask's own fields in field
     order (proto/service.proto `Action`): the 6 switch bits, then the 16x17
     move_targets rows, then the standalone bits. Bit positions index the
-    ActionEnum slot lists both sides build, never raw enum values, and `kind`
+    slot-enum value lists both sides build, never raw enum values, and `kind`
     only matters to the DECODER (lead vs switch choice string) -- the mask
     cells are the same either way.
     """
@@ -483,25 +478,6 @@ def _cells_from_structured_mask(mask: ActionMask) -> np.ndarray:
     return cells
 
 
-def _cells_from_packed_grid(grid: np.ndarray) -> np.ndarray:
-    """Block mask from a legacy 41x41 grid (replay shards only).
-
-    The inverse of the retired scatter over the ~18% reachable cells: battle
-    switches lived at (ALLY_i_SWITCH, RESERVE_j) and team-preview leads at
-    (RESERVE_j, tgt), both folding onto switch cell j; moves at
-    (MOVE_INDICES[m], TARGET_SLOT_INDICES[t]); standalone on the target-slot
-    diagonal. An all-lit grid (the WAIT sentinel) folds onto all-lit cells.
-    """
-    cells = np.zeros(NUM_ACTION_CELLS, dtype=bool)
-    switch_via_tgt = grid[ALLY_SWITCH_INDICES][:, RESERVE_ENTITY_INDICES].any(axis=0)
-    switch_via_src = grid[RESERVE_ENTITY_INDICES].any(axis=-1)
-    cells[:NUM_SWITCH_CELLS] = switch_via_tgt | switch_via_src
-    move_block = grid[MOVE_INDICES][:, TARGET_SLOT_INDICES]
-    cells[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET] = move_block.reshape(-1)
-    cells[OTHER_CELL_OFFSET:] = grid[TARGET_SLOT_INDICES, TARGET_SLOT_INDICES]
-    return cells
-
-
 def _decode_private_rows(raw: bytes) -> np.ndarray:
     """One private sheet -> (6, NUM_ENTITY_PRIVATE_FEATURES) int32.
 
@@ -524,15 +500,7 @@ def _decode_private_rows(raw: bytes) -> np.ndarray:
 
 
 def get_action_mask(state: EnvironmentState):
-    if state.HasField("structured_action_mask"):
-        return _cells_from_structured_mask(state.structured_action_mask)
-    # Replay shards predate the structured mask (2026-08-29) and carry the
-    # 1681-bit packed grid instead. Delete this branch, and the proto field it
-    # reads, when replays/shards is next rebuilt.
-    buffer = np.frombuffer(state.packed_action_mask, dtype=np.uint8)
-    mask = np.unpackbits(buffer, axis=-1)[: NUM_ACTION_FEATURES**2]
-    grid = mask.astype(bool).reshape(NUM_ACTION_FEATURES, NUM_ACTION_FEATURES)
-    return _cells_from_packed_grid(grid)
+    return _cells_from_structured_mask(state.structured_action_mask)
 
 
 def process_state(

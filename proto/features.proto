@@ -241,31 +241,32 @@ enum InfoFeature {
     INFO_FEATURE__NUM_ACTIVE = 8;
     INFO_FEATURE__REQUEST_TYPE = 9;
     INFO_FEATURE__HAS_PREV_ACTION = 10;
-    INFO_FEATURE__PREV_ACTION_SRC = 11;
-    INFO_FEATURE__PREV_ACTION_TGT = 12;
-    INFO_FEATURE__STATE_POTENTIAL = 13;
-    INFO_FEATURE__HISTORY_STEP_COUNT = 14;
+    // The block cell (service.proto `Action`) the previous request answered.
+    // The model names it by the readout rows that produce that cell's logit.
+    INFO_FEATURE__PREV_ACTION_CELL = 11;
+    INFO_FEATURE__STATE_POTENTIAL = 12;
+    INFO_FEATURE__HISTORY_STEP_COUNT = 13;
     // For each public team row (my side then opp side, actives sorted first),
     // the stable entity index used by ENTITY_EDGE_FEATURE__ENTITY_IDX, or -1
     // when the row is an unrevealed filler.
-    INFO_FEATURE__PUBLIC_ORDER_0 = 15;
-    INFO_FEATURE__PUBLIC_ORDER_1 = 16;
-    INFO_FEATURE__PUBLIC_ORDER_2 = 17;
-    INFO_FEATURE__PUBLIC_ORDER_3 = 18;
-    INFO_FEATURE__PUBLIC_ORDER_4 = 19;
-    INFO_FEATURE__PUBLIC_ORDER_5 = 20;
-    INFO_FEATURE__PUBLIC_ORDER_6 = 21;
-    INFO_FEATURE__PUBLIC_ORDER_7 = 22;
-    INFO_FEATURE__PUBLIC_ORDER_8 = 23;
-    INFO_FEATURE__PUBLIC_ORDER_9 = 24;
-    INFO_FEATURE__PUBLIC_ORDER_10 = 25;
-    INFO_FEATURE__PUBLIC_ORDER_11 = 26;
+    INFO_FEATURE__PUBLIC_ORDER_0 = 14;
+    INFO_FEATURE__PUBLIC_ORDER_1 = 15;
+    INFO_FEATURE__PUBLIC_ORDER_2 = 16;
+    INFO_FEATURE__PUBLIC_ORDER_3 = 17;
+    INFO_FEATURE__PUBLIC_ORDER_4 = 18;
+    INFO_FEATURE__PUBLIC_ORDER_5 = 19;
+    INFO_FEATURE__PUBLIC_ORDER_6 = 20;
+    INFO_FEATURE__PUBLIC_ORDER_7 = 21;
+    INFO_FEATURE__PUBLIC_ORDER_8 = 22;
+    INFO_FEATURE__PUBLIC_ORDER_9 = 23;
+    INFO_FEATURE__PUBLIC_ORDER_10 = 24;
+    INFO_FEATURE__PUBLIC_ORDER_11 = 25;
     // Pre-game ladder ratings from the replay log's |player| lines,
     // relative to the perspective (0 = unknown/unrated — always 0 in live
     // self-play). MUST be start-of-game ratings: post-game ratings leak
     // the result.
-    INFO_FEATURE__MY_RATING = 27;
-    INFO_FEATURE__OPP_RATING = 28;
+    INFO_FEATURE__MY_RATING = 26;
+    INFO_FEATURE__OPP_RATING = 27;
 }
 
 

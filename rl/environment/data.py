@@ -41,7 +41,13 @@ from rl.environment.protos.features_pb2 import (
     PackedSetFeature,
     RequestType,
 )
-from rl.environment.protos.service_pb2 import ActionEnum, EnvironmentBatch, ModalityEnum
+from rl.environment.protos.service_pb2 import (
+    EnvironmentBatch,
+    ModalityEnum,
+    MoveSlot,
+    ReserveSlot,
+    TargetSlot,
+)
 from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
@@ -73,7 +79,6 @@ NUM_FIELD_FEATURES = len(FieldFeature.keys())
 NUM_ENTITY_PRIVATE_FEATURES = len(EntityPrivateNodeFeature.keys())
 NUM_ENTITY_PUBLIC_FEATURES = len(EntityPublicNodeFeature.keys())
 NUM_ENTITY_REVEALED_FEATURES = len(EntityRevealedNodeFeature.keys())
-NUM_ACTION_FEATURES = len(ActionEnum.keys())
 NUM_MODALITY_FEATURES = len(ModalityEnum.keys())
 
 SPIKES_TOKEN = SideconditionEnum.SIDECONDITION_ENUM__SPIKES
@@ -249,77 +254,39 @@ EX_BUFFER = _read_ex_buffer()
 EX_BATCH = EnvironmentBatch.FromString(EX_BUFFER)
 
 
-MOVE_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
-    ]
-)
+def _slot_values(slots, keep_zero: bool) -> np.ndarray:
+    """A slot enum's values in ascending order: a slot's position in this list
+    is its ActionMask bit and its readout row (proto/service.proto).
+    MoveSlot and ReserveSlot drop protolint's zero sentinel; TargetSlot keeps
+    it as a slot (its proto comment says why). service/src/server/data.ts
+    builds the same three lists the same way."""
+    values = sorted(slots.values())
+    if not keep_zero:
+        values = [value for value in values if value != 0]
+    return np.array(values)
+
+
+MOVE_INDICES = _slot_values(MoveSlot, keep_zero=False)
 WILDCARD_MOVE_INDICES = np.array(
     [
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD,
-        ActionEnum.ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_1_MOVE_1_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_1_MOVE_2_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_1_MOVE_3_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_1_MOVE_4_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_2_MOVE_1_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_2_MOVE_2_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_2_MOVE_3_WILDCARD,
+        MoveSlot.MOVE_SLOT__ALLY_2_MOVE_4_WILDCARD,
     ]
 )
-RESERVE_ENTITY_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__RESERVE_1_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_2_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_3_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_4_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_5_SWITCH_IN,
-        ActionEnum.ACTION_ENUM__RESERVE_6_SWITCH_IN,
-    ]
-)
-ALLY_SWITCH_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_SWITCH,
-        ActionEnum.ACTION_ENUM__ALLY_2_SWITCH,
-    ]
-)
+RESERVE_ENTITY_INDICES = _slot_values(ReserveSlot, keep_zero=False)
+TARGET_SLOT_INDICES = _slot_values(TargetSlot, keep_zero=True)
 ALLY_TARGET_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ALLY_1_TARGET,
-        ActionEnum.ACTION_ENUM__ALLY_2_TARGET,
-    ]
+    [TargetSlot.TARGET_SLOT__ALLY_1, TargetSlot.TARGET_SLOT__ALLY_2]
 )
 ENEMY_TARGET_INDICES = np.array(
-    [
-        ActionEnum.ACTION_ENUM__ENEMY_1_TARGET,
-        ActionEnum.ACTION_ENUM__ENEMY_2_TARGET,
-    ]
+    [TargetSlot.TARGET_SLOT__ENEMY_1, TargetSlot.TARGET_SLOT__ENEMY_2]
 )
-
-
-for indices in [
-    MOVE_INDICES,
-    RESERVE_ENTITY_INDICES,
-    ALLY_SWITCH_INDICES,
-    ALLY_TARGET_INDICES,
-    ENEMY_TARGET_INDICES,
-]:
-    assert len(indices) == len(set(indices)), "Duplicate indices found"
-    indices.sort()
 
 
 # ---- the block action space (2026-08-31) -----------------------------------
@@ -332,10 +299,6 @@ for indices in [
 NUM_SWITCH_CELLS = len(RESERVE_ENTITY_INDICES)
 NUM_MOVE_SLOTS = len(MOVE_INDICES)
 MOVE_SLOT_INDICES = MOVE_INDICES
-TARGET_SLOT_INDICES = np.setdiff1d(
-    np.arange(NUM_ACTION_FEATURES),
-    np.concatenate([MOVE_INDICES, RESERVE_ENTITY_INDICES, ALLY_SWITCH_INDICES]),
-)
 NUM_TARGET_SLOTS = len(TARGET_SLOT_INDICES)
 MOVE_CELL_OFFSET = NUM_SWITCH_CELLS
 OTHER_CELL_OFFSET = MOVE_CELL_OFFSET + NUM_MOVE_SLOTS * NUM_TARGET_SLOTS

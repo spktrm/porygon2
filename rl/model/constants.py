@@ -29,7 +29,6 @@ from rl.environment.data import (
     ENEMY_TARGET_INDICES,
     MOVE_INDICES,
     NUM_ACTION_CELLS,
-    NUM_ACTION_FEATURES,
     RESERVE_ENTITY_INDICES,
     TARGET_SLOT_INDICES,
     WILDCARD_MOVE_INDICES,
@@ -280,11 +279,6 @@ for _head_row in (
 NUM_ACTIVES_PER_SIDE = 2
 MY_ACTIVE_PUBLIC_ROWS = np.arange(NUM_ACTIVES_PER_SIDE)
 OPP_ACTIVE_PUBLIC_ROWS = NUM_PUBLIC_SLOTS // 2 + np.arange(NUM_ACTIVES_PER_SIDE)
-
-assert (
-    NUM_ACTION_FEATURES
-    == len(MOVE_INDICES) + len(TARGET_SLOT_INDICES) + len(RESERVE_ENTITY_INDICES) + 2
-), "the action slots must partition into move / target / reserve / ally-switch"
 
 # Which of the 16 move rows are the wildcard (tera / mega / Z-move) shadow of
 # a regular slot. `my_moveset` row k IS action slot MOVE_INDICES[k], so this

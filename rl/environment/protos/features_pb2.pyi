@@ -200,8 +200,7 @@ class InfoFeature(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     INFO_FEATURE__NUM_ACTIVE: _ClassVar[InfoFeature]
     INFO_FEATURE__REQUEST_TYPE: _ClassVar[InfoFeature]
     INFO_FEATURE__HAS_PREV_ACTION: _ClassVar[InfoFeature]
-    INFO_FEATURE__PREV_ACTION_SRC: _ClassVar[InfoFeature]
-    INFO_FEATURE__PREV_ACTION_TGT: _ClassVar[InfoFeature]
+    INFO_FEATURE__PREV_ACTION_CELL: _ClassVar[InfoFeature]
     INFO_FEATURE__STATE_POTENTIAL: _ClassVar[InfoFeature]
     INFO_FEATURE__HISTORY_STEP_COUNT: _ClassVar[InfoFeature]
     INFO_FEATURE__PUBLIC_ORDER_0: _ClassVar[InfoFeature]
@@ -422,8 +421,7 @@ INFO_FEATURE__WIN_REWARD: InfoFeature
 INFO_FEATURE__NUM_ACTIVE: InfoFeature
 INFO_FEATURE__REQUEST_TYPE: InfoFeature
 INFO_FEATURE__HAS_PREV_ACTION: InfoFeature
-INFO_FEATURE__PREV_ACTION_SRC: InfoFeature
-INFO_FEATURE__PREV_ACTION_TGT: InfoFeature
+INFO_FEATURE__PREV_ACTION_CELL: InfoFeature
 INFO_FEATURE__STATE_POTENTIAL: InfoFeature
 INFO_FEATURE__HISTORY_STEP_COUNT: InfoFeature
 INFO_FEATURE__PUBLIC_ORDER_0: InfoFeature

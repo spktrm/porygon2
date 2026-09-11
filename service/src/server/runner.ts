@@ -13,17 +13,10 @@ import { Dex } from "@pkmn/dex";
 import { ChoiceRequest } from "@pkmn/sim/build/cjs/sim/side";
 import { ObjectReadWriteStream } from "@pkmn/sim/build/cjs/lib/streams";
 import { EventHandler, RewardTracker, StateHandler } from "./state";
-import { cellToEnumPair } from "./data";
+import { NO_CHOICE_CELL } from "./data";
 import { Protocol } from "@pkmn/protocol";
 import fs from "fs";
-import {
-    Action,
-    ActionEnum,
-    ActionRequestKind,
-    ActionRequestKindMap,
-    EnvironmentState,
-    StepRequest,
-} from "../../protos/service_pb";
+import { Action, EnvironmentState, StepRequest } from "../../protos/service_pb";
 import { evalActionMapping, numEvals } from "./eval";
 import { isBaselineUser, TaskQueueSystem } from "./utils";
 
@@ -168,21 +161,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     rqid: number;
     choices: string[];
     actions: Action[];
-    // The taken actions named in ActionEnum (src, tgt) terms, for the
-    // PREV_ACTION_SRC/TGT info features -- recorded at decode time, where the
-    // request kind that disambiguates a switch cell is still known.
-    actionEnumPairs: [number, number][];
+    // The block cells taken, for the PREV_ACTION_CELL info feature.
+    actionCells: number[];
     // block cell -> the Showdown choice string that cell means, rebuilt by
     // StateHandler.getActionMask on every request (and, in doubles, every
     // sub-decision). choiceFromAction is a lookup in it, so the mask and the
     // decoder cannot disagree about what a cell means. Empty until the first
     // state is built, and on requests that carry no choice.
     legalChoiceByCell: Map<number, string> = new Map();
-    // The request kind and ally half the current legalChoiceByCell was built
-    // for, published by getActionMask alongside the map.
-    lastMaskKind: ActionRequestKindMap[keyof ActionRequestKindMap] =
-        ActionRequestKind.ACTION_REQUEST_KIND___UNSPECIFIED;
-    lastMaskActiveSlot: number = 0;
     // How many choices this battle's sim rejected outright. Should be 0.
     invalidChoiceCount: number = 0;
 
@@ -222,7 +208,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.done = false;
         this.choices = [];
         this.actions = [];
-        this.actionEnumPairs = [];
+        this.actionCells = [];
 
         this.outgoingQueue = new AsyncQueue<EnvironmentState>();
         this.tasks = new TaskQueueSystem();
@@ -379,22 +365,12 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         const action = stepRequest.getAction()!;
         this.actions.push(action);
-        // Named in ActionEnum terms while the kind that disambiguates a
-        // switch cell is still current; a no-choice request (empty map)
-        // records DEFAULT.
+        // A request with no choice (empty map) records the DEFAULT
+        // standalone cell, whichever cell came back.
         if (this.legalChoiceByCell.size === 0) {
-            this.actionEnumPairs.push([
-                ActionEnum.ACTION_ENUM__DEFAULT,
-                ActionEnum.ACTION_ENUM__DEFAULT,
-            ]);
+            this.actionCells.push(NO_CHOICE_CELL);
         } else {
-            this.actionEnumPairs.push(
-                cellToEnumPair(
-                    action.getCell(),
-                    this.lastMaskKind,
-                    this.lastMaskActiveSlot,
-                ),
-            );
+            this.actionCells.push(action.getCell());
         }
 
         return this.choiceFromAction(action);
@@ -488,7 +464,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.choices = [];
         this.actions = [];
-        this.actionEnumPairs = [];
+        this.actionCells = [];
 
         return choice;
     }

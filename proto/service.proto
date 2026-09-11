@@ -18,48 +18,71 @@ enum ModalityEnum {
     MODALITY_ENUM__OTHER = 4;
 }
 
-enum ActionEnum {
-    ACTION_ENUM___UNSPECIFIED = 0;
-    ACTION_ENUM__DEFAULT = 1;
-    ACTION_ENUM__ALLY_1_TARGET = 2;
-    ACTION_ENUM__ALLY_1_PASS = 3;
-    ACTION_ENUM__ALLY_1_MOVE_1 = 4;
-    ACTION_ENUM__ALLY_1_MOVE_2 = 5;
-    ACTION_ENUM__ALLY_1_MOVE_3 = 6;
-    ACTION_ENUM__ALLY_1_MOVE_4 = 7;
-    ACTION_ENUM__ALLY_1_MOVE_1_WILDCARD = 8;
-    ACTION_ENUM__ALLY_1_MOVE_2_WILDCARD = 9;
-    ACTION_ENUM__ALLY_1_MOVE_3_WILDCARD = 10;
-    ACTION_ENUM__ALLY_1_MOVE_4_WILDCARD = 11;
-    ACTION_ENUM__ALLY_2_TARGET = 12;
-    ACTION_ENUM__ALLY_2_PASS = 13;
-    ACTION_ENUM__ALLY_2_MOVE_1 = 14;
-    ACTION_ENUM__ALLY_2_MOVE_2 = 15;
-    ACTION_ENUM__ALLY_2_MOVE_3 = 16;
-    ACTION_ENUM__ALLY_2_MOVE_4 = 17;
-    ACTION_ENUM__ALLY_2_MOVE_1_WILDCARD = 18;
-    ACTION_ENUM__ALLY_2_MOVE_2_WILDCARD = 19;
-    ACTION_ENUM__ALLY_2_MOVE_3_WILDCARD = 20;
-    ACTION_ENUM__ALLY_2_MOVE_4_WILDCARD = 21;
-    ACTION_ENUM__ENEMY_1_TARGET = 22;
-    ACTION_ENUM__ENEMY_2_TARGET = 23;
-    ACTION_ENUM__TARGET_AUTO = 24;
-    ACTION_ENUM__TARGET_ALL = 25;
-    ACTION_ENUM__TARGET_ALLY_SIDE = 26;
-    ACTION_ENUM__TARGET_FOE_SIDE = 27;
-    ACTION_ENUM__TARGET_ALLY_TEAM = 28;
-    ACTION_ENUM__TARGET_RANDOM_NORMAL = 29;
-    ACTION_ENUM__TARGET_ALL_ADJACENT = 30;
-    ACTION_ENUM__TARGET_ALL_ADJACENT_FOES = 31;
-    ACTION_ENUM__TARGET_ALLIES = 32;
-    ACTION_ENUM__RESERVE_1_SWITCH_IN = 33;
-    ACTION_ENUM__RESERVE_2_SWITCH_IN = 34;
-    ACTION_ENUM__RESERVE_3_SWITCH_IN = 35;
-    ACTION_ENUM__RESERVE_4_SWITCH_IN = 36;
-    ACTION_ENUM__RESERVE_5_SWITCH_IN = 37;
-    ACTION_ENUM__RESERVE_6_SWITCH_IN = 38;
-    ACTION_ENUM__ALLY_1_SWITCH = 39;
-    ACTION_ENUM__ALLY_2_SWITCH = 40;
+// The three slot vocabularies the action space is built from (replacing
+// ActionEnum, 2026-09-11, whose 41 values mixed all three with two
+// ALLY_i_SWITCH pseudo-slots no row or cell ever named). Both sides list
+// each enum's values in ascending order, and a slot's POSITION in that
+// list is its bit in ActionMask and its row in the model's readout -- see
+// ActionMask below. rl/environment/data.py and service/src/server/data.ts
+// build the same three lists from these, and both suites assert them.
+
+// The 16 move sources: 2 allies x {regular, wildcard} x 4 moves. Zero is
+// protolint's sentinel and is not a slot.
+enum MoveSlot {
+    MOVE_SLOT___UNSPECIFIED = 0;
+    MOVE_SLOT__ALLY_1_MOVE_1 = 1;
+    MOVE_SLOT__ALLY_1_MOVE_2 = 2;
+    MOVE_SLOT__ALLY_1_MOVE_3 = 3;
+    MOVE_SLOT__ALLY_1_MOVE_4 = 4;
+    MOVE_SLOT__ALLY_1_MOVE_1_WILDCARD = 5;
+    MOVE_SLOT__ALLY_1_MOVE_2_WILDCARD = 6;
+    MOVE_SLOT__ALLY_1_MOVE_3_WILDCARD = 7;
+    MOVE_SLOT__ALLY_1_MOVE_4_WILDCARD = 8;
+    MOVE_SLOT__ALLY_2_MOVE_1 = 9;
+    MOVE_SLOT__ALLY_2_MOVE_2 = 10;
+    MOVE_SLOT__ALLY_2_MOVE_3 = 11;
+    MOVE_SLOT__ALLY_2_MOVE_4 = 12;
+    MOVE_SLOT__ALLY_2_MOVE_1_WILDCARD = 13;
+    MOVE_SLOT__ALLY_2_MOVE_2_WILDCARD = 14;
+    MOVE_SLOT__ALLY_2_MOVE_3_WILDCARD = 15;
+    MOVE_SLOT__ALLY_2_MOVE_4_WILDCARD = 16;
+}
+
+// The 6 team members a switch or a lead can bring in. Zero is protolint's
+// sentinel and is not a slot.
+enum ReserveSlot {
+    RESERVE_SLOT___UNSPECIFIED = 0;
+    RESERVE_SLOT__RESERVE_1 = 1;
+    RESERVE_SLOT__RESERVE_2 = 2;
+    RESERVE_SLOT__RESERVE_3 = 3;
+    RESERVE_SLOT__RESERVE_4 = 4;
+    RESERVE_SLOT__RESERVE_5 = 5;
+    RESERVE_SLOT__RESERVE_6 = 6;
+}
+
+// The 17 target slots, every value INCLUDING zero: a move is aimed at one,
+// and a standalone action (a pass) is one. Zero and DEFAULT are never
+// legal -- DEFAULT only names a request that carried no choice -- and are
+// kept as slots until a separate commit deletes them, so that this
+// vocabulary change moved no number.
+enum TargetSlot {
+    TARGET_SLOT___UNSPECIFIED = 0;
+    TARGET_SLOT__DEFAULT = 1;
+    TARGET_SLOT__ALLY_1 = 2;
+    TARGET_SLOT__ALLY_1_PASS = 3;
+    TARGET_SLOT__ALLY_2 = 4;
+    TARGET_SLOT__ALLY_2_PASS = 5;
+    TARGET_SLOT__ENEMY_1 = 6;
+    TARGET_SLOT__ENEMY_2 = 7;
+    TARGET_SLOT__AUTO = 8;
+    TARGET_SLOT__ALL = 9;
+    TARGET_SLOT__ALLY_SIDE = 10;
+    TARGET_SLOT__FOE_SIDE = 11;
+    TARGET_SLOT__ALLY_TEAM = 12;
+    TARGET_SLOT__RANDOM_NORMAL = 13;
+    TARGET_SLOT__ALL_ADJACENT = 14;
+    TARGET_SLOT__ALL_ADJACENT_FOES = 15;
+    TARGET_SLOT__ALLIES = 16;
 }
 
 // How the environment is asking us to choose. READ, not decorative: the
@@ -80,10 +103,10 @@ enum ActionRequestKind {
 // at a given step. Since 2026-08-31 this message's fields, flattened in field
 // order, ARE the model's action space -- see `Action` below.
 //
-// Bit indices are positions in the ActionEnum-derived slot lists both sides
-// build (rl/environment/data.py MOVE_INDICES / TARGET_SLOT_INDICES /
-// RESERVE_ENTITY_INDICES; service/src/server/data.ts the same three), NOT raw
-// enum values -- so the lists are the shared contract and are asserted equal
+// Bit indices are positions in the MoveSlot / ReserveSlot / TargetSlot value
+// lists both sides build (rl/environment/data.py MOVE_INDICES /
+// RESERVE_ENTITY_INDICES / TARGET_SLOT_INDICES; service/src/server/data.ts the
+// same three) -- so the lists are the shared contract and are asserted equal
 // in both test suites.
 message ActionMask {
     ActionRequestKind kind = 1;
@@ -146,14 +169,9 @@ message ResetRequest {
 message EnvironmentState {
     bytes info = 1;
 
-    // DEPRECATED UNTIL THE REPLAY SHARDS ARE REBUILT. The 1681-bit packed grid
-    // the service no longer writes -- `structured_action_mask` below replaced
-    // it 2026-08-29. It stays declared because replays/shards holds 8.8GB of
-    // serialised EnvironmentState that rl/offline/dataset.py still reads
-    // through process_state, and dropping the field would strand them.
-    // get_action_mask prefers the structured field and falls back to this.
-    // Delete both this and the fallback when those shards are next rebuilt.
-    bytes packed_action_mask = 2;
+    // Field 2 was the 1681-bit packed ActionEnum grid, retired 2026-08-29; its
+    // replay-shard fallback went with ActionEnum (2026-09-11). Never reuse it.
+    reserved 2;
     bytes history_entity_public_cache = 3;
     bytes history_entity_revealed_cache = 4;
     bytes history_entity_edge_cache = 5;

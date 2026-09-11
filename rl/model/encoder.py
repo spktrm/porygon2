@@ -11,7 +11,6 @@ from constants import MAX_RATIO_TOKEN
 from rl.environment.data import (
     MOVE_CELL_OFFSET,
     MOVE_INDICES,
-    NUM_ACTION_FEATURES,
     NUM_FROM_SOURCE_EFFECTS,
     NUM_TYPECHART,
     ONEHOT_ENCODERS,
@@ -72,6 +71,7 @@ from rl.model.features import (
     get_private_entity_mask,
     get_public_entity_mask,
 )
+from rl.model.heads import chosen_bank_rows
 from rl.model.history_encoder import (
     HistoryAttentionPool,
     NodeHistoryRead,
@@ -242,15 +242,6 @@ class Encoder(nn.Module):
             "target_slot_embeddings",
             embedding_init,
             (len(TARGET_SLOT_INDICES), entity_size),
-        )
-        # The previous action's two slot ids, looked up directly. Before the
-        # rewrite these were GATHERED out of the built action stream, which
-        # made the token set circular and forced it to be assembled twice.
-        self.prev_action_embeddings = nn.Embed(
-            num_embeddings=NUM_ACTION_FEATURES,
-            embedding_init=embedding_init,
-            name="prev_action_embeddings",
-            **embed_kwargs,
         )
         # My own private sheet's identity tag. NOT side_bias(0): the service
         # writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so row 1 of
@@ -1176,18 +1167,19 @@ class Encoder(nn.Module):
         )
 
         # ---- the previous action ------------------------------------------
-        # An embedding lookup on the two slot ids, NOT a gather out of a built
-        # action stream. That gather is why `InputTokenSet.assemble` had to run
-        # twice before 2026-08-29: the previous action's rows were read off a
-        # sequence that was itself built from a read over those rows.
-        prev_action_rows = self.prev_action_embeddings(
-            jnp.stack(
-                (
-                    env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_SRC],
-                    env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_TGT],
-                )
-            )
-        ) + jnp.concatenate(
+        # The rows the previous cell's logit is read from -- its source row
+        # and its target row (heads.chosen_bank_rows) -- gathered out of THIS
+        # step's pre-trunk private/move/target rows, so the previous action is
+        # described by what it named rather than by a slot id. Not circular:
+        # those rows are built above from this step's features alone, where
+        # the pre-2026-08-29 gather read a sequence built over these rows.
+        prev_source, prev_target = chosen_bank_rows(
+            private_rows,
+            move_rows,
+            target_rows,
+            env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_CELL],
+        )
+        prev_action_rows = jnp.stack((prev_source, prev_target)) + jnp.concatenate(
             (
                 self.prev_action_src_bias.astype(dtype),
                 self.prev_action_tgt_bias.astype(dtype),

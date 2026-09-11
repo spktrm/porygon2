@@ -4789,3 +4789,55 @@ see their inputs rescaled at the merge, so expect a transient on the
 policy/value losses. Revert handle: delete `output_normalisation` in
 `encoder.setup` and the one application line; everything else is
 structure.
+
+## Removal ledger — 2026-09-11 ActionEnum (structure-only, bit-identical)
+
+`ActionEnum` (41 values: 16 move sources, 6 reserves, 17 target slots and
+two ALLY_i_SWITCH pseudo-slots) is deleted from proto/service.proto. Its two
+ALLY_i_SWITCH values named no sequence row and no cell, and read as if the
+model had ally-switch embeddings -- the confusion that surfaced while
+designing a switch bilinear this date. In its place, three slot vocabularies
+whose ascending value lists ARE the old slot lists position for position:
+`MoveSlot` (16), `ReserveSlot` (6) and `TargetSlot` (17, keeping the
+never-legal zero slot and DEFAULT as slots so no mask bit, cell or readout
+row moves; deleting them is a separate, number-moving change). Both sides
+build the lists from these (`_slot_values` / `slotValues`).
+
+Previous action: `INFO_FEATURE__PREV_ACTION_SRC/TGT` (an ActionEnum pair
+built by `cellToEnumPair` from the request kind and ally half) become one
+`INFO_FEATURE__PREV_ACTION_CELL`, the block cell taken; a request with no
+choice records the DEFAULT standalone cell (`NO_CHOICE_CELL`). The encoder
+names the cell by the rows its logit is read from -- `heads.chosen_bank_rows`
+over this step's pre-trunk private/move/target rows, plus the existing
+src/tgt tags -- so the 41-row `prev_action_embeddings` table is deleted
+(user call: the rows are described relative to SEQUENCE_LAYOUT). Not
+circular: those rows are built from this step's features alone. InfoFeature
+is renumbered (fields after the pair shift down one). A lead and a battle
+switch of the same mon are now one previous action (one cell), where the
+enum pair told them apart.
+
+Deleted with it: `numActionFeatures` / `NUM_ACTION_FEATURES`,
+`ALLY_SWITCH_(SRC_)INDICES`, `cellToEnumPair`, `TEAM_PREVIEW_TGT`,
+`lastMaskKind` / `lastMaskActiveSlot`, the constants.py partition assertion,
+and the packed-grid replay-shard fallback (`get_action_mask`'s branch,
+`_cells_from_packed_grid`, its test) with `EnvironmentState` field 2, now
+`reserved`. **replays/shards no longer decodes** (user call): rebuild it
+before the offline critic program is next used. `simple_heuristic.ts`
+decodes cells directly (`decodeCell`); its choices are identical by
+construction -- team index = switch cell, ally = the mask's active_slot,
+the same (ally, move, target, wildcard) for move cells, pass/DEFAULT at
+-1e6 and every other standalone cell at -1e4.
+
+Bit-identity: the prev-action rows are dead in singles (HAS_PREV_ACTION is
+always 0, health check 2026-09-11), so nothing here reaches a number. The
+local ex.bin fixture was converted in place (803 states, info column 12
+dropped; the conversion refuses any state with a live previous action), and
+the ckpt_00360000 EMA learner-side forward on it matched the pre-edit
+capture exactly: 15 decoded input leaves and 73 output leaves, deterministic
+XLA, with the pre-edit self-compare as the control; the only param leaf the
+model no longer has is prev_action_embeddings. Test:
+`test_prev_action_rows_are_the_rows_the_cell_names` (with the src/tgt tags
+and group bias zeroed, each prev-action row equals the row it names exactly;
+controls: the tags are live, and no previous action gives exact zeros).
+Service: tsc clean, vitest 42 passed / 2 skipped. Revert handle: this
+commit, and regenerate ex.bin with service/src/tests/ex.ts.
