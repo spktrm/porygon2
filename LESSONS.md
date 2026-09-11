@@ -4841,3 +4841,27 @@ and group bias zeroed, each prev-action row equals the row it names exactly;
 controls: the tags are live, and no previous action gives exact zeros).
 Service: tsc clean, vitest 42 passed / 2 skipped. Revert handle: this
 commit, and regenerate ex.bin with service/src/tests/ex.ts.
+
+## Fix — 2026-09-11 previous action made live (numbers move)
+
+`runner.ts` cleared the taken-action list (`actionEnumPairs`, now
+`actionCells`) at the end of every request since 4c8836d (2026-08-31), so
+each state was built from an empty list: HAS_PREV_ACTION was 0 on every live
+and offline singles state, the two PREV_ACTION sequence rows were zeroed at
+input and output, and `prev_action_embeddings` sat at init for the whole
+lineage (health check 2026-09-11, defect 1). The per-request reset goes; the
+per-battle reset in the constructor stays. Every state after a player's
+first decision now carries the cell it last took (NO_CHOICE_CELL after a
+request with no choice), which the encoder reads as the rows that cell's
+logit came from (the ActionEnum removal above). Both rows are
+policy-readable and carry nothing privileged -- the player's own last
+choice, which it knows at deploy.
+
+Invariant in `harness.playerController` (the vitest suite and the soak):
+after a player's first decision, every state but a team-preview request
+carries HAS_PREV_ACTION = 1 and the cell that controller last sent. Positive
+control: the same invariant against the pre-fix runner failed in every
+singles battle ("previous action lost: HAS_PREV_ACTION 0, PREV_ACTION_CELL
+0, last sent N", N over leads, switches and move cells). Numbers move: two
+more live rows in every singles state after the first decision. Revert
+handle: this commit.

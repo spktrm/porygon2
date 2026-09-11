@@ -464,7 +464,9 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
         this.choices = [];
         this.actions = [];
-        this.actionCells = [];
+        // actionCells is NOT cleared here: the last cell has to survive into
+        // the next request's state as its previous action. Clearing it with
+        // every request (4c8836d, 2026-08-31) held HAS_PREV_ACTION at 0.
 
         return choice;
     }

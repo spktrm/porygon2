@@ -8,6 +8,7 @@ import {
 } from "../../protos/service_pb";
 import {
     MOVE_SLOT_INDICES,
+    NO_CHOICE_CELL,
     RESERVE_SLOT_INDICES,
     TARGET_SLOT_INDICES,
 } from "../server/data";
@@ -325,6 +326,9 @@ export async function playerController(player: TrainablePlayerAI) {
         packedHistoryLength = 0,
         stateCount = 0,
         rewriteCount = 0;
+    // The cell this controller last sent, as the runner records it: the cell
+    // itself, or NO_CHOICE_CELL when that request offered no choice.
+    let lastSentCell: number | undefined;
     while (true) {
         // Only the stream read is guarded: a closed stream ends the loop
         // cleanly, while invariant violations below THROW upward so the
@@ -475,10 +479,36 @@ export async function playerController(player: TrainablePlayerAI) {
                 throw new Error("No request available");
             }
 
+            // The previous action (2026-09-11): after this player's first
+            // decision, every state but a team-preview request carries the
+            // cell it last sent. Until then the runner cleared it with every
+            // request, so HAS_PREV_ACTION never reached the model.
+            if (
+                lastSentCell !== undefined &&
+                !(request as AnyObject).teamPreview
+            ) {
+                const hasPrevious =
+                    info[InfoFeature.INFO_FEATURE__HAS_PREV_ACTION];
+                const previousCell =
+                    info[InfoFeature.INFO_FEATURE__PREV_ACTION_CELL];
+                if (hasPrevious !== 1 || previousCell !== lastSentCell) {
+                    throw new Error(
+                        `previous action lost: HAS_PREV_ACTION ${hasPrevious}, ` +
+                            `PREV_ACTION_CELL ${previousCell}, ` +
+                            `last sent ${lastSentCell}`,
+                    );
+                }
+            }
+
             // A request is pending, so we need to choose an action.
             const stepRequest = new StepRequest();
 
             const action = GetRandomAction({ player });
+            if (player.legalChoiceByCell.size === 0) {
+                lastSentCell = NO_CHOICE_CELL;
+            } else {
+                lastSentCell = action.getCell();
+            }
 
             stepRequest.setAction(action);
             stepRequest.setRqid(state.getRqid());
