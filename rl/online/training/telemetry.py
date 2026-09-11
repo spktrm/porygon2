@@ -288,6 +288,9 @@ _ACTION_HEAD_LEAVES = {
     "player_pointer_local_src_rms": (("action_head", "local_src", "kernel"),),
     "player_pointer_local_tgt_rms": (("action_head", "local_tgt", "kernel"),),
     "player_switch_head_rms": (("action_head", "switch", "kernel"),),
+    "player_switch_query_rms": (("action_head", "switch_query", "kernel"),),
+    "player_switch_key_rms": (("action_head", "switch_key", "kernel"),),
+    "player_switch_local_tgt_rms": (("action_head", "switch_local_tgt", "kernel"),),
     "player_other_head_rms": (("action_head", "other", "kernel"),),
 }
 # Trunk leaves carry a leading axis of cfg.trunk.num_blocks (nn.scan stacks
@@ -425,21 +428,24 @@ _GRAD_SUBTREES = {
 
 
 # The action-readout leaves a support force acts on directly (the flat
-# hinge, 2026-09-09): the switch scalar's bias, the move-side `query` and
+# hinge, 2026-09-09): the switch pair's query and ally-side scalar (its
+# whether-to-switch level since 2026-09-11), the move-side `query` and
 # the target-side `key`/`local_tgt` projections -- a tgt column is read by
 # every legal move cell of a row, which is the high-gain route the
 # dx65cpwp runaway took.
 _APPLIED_DELTA_LEAVES = {
-    "player_applied_delta_rms_switch_bias": (("action_head", "switch_bias"),),
+    "player_applied_delta_rms_switch_query": (
+        ("action_head", "switch_query", "kernel"),
+    ),
+    "player_applied_delta_rms_switch_local_tgt": (
+        ("action_head", "switch_local_tgt", "kernel"),
+    ),
     "player_applied_delta_rms_pointer_query": (("action_head", "query", "kernel"),),
     "player_applied_delta_rms_pointer_key": (("action_head", "key", "kernel"),),
     "player_applied_delta_rms_pointer_local_tgt": (
         ("action_head", "local_tgt", "kernel"),
     ),
 }
-
-
-_SWITCH_BIAS = ("action_head", "switch_bias")
 
 
 def _rms_panels(table: dict[str, tuple], tree, read_leaf) -> dict[str, jax.Array]:
@@ -471,18 +477,6 @@ def applied_delta_telemetry(prev_params, params) -> dict[str, jax.Array]:
         )
 
     return _rms_panels(_APPLIED_DELTA_LEAVES, after, applied_delta)
-
-
-def switch_bias_telemetry(prev_params, params, grads) -> dict[str, jax.Array]:
-    """The switch bias before the update, its pre-clip gradient, and the
-    mean delta the update applied."""
-    before = _get(prev_params["params"], _SWITCH_BIAS)
-    after = _get(params["params"], _SWITCH_BIAS)
-    return {
-        "player_switch_bias": before.mean(),
-        "player_switch_bias_gradient": _get(grads["params"], _SWITCH_BIAS).sum(),
-        "player_switch_bias_applied_delta": (after - before).mean(),
-    }
 
 
 def head_param_telemetry(params, grads) -> dict[str, jax.Array]:

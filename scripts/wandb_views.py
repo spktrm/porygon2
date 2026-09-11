@@ -327,6 +327,9 @@ def rl_sections():
                         "player_pointer_local_src_rms",
                         "player_pointer_local_tgt_rms",
                         "player_switch_head_rms",
+                        "player_switch_query_rms",
+                        "player_switch_key_rms",
+                        "player_switch_local_tgt_rms",
                         "player_other_head_rms",
                     ],
                 ),
@@ -1355,11 +1358,14 @@ def rl_sections():
                 ),
                 lp(
                     # What Adam APPLIED to the readout leaves a support
-                    # force acts on (post-clip, post-revert rms), beside the
-                    # switch_bias delta that started the pattern.
+                    # force acts on (post-clip, post-revert rms): the switch
+                    # pair's query and ally-side scalar (which replaced the
+                    # switch_bias whose delta started the pattern) beside the
+                    # move pair's.
                     "Applied update rms · action readout leaves",
                     [
-                        "player_applied_delta_rms_switch_bias",
+                        "player_applied_delta_rms_switch_query",
+                        "player_applied_delta_rms_switch_local_tgt",
                         "player_applied_delta_rms_pointer_query",
                         "player_applied_delta_rms_pointer_key",
                         "player_applied_delta_rms_pointer_local_tgt",

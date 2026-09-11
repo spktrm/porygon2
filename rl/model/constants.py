@@ -301,8 +301,9 @@ assert len(ALLY_TARGET_ROWS) == len(ENEMY_TARGET_ROWS) == NUM_ACTIVES_PER_SIDE
 # Block cell -> row-bank index, for the doubles SlotConditioning gather. The
 # bank is the readout's own input rows stacked in order --
 # private(6) | move(16) | target(17) -- and each cell names the row(s) that
-# produced its logit: a switch cell its private row (both halves -- the
-# ALLY_i_SWITCH pseudo-slots of the grid era had no row and gathered zeros),
+# produced its logit: a switch cell its private row and the ALLY_1_TARGET
+# row of the active it replaces (the switch pair, 2026-09-11; a doubles
+# stage-2 switch reads ALLY_2 -- the known-open doubles workstream),
 # a move cell its move row and its target row, a standalone cell its target
 # row twice.
 _BANK_MOVE_OFFSET = NUM_PRIVATE_SLOTS
@@ -319,7 +320,7 @@ CELL_BANK_SRC = np.concatenate(
 ).astype(np.int32)
 CELL_BANK_TGT = np.concatenate(
     [
-        np.arange(NUM_PRIVATE_SLOTS),
+        np.full(NUM_PRIVATE_SLOTS, _BANK_TARGET_OFFSET + ALLY_TARGET_ROWS[0]),
         np.tile(
             _BANK_TARGET_OFFSET + np.arange(len(TARGET_SLOT_INDICES)),
             len(MOVE_INDICES),

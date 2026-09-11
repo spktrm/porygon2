@@ -65,9 +65,10 @@ TypeScript game service speaking protobuf over websockets.
   live at init by construction. `history_encoder.py`: per-slot GRU scan over
   history, aligned to requests by REQUEST_COUNT VALUE (trailing windows are
   therefore safe). `player_model.py`: three modules — encoder, action
-  readout, critic. `heads.py`: `FlatActionReadout` — a scalar per sheet row
-  for switching, ONE bilinear for moves x targets, a scalar per target row
-  for the standalone actions; `query` zero-init and `key` not, so the zero
+  readout, critic. `heads.py`: `FlatActionReadout` — ONE pair form (bilinear
+  plus a scalar per side) for sheet rows x the ally row a switch replaces AND
+  for moves x targets, a scalar per target row for the standalone actions;
+  each pair's `query` zero-init and `key` not, so the zero
   factor's gradient is a rank-1 outer product of live rows rather than the
   two-factor stall. The critic reads the CLS row and nothing else.
   `transition.py`: `TransitionModel` — g(h_t, u, z) over the 73 post-trunk

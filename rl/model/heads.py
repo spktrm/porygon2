@@ -13,7 +13,7 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
-from rl.model.constants import CELL_BANK_SRC, CELL_BANK_TGT
+from rl.model.constants import ALLY_TARGET_ROWS, CELL_BANK_SRC, CELL_BANK_TGT
 from rl.model.modules import MLP, PointerLogits
 from rl.model.utils import legal_log_policy, legal_policy
 
@@ -148,10 +148,11 @@ def chosen_bank_rows(
 
     The bank is private(6) | move(16) | target(17), and `CELL_BANK_SRC` /
     `CELL_BANK_TGT` name a cell's (source, target) row in it: a switch cell
-    its private row twice, a move cell its move row and its target row, a
-    standalone cell its target row twice. Written once (2026-09-03) for
-    `SlotConditioning` and the dynamics head, which both condition on the
-    taken action through its OWN rows rather than a cell index.
+    its private row and the ALLY_1_TARGET row it switches into, a move cell
+    its move row and its target row, a standalone cell its target row twice.
+    Written once (2026-09-03) for `SlotConditioning`, the dynamics head and
+    (2026-09-11) the previous action, which all condition on a taken action
+    through its OWN rows rather than a cell index.
     """
     bank = jnp.concatenate((private_rows, move_rows, target_rows), axis=0)
     src_row = jnp.take(jnp.asarray(CELL_BANK_SRC), action_cell)
@@ -166,8 +167,8 @@ class SlotConditioning(nn.Module):
     and the conditioning has to earn its way in. Keyed by the chosen BLOCK
     CELL since 2026-08-31: `CELL_BANK_SRC`/`CELL_BANK_TGT` name the readout
     input rows that produced the cell's logit, so a switch cell now gathers
-    its private row where the grid era's ALLY_i_SWITCH pseudo-slot gathered
-    zeros.
+    its private row and the ally row it replaces, where the grid era's
+    ALLY_i_SWITCH pseudo-slot gathered zeros.
 
     NOTE this keeps the MODEL side of doubles reachable and nothing more. The
     plumbing outside it -- per-slot masks in requests, two stored action
@@ -215,11 +216,15 @@ class FlatActionReadout(nn.Module):
     of ActionMask's fields -- proto/service.proto `Action`), emitted directly
     since 2026-08-31; the 41x41 scatter they used to land in is gone:
 
-      switch   one logit per SHEET ROW, "may this mon come in and should it".
-               One block serves the battle switch and the team-preview lead
-               alike; `kind` only matters to the service's decoder.
-      move     THE ONLY BILINEAR: 16 candidate move rows against the 17 target
-               rows, four of which carry the actual mon they would hit.
+      switch   sheet rows x the ALLY row of the active slot being replaced
+               (2026-09-11): the same pair form as moves x targets, so a
+               candidate's logit reads what that row attended to -- the
+               field, the opponent's active -- where a scalar per sheet row
+               could only read the candidate. One block serves the battle
+               switch and the team-preview lead alike; `kind` only matters
+               to the service's decoder.
+      move     16 candidate move rows against the 17 target rows, four of
+               which carry the actual mon they would hit.
       other    one logit per target row for the standalone actions -- pass,
                default.
 
@@ -233,10 +238,10 @@ class FlatActionReadout(nn.Module):
     13: a learned grid behind a zero-init scale sat at lecun init for 60k
     steps) is the whole subtlety here:
 
-      * `query` is zero-init and `key` is not. The bilinear is exactly 0 at
-        init, and d/d query is a rank-1 outer product of LIVE inputs, so query
-        moves at step 1 and key -- whose gradient is proportional to query --
-        unfreezes at step 2. That is one zero factor over a live input, not a
+      * Each pair's `query` (source side) is zero-init and its `key` is
+        not. The bilinear is exactly 0 at init, and d/d query is a rank-1
+        outer product of LIVE inputs, so query moves at step 1 and key --
+        whose gradient is proportional to query -- unfreezes at step 2. That is one zero factor over a live input, not a
         scalar multiplying a random grid.
       * NO layer-norm on the query heads. Its input is identically zero at
         init and its Jacobian goes as 1/sqrt(eps), i.e. ~1e3, straight into
@@ -259,6 +264,7 @@ class FlatActionReadout(nn.Module):
         move_rows: jax.Array,
         target_rows: jax.Array,
         temp: float = 1.0,
+        decision_slot: int = 0,
     ) -> jax.Array:
         dtype = private_rows.dtype
         zeros = nn.initializers.zeros_init()
@@ -266,33 +272,49 @@ class FlatActionReadout(nn.Module):
             nn.Dense, features=1, kernel_init=zeros, use_bias=False, dtype=dtype
         )
 
-        switch_logit = scalar_head(name="switch")(private_rows)[..., 0]
-        other_logit = scalar_head(name="other")(target_rows)[..., 0]
-
         qk_size = self.cfg.qk_size
-        query = nn.Dense(
-            qk_size, kernel_init=zeros, use_bias=False, dtype=dtype, name="query"
-        )(move_rows)
-        key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name="key")(target_rows)
-        move_target = jnp.einsum("...mq,...tq->...mt", query, key) / math.sqrt(qk_size)
-        move_target = (
-            move_target
-            + scalar_head(name="local_src")(move_rows)
-            + scalar_head(name="local_tgt")(target_rows)[..., 0][..., None, :]
-        )
 
-        # The whether-to-switch baseline: one scalar over the whole switch
-        # block. The grid era's `ally_switch_bias` (2, 1) is folded to one
-        # value -- in singles only row 0 ever trained (the mask cleared the
-        # other ally half), and at team preview a uniform shift over an
-        # all-switch legal set is softmax-invariant, so behaviour is
-        # unchanged. A per-active-slot bias rejoins with the doubles
-        # workstream, which needs per-slot masks anyway.
-        switch_bias = self.param("switch_bias", zeros, (1,)).astype(dtype)
+        def pair_logits(src_rows, tgt_rows, query_name, key_name, src_name, tgt_name):
+            """THE pair form, written once for both pair blocks: a bilinear
+            between every source row and every target row, plus a scalar on
+            each side. The source-side `query` is the zero factor."""
+            query = nn.Dense(
+                qk_size, kernel_init=zeros, use_bias=False, dtype=dtype, name=query_name
+            )(src_rows)
+            key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=key_name)(
+                tgt_rows
+            )
+            logits = jnp.einsum("...sq,...tq->...st", query, key) / math.sqrt(qk_size)
+            return (
+                logits
+                + scalar_head(name=src_name)(src_rows)
+                + scalar_head(name=tgt_name)(tgt_rows)[..., 0][..., None, :]
+            )
+
+        # The switch block is sheet rows x the ALLY row of the active slot a
+        # switch replaces (2026-09-11). `switch` keeps its name as the
+        # sheet-side scalar, so a merge carries it; `switch_local_tgt`, a
+        # scalar on the ally row, is the whether-to-switch level -- one that
+        # reads the state, replacing the context-free `switch_bias`.
+        ally_row = jnp.take(
+            target_rows, ALLY_TARGET_ROWS[decision_slot : decision_slot + 1], axis=-2
+        )
+        switch_logit = pair_logits(
+            private_rows,
+            ally_row,
+            "switch_query",
+            "switch_key",
+            "switch",
+            "switch_local_tgt",
+        )[..., 0]
+        move_target = pair_logits(
+            move_rows, target_rows, "query", "key", "local_src", "local_tgt"
+        )
+        other_logit = scalar_head(name="other")(target_rows)[..., 0]
 
         cells = jnp.concatenate(
             (
-                switch_logit + switch_bias,
+                switch_logit,
                 move_target.reshape(*move_target.shape[:-2], -1),
                 other_logit,
             ),

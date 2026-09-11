@@ -15,12 +15,14 @@ from rl.environment.data import (
     MOVE_CELL_OFFSET,
     MOVE_INDICES,
     NUM_ACTION_CELLS,
+    NUM_SWITCH_CELLS,
     NUM_TARGET_SLOTS,
     OTHER_CELL_OFFSET,
     RESERVE_ENTITY_INDICES,
     TARGET_SLOT_INDICES,
 )
 from rl.model.constants import (
+    ALLY_TARGET_ROWS,
     CLS_ROW,
     MOVE_ROWS,
     NUM_SEQUENCE_ROWS,
@@ -110,12 +112,21 @@ def test_zero_init_query_gets_live_gradient_and_the_key_unfreezes() -> None:
     assert np.abs(np.asarray(grads["local_src"]["kernel"])).max() > 0
     assert np.abs(np.asarray(grads["local_tgt"]["kernel"])).max() > 0
     assert np.abs(np.asarray(grads["switch"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["switch_query"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["switch_local_tgt"]["kernel"])).max() > 0
     np.testing.assert_array_equal(np.asarray(grads["key"]["kernel"]), 0.0)
+    np.testing.assert_array_equal(np.asarray(grads["switch_key"]["kernel"]), 0.0)
 
     nudged = jax.tree.map(lambda x: x, params)
     nudged["params"]["query"]["kernel"] = nudged["params"]["query"]["kernel"] + 1e-2
     key_grad = jax.grad(total)(nudged)["params"]["key"]["kernel"]
     assert np.abs(np.asarray(key_grad)).max() > 0
+
+    nudged["params"]["switch_query"]["kernel"] = (
+        nudged["params"]["switch_query"]["kernel"] + 1e-2
+    )
+    switch_key_grad = jax.grad(total)(nudged)["params"]["switch_key"]["kernel"]
+    assert np.abs(np.asarray(switch_key_grad)).max() > 0
 
 
 def test_the_pointer_is_not_symmetric() -> None:
@@ -142,7 +153,7 @@ def test_the_pointer_is_not_symmetric() -> None:
 
 def _open(params: dict, seed: int = 5) -> dict:
     """Non-zero every zero-init leaf, so the grid actually varies."""
-    keys = iter(jax.random.split(jax.random.key(seed), 8))
+    keys = iter(jax.random.split(jax.random.key(seed), 16))
     return jax.tree.map(lambda x: x + jax.random.normal(next(keys), x.shape), params)
 
 
@@ -160,6 +171,31 @@ def test_a_sheet_row_moves_only_its_own_switch_cell(reserve: int) -> None:
     expected = np.zeros_like(changed)
     expected[reserve] = True
     np.testing.assert_array_equal(changed, expected)
+
+
+@pytest.mark.parametrize("decision_slot", [0, 1])
+def test_the_decision_slots_ally_row_moves_every_switch_cell(
+    decision_slot: int,
+) -> None:
+    """The switch block is sheet rows x ONE ally row -- the active the switch
+    replaces. Bumping that row moves all six switch cells; bumping the other
+    ally row moves none, the control that this is not "any target row"."""
+    head, params, rows = _init()
+    params = _open(params)
+    private_rows, move_rows, target_rows = rows
+
+    def switch_cells(targets: jax.Array) -> np.ndarray:
+        logits = head.apply(
+            params, private_rows, move_rows, targets, decision_slot=decision_slot
+        )
+        return np.asarray(logits[:NUM_SWITCH_CELLS])
+
+    base = switch_cells(target_rows)
+    own = int(ALLY_TARGET_ROWS[decision_slot])
+    other = int(ALLY_TARGET_ROWS[1 - decision_slot])
+    moved = switch_cells(target_rows.at[own].add(1.0))
+    assert (~np.isclose(base, moved, atol=1e-6)).all()
+    np.testing.assert_array_equal(base, switch_cells(target_rows.at[other].add(1.0)))
 
 
 def test_a_move_row_moves_only_its_own_move_cells() -> None:

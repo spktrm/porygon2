@@ -4865,3 +4865,55 @@ singles battle ("previous action lost: HAS_PREV_ACTION 0, PREV_ACTION_CELL
 0, last sent N", N over leads, switches and move cells). Numbers move: two
 more live rows in every singles state after the first decision. Revert
 handle: this commit.
+
+## Addition + removal ledger — 2026-09-11 switch pair readout (numbers move)
+
+The switch block was one zero-init scalar per sheet row plus a single
+context-free `switch_bias`: a candidate's logit could read only its own
+post-trunk row. The 2026-09-10 switch-pair probes found the candidate-vs-
+opponent matchup unreadable from that row (post-trunk pair at the majority
+floor, raw pre-trunk pair .63), and the paired advantage audit (09-09)
+found taken switches scoring below stays at every horizon -- consistent
+with switches the readout cannot aim. The move block, by contrast, is a
+bilinear against the target rows, and the trunk did learn to put the
+move-vs-opponent matchup into the move row (.66 vs .57 floor).
+
+Change (user call: "private embeddings @ [ally_switch_1, ally_switch_2]"):
+ONE pair form in `FlatActionReadout` -- a bilinear between every source row
+and every target row plus a scalar on each side, source-side `query`
+zero-init -- now serves both pair blocks. Moves x targets keep their param
+names (`query`/`key`/`local_src`/`local_tgt`). Switching is sheet rows x the
+ALLY_i_TARGET row of the active slot being replaced (`decision_slot`: 0 in
+singles, 1 for doubles stage 2): new `switch_query` / `switch_key`; the old
+`switch` kernel stays as the sheet-side scalar under its own name (a merge
+carries it); `switch_local_tgt`, a scalar on the ally row, is the
+whether-to-switch level and replaces `switch_bias` (deleted, with
+`switch_bias_telemetry` and its panel). There are no ally-switch rows (the
+ActionEnum removal above deleted the pseudo-slots): ALLY_i_TARGET is the
+row that carries my active mon i. It was masked off whenever no move
+targets it -- every forced switch and team preview -- so the encoder now
+also marks it valid whenever a switch cell is legal, gated by the format's
+active count (singles never wakes ALLY_2). `CELL_BANK_TGT` for a switch
+cell becomes that ally row (was the private row twice), so the transition
+model's action rows and the previous-action rows see the pair too.
+
+Four questions (CLAUDE.md): (1) bounded -- a bilinear of two RMS-normalised
+rows times a learned kernel, the same form the move block has run since
+08-29; (2) the softmax-mean direction is opposed by nothing new -- the pair
+adds no loss term; (3) momentum: none beyond the move pair's; (4) shared
+routes: the ally row is read by every switch cell of a row, the same
+high-gain shape as a target column -- `player_switch_{query,key,local_tgt}
+_rms` and `player_applied_delta_rms_switch_{query,local_tgt}` are panelled
+from launch beside the move pair's.
+
+Tests: `test_flat_readout` -- every logit still exactly 0 at init;
+`switch_query` / `switch_local_tgt` live at step 1, `switch_key` frozen one
+step and unfreezing when switch_query is nudged; the decision slot's ally
+row moves all six switch cells while the other ally row moves none; a sheet
+row still moves only its own cell. Merge relaunch, measured on
+ckpt_00360000's EMA params over the bundled ex.bin: exactly `switch_query`,
+`switch_key` and `switch_local_tgt` start fresh; the learned `switch_bias`
+(-0.20) is dropped, and on the 52 states where both a switch and a move are
+legal the mean switch probability goes .0524 -> .0644 (median .0458 ->
+.0555, about exp(0.2)), every legal logit finite. Revert handle: this
+commit.

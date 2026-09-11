@@ -291,12 +291,16 @@ class Porygon2PlayerModel(nn.Module):
         sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
         valid_mask: jax.Array,
         temp: float,
+        decision_slot: int = 0,
     ) -> jax.Array:
         """The readout's logits with illegal cells at -1e9 (finite, so no
         `-inf * 0` in a vjp): the one form both the sampler and the search
-        diagnostics read."""
+        diagnostics read. `decision_slot` picks the ally row the switch
+        block reads -- 0 in singles, 1 for doubles stage 2."""
         private_rows, move_rows, target_rows = sequence_rows
-        logits = self.action_head(private_rows, move_rows, target_rows, temp=temp)
+        logits = self.action_head(
+            private_rows, move_rows, target_rows, temp=temp, decision_slot=decision_slot
+        )
         return jnp.where(valid_mask, logits, -1e9)
 
     def _score_and_sample(
@@ -307,6 +311,7 @@ class Porygon2PlayerModel(nn.Module):
         temp: float,
         search_bonus: jax.Array | None = None,
         prune_threshold: float = 0.0,
+        decision_slot: int = 0,
     ):
         """Score one decision's cells and pick an action.
 
@@ -326,7 +331,7 @@ class Porygon2PlayerModel(nn.Module):
         sampling the thresholded policy reports what it sampled.
         """
         flat_valid = valid_mask
-        pi_logits = self._legal_logits(sequence_rows, valid_mask, temp)
+        pi_logits = self._legal_logits(sequence_rows, valid_mask, temp, decision_slot)
         if search_bonus is not None:
             pi_logits = pi_logits + search_bonus.astype(pi_logits.dtype)
         # prior=None is uniform over legal cells -- which is exactly what the
@@ -433,7 +438,13 @@ class Porygon2PlayerModel(nn.Module):
         else:
             stage2_given = None
         flat_valid_2, metrics_2, index_2, log_prob_2 = self._score_and_sample(
-            cond_rows, mask_2, stage2_given, temp, None, prune_threshold
+            cond_rows,
+            mask_2,
+            stage2_given,
+            temp,
+            None,
+            prune_threshold,
+            decision_slot=1,
         )
 
         action_index = jnp.stack([index_1, index_2])

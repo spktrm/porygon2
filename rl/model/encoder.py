@@ -1215,6 +1215,20 @@ class Encoder(nn.Module):
         other_cells = env_step.action_mask[OTHER_CELL_OFFSET:]
         move_slot_valid = move_cells.any(axis=-1) & not_done
         target_slot_valid = (move_cells.any(axis=0) | other_cells) & not_done
+        # A switch cell's logit reads the ALLY row of the active slot it
+        # replaces (heads.FlatActionReadout, 2026-09-11), so that row is live
+        # whenever a switch is -- a forced switch and a team-preview lead
+        # included, where no move targets it. Gated by the format's active
+        # count, so singles never wakes ALLY_2.
+        switch_legal = env_step.action_mask[:MOVE_CELL_OFFSET].any() & not_done
+        ally_slot_active = (
+            jnp.arange(len(ALLY_TARGET_ROWS))
+            < env_step.info[InfoFeature.INFO_FEATURE__NUM_ACTIVE]
+        )
+        ally_rows = jnp.asarray(ALLY_TARGET_ROWS)
+        target_slot_valid = target_slot_valid.at[ally_rows].set(
+            target_slot_valid[ally_rows] | (switch_legal & ally_slot_active)
+        )
 
         # (rows, validity) per group in SEQUENCE_LAYOUT order; the learner-only
         # partition is present or absent as ONE list, so the two sequences

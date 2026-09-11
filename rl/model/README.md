@@ -13,7 +13,7 @@ triple, the previous action and the request info. 13.47M parameters.
 | `config.py` | The `ConfigDict` describing the architecture. |
 | `encoder.py` | Feature embedders, the entity-local pools, the recurrent history encoder, and `_assemble_sequence` — everything that turns a proto observation into the 61 rows. |
 | `trunk.py` | The trunk: N unshared pre-RMSNorm blocks (self-attention + one shared SwiGLU MLP), no gates, no block masks. |
-| `heads.py` | `FlatActionReadout` (a scalar per sheet row for switching, one bilinear for moves x targets, a scalar per target row for pass/default) and the categorical value head, which reads the CLS row and nothing else. |
+| `heads.py` | `FlatActionReadout` (one pair form, a bilinear plus a scalar per side, for sheet rows x the ally row a switch replaces and for moves x targets; a scalar per target row for pass/default) and the categorical value head, which reads the CLS row and nothing else. |
 | `player_model.py` | Trunk + readouts, sampling, and the doubles two-stage dispatch. Run it for parameter counts. |
 | `history_encoder.py` | The per-slot GRU scan over the packed history cache. |
 | `modules.py` | Generic primitives only — attention, SwiGLU, RMSNorm, pointer logits. Architecture lives next to its wiring. |

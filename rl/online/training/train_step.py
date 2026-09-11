@@ -74,7 +74,6 @@ from rl.online.training.telemetry import (
     head_param_telemetry,
     promote_map,
     ratio_ess_and_tail,
-    switch_bias_telemetry,
 )
 from rl.utils import average
 
@@ -1723,9 +1722,6 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            **switch_bias_telemetry(
-                prev_player_state.params, player_state.params, player_grads
-            ),
             # Q-head learning readouts: the three-scalar micro gate, the
             # drift-from-init of the zero-init out layers and the pointer
             # kernels, and per-subtree grad norms (pre-clip). A micro
