@@ -4790,6 +4790,116 @@ policy/value losses. Revert handle: delete `output_normalisation` in
 `encoder.setup` and the one application line; everything else is
 structure.
 
+## Human replay position potential — 2026-09-11 (research, no training change)
+
+User explicitly requested deriving human-informed PBRS, then specified a
+position-quality prior rather than action imitation, a learned override, and
+exactly zero cumulative shaping. This authorises the investigation despite the
+standing no-human-shaping rule; no production shaping path was restored.
+
+8,000 eligible local gen9randombattle replay logs with metadata rating >=1900;
+7,972 contain scored actions, 376,325 move/voluntary-switch rows. Whole-game
+train/validation/test 5559/1242/1171; both perspectives together. Public-prefix
+features, complex identity/type logs excluded; voluntary counts agree with the
+existing battle_stats parser. Test11,415 switches:65.09% outgoing HP>=2/3;
+switch rates33.80/17.96/12.62% from unfavourable/equal/favourable coarse STAB
+matchups. These denominators are observed actions, not legal-choice-mask rows.
+58.43% of chosen switches improve that matchup; no counterfactual benefit claim.
+
+Fit human outcomes, not actions, with one hash-selected state/game. Features H:
+public last-observed team HP balance (unseen slots full), N: alive balance,
+M: difference in best-STAB log2 effectiveness in each direction (immunity floor
+1/4; no moveset/ability/damage simulation). Experimental train-fit potential:
+Phi=eta*tanh(.315472H+.082297N+.022844M). Material baseline:
+eta*tanh(.313207H+.084851N). Test Brier material .218491, +M .218431;
+paired difference -.000060,95% game CI[-.000729,+.000567]: incremental matchup
+value NOT established. The four-feature active-HP extension won validation but
+not test. Player-disjoint/chronological generalisation was not measured.
+
+Critical negative control: over11,326 test switch turns with a next turn,
+unscaled mean potential delta material-.05515 / +M-.03754, positive only
+9.28%/33.18%. These potentials can initially penalise human switching too;
+NOT a validated switching fix. Do not increase M merely to force positive signs.
+
+At gamma1 use Psi(nonterminal)=Phi(history)-Phi(initial history), terminal
+Psi=0 explicitly, F=Psi(next)-Psi(now): sum F=0 exactly. Whole-game centring,
+all signed transitions, terminal debit; never centre each chunk or clip F.
+A free shaped critic U can learn V-Psi; exact TD advantages then equal the
+unshaped ones. No persistent heuristic agreement loss. Existing fixed [-1,0,1]
+categorical heads cannot naively consume shaped returns outside their support;
+implementation needs a derived residual/value parameterisation. No eta selected.
+
+Report with derivation, pros/cons, limitations, implementation requirements and
+PBRS references: docs/human-switch-pbrs-2026-09-11.md (local/gitignored).
+Scripts, frozen manifest/rows/results: runtime/human-switch-pbrs/. Synthetic
+parser controls include forced/pivot exclusion, future-move feature isolation,
+benched healing and two-target HP. Numeric PBRS controls cover telescoping,
+zero-return centring, corrected TD identity and positive-only clipping failure.
+Scoped Ruff/Black passed. No model/GPU work, restart, checkpoint or coefficient
+change. Research scripts/results are local artefacts; no production revert needed.
+
+### Multiple-active extension of the position potential — 2026-09-11
+
+User requested doubles generalisation. Added offline reference
+`rl/offline/position_potential.py`, not a live reward path. Field matchup is
+mean over enemy defenders of their maximum incoming pair pressure from own
+actives, minus the reverse. Exactly the singles pair difference at1x1;
+slot-permutation invariant, player-swap antisymmetric, bounded[-4,4]. It avoids
+averaging a dangerous opponent away with a harmless one, but does not model
+focus fire, spread damage, redirection, Protect or support. This aggregation
+is a design hypothesis, not a measured doubles result.
+
+Material uses6*(own roster fraction-opponent roster fraction), where6 records
+the fit's reference-team size. Actual battling roster sizes, not preview pool
+or active counts; fainted entries remain, unseen entries retain the public
+full-HP convention. Four-mon fractional losses scale to the original six-mon
+units. Singles-derived coefficients remain unchanged and unvalidated in doubles.
+
+Episode-centred PBRS is unchanged. At gamma1, unchanged-field choice microsteps
+get zero; never duplicate a resolved field reward across both active choices.
+Nine focused tests passed: singles reduction, permutation/player symmetry with
+live control, undiluted threat, four/six roster scale, bench/faint/empty handling,
+microstep/terminal zero sum, corrected TD override, bounds/off mode/invalid data.
+No model forward or simulator required. Scoped Black/Ruff/diff checks passed.
+Existing doubles service slot-alignment defect is untouched; singles replay
+parser still rejects doubles. Report extension/pros-cons/validation requirements:
+docs/human-switch-pbrs-2026-09-11.md. No training restart or live shaping change.
+
+### PBRS learner integration alternatives and eta recommendation — 2026-09-11
+
+Documentation-only follow-up requested by user. Report now maps the proposed
+reward/value changes to targets.py's scalar conversion/V-trace, train_step.py's
+CE/PG, actor whole-game chunking, interfaces, head wiring and imagined consumers.
+Extra scalar heads are OPTIONAL: existing three logits can predict a residual
+on fixed widened support ±(1+eta), trained by CE on residual_target/(1+eta).
+This preserves parameter count but abandons outcome-probability semantics and
+requires transition/search consumer migration. Merely shifting an unchanged
+outcome support by-Psi with consistently shifted targets cancels algebraically.
+
+Alternative: two small scalar residual heads on CLS/VALUE_CLS, preserving both
+raw categorical heads and their unshaped target passes; shared trunk is not an
+independent control. Actor advantages must actually use the shaped estimator
+for a direct PBRS intervention. No production choice or loss coefficient set.
+
+Analytic initial-offset handling: raw_prior=Phi(nonterminal),0 at terminal;
+start_offset=Phi(initial),0 at terminal; Psi=raw_prior-start_offset. Learn
+R≈V-raw_prior, use shaped U=R+start_offset and original V=R+raw_prior. Network
+need not reconstruct initial history. Terminal recorded value still learns the
+payoff: only its potential is0, not its payoff/value label. Numeric scratch
+check verified centred TD identity and zero sum with the actual done-row form.
+
+User wants terminal dominance: recommend eta.05 for first trial, .025 fallback;
+.10 only a justified later experiment, not a switch-rate response. This is a
+bounds-based proposal, not measured optimum or applied config. Max increment/
+terminal correction2eta=.10 at.05 (10% of unit payoff); held-out human switch
+|delta|p95 .192472*.05=.00962, mean-.00188. Total shaping remains0 exactly.
+Suggested offline same-estimator actor-logit gradient perturbation budget10%
+RMS, explicitly a design criterion, not a guarantee from reward bounds. Include
+actual advantage normalisation, absolute norms, shared-trunk/new-value-loss
+costs, raw outcome evaluation and meaningful disabled estimator control.
+No training modification/restart. Full alternatives, pros/cons and source map:
+docs/human-switch-pbrs-2026-09-11.md.
+
 ## Removal ledger — 2026-09-11 ActionEnum (structure-only, bit-identical)
 
 `ActionEnum` (41 values: 16 move sources, 6 reserves, 17 target slots and
