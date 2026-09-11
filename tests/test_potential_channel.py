@@ -208,7 +208,9 @@ def test_potential_values_need_a_positive_strength() -> None:
             batch,
             value_log_probs,
             cut,
-            Porygon2LearnerConfig(),
+            # Strength 0 explicitly: the default became .05 at the PBRS
+            # launch (a14092b), which is exactly what the guard must refuse.
+            Porygon2LearnerConfig().replace(player_potential_strength=0.0),
             isr_raw=raw,
             potential_values=jnp.zeros((6, 1)),
         )
