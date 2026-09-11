@@ -31,7 +31,6 @@ not waited on, and the count is logged.
 from __future__ import annotations
 
 import concurrent.futures as cf
-import functools
 import logging
 import os
 import pickle
@@ -58,7 +57,6 @@ from rl.model.constants import (
 from rl.model.encoder import Encoder
 from rl.model.heads import HeadParams
 from rl.model.player_model import actor_params_view, get_player_model
-from rl.model.search import configure_search
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent, resolve_actor_device
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
@@ -138,10 +136,6 @@ def play_games(
     seed: int = 0,
     opponent: str = "self",
     side_filters: dict[int, ActorInputFilter] | None = None,
-    search_mode: str = "plain",
-    search_depth: int = 2,
-    simulations: int = 64,
-    chance_samples: int = 4,
     temperature: float = 1.0,
     device: str | None = None,
 ) -> list[list[Trajectory]]:
@@ -161,21 +155,12 @@ def play_games(
         device = ctx.config.player_actor_device
     actor_device, actor_dtype = resolve_actor_device(device)
     actor_config = get_player_model_config(generation, train=False, dtype=actor_dtype)
-    configure_search(
-        actor_config,
-        mode=search_mode,
-        depth=search_depth,
-        simulations=simulations,
-        chance_samples=chance_samples,
-    )
     actor_net = get_player_model(actor_config)
     agent = Agent(
         actor_net.apply,
         device=actor_device,
         player_head_params=HeadParams(temp=temperature),
-        player_params_view=functools.partial(
-            actor_params_view, search=search_mode != "plain"
-        ),
+        player_params_view=actor_params_view,
     )
     container = ParamsContainer(
         step_count=0,
@@ -290,8 +275,8 @@ def load(path: str):
 
 def encode_policy_rows(module, actor_input, actor_output):
     """One chunk -> the post-trunk policy-readable rows (T, 73, D) and
-    their validity, exactly what the live search reads. Bound as a flax
-    `method=` on the player module (the probes' shared read)."""
+    their validity. Bound as a flax `method=` on the player module (the
+    probes' shared read)."""
     encoder = module.encoder
     env = actor_input.env
     *history_inputs, _ = encoder._history_inputs(

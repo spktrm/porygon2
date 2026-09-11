@@ -24,16 +24,8 @@ from rl.model.heads import HeadParams
 app = FastAPI()
 
 
-parser = argparse.ArgumentParser(
-    description="Play against a fixed checkpoint with optional search"
-)
-parser.add_argument(
-    "--search", choices=("plain", "expectimax", "mcts"), default="plain"
-)
+parser = argparse.ArgumentParser(description="Play against a fixed checkpoint")
 parser.add_argument("--checkpoint", default=None)
-parser.add_argument("--search-depth", type=int, default=2)
-parser.add_argument("--simulations", type=int, default=64)
-parser.add_argument("--chance-samples", type=int, default=4)
 parser.add_argument("--temperature", type=float, default=0.5)
 parser.add_argument("--device", choices=("cpu", "gpu"), default=None)
 if __name__ == "__main__":
@@ -46,10 +38,6 @@ model = InferenceModel(
     seed=secrets.randbits(32),
     player_head_params=HeadParams(temp=args.temperature),
     fpath=args.checkpoint,
-    search_mode=args.search,
-    search_depth=args.search_depth,
-    simulations=args.simulations,
-    chance_samples=args.chance_samples,
     device=args.device,
     builder_head_params=HeadParams(temp=1.0),
 )

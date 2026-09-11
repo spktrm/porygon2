@@ -174,17 +174,15 @@ def test_actor_parameter_view_preserves_required_branches() -> None:
             "encoder",
             "action_head",
             "v_head",
-            "transition",
-            "dynamics_delta_head",
+            "priv_v_head",
+            "retired_learner_branch",
         )
     }
     variables = {"params": branches}
     plain = actor_params_view(variables)
-    search = actor_params_view(variables, search=True)
     assert set(plain["params"]) == {"encoder", "action_head", "v_head"}
-    assert search["params"]["transition"] is branches["transition"]
     assert plain["params"]["encoder"] is branches["encoder"]
-    assert "dynamics_delta_head" in variables["params"]
+    assert "retired_learner_branch" in variables["params"]
     branches["slot_conditioning"] = {"weight": np.ones(2)}
     assert (
         actor_params_view(variables)["params"]["slot_conditioning"]
@@ -192,8 +190,6 @@ def test_actor_parameter_view_preserves_required_branches() -> None:
     )
     with pytest.raises(KeyError):
         actor_params_view({"params": {"encoder": {}}})
-    with pytest.raises(KeyError):
-        actor_params_view(plain, search=True)
 
 
 def test_actor_jit_shared_across_agents_and_historical_params(
@@ -247,12 +243,10 @@ def test_actor_jit_shared_across_agents_and_historical_params(
 
 @pytest.mark.gpu
 @pytest.mark.slow
-@pytest.mark.parametrize("search", [False, True])
 def test_real_actor_parameter_view_is_bit_identical(
     real_model_and_trajectory: tuple[
         nn.Module, dict, PlayerActorInput, PlayerActorOutput
     ],
-    search: bool,
 ) -> None:
     from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
@@ -260,25 +254,19 @@ def test_real_actor_parameter_view_is_bit_identical(
     from rl.model.utils import open_zero_init_paths
 
     _, variables, actor_input, actor_output = real_model_and_trajectory
-    variables = open_zero_init_paths(variables, ["action_head", "dynamics_out_proj"])
+    variables = open_zero_init_paths(variables, ["action_head"])
     actor_input = actor_input.replace(
         env=jax.tree.map(lambda leaf: leaf[:1], actor_input.env)
     )
     actor_output = jax.tree.map(lambda leaf: leaf[:1], actor_output)
     config = get_player_model_config(9, train=False)
-    config.search.enabled = search
-    config.search.depth = 1
     apply_model = jax.jit(get_player_model(config).apply)
     arguments = (actor_input, actor_output, HeadParams())
     rngs = {"sampling": jax.random.key(9)}
     full = apply_model(variables, *arguments, rngs=rngs)
-    projected = apply_model(
-        actor_params_view(variables, search=search), *arguments, rngs=rngs
-    )
+    projected = apply_model(actor_params_view(variables), *arguments, rngs=rngs)
     for expected, actual in zip(
         jax.tree.leaves(full), jax.tree.leaves(projected), strict=True
     ):
         np.testing.assert_array_equal(expected, actual)
     assert np.any(np.asarray(full.action_head.entropy) > 0)
-    if search:
-        assert np.any(np.asarray(full.search.root_kl) > 0)

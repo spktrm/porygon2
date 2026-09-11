@@ -22,7 +22,6 @@ from rl.environment.interfaces import (
     PlayerEnvOutput,
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
-    SearchOutput,
 )
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
@@ -30,7 +29,6 @@ from rl.environment.protos.features_pb2 import (
     InfoFeature,
 )
 from rl.environment.utils import get_ex_player_step
-from rl.model.categoricals import unimix_probs
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
@@ -57,28 +55,24 @@ from rl.model.heads import (
     compute_policy_metrics,
     sample_categorical,
 )
-from rl.model.mcts import mcts_root
 from rl.model.modules import MLP
-from rl.model.search import SearchBudget, SearchFns, search_diagnostics, search_root
 from rl.model.transition import TransitionModel
 from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params, prune_log_policy
 
 
-def actor_params_view(variables, *, search: bool = False):
+def actor_params_view(variables):
     """Project checkpoint variables onto the actor's required modules.
 
     Historical league snapshots carry different unused learner branches.
     Strip those before JIT dispatch, retaining the complete encoder (including
-    setup-time parameters), value output and, for search, transition tree.
+    setup-time parameters) and the value output.
     Indexing required modules deliberately fails on incompatible snapshots.
     """
     required = ["encoder", "action_head", "v_head"]
     # The optional doubles readout is an actor consumer too.
     if "slot_conditioning" in variables["params"]:
         required.append("slot_conditioning")
-    if search:
-        required.append("transition")
     return {"params": {name: variables["params"][name] for name in required}}
 
 
@@ -215,16 +209,10 @@ class Porygon2PlayerModel(nn.Module):
         # The latent transition model (2026-09-05, rl/model/transition.py):
         # g(h_t, a, z) over the post-trunk policy-readable rows. Its params
         # are lazy, so instantiating it here costs the actor nothing; it is
-        # CALLED under cfg.train (the losses) and under cfg.search.enabled
-        # (the search eval arm's `prior` / `imagine`, rl/model/search.py) --
-        # the two are exclusive: search runs on an ACTOR config, so the
-        # learner's forward never pays for it.
+        # CALLED under cfg.train (the losses) only.
         self.transition = TransitionModel(
             self.cfg.transition, dtype=self.cfg.dtype, name="transition"
         )
-        if self.cfg.search.enabled:
-            assert not self.cfg.train, "search is actor-side only"
-            assert self.transition.has_code, "search samples the chance code"
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -282,22 +270,18 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        search_bonus: jax.Array | None = None,
         prune_threshold: float = 0.0,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
         the block cells (the historical path, unchanged); doubles = two head-level
         stages over per-slot masks with slot 2 conditioned on slot 1's
-        choice — the trunk is forwarded once either way. `search_bonus`
-        (the search eval arm's per-cell Q / temp, rl/model/search.py) is
-        singles-only."""
+        choice — the trunk is forwarded once either way."""
         if self.cfg.num_decision_slots == 2:
-            assert search_bonus is None
             return self._forward_two_slots(
                 sequence_rows, valid_mask, head, train, temp, prune_threshold
             )
         return self._forward_single_slot(
-            sequence_rows, valid_mask, head, train, temp, search_bonus, prune_threshold
+            sequence_rows, valid_mask, head, train, temp, prune_threshold
         )
 
     def _legal_logits(
@@ -308,8 +292,8 @@ class Porygon2PlayerModel(nn.Module):
         decision_slot: int = 0,
     ) -> jax.Array:
         """The readout's logits with illegal cells at -1e9 (finite, so no
-        `-inf * 0` in a vjp): the one form both the sampler and the search
-        diagnostics read. `decision_slot` picks the ally row the switch
+        `-inf * 0` in a vjp): the one form the sampler reads.
+        `decision_slot` picks the ally row the switch
         block reads -- 0 in singles, 1 for doubles stage 2."""
         private_rows, move_rows, target_rows = sequence_rows
         logits = self.action_head(
@@ -323,7 +307,6 @@ class Porygon2PlayerModel(nn.Module):
         valid_mask: jax.Array,
         given_index: jax.Array | None,
         temp: float,
-        search_bonus: jax.Array | None = None,
         prune_threshold: float = 0.0,
         decision_slot: int = 0,
     ):
@@ -335,10 +318,7 @@ class Porygon2PlayerModel(nn.Module):
         actor actually did; None samples.
 
         Behaviour policy mu == pi, with illegal cells at the dtype's min so
-        the sampler can never draw one. `search_bonus` adds the search
-        arm's Q / temp on legal cells (0 elsewhere) BEFORE the softmax, so
-        pi here IS the searched policy and every metric reads it; None is
-        bit-identical to the trained policy. `prune_threshold` removes the
+        the sampler can never draw one. `prune_threshold` removes the
         legal cells below it from mu ONLY (rl/model/utils.py
         prune_log_policy; 0.0 is bit-identical): the metrics read pi
         untouched, and the stored log_prob is mu's, so an eval slot
@@ -346,8 +326,6 @@ class Porygon2PlayerModel(nn.Module):
         """
         flat_valid = valid_mask
         pi_logits = self._legal_logits(sequence_rows, valid_mask, temp, decision_slot)
-        if search_bonus is not None:
-            pi_logits = pi_logits + search_bonus.astype(pi_logits.dtype)
         # prior=None is uniform over legal cells -- which is exactly what the
         # flat readout's all-zero init produces, so the init policy and the
         # metric anchor are the same distribution.
@@ -367,7 +345,6 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        search_bonus: jax.Array | None = None,
         prune_threshold: float = 0.0,
     ):
         if train:
@@ -379,7 +356,6 @@ class Porygon2PlayerModel(nn.Module):
             valid_mask,
             given_index,
             temp,
-            search_bonus,
             prune_threshold,
         )
         learner_only = {}
@@ -504,94 +480,6 @@ class Porygon2PlayerModel(nn.Module):
             normalized_modality_entropy=normalized_modality_entropy,
         )
 
-    def _search_root(
-        self, sequence: jax.Array, row_valid: jax.Array, legal: jax.Array, temp: float
-    ):
-        """The search eval arm's read of one decision (rl/model/search.py):
-        the exact legal cells at the root, each through the action
-        encoder, chance sampled from the PRIOR -- against the empirical
-        opponent the data was played against -- valued by the shared V
-        (depth 1) or by the generator's candidates one level down (depth
-        2). Returns the logit bonus and the `SearchOutput` panels."""
-        search_cfg = self.cfg.search
-        transition = self.transition
-        mass_threshold = self.cfg.transition.mass_threshold
-
-        def value_fn(cls_row):
-            return self.v_head(cls_row).expectation
-
-        def generate_fn(rows, rng):
-            return transition.generate(rows, rng, mass_threshold)
-
-        def encoder_fn(rows, cell):
-            return unimix_probs(transition.action_logits(rows, cell))
-
-        fns = SearchFns(
-            encoder_fn=encoder_fn,
-            prior_fn=transition.prior,
-            imagine_fn=transition.imagine,
-            value_fn=value_fn,
-            generate_fn=generate_fn,
-            continue_fn=transition.continue_prob,
-            terminal_fn=transition.expected_terminal_outcome,
-        )
-        budget = SearchBudget(
-            depth=search_cfg.depth,
-            num_samples=search_cfg.num_samples,
-            num_samples_inner=search_cfg.num_samples_inner,
-            max_cells=search_cfg.max_cells,
-            temp=search_cfg.temp,
-        )
-        base_logits = self._legal_logits(
-            (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
-            legal,
-            temp,
-        )
-        mcts = None
-        if search_cfg.method == "mcts":
-            mcts = mcts_root(
-                sequence,
-                legal,
-                base_logits,
-                self.make_rng("sampling"),
-                fns,
-                simulations=search_cfg.mcts_simulations,
-                depth=search_cfg.depth,
-                chance_samples=search_cfg.mcts_chance_samples,
-                max_actions=search_cfg.max_cells,
-            )
-            root = mcts.root
-        elif search_cfg.method == "expectimax":
-            root = search_root(sequence, legal, self.make_rng("sampling"), fns, budget)
-        else:
-            raise ValueError(f"Unknown search method: {search_cfg.method}")
-        diagnostics = search_diagnostics(
-            base_logits, root, legal, self.v_head(sequence[CLS_ROW]).expectation
-        )
-        output = SearchOutput(
-            root_kl=diagnostics.root_kl,
-            search_value=diagnostics.search_value,
-            root_value_gap=diagnostics.root_value_gap,
-            num_legal=root.num_legal,
-            legal_truncated=root.legal_truncated,
-        )
-        if mcts is not None:
-            output = output.replace(
-                mcts_visits=mcts.visits,
-                mcts_model_calls=mcts.model_calls,
-                mcts_depth_reached=mcts.depth_reached,
-                candidate_retained_mass=root.candidate_retained_mass,
-                candidate_occupied=root.candidate_occupied,
-            )
-        elif search_cfg.depth >= 2:
-            output = output.replace(
-                deep_gain=root.deep_gain,
-                deep_continue=root.deep_continue,
-                candidate_retained_mass=root.candidate_retained_mass,
-                candidate_occupied=root.candidate_occupied,
-            )
-        return root.bonus, output
-
     def get_head_outputs(
         self,
         sequence: jax.Array,
@@ -612,19 +500,12 @@ class Porygon2PlayerModel(nn.Module):
         history_stats and history_carry are per TRAJECTORY (the history is
         shared across the requests); closed over rather than mapped, so the
         vmap in __call__ broadcasts them to one copy per step."""
-        search_bonus = None
-        search_output = SearchOutput()
-        if self.cfg.search.enabled:
-            search_bonus, search_output = self._search_root(
-                sequence, row_valid, env_step.action_mask, head_params.temp
-            )
         action_head = self._forward_action_head(
             (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
-            search_bonus=search_bonus,
             prune_threshold=head_params.prune_threshold,
         )
         learner_only = {}
@@ -716,7 +597,6 @@ class Porygon2PlayerModel(nn.Module):
             # The CLS row, and only the CLS row.
             value_head=self.v_head(sequence[CLS_ROW]),
             history_carry=history_carry,
-            search=search_output,
             **learner_only,
         )
 

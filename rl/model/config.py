@@ -298,34 +298,6 @@ def get_player_model_config(
     # (learner-only; set from `player_transition_value_trains_v_head` at
     # the learner's construction sites). False applies a frozen copy.
     cfg.transition.value_trains_v_head = True
-    # Search over the transition model (2026-09-06, rl/model/search.py;
-    # recursive 2026-09-07). ACTOR-side only and off by default -- the
-    # baseline search eval slots in rl/online/main.py build their own
-    # configs with `enabled` True (search runs NOWHERE else: not on the
-    # self-play actors, not in the learner). The root expands the exact
-    # legal cells, each through the action encoder, with `num_samples`
-    # chance codes from the prior per cell; every deeper node (`depth`
-    # 2) draws its own latent candidates from the generator and
-    # `num_samples_inner` chance codes per candidate, backed up as the
-    # explicit decision / chance recursion (candidates improved by the
-    # KL-regularised softmax at `temp`, chance averaged, the terminal
-    # payoff through the conditional outcome reader). The root's per-cell
-    # value is added to the readout's logits as Q(a) / temp
-    # (Gumbel-MuZero's additive form). temp 0.1: a 0.1 edge in win
-    # probability is one e-fold of policy mass; judged by `root_kl`
-    # (0.05-0.5 is the band), never retuned as a ladder. `max_cells`
-    # aliases the transition's static width; a root with more legal cells
-    # returns the base policy untouched and is counted (`legal_truncated`).
-    cfg.search = ConfigDict()
-    cfg.search.enabled = False
-    cfg.search.method = "expectimax"
-    cfg.search.mcts_simulations = 64
-    cfg.search.mcts_chance_samples = 4
-    cfg.search.depth = 1
-    cfg.search.num_samples = 8
-    cfg.search.num_samples_inner = 2
-    cfg.search.temp = 0.1
-    cfg.search.max_cells = cfg.transition.max_cells
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step
