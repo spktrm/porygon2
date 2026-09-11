@@ -895,6 +895,22 @@ def transition_losses(
     return loss, logs
 
 
+def normalise_advantages(
+    advantages: jax.Array, policy_mask: jax.Array
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """(normalised, mean, std) of the policy advantages over the policy rows,
+    f32: the batch statistics the surrogate reads, off-policy rows zeroed.
+    One function so offline screens (runtime/pbrs-screen) read the learner's
+    own normalisation. The count guard covers an all-masked batch."""
+    advantages = advantages.astype(jnp.float32)
+    count = jnp.maximum(policy_mask.sum().astype(jnp.float32), 1.0)
+    mean = jnp.where(policy_mask, advantages, 0.0).sum() / count
+    variance = jnp.where(policy_mask, jnp.square(advantages - mean), 0.0).sum() / count
+    std = jnp.sqrt(variance)
+    normalised = jnp.where(policy_mask, (advantages - mean) / (std + 1e-8), 0.0)
+    return normalised, mean, std
+
+
 def train_step(
     player_state: Porygon2PlayerTrainState,
     builder_state: Porygon2BuilderTrainState,
@@ -1099,15 +1115,8 @@ def train_step(
     # guard covers an all-masked batch; there is no running statistic
     # here to poison (LESSONS 2 applies to EMAs, not batch stats).
     pg_advantages = player_targets.pg_advantages.astype(jnp.float32)
-    pg_adv_count = jnp.maximum(policy_mask.sum().astype(jnp.float32), 1.0)
-    pg_adv_mean = jnp.where(policy_mask, pg_advantages, 0.0).sum() / pg_adv_count
-    pg_adv_var = (
-        jnp.where(policy_mask, jnp.square(pg_advantages - pg_adv_mean), 0.0).sum()
-        / pg_adv_count
-    )
-    pg_adv_std = jnp.sqrt(pg_adv_var)
-    pg_adv_norm = jnp.where(
-        policy_mask, (pg_advantages - pg_adv_mean) / (pg_adv_std + 1e-8), 0.0
+    pg_adv_norm, pg_adv_mean, pg_adv_std = normalise_advantages(
+        pg_advantages, policy_mask
     )
     training_logs["player_pg_adv_mean"] = pg_adv_mean
     training_logs["player_pg_adv_std"] = pg_adv_std
