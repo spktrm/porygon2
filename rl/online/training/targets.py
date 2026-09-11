@@ -91,6 +91,39 @@ def trace_run_length(continues: jax.Array) -> jax.Array:
     return runs
 
 
+def scalar_vtrace(
+    reward: jax.Array,
+    value: jax.Array,
+    discount_t: jax.Array,
+    mask: jax.Array,
+    rho_t: jax.Array,
+    c_t: jax.Array,
+    lambda_: float,
+) -> tuple[jax.Array, jax.Array]:
+    """One scalar v-trace channel: (value targets, policy advantages).
+
+    The value recursion bootstraps on `value` with each row's successor (a
+    chunk's final row bootstraps on itself); the advantage is the plain
+    v-trace pass over the same residuals, bootstrapping on the
+    lambda-mixed v-trace value of the NEXT step, so a reward enters exactly
+    once (a done row's discount is 0 and its estimate is its own reward).
+    Linear in (reward, value) at fixed ratios, which is what lets
+    compute_player_targets run the potential channel beside the win
+    channel and add the advantages. f32 throughout (LESSONS 2).
+    """
+    value_next = jnp.concatenate([value[1:], value[-1:]], axis=0)
+    td_errors = rho_t * mask * (reward + discount_t * value_next - value)
+    vtrace_value = vtrace(td_errors, discount_t, c_t * lambda_) + value
+    returns = vtrace_value * mask
+    q_bootstrap = jnp.concatenate(
+        [lambda_ * vtrace_value[1:] + (1 - lambda_) * value[1:], value[-1:]],
+        axis=0,
+    )
+    q_estimate = reward + discount_t * q_bootstrap
+    advantages = rho_t * (q_estimate - value) * mask
+    return returns, advantages
+
+
 def compute_player_targets(
     batch: Batch,
     value_log_probs: jax.Array,
@@ -157,7 +190,6 @@ def compute_player_targets(
     r_t = batch.player_transitions.env_output.win_reward.astype(jnp.float32) @ support
 
     v_tm1 = jnp.exp(value_log_probs.astype(jnp.float32)) @ support
-    v_t = jnp.concatenate([v_tm1[1:], v_tm1[-1:]], axis=0)
 
     # Plain v-trace: the subtracted baseline is V(s). Between 2026-08-25 and
     # 2026-08-29 it was the COMPOSED Q = V(s) + A(s, a), i.e. this residual
@@ -165,35 +197,18 @@ def compute_player_targets(
     # rho attenuated only environment noise rather than the whole residual.
     # That went with the advantage head; the file's own note promised
     # adv_taken = 0 was the exact revert, and this is it.
-    td_errors = rho_t * mask * (r_t + discount_t * v_t - v_tm1)
-
-    errors = vtrace(td_errors, discount_t, c_t * config.player_lambda)
-    scalar_returns = (errors + v_tm1) * mask
+    #
+    # Policy advantage (2026-08-26): a PLAIN v-trace pass over the V
+    # readout — no Retrace baseline shift — feeding the PPO surrogate's
+    # taken-action advantage (scalar_vtrace; the same construction as the
+    # builder's pg_advantages). done rows are excluded by policy_mask.
+    scalar_returns, pg_advantages = scalar_vtrace(
+        r_t, v_tm1, discount_t, mask, rho_t, c_t, config.player_lambda
+    )
 
     # Off-mask rows stay inert zero vectors; every masked row is a proper
     # two-hot distribution (two_hot clips to the support range).
     win_returns = two_hot(scalar_returns, support) * mask[..., None]
-
-    # Policy advantage (2026-08-26): a PLAIN v-trace pass over the V
-    # readout — no Retrace baseline shift — feeding the PPO surrogate's
-    # taken-action advantage. Same construction as the builder's
-    # pg_advantages: q_estimate bootstraps on the lambda-mixed v-trace
-    # value of the NEXT step, so the outcome enters exactly once (a done
-    # row's discount is 0 and its estimate is the terminal reward itself;
-    # done rows are excluded by policy_mask anyway). rho truncates the
-    # off-policy weight as everywhere else; f32 like the value recursion.
-    td_plain = rho_t * mask * (r_t + discount_t * v_t - v_tm1)
-    vtrace_v = vtrace(td_plain, discount_t, c_t * config.player_lambda) + v_tm1
-    q_bootstrap = jnp.concatenate(
-        [
-            config.player_lambda * vtrace_v[1:]
-            + (1 - config.player_lambda) * v_tm1[1:],
-            v_tm1[-1:],
-        ],
-        axis=0,
-    )
-    q_estimate = r_t + discount_t * q_bootstrap
-    pg_advantages = rho_t * (q_estimate - v_tm1) * mask
 
     value_mask = mask.astype(jnp.bool_)
     # Chunked unrolls: a chunk's final row is bootstrap-only — it anchors
