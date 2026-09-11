@@ -8,7 +8,7 @@ import {
     ObservedBattle,
     ObservedPokemon,
 } from "./mcts_observation";
-import { evaluatePosition, PotentialPokemon } from "./position_potential";
+import { evaluatePosition, PotentialPokemon } from "../position_potential";
 import { normaliseChoice } from "./mcts_simulator";
 
 export function observedPotential(observation: ObservedBattle): number {

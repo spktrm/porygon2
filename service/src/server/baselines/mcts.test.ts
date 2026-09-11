@@ -4,7 +4,6 @@ import { Generations } from "@pkmn/data";
 import { Dex as ClientDex } from "@pkmn/dex";
 import { Battle, PRNG, Teams } from "@pkmn/sim";
 import { searchMcts, SearchState } from "./mcts";
-import { evaluatePosition, PotentialPokemon } from "./position_potential";
 import {
     buildSampledBattle,
     makeRootSampler,
@@ -91,10 +90,6 @@ function observation(): ObservedBattle {
             ],
         },
     };
-}
-
-function pokemon(kind: string, hp = 1, active = true): PotentialPokemon {
-    return { hp, active, offensiveTypes: [kind], defensiveTypes: [kind] };
 }
 
 describe("service-only potential MCTS", () => {
@@ -207,31 +202,6 @@ describe("service-only potential MCTS", () => {
             random: random(),
         });
         expect(result.action).toBe("good");
-    });
-    test("potential matches the Python singles fixture and is symmetric in doubles", () => {
-        const own = [
-            pokemon("Fire", 0.5),
-            ...Array.from({ length: 5 }, () => pokemon("Normal", 1, false)),
-        ];
-        const opponent = [
-            pokemon("Grass"),
-            ...Array.from({ length: 5 }, () => pokemon("Normal", 1, false)),
-        ];
-        expect(evaluatePosition(own, opponent)).toBeCloseTo(
-            Math.tanh(
-                (-0.5 * 0.6309440873897149 + 2 * 0.04568841302462828) / 2,
-            ),
-            12,
-        );
-        const ownDoubles = [pokemon("Fire", 0.5), pokemon("Water")];
-        const opposingDoubles = [pokemon("Grass"), pokemon("Electric")];
-        expect(evaluatePosition(ownDoubles, opposingDoubles)).toBeCloseTo(
-            -evaluatePosition(opposingDoubles, ownDoubles),
-            12,
-        );
-        expect(
-            evaluatePosition([...ownDoubles].reverse(), opposingDoubles),
-        ).toBe(evaluatePosition(ownDoubles, opposingDoubles));
     });
     test("sampled worlds retain own facts and revealed opponent moves without mutating observations", () => {
         const observed = observation();

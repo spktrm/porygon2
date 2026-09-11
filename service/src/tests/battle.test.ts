@@ -80,6 +80,14 @@ describe("battle invariants", () => {
             for (const result of results) {
                 expect(result.stateCount).toBeGreaterThan(0);
             }
+            // runBattle already required the paired potentials to be exact
+            // negatives; this keeps that check from passing on all zeros.
+            const [first, second] = results;
+            const pairedNonzero = [...first.potentialByTurn].filter(
+                ([turn, value]) =>
+                    value !== 0 && second.potentialByTurn.has(turn),
+            ).length;
+            expect(pairedNonzero).toBeGreaterThan(0);
         },
     );
 });

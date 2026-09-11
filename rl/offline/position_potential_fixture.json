@@ -1,0 +1,685 @@
+{
+ "_comment": "Shared parity fixture: rl/offline/position_potential.py and service/src/server/position_potential.ts must both reproduce these, on the gen9 dex chart. Regenerate only with the Python reference.",
+ "positions": [
+  {
+   "name": "fire_half_vs_grass",
+   "own": [
+    {
+     "hp": 0.5,
+     "active": true,
+     "offensive": [
+      "Fire"
+     ],
+     "defensive": [
+      "Fire"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    }
+   ],
+   "opponent": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Grass"
+     ],
+     "defensive": [
+      "Grass"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    }
+   ],
+   "features": {
+    "hp_balance": -0.5,
+    "alive_balance": 0.0,
+    "matchup": 2.0
+   },
+   "potential": -0.11158104491224716
+  },
+  {
+   "name": "electric_into_ground_unrevealed",
+   "own": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Electric"
+     ],
+     "defensive": [
+      "Electric"
+     ]
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "opponent": [
+    {
+     "hp": 0.8,
+     "active": true,
+     "offensive": [
+      "Ground"
+     ],
+     "defensive": [
+      "Ground"
+     ]
+    },
+    {
+     "hp": 0.3,
+     "active": false,
+     "offensive": [
+      "Water"
+     ],
+     "defensive": [
+      "Water"
+     ]
+    },
+    null,
+    null,
+    null,
+    null
+   ],
+   "features": {
+    "hp_balance": 0.9000000000000004,
+    "alive_balance": 0.0,
+    "matchup": -3.0
+   },
+   "potential": 0.21212193958839518
+  },
+  {
+   "name": "ice_4x_with_fainted_bench",
+   "own": [
+    {
+     "hp": 0.6,
+     "active": true,
+     "offensive": [
+      "Ice"
+     ],
+     "defensive": [
+      "Ice"
+     ]
+    },
+    {
+     "hp": 0,
+     "active": false,
+     "offensive": [
+      "Fire"
+     ],
+     "defensive": [
+      "Fire"
+     ]
+    },
+    null,
+    null,
+    null,
+    null
+   ],
+   "opponent": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Dragon",
+      "Flying"
+     ],
+     "defensive": [
+      "Dragon",
+      "Flying"
+     ]
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "features": {
+    "hp_balance": -1.4000000000000004,
+    "alive_balance": -1.0,
+    "matchup": 2.0
+   },
+   "potential": -0.44485636689047237
+  },
+  {
+   "name": "tera_offence_and_defence",
+   "own": [
+    {
+     "hp": 0.7,
+     "active": true,
+     "offensive": [
+      "Water",
+      "Fire"
+     ],
+     "defensive": [
+      "Fire"
+     ]
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "opponent": [
+    {
+     "hp": 0.5,
+     "active": true,
+     "offensive": [
+      "Grass",
+      "Steel"
+     ],
+     "defensive": [
+      "Grass",
+      "Steel"
+     ]
+    },
+    {
+     "hp": 0.4,
+     "active": false,
+     "offensive": [
+      "Bug"
+     ],
+     "defensive": [
+      "Bug"
+     ]
+    },
+    null,
+    null,
+    null,
+    null
+   ],
+   "features": {
+    "hp_balance": 0.7999999999999998,
+    "alive_balance": 0.0,
+    "matchup": 3.0
+   },
+   "potential": 0.31032974625844306
+  },
+  {
+   "name": "ghost_normal_immunity",
+   "own": [
+    {
+     "hp": 0.9,
+     "active": true,
+     "offensive": [
+      "Ghost"
+     ],
+     "defensive": [
+      "Ghost"
+     ]
+    },
+    {
+     "hp": 0,
+     "active": false,
+     "offensive": [
+      "Water"
+     ],
+     "defensive": [
+      "Water"
+     ]
+    },
+    null,
+    null,
+    null,
+    null
+   ],
+   "opponent": [
+    {
+     "hp": 0.35,
+     "active": true,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "features": {
+    "hp_balance": -0.4499999999999993,
+    "alive_balance": -1.0,
+    "matchup": 0.0
+   },
+   "potential": -0.22057375852815267
+  },
+  {
+   "name": "fainted_active_has_no_matchup",
+   "own": [
+    {
+     "hp": 0,
+     "active": true,
+     "offensive": [
+      "Fire"
+     ],
+     "defensive": [
+      "Fire"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    }
+   ],
+   "opponent": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Grass"
+     ],
+     "defensive": [
+      "Grass"
+     ]
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "features": {
+    "hp_balance": -1.0,
+    "alive_balance": -1.0,
+    "matchup": 0.0
+   },
+   "potential": -0.3780382049289848
+  },
+  {
+   "name": "three_type_defender_caps_at_four",
+   "own": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Fire"
+     ],
+     "defensive": [
+      "Fire"
+     ]
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "opponent": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Grass",
+      "Steel",
+      "Bug"
+     ]
+    },
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "features": {
+    "hp_balance": 0.0,
+    "alive_balance": 0.0,
+    "matchup": 2.0
+   },
+   "potential": 0.045656649075200624
+  },
+  {
+   "name": "doubles_two_actives",
+   "own": [
+    {
+     "hp": 0.5,
+     "active": true,
+     "offensive": [
+      "Fire"
+     ],
+     "defensive": [
+      "Fire"
+     ]
+    },
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Water"
+     ],
+     "defensive": [
+      "Water"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    }
+   ],
+   "opponent": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Grass"
+     ],
+     "defensive": [
+      "Grass"
+     ]
+    },
+    {
+     "hp": 0.7,
+     "active": true,
+     "offensive": [
+      "Electric"
+     ],
+     "defensive": [
+      "Electric"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    }
+   ],
+   "features": {
+    "hp_balance": -0.20000000000000018,
+    "alive_balance": 0.0,
+    "matchup": 0.0
+   },
+   "potential": -0.06301081757373908
+  },
+  {
+   "name": "bring_four_roster",
+   "own": [
+    {
+     "hp": 0.5,
+     "active": true,
+     "offensive": [
+      "Fighting"
+     ],
+     "defensive": [
+      "Fighting"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    },
+    {
+     "hp": 1.0,
+     "active": false,
+     "offensive": [
+      "Normal"
+     ],
+     "defensive": [
+      "Normal"
+     ]
+    }
+   ],
+   "opponent": [
+    {
+     "hp": 1,
+     "active": true,
+     "offensive": [
+      "Dark",
+      "Steel"
+     ],
+     "defensive": [
+      "Dark",
+      "Steel"
+     ]
+    },
+    null,
+    null,
+    null
+   ],
+   "features": {
+    "hp_balance": -0.75,
+    "alive_balance": 0.0,
+    "matchup": 2.0
+   },
+   "potential": -0.18862939919458177
+  }
+ ]
+}

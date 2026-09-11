@@ -2,7 +2,7 @@
  * Every input belongs to a sampled hypothetical battle, never the live opponent.
  */
 import { Battle, Pokemon } from "@pkmn/sim";
-import { evaluatePosition } from "./position_potential";
+import { evaluatePosition } from "../position_potential";
 
 export const SEARCH_POTENTIAL_NAMES = [
     "original",

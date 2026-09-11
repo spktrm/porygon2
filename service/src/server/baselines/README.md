@@ -72,7 +72,8 @@ multi-active potential alone does not make the battle adapter doubles-ready.
 - `search_potentials.ts`: original, material, strategic, tactical and roster leaves.
 - `mcts_observation.ts`: explicit public/own-request information boundary.
 - `mcts_simulator.ts`: sampled worlds, simulator action enumeration and clones.
-- `position_potential.ts`: shared-coefficient position evaluation.
+- `../position_potential.ts`: shared-coefficient position evaluation (moved up
+  2026-09-11: the battle state also emits it for the learner's PBRS channel).
 - `potential_mcts.ts`: legal action-cell adapter, budgets and fallback counters.
 
 From `service/`:

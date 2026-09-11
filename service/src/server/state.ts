@@ -75,6 +75,7 @@ import {
     RequestType,
 } from "../../protos/features_pb";
 import { TrainablePlayerAI } from "./runner";
+import { potentialOf, publicPositionFeatures } from "./position_potential";
 import {
     EnvironmentState,
     MoveSlot,
@@ -4675,6 +4676,15 @@ export class StateHandler {
         return {};
     }
 
+    /** A unit-scale potential on the int16 info vector, rounded
+     * symmetrically so the two perspectives stay exact negatives. */
+    static quantisePotential(potential: number): number {
+        return (
+            Math.sign(potential) *
+            Math.round(Math.abs(potential) * MAX_RATIO_TOKEN)
+        );
+    }
+
     getHpRatio(member: Pokemon) {
         const isHpBug = !member.fainted && member.hp === 0;
         const hp = isHpBug ? 100 : member.hp;
@@ -4736,10 +4746,20 @@ export class StateHandler {
                 this.player.actionCells.at(-1)!;
         }
 
-        // INFO_FEATURE__STATE_POTENTIAL is left at 0: the hand-crafted
-        // heuristic was replaced by a learned critic evaluated learner-side
-        // (rl/offline/artifact.py); the feature slot is kept so the proto
-        // layout is unchanged.
+        // The public position potential (2026-09-11), unit scale, both sides
+        // from publicBattle so the two perspectives read identical inputs and
+        // the value is exactly antisymmetric (harness.ts). The model never
+        // reads this slot; the learner's PBRS channel does, scaled by
+        // player_potential_strength.
+        infoBuffer[InfoFeature.INFO_FEATURE__STATE_POTENTIAL] =
+            StateHandler.quantisePotential(
+                potentialOf(
+                    publicPositionFeatures(
+                        this.player.publicBattle,
+                        playerIndex,
+                    ),
+                ),
+            );
 
         const publicOrder = this.getPublicTeamOrder(playerIndex);
         infoBuffer.set(publicOrder, InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0);

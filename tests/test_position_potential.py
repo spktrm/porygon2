@@ -1,8 +1,10 @@
 """Offline potential contracts; no model initialisation or simulator required."""
 
 import itertools
+import json
 import math
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -168,3 +170,65 @@ def test_bounded_potential_off_mode_and_invalid_inputs():
         position_potential(PositionFeatures(0, 0, 0), strength=-1)
     with pytest.raises(ValueError):
         shaping_reward(0, 1, gamma=1.1)
+
+
+REPO = Path(__file__).resolve().parents[1]
+# The dex export's `damageTaken` codes (0 neutral, 1 weak, 2 resist, 3 immune)
+# as the type-chart multipliers the potential reads.
+_DAMAGE_TAKEN_MULTIPLIER = {0: 1.0, 1: 2.0, 2: 0.5, 3: 0.0}
+
+
+def gen9_type_chart():
+    entries = [
+        entry
+        for entry in json.loads((REPO / "data/data/gen9/typechart.json").read_text())
+        if entry["id"] != "stellar"
+    ]
+    return {
+        attack["name"]: {
+            defender["name"]: _DAMAGE_TAKEN_MULTIPLIER[
+                defender["damageTaken"][attack["name"]]
+            ]
+            for defender in entries
+        }
+        for attack in entries
+    }
+
+
+def fixture_team(mons):
+    return [
+        (
+            None
+            if entry is None
+            else PublicPokemon(
+                tuple(entry["offensive"]),
+                tuple(entry["defensive"]),
+                float(entry["hp"]),
+                entry["active"],
+            )
+        )
+        for entry in mons
+    ]
+
+
+def test_shared_fixture_matches_the_reference_on_the_dex_chart():
+    """service/src/server/position_potential.test.ts asserts the same numbers,
+    so the service's emitted potential and this reference cannot drift."""
+    fixture = json.loads(
+        (REPO / "rl/offline/position_potential_fixture.json").read_text()
+    )
+    chart = gen9_type_chart()
+    assert fixture["positions"]
+    for position in fixture["positions"]:
+        features = position_features(
+            fixture_team(position["own"]), fixture_team(position["opponent"]), chart
+        )
+        expected = position["features"]
+        assert features.hp_balance == pytest.approx(expected["hp_balance"], abs=1e-12)
+        assert features.alive_balance == pytest.approx(
+            expected["alive_balance"], abs=1e-12
+        )
+        assert features.matchup == pytest.approx(expected["matchup"], abs=1e-12)
+        assert position_potential(features, strength=1.0) == pytest.approx(
+            position["potential"], abs=1e-12
+        )

@@ -22,6 +22,10 @@ import { AnyObject, Teams } from "@pkmn/sim";
 import { TeamGenerators } from "@pkmn/randoms";
 import { GetRandomAction } from "../server/baselines/random";
 import { numEvals } from "../server/eval";
+import {
+    potentialOf,
+    publicPositionFeatures,
+} from "../server/position_potential";
 
 Teams.setGeneratorFactory(TeamGenerators);
 
@@ -329,6 +333,10 @@ export async function playerController(player: TrainablePlayerAI) {
     // The cell this controller last sent, as the runner records it: the cell
     // itself, or NO_CHOICE_CELL when that request offered no choice.
     let lastSentCell: number | undefined;
+    // The public position potential at each turn-start move request, by
+    // turn: runBattle pairs the two players' values and requires exact
+    // negatives, since both read the same public inputs.
+    const potentialByTurn = new Map<number, number>();
     while (true) {
         // Only the stream read is guarded: a closed stream ends the loop
         // cleanly, while invariant violations below THROW upward so the
@@ -479,6 +487,42 @@ export async function playerController(player: TrainablePlayerAI) {
                 throw new Error("No request available");
             }
 
+            // The position potential (2026-09-11). On the first state both
+            // rosters are whole and unhurt, so only the lead matchup can move
+            // it, and a rebuild from the same public view matches the wire.
+            const potential = info[InfoFeature.INFO_FEATURE__STATE_POTENTIAL];
+            if (stateCount === 1) {
+                const features = publicPositionFeatures(
+                    player.publicBattle,
+                    player.getPlayerIndex()!,
+                );
+                if (features.hpBalance !== 0 || features.aliveBalance !== 0) {
+                    throw new Error(
+                        `first-state potential reads material: ` +
+                            JSON.stringify(features),
+                    );
+                }
+                const rebuilt = StateHandler.quantisePotential(
+                    potentialOf(features),
+                );
+                if (rebuilt !== potential) {
+                    throw new Error(
+                        `potential ${potential} on the wire, ${rebuilt} rebuilt`,
+                    );
+                }
+            }
+            const requestFields = request as AnyObject;
+            if (
+                !requestFields.teamPreview &&
+                !requestFields.forceSwitch &&
+                !requestFields.wait
+            ) {
+                const turn = info[InfoFeature.INFO_FEATURE__TURN];
+                if (!potentialByTurn.has(turn)) {
+                    potentialByTurn.set(turn, potential);
+                }
+            }
+
             // The previous action (2026-09-11): after this player's first
             // decision, every state but a team-preview request carries the
             // cell it last sent. Until then the runner cleared it with every
@@ -529,7 +573,25 @@ export async function playerController(player: TrainablePlayerAI) {
         // The count of |replace| handler calls that reached a remap -- the
         // positive control's ground truth for `rewriteCount` above.
         bufferRewriteCount: player.eventHandler.edgeBuffer.rewriteCount,
+        potentialByTurn,
     };
+}
+
+/** Both players read the same public inputs at a turn's start, so their
+ * potentials are exact negatives. The own-HP public rule is what makes them
+ * so; position_potential.test.ts carries its positive control. */
+function assertPotentialAntisymmetry(
+    first: Map<number, number>,
+    second: Map<number, number>,
+) {
+    for (const [turn, value] of first) {
+        const other = second.get(turn);
+        if (other !== undefined && value !== -other) {
+            throw new Error(
+                `potential not antisymmetric at turn ${turn}: ${value} vs ${other}`,
+            );
+        }
+    }
 }
 
 export const testFormats = [
@@ -610,6 +672,12 @@ export async function runBattle(
 
         // Wait for both player loops to complete. This happens when the battle ends.
         results = await Promise.all(promises);
+        if (results.length === 2) {
+            assertPotentialAntisymmetry(
+                results[0].potentialByTurn,
+                results[1].potentialByTurn,
+            );
+        }
 
         console.log("\nBattle has concluded.");
     } finally {
