@@ -150,9 +150,9 @@ def chosen_bank_rows(
     `CELL_BANK_TGT` name a cell's (source, target) row in it: a switch cell
     its private row and the ALLY_1_TARGET row it switches into, a move cell
     its move row and its target row, a standalone cell its target row twice.
-    Written once (2026-09-03) for `SlotConditioning`, the dynamics head and
-    (2026-09-11) the previous action, which all condition on a taken action
-    through its OWN rows rather than a cell index.
+    Written once (2026-09-03) for `SlotConditioning` and (2026-09-11) the
+    previous action, which both condition on a taken action through its
+    OWN rows rather than a cell index.
     """
     bank = jnp.concatenate((private_rows, move_rows, target_rows), axis=0)
     src_row = jnp.take(jnp.asarray(CELL_BANK_SRC), action_cell)

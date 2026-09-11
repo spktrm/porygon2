@@ -180,91 +180,6 @@ def test_train_step_smoke() -> None:
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",
-        # The latent transition model (2026-09-05; latent actions and the
-        # K=2 unroll 2026-09-07): the grounding term (normalised MSE in
-        # the NEXT step's layout, copy predictor at exactly 1) with its
-        # per-group gains/scales, the hp-moved subset and the prior-decode
-        # panels, the consistency / KL / value / kind / termination /
-        # decode / generator / align terms, the code usage, the shared-
-        # head calibration reads and the model's drift/gradient.
-        "player_loss_transition",
-        "player_loss_transition_ground",
-        "player_loss_transition_cons",
-        "player_loss_transition_kl",
-        "player_loss_transition_value",
-        "player_loss_transition_value_k1",
-        "player_loss_transition_kind",
-        "player_loss_transition_termination",
-        "player_loss_transition_decode",
-        "player_loss_transition_generator",
-        "player_loss_transition_align",
-        "player_transition_rows_frac",
-        "player_transition_unroll_rows_frac",
-        "player_transition_kl_k1",
-        "player_transition_value_delta_r2_k1",
-        "player_transition_value_delta_r2_newly_valid",
-        "player_transition_value_delta_r2_no_newly_valid",
-        "player_transition_newly_valid_frac",
-        "player_transition_cons_gain_newly_valid",
-        "player_transition_terminal_ce",
-        "player_transition_terminal_acc",
-        "player_transition_terminal_payoff_err",
-        "player_transition_terminal_rows",
-        "player_transition_decode_acc",
-        "player_transition_action_mi",
-        "player_transition_action_num_legal",
-        "player_transition_action_overflow_frac",
-        "player_transition_action_logit_mean",
-        "player_transition_action_logit_std",
-        "player_transition_action_sample_is_mode",
-        "player_transition_action_entropy",
-        "player_transition_action_perplexity_mean",
-        "player_transition_generator_kl_first",
-        "player_transition_generator_kl_later",
-        "player_transition_generator_kl_first_k1",
-        "player_transition_generator_kl_first_k2",
-        "player_transition_generator_target_entropy",
-        "player_transition_generator_target_perplexity",
-        "player_transition_generator_coverage",
-        "player_transition_generator_occupied",
-        "player_transition_generator_support",
-        "player_transition_align_kl_k1",
-        "player_transition_align_kl_k2",
-        "player_transition_action_table_rms",
-        "player_transition_slot_embedding_rms",
-        "player_transition_chance_token_proj_rms",
-        "player_transition_action_encoder_grad_norm",
-        "player_transition_generator_grad_norm",
-        "player_transition_terminal_head_grad_norm",
-        "player_transition_ground_rows_frac",
-        "player_transition_gain_public",
-        "player_transition_gain_private",
-        "player_transition_gain_field",
-        "player_transition_ground_scale_public",
-        "player_transition_ground_scale_private",
-        "player_transition_ground_scale_field",
-        "player_transition_gain_public_prior",
-        "player_transition_gain_hp_moved",
-        "player_transition_gain_hp_moved_prior",
-        "player_transition_hp_moved_frac",
-        "player_transition_hp_share",
-        "player_transition_kl",
-        "player_transition_kl_free_frac",
-        "player_transition_post_perplexity_mean",
-        "player_transition_post_perplexity_min",
-        "player_transition_prior_perplexity_mean",
-        "player_transition_prior_perplexity_min",
-        "player_transition_prior_post_agree",
-        "player_transition_value_r2",
-        "player_transition_value_gap",
-        "player_transition_kind_acc",
-        "player_transition_done_acc",
-        "player_transition_out_proj_rms",
-        "player_transition_code_table_rms",
-        "player_transition_grad_norm",
-        "player_transition_blocks_grad_norm",
-        "player_transition_prior_grad_norm",
-        "player_transition_posterior_grad_norm",
         "player_state_kernel_rms_hp",
         "player_state_kernel_rms_status",
         "player_state_kernel_rms_boosts",
@@ -285,12 +200,6 @@ def test_train_step_smoke() -> None:
         "player_chunk_vol_switch_frac",
     ):
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
-
-    # The learner forward carries its "sampling" rng: the decoded posterior
-    # code is a draw, so on fresh (near-flat) posterior logits it is the
-    # mode on a small fraction of transitions. Exactly 1.0 here is the
-    # silent fallback to the argmax decode.
-    assert 0.0 <= float(logs["player_transition_post_sample_is_mode"]) < 0.5
 
     # The gradient actually reaches both halves of the model.
     assert float(logs["player_action_head_grad_norm"]) > 0.0

@@ -7,9 +7,8 @@ encoder used to assemble those inline, so the layout existed only as the
 order of a concat. It is written here once, as a list of NAMED parts, and
 `state_kernel_blocks` derives each kernel's column blocks from the same
 list -- the telemetry that reads a kernel's hp columns against its status
-columns (the normaliser-gaming instrument of the delta dynamics head)
-cannot drift from the encoder's layout because there is no second copy
-of it.
+columns cannot drift from the encoder's layout because there is no second
+copy of it.
 
 Structure-only against the inline form: the same arrays concatenated in
 the same order, so the encoder's tokens are bit-identical.
@@ -441,11 +440,3 @@ def state_kernel_blocks() -> dict[str, dict[str, list[slice]]]:
                 by_group["other"].append(block)
         grouped[kernel] = by_group
     return grouped
-
-
-def hp_input_rows(kernel: str) -> np.ndarray:
-    """The input-row indices of a state kernel's hp block(s), for the delta
-    dynamics head's hp-subspace instrument."""
-    blocks = state_kernel_blocks()[kernel]["hp"]
-    rows = [np.arange(block.start, block.stop) for block in blocks]
-    return np.concatenate(rows + [np.zeros((0,), np.int64)])

@@ -162,9 +162,6 @@ def player_model_config_for(learner_config: Porygon2LearnerConfig):
     from rl.model.config import get_player_model_config
 
     model_config = get_player_model_config(learner_config.generation, train=True)
-    model_config.transition.value_trains_v_head = (
-        learner_config.player_transition_value_trains_v_head
-    )
     model_config.potential_head.enabled = learner_config.player_potential_strength > 0
     model_config.pair_value_head.enabled = (
         learner_config.player_pair_value_loss_coef > 0
@@ -211,7 +208,7 @@ def create_train_state(
         apply_fn=jax.vmap(
             player_network.apply,
             in_axes=(None, 1, 1, None),
-            out_axes=PlayerActorOutput.batch_out_axes(),
+            out_axes=1,
         ),
         init_fn=player_params_init_fn,
         params=initial_player_params,

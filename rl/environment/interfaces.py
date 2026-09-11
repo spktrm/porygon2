@@ -1,4 +1,4 @@
-from dataclasses import field, fields
+from dataclasses import field
 
 from chex import dataclass
 from jaxtyping import ArrayLike
@@ -163,75 +163,9 @@ class PlayerActorOutput:
     revealed_belief_logits: ArrayLike = ()
     belief_matched: ArrayLike = ()
     belief_hidden_any: ArrayLike = ()
-    # The transition model's grounding label (2026-09-03, dynamics head;
-    # 2026-09-05 relabelled): (T, NUM_DYNAMICS_ROWS, D) pre-trunk content
-    # of the target rows. Step t's grounding head is scored against step
-    # t+1's copy, aligned by dynamics_alignment. Learner-only.
+    # (T, NUM_DYNAMICS_ROWS, D) pre-trunk content of the target rows; the
+    # revealed-belief control reads its public slice. Learner-only.
     dynamics_target: ArrayLike = ()
-    # The latent transition model (2026-09-05; latent actions and the K-step
-    # unroll 2026-09-07, rl/model/transition.py). Learner-only. Three
-    # leading-axis families, every one followed by the trajectory axis T:
-    # - per START step (T, ...): cons_err / cons_scale (T, 73) f32 -- the
-    #   first imagined step's squared distance from the real next row, and
-    #   the real next row's from the current one (the copy predictor's
-    #   error, the normaliser); ground (T, NUM_DYNAMICS_ROWS, D) the
-    #   grounding head on the first posterior-decoded step and
-    #   ground_prior the same read of a no-gradient prior-mode decode;
-    #   value_head_prior the frozen critic on that prior-mode decode;
-    #   pred_rms (T,) rms(pred) / rms(rows) over the rows valid at t;
-    #   newly_valid (T,) whether a row zeroed at t exists at t+1 (a panel
-    #   mask); action_logits (T, max_cells, C) the action encoder over the
-    #   enumerated legal cells with action_cells / action_cell_valid /
-    #   action_taken_index / action_overflow the enumeration;
-    # - per TRANSITION k = 0 .. K-1 (K, T, ...), paired with the real step
-    #   t+k+1: prior / post logits and post_one_hot (K, T, G, Kc);
-    #   action_one_hot (K, T, C) the latent action drawn for the step;
-    #   value_head the shared critic on the imagined CLS row (LIVE under
-    #   `transition.value_trains_v_head`, else a frozen clone);
-    #   kind_logits (K, T, 4), done_logit (K, T) and terminal_logits
-    #   (K, T, 3) the imagined CLS row's request kind, done and
-    #   conditional terminal outcome;
-    # - per NODE k = 0 .. K (K+1, T, ...), hhat_0 the real state: the
-    #   generator teacher-forced on the real step t+k's teacher order
-    #   (generator_logits (K+1, T, J, C), teacher_codes (K+1, T, J),
-    #   generator_target (K+1, T, C) = sg p(u | h_{t+k}), support_mask
-    #   (K+1, T, C), node_overflow (K+1, T)), and the encoder on the
-    #   recorded cell at the node (align_logits (K+1, T, C)) against its
-    #   real-state distribution (align_target (K+1, T, C), sg).
-    transition_cons_err: ArrayLike = ()
-    transition_cons_scale: ArrayLike = ()
-    # Target-label mask (T, rows): present at either endpoint, never an
-    # input to imagination. Batched forwards insert B after T.
-    transition_cons_valid: ArrayLike = ()
-    transition_prior_logits: ArrayLike = ()
-    transition_post_logits: ArrayLike = ()
-    transition_post_one_hot: ArrayLike = ()
-    transition_ground: ArrayLike = ()
-    transition_ground_prior: ArrayLike = ()
-    transition_value_head: CategoricalValueHeadOutput = field(
-        default_factory=CategoricalValueHeadOutput
-    )
-    transition_value_head_prior: CategoricalValueHeadOutput = field(
-        default_factory=CategoricalValueHeadOutput
-    )
-    transition_pred_rms: ArrayLike = ()
-    transition_newly_valid: ArrayLike = ()
-    transition_kind_logits: ArrayLike = ()
-    transition_done_logit: ArrayLike = ()
-    transition_terminal_logits: ArrayLike = ()
-    transition_action_logits: ArrayLike = ()
-    transition_action_cells: ArrayLike = ()
-    transition_action_cell_valid: ArrayLike = ()
-    transition_action_taken_index: ArrayLike = ()
-    transition_action_overflow: ArrayLike = ()
-    transition_action_one_hot: ArrayLike = ()
-    transition_generator_logits: ArrayLike = ()
-    transition_teacher_codes: ArrayLike = ()
-    transition_generator_target: ArrayLike = ()
-    transition_support_mask: ArrayLike = ()
-    transition_node_overflow: ArrayLike = ()
-    transition_align_logits: ArrayLike = ()
-    transition_align_target: ArrayLike = ()
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows
     # of the trunk's output. The over-smoothing instrument; learner-only.
@@ -261,42 +195,6 @@ class PlayerActorOutput:
 
     def without_history_carry(self) -> "PlayerActorOutput":
         return self.replace(history_carry=HistoryCarry())
-
-    # The transition leaves whose FIRST axis is the unroll offset (K
-    # transitions or K+1 nodes) ahead of the trajectory axis T: the
-    # learner's batch vmap must place B after T on these, at axis 2.
-    # This is exactly transition.NodeOutputs + StepOutputs (plus the value
-    # head read off the imagined states) -- the environment layer does not
-    # import the model, so the two are held together by
-    # tests/test_transition_model.py rather than by a shared derivation.
-    OFFSET_LEADING_LEAVES = (
-        "transition_prior_logits",
-        "transition_post_logits",
-        "transition_post_one_hot",
-        "transition_value_head",
-        "transition_kind_logits",
-        "transition_done_logit",
-        "transition_terminal_logits",
-        "transition_action_one_hot",
-        "transition_generator_logits",
-        "transition_teacher_codes",
-        "transition_generator_target",
-        "transition_support_mask",
-        "transition_node_overflow",
-        "transition_align_logits",
-        "transition_align_target",
-    )
-
-    @classmethod
-    def batch_out_axes(cls) -> "PlayerActorOutput":
-        """`out_axes` for a vmap of the player forward over the batch: B at
-        axis 1 (after T) on every leaf, at axis 2 on the offset-leading
-        transition leaves (after K and T). ONE definition, so a leaf added
-        with a leading offset axis is registered here and nowhere else."""
-        axes = {leaf.name: 1 for leaf in fields(cls)}
-        for name in cls.OFFSET_LEADING_LEAVES:
-            axes[name] = 2
-        return cls(**axes)
 
     # `advantage` and `q` lived here until 2026-08-29: the learner-only
     # Q = V + A decomposition over the flat src x tgt grid, composed in the

@@ -3,7 +3,7 @@ import pprint
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import CAT_VF_SUPPORT, NUM_REQUEST_TYPES
+from rl.environment.data import CAT_VF_SUPPORT
 
 
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
@@ -205,99 +205,6 @@ def get_player_model_config(
     cfg.revealed_belief = ConfigDict()
     cfg.revealed_belief.mlp = ConfigDict()
     cfg.revealed_belief.mlp.layer_sizes = cfg.belief_head.mlp.layer_sizes
-    # The latent transition model (2026-09-05; latent actions 2026-09-07,
-    # rl/model/transition.py): g(h_t, u, z) -> h_{t+1} over the 73
-    # policy-readable post-trunk rows, `block.num_blocks` TrunkBlocks of
-    # the trunk's own shape over [rows + slot embedding ; action token ;
-    # chance token] under an all-True mask -- nothing is masked past the
-    # root encoding. u is ONE categorical of `action_classes` latent
-    # actions (the action encoder q(u | h, a) reads the taken cell's rows
-    # against the sequence through one cross-attention; the candidate
-    # generator rho(u | h) draws `num_candidates` distinct codes without
-    # replacement inside the smallest rho prefix holding `mass_threshold`);
-    # z the chance code of `code_groups` categoricals over `code_classes`
-    # (prior from (h, u); posterior also reads the real t+1 rows,
-    # learner-only). Readers on an imagined node: grounding (per row ->
-    # the t -> t+1 CHANGE in the DYNAMICS_TARGET_ROWS' pre-trunk content),
-    # one cls head for the next request kind + done, and the conditional
-    # terminal-outcome head (loss / draw / win GIVEN the node ends the
-    # game -- the quantity the fractional-continuation backup needs, which
-    # the unconditional V cannot supply). `unroll_steps` = K: the learner
-    # unrolls every start step K transitions along the recorded actions
-    # (MuZero), recomputing the encoder and the posterior at the imagined
-    # state; 1 is the single-step model. `max_cells` is the ONE static
-    # width of a legal set, shared with the search (singles legalises at
-    # most 13 cells: up to 8 move cells with tera wildcards + 5 switches;
-    # team preview 6); a wider set is counted as overflow and masked,
-    # never silently truncated and renormalised. `code_groups = 0` is the
-    # chance-free control. The shared v_head is applied to the imagined
-    # rows in the parent model.
-    cfg.transition = ConfigDict()
-    cfg.transition.block = ConfigDict(cfg.encoder.trunk.to_dict())
-    cfg.transition.block.num_blocks = 2
-    # The registers are the ENCODER trunk's workspace (2026-09-10); the
-    # copied config would have given the two dynamics blocks four of
-    # their own, un-asked-for -- the merge audit against ckpt_02339569
-    # surfaced the leaves. Explicitly none here.
-    cfg.transition.block.num_registers = 0
-    cfg.transition.code_groups = 2
-    cfg.transition.code_classes = 16
-    cfg.transition.action_classes = 64
-    cfg.transition.num_candidates = 8
-    cfg.transition.max_cells = 16
-    cfg.transition.mass_threshold = 0.99
-    cfg.transition.unroll_steps = 2
-    # The prior and posterior read the rows through ONE shared bias-free
-    # Dense(D -> row_read_width) per row, flattened in row order (73 x
-    # width), so which row changed is legible by position; the mean pool
-    # it replaced cancelled row identity (2026-09-05, kl_long < kl_short).
-    cfg.transition.row_read_width = 16
-    cfg.transition.prior = ConfigDict()
-    cfg.transition.prior.mlp = ConfigDict()
-    cfg.transition.prior.mlp.layer_sizes = (
-        2 * entity_size,
-        entity_size,
-        cfg.transition.code_groups * cfg.transition.code_classes,
-    )
-    cfg.transition.posterior = ConfigDict()
-    cfg.transition.posterior.mlp = ConfigDict()
-    cfg.transition.posterior.mlp.layer_sizes = cfg.transition.prior.mlp.layer_sizes
-    # The action encoder: one multi-head read of the sequence by the
-    # taken cell's rows (the trunk's head shape), then an MLP to the
-    # alphabet.
-    cfg.transition.action_encoder = ConfigDict()
-    cfg.transition.action_encoder.num_heads = num_heads
-    cfg.transition.action_encoder.qk_size = encoder_qkv_size
-    cfg.transition.action_encoder.v_size = encoder_qkv_size
-    cfg.transition.action_encoder.use_bias = encoder_use_bias
-    cfg.transition.action_encoder.qk_layer_norm = encoder_qk_layer_norm
-    cfg.transition.action_encoder.mlp = ConfigDict()
-    cfg.transition.action_encoder.mlp.layer_sizes = (
-        2 * entity_size,
-        entity_size,
-        cfg.transition.action_classes,
-    )
-    # The candidate generator's decoder blocks: the trunk's block shape
-    # (causal self-attention over the candidate tokens + cross-attention
-    # over the rows + SwiGLU), `num_blocks` deep.
-    cfg.transition.generator = ConfigDict(cfg.encoder.trunk.to_dict())
-    cfg.transition.generator.num_blocks = 2
-    cfg.transition.ground = ConfigDict()
-    cfg.transition.ground.mlp = ConfigDict()
-    cfg.transition.ground.mlp.layer_sizes = (2 * entity_size, entity_size)
-    cfg.transition.cls_head = ConfigDict()
-    cfg.transition.cls_head.mlp = ConfigDict()
-    cfg.transition.cls_head.mlp.layer_sizes = (entity_size, NUM_REQUEST_TYPES + 1)
-    cfg.transition.terminal_outcome = ConfigDict()
-    cfg.transition.terminal_outcome.mlp = ConfigDict()
-    cfg.transition.terminal_outcome.mlp.layer_sizes = (
-        entity_size,
-        len(CAT_VF_SUPPORT),
-    )
-    # Whether the shared v_head trains through the imagined CLS row
-    # (learner-only; set from `player_transition_value_trains_v_head` at
-    # the learner's construction sites). False applies a frozen copy.
-    cfg.transition.value_trains_v_head = True
     if cfg.num_decision_slots != 1:
         # The Q critic is structural and singles-only: the doubles path
         # stacks per-stage log_policy/action_index, which the one-step

@@ -363,8 +363,8 @@ def _get(tree, path):
 
 def _has(tree, path) -> bool:
     """Whether `path` names a leaf or subtree of the variable dict -- a
-    static python question, so a config-gated module (the transition code
-    under code_groups = 0) simply logs nothing."""
+    static python question, so a config-gated module (a head built only
+    under its coefficient) simply logs nothing."""
     for key in path:
         if not isinstance(tree, dict) or key not in tree:
             return False
@@ -507,32 +507,12 @@ _HISTORY_LEAVES = {
         ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
     ),
 }
-# The latent transition model (2026-09-05; latent actions 2026-09-07,
-# rl/model/transition.py). dynamics_out_proj is THE zero factor: the
-# imagined rows are `rows + out_proj(...)` so the model starts as the copy
-# predictor, and its rms still 0.0 past ~200 steps is the stall. The
-# tables are variance_scaling(1, fan_in) (0.0625 over D=256 for the
-# action table and the slot embedding; 0.0884 over D/G per chance class);
-# chance_token_proj is lecun over D. The chance leaves exist only with
-# code_groups > 0 -- a missing path is skipped.
-_TRANSITION_LEAVES = {
-    "player_transition_out_proj_rms": (("transition", "dynamics_out_proj", "kernel"),),
-    "player_transition_action_table_rms": (("transition", "action_table"),),
-    "player_transition_slot_embedding_rms": (("transition", "slot_embedding"),),
-    "player_transition_chance_token_proj_rms": (
-        ("transition", "chance_token_proj", "kernel"),
-    ),
-    "player_transition_code_table_rms": (("transition", "code_table"),),
-}
 # player_belief_head_gradient_norm already exists in train_step; not
 # duplicated here.
 _GRAD_SUBTREES = {
     "player_action_head_grad_norm": ("action_head",),
-    # The TOTAL gradient into the deployable value head -- real-row CE plus,
-    # under cfg.transition.value_trains_v_head (2026-09-06, Step 3b), the
-    # imagined-row CE. The imagined share alone would cost a second
-    # backward; read this beside player_loss_v_win / player_value_head_r2
-    # (the matched control) instead.
+    # The gradient into the deployable value head (its real-row CE); read
+    # beside player_loss_v_win / player_value_head_r2.
     "player_value_head_grad_norm": ("v_head",),
     "player_trunk_grad_norm": ("encoder", "trunk"),
     "player_opp_code_logits_grad_norm": ("encoder", "opp_code_logits"),
@@ -541,16 +521,6 @@ _GRAD_SUBTREES = {
         "encoder",
         "history_encoder",
         "step_attention",
-    ),
-    "player_transition_grad_norm": ("transition",),
-    "player_transition_blocks_grad_norm": ("transition", "dynamics_blocks"),
-    "player_transition_prior_grad_norm": ("transition", "prior_latent_net"),
-    "player_transition_posterior_grad_norm": ("transition", "posterior_latent_net"),
-    "player_transition_action_encoder_grad_norm": ("transition", "action_encoder"),
-    "player_transition_generator_grad_norm": ("transition", "candidate_generator"),
-    "player_transition_terminal_head_grad_norm": (
-        "transition",
-        "terminal_outcome_head",
     ),
 }
 
@@ -635,7 +605,6 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
             **_TRUNK_LEAVES,
             **_OPP_CODE_LEAVES,
             **_HISTORY_LEAVES,
-            **_TRANSITION_LEAVES,
         },
         param_tree,
         leaf,

@@ -65,7 +65,7 @@ def _apply_fn(config: Porygon2LearnerConfig):
         jax.vmap(
             net.apply,
             in_axes=(None, 1, 1, None),
-            out_axes=PlayerActorOutput.batch_out_axes(),
+            out_axes=1,
         )
     )
 

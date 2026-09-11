@@ -81,16 +81,8 @@ def policy_logit_gradient(player_state, batch, config: Porygon2LearnerConfig):
     target = player_state.apply_fn(
         player_state.target_params, actor_input, actor_output, HeadParams()
     )
-    sampling_keys = jax.random.split(
-        jax.random.fold_in(jax.random.key(0), player_state.step_count),
-        transitions.env_output.done.shape[1],
-    )
     learner = player_state.apply_fn(
-        player_state.params,
-        actor_input,
-        actor_output,
-        HeadParams(),
-        rngs={"sampling": sampling_keys},
+        player_state.params, actor_input, actor_output, HeadParams()
     )
     behaviour_log_prob = actor_output.action_head.log_prob
     action_index = actor_output.action_head.action_index

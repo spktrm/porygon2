@@ -319,7 +319,7 @@ def forward(
         jax.vmap(
             net.apply,
             in_axes=(None, 1, 1, None),
-            out_axes=PlayerActorOutput.batch_out_axes(),
+            out_axes=1,
         )
     )
     dev_params = jax.device_put(params)

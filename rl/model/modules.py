@@ -475,8 +475,8 @@ class MLP(nn.Module):
     use_bias: bool = True
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
     # The LAST layer's kernel init when it should differ -- zeros for a
-    # head whose output must start at a known point (the delta dynamics
-    # head starts AT the copy baseline). None = `kernel_init` throughout.
+    # head whose output must start at a known point. None = `kernel_init`
+    # throughout.
     final_kernel_init: nn.initializers.Initializer | None = None
 
     @nn.compact

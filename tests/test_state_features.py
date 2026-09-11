@@ -11,9 +11,14 @@ import numpy as np
 from rl.model.state_features import (
     STATE_KERNEL_GROUPS,
     STATE_KERNELS,
-    hp_input_rows,
     state_kernel_blocks,
 )
+
+
+def hp_input_rows(kernel: str) -> np.ndarray:
+    blocks = state_kernel_blocks()[kernel]["hp"]
+    rows = [np.arange(block.start, block.stop) for block in blocks]
+    return np.concatenate(rows + [np.zeros((0,), np.int64)])
 
 
 def test_blocks_partition_every_kernel_width() -> None:

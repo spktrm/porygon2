@@ -305,9 +305,8 @@ def test_suffix_carry_replays_the_game_within_bf16(
     # The floor is ONE draw of the bf16 leading-dim class (the 256-row
     # tail) and the carry path runs another (the 32-row suffix bucket), so
     # the bound carries a margin over it -- read 0.093 vs 0.14 (2026-09-03)
-    # and 0.101 vs 0.096 (2026-09-05, the transition params re-drew the
-    # opened readout's noise); the shifted-carry control below sits ~2.0
-    # away, so the margin costs the test nothing.
+    # and 0.101 vs 0.096 (2026-09-05); the shifted-carry control below sits
+    # ~2.0 away, so the margin costs the test nothing.
     policy_bound = max(0.05, 1.5 * floor_policy)
     value_bound = max(0.05, 1.5 * floor_value)
     assert worst_policy <= policy_bound, (worst_policy, floor_policy)
@@ -377,16 +376,8 @@ def test_server_mixed_group_matches_single_forwards(
         head_params: HeadParams,
         rngs: dict[str, jax.Array],
     ) -> PlayerActorOutput:
-        output = network.apply(
+        return network.apply(
             params, actor_input, taken, head_params=head_params, rngs=rngs
-        )
-        # The train model also emits the transition leaves, laid out
-        # [K, T, ...] (PlayerActorOutput.OFFSET_LEADING_LEAVES, K = 2 since
-        # the 2026-09-07 unroll). The server squeezes the deploy layout
-        # [T=1, ...] and is never handed a train model in production; this
-        # test reads the history carry, so those leaves are dropped here.
-        return output.replace(
-            **{name: () for name in PlayerActorOutput.OFFSET_LEADING_LEAVES}
         )
 
     server = InferenceServer(player_apply_fn=teacher_forced_apply)

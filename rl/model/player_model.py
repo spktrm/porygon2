@@ -24,9 +24,7 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.protos.features_pb2 import (
-    EntityPrivateNodeFeature,
     EntityRevealedNodeFeature,
-    InfoFeature,
 )
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
@@ -35,9 +33,6 @@ from rl.model.constants import (
     DYNAMICS_GROUP_SLICES,
     FIELD_ROWS,
     MOVE_ROWS,
-    NUM_PRIVATE_SLOTS,
-    NUM_PUBLIC_SLOTS,
-    POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
     PUBLIC_ROWS,
     TARGET_ROWS,
@@ -56,7 +51,6 @@ from rl.model.heads import (
     sample_categorical,
 )
 from rl.model.modules import MLP
-from rl.model.transition import TransitionModel
 from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params, prune_log_policy
 
@@ -74,66 +68,6 @@ def actor_params_view(variables):
     if "slot_conditioning" in variables["params"]:
         required.append("slot_conditioning")
     return {"params": {name: variables["params"][name] for name in required}}
-
-
-def _match_rows(key_now: jax.Array, key_next: jax.Array, valid_now, valid_next):
-    """Row i now -> the row carrying the same key next step. (matched, index)."""
-    hits = (
-        (key_now[:, None] == key_next[None, :])
-        & valid_now[:, None]
-        & valid_next[None, :]
-    )
-    return hits.any(axis=-1), jnp.argmax(hits, axis=-1)
-
-
-def dynamics_alignment(env_now: PlayerEnvOutput, env_next: PlayerEnvOutput):
-    """Which next-step target row is this step's target row j? (2026-09-03)
-
-    The dynamics head's rows are DYNAMICS_TARGET_ROWS: public 12, my
-    private 6, field 3. Public rows re-sort every step (actives first), so
-    row i now and row i next are different mons after a switch; PUBLIC_ORDER
-    carries each row's stable entity index and the match is a (12, 12)
-    equality over it -- `belief_alignment`'s construction over TIME instead
-    of over sides. The private rows follow the request's own order, which
-    also moves on a switch, so they match on ENTITY_IDX (1 + stable index;
-    0 = never fielded, unmatched and skipped -- its row is static anyway).
-    Field rows are fixed slots. Returns (matched (21,), next_index (21,)),
-    the index valid only where matched.
-    """
-    order_slice = slice(
-        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0,
-        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11 + 1,
-    )
-    order_now = env_now.info[order_slice]
-    order_next = env_next.info[order_slice]
-    order_ok_now = (order_now >= 0) & (order_now < NUM_PUBLIC_SLOTS)
-    order_ok_next = (order_next >= 0) & (order_next < NUM_PUBLIC_SLOTS)
-    public_matched, public_index = _match_rows(
-        order_now, order_next, order_ok_now, order_ok_next
-    )
-
-    idx_column = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
-    idx_now = env_now.private_team[:, idx_column]
-    idx_next = env_next.private_team[:, idx_column]
-    private_matched, private_index = _match_rows(
-        idx_now, idx_next, idx_now > 0, idx_next > 0
-    )
-
-    field = DYNAMICS_GROUP_SLICES["field"]
-    num_field = field.stop - field.start
-    field_index = jnp.arange(num_field, dtype=public_index.dtype)
-
-    matched = jnp.concatenate(
-        (public_matched, private_matched, jnp.ones(num_field, dtype=jnp.bool_))
-    )
-    next_index = jnp.concatenate(
-        (
-            public_index,
-            NUM_PUBLIC_SLOTS + private_index,
-            NUM_PUBLIC_SLOTS + NUM_PRIVATE_SLOTS + field_index,
-        )
-    )
-    return matched, next_index
 
 
 class Porygon2PlayerModel(nn.Module):
@@ -206,13 +140,6 @@ class Porygon2PlayerModel(nn.Module):
         # the opponent has and has not done. Input under stop_gradient: no
         # shared param receives its gradient; its CE enters unscaled.
         self.revealed_belief = MLP(**self.cfg.revealed_belief.mlp.to_dict())
-        # The latent transition model (2026-09-05, rl/model/transition.py):
-        # g(h_t, a, z) over the post-trunk policy-readable rows. Its params
-        # are lazy, so instantiating it here costs the actor nothing; it is
-        # CALLED under cfg.train (the losses) only.
-        self.transition = TransitionModel(
-            self.cfg.transition, dtype=self.cfg.dtype, name="transition"
-        )
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -538,9 +465,8 @@ class Porygon2PlayerModel(nn.Module):
             row_cosine, row_participation = row_homogeneity(sequence)
             group_l2_sum, group_rows = trunk_out_group_l2
             learner_only = {
-                # The grounding label: the target rows' pre-trunk content.
-                # The transition model's grounding head is scored against
-                # the NEXT step's copy of this (train_step.dynamics_losses).
+                # The target rows' pre-trunk content (the revealed-belief
+                # control reads its public slice).
                 "dynamics_target": dynamics_rows,
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
@@ -642,98 +568,7 @@ class Porygon2PlayerModel(nn.Module):
             actor_input.env,
             actor_output,
         )
-        if self.cfg.train:
-            output = output.replace(
-                **self._forward_transition(
-                    sequence, row_valid, output, actor_input.env.action_mask
-                )
-            )
         return output
-
-    def _forward_transition(
-        self,
-        sequence: jax.Array,
-        row_valid: jax.Array,
-        output: PlayerActorOutput,
-        action_mask: jax.Array,
-    ) -> dict[str, jax.Array]:
-        """The transition model over the trajectory (T, rows, D), unrolled
-        `cfg.transition.unroll_steps` transitions from every start step
-        along the recorded actions (the real steps gathered by their
-        POSITIONAL successors, the last to itself; train_step masks the
-        out-of-range offsets). Only the policy-readable rows enter -- the
-        rollout's information set -- and every real input is under
-        stop_gradient: the rows at every offset, and the base policy the
-        latent target is built from (an EXPLICIT stop_gradient on the
-        live readout's log_policy: without it the generator and decode
-        losses would reach the readout and the trunk, launch check 2's
-        collapse shape). The shared value head is LIVE on every imagined
-        CLS row under `cfg.transition.value_trains_v_head` (2026-09-06,
-        Step 3b: MuZero's value target -- the same real t+k+1 win_returns
-        the head fits on real rows, through the imagined state) and a
-        FROZEN clone (`clone().apply` on a stop_gradient'd variable tree)
-        otherwise; the prior-mode decode is read by the frozen clone
-        either way (a no-gradient panel). No readout is applied under a
-        real next legal set: legality at an imagined node is the
-        generator's mass (2026-09-07)."""
-        rows = jax.lax.stop_gradient(sequence[:, POLICY_READABLE_ROWS])
-        valid = row_valid[:, POLICY_READABLE_ROWS]
-        log_policy = jax.lax.stop_gradient(output.action_head.log_policy)
-        transition = self.transition(
-            rows, output.action_head.action_index, action_mask, log_policy
-        )
-        # (K, T, rows, D): the imagined state after each unroll step.
-        pred = transition.steps.pred
-        # The successor written once, as a GATHER rather than slice+concat:
-        # XLA's fusion emitter mis-typed the concatenated bool mask inside
-        # a KL fusion at the live lattice shapes ('scf.if' 1x1x1xi1 vs
-        # 1x4x512xi1 at (64, 192) x B=4, 2026-09-05; the ex.bin shape
-        # compiled), and the gather does not fuse into that pattern.
-        num_steps = rows.shape[0]
-        successor = jnp.minimum(jnp.arange(num_steps) + 1, num_steps - 1)
-        next_rows = jax.lax.stop_gradient(jnp.take(rows, successor, axis=0))
-        next_valid = jnp.take(valid, successor, axis=0)
-        # The params collection ALONE: `.variables` also carries whatever
-        # `capture_intermediates` recorded on the real-row call, which are
-        # tracers of the head-output vmap above and leak from this scope.
-        frozen_v_head = jax.lax.stop_gradient(
-            {"params": self.v_head.variables["params"]}
-        )
-        if self.cfg.transition.value_trains_v_head:
-            transition_value_head = self.v_head(pred[:, :, CLS_ROW])
-        else:
-            transition_value_head = self.v_head.clone().apply(
-                frozen_v_head, pred[:, :, CLS_ROW]
-            )
-        transition_value_head_prior = self.v_head.clone().apply(
-            frozen_v_head, transition.first.pred_prior[:, CLS_ROW]
-        )
-        first = pred[0].astype(jnp.float32)
-        error = (first - next_rows.astype(jnp.float32)) ** 2
-        movement = (next_rows.astype(jnp.float32) - rows.astype(jnp.float32)) ** 2
-        # The off-manifold watch: the imagined rows' rms against the real
-        # rows' over the rows valid at t, per step (T,), sg'd (a read,
-        # never a force).
-        row_weight = valid.astype(jnp.float32)[..., None]
-        pred_energy = (row_weight * first**2).sum(axis=(-2, -1))
-        rows_energy = (row_weight * rows.astype(jnp.float32) ** 2).sum(axis=(-2, -1))
-        pred_rms = jax.lax.stop_gradient(jnp.sqrt(pred_energy / (rows_energy + 1e-6)))
-        # A LABEL-side panel mask (never a model input): the transition
-        # brings a row that the trunk zeroed at t into existence at t+1.
-        newly_valid = (jnp.logical_not(valid) & next_valid).any(axis=-1)
-        # Every pass-through leaf carries its own name out of the model
-        # (TransitionOutput.exported); only what this method DERIVES is
-        # named here.
-        return {
-            **transition.exported(),
-            "transition_cons_err": error.sum(axis=-1),
-            "transition_cons_scale": jax.lax.stop_gradient(movement.sum(axis=-1)),
-            "transition_cons_valid": valid | next_valid,
-            "transition_value_head": transition_value_head,
-            "transition_value_head_prior": transition_value_head_prior,
-            "transition_pred_rms": pred_rms,
-            "transition_newly_valid": newly_valid,
-        }
 
 
 def get_player_model(config: ConfigDict = None) -> nn.Module:
