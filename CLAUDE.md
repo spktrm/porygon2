@@ -70,20 +70,16 @@ TypeScript game service speaking protobuf over websockets.
   for moves x targets, a scalar per target row for the standalone actions;
   each pair's `query` zero-init and `key` not, so the zero
   factor's gradient is a rank-1 outer product of live rows rather than the
-  two-factor stall. The critic reads the CLS row and nothing else.
-  `transition.py`: `TransitionModel` — g(h_t, u, z) over the 73 post-trunk
-  policy-readable rows (2 `TrunkBlock`s over [rows + slot embedding ;
-  action token ; chance token] under an all-True mask + one zero-init
-  `dynamics_out_proj`; nothing is masked past the root encoding), u ONE
-  64-class LATENT ACTION (the action encoder q(u|h,a) at observed states;
-  the candidate generator rho(u|h) draws J distinct codes without
-  replacement inside its support at imagined nodes), z the 2x16 chance
-  code with prior/posterior MLPs; the K-step unroll (`unroll_steps`)
-  recomputes the encoder and posterior at every imagined state; readers
-  on the imagined rows: grounding, kind+done, the conditional
-  terminal-outcome head. The shared `v_head` is applied to them in
-  `player_model._forward_transition`. `search.py`: the recursive
-  decision/chance backup, on the baseline search eval actors ONLY.
+  two-factor stall. The critic reads the CLS row and nothing else; the
+  privileged critic reads VALUE_CLS, whose learner-only partition carries
+  the opponent's sheet latents from the same private embedder.
+  The latent world model (`transition.py`, `search.py`, `mcts.py`), the
+  opponent discrete code + belief SSL and the dynamics target rows were
+  REMOVED 2026-09-12 as explored-but-premature (tag
+  `pre-world-model-removal-2026-09-12`, LESSONS "Removal ledger —
+  2026-09-12", local write-up docs/latent-world-model-retrospective-
+  2026-09-12.md) — reopen when the base agent is clearly above the
+  heuristic baseline at T=1.
   `modules.py`: generic primitives only — architecture lives next to its wiring.
 - `rl/online/training/` — the learner, split by what each piece needs to
   run. `train_step.py`: the jitted update (losses, EMA target, non-finite
@@ -304,8 +300,8 @@ the grep targets.
 |---|---|
 | cleanup | 2026-08-21 cleanup pass |
 | policy objective + exploration | 2026-08-22 R-NaD · 08-26 NashPG transition · 08-26 support anchor · 08-26 anchor phase 3 · 08-27 factorised objective · 08-28 entropy floor · 08-30 NashPG-verbatim bracket · 08-31 zero-avoider restored (carries the algebra for why NO entropy coefficient holds a floor) |
-| model architecture | 08-25 privileged critic · 08-25 head redesign · 08-28 audit + input-read redesign · 08-29 flat trunk · 08-31 grid retired + modality-marginal KL · 09-01 centralised value + belief code · 09-02 entity_index_tag · 09-02 history encoder restructure · 09-03 entity attention pool → masked sum |
-| stochastic transition + search | 09-05 Step 1 (mean head priced) · 09-05 Step 2 (latent model) · 09-05 hidden-token belief label · 09-06 Step 3 (search) · 09-06 Step 3b (B and D) · 09-06 Step 3b D result + posterior sampling + event probe |
+| model architecture | 08-25 privileged critic · 08-25 head redesign · 08-28 audit + input-read redesign · 08-29 flat trunk · 08-31 grid retired + modality-marginal KL · 09-01 centralised value + belief code · 09-02 entity_index_tag · 09-02 history encoder restructure · 09-03 entity attention pool → masked sum · 09-12 opp code + belief SSL + dynamics rows removed (in the 09-12 removal ledger) |
+| stochastic transition + search | 09-05 Step 1 (mean head priced) · 09-05 Step 2 (latent model) · 09-05 hidden-token belief label · 09-06 Step 3 (search) · 09-06 Step 3b (B and D) · 09-06 Step 3b D result + posterior sampling + event probe · 09-07 latent actions · 09-08 MCTS + interval model · 09-09 search eval actor removed · 09-12 removal ledger (explored; open to revisit) |
 | performance | 09-01 flash attention (declined, with the crossover number) · 09-01 GRU scan · 09-02 actor-side history carry · 09-03 gpu_lock retired, actors on the CPU |
 | probes | 08-27 capacity falsification (separation probe) |
 
