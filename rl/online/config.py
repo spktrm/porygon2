@@ -430,7 +430,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # -Psi under any policy, so a fitted head makes it inert: the head starts
     # at 0 and its lag IS the shaping. The win critics never see it. 0.0
     # builds neither the head nor the channel -- today's learning rule.
-    player_potential_strength: float = 0.0
+    # Launched at .05 on 2026-09-11 from ckpt_00480000 after the offline
+    # screen (rl/offline/potential_screen.py): logit-gradient RMS
+    # perturbation .031 vs the .10 budget, shared-param update .0047 --
+    # LESSONS "PBRS screen on ckpt_00480000".
+    player_potential_strength: float = 0.05
     # Belief-state shaping (2026-09-01): CE from the matched public rows'
     # belief logits to the sg'd opponent code. Bounded (<= log K per group),
     # pi-free, touches representations not logits; 0.0 is an inert-loss off

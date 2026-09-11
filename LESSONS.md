@@ -5357,3 +5357,28 @@ TD is rho_done * (r - V_done) with rho_done a sampled ratio, 0 when the
 sampled cell is thresholded away. The fixed point is intact (V_done -> r while
 E[rho] > 0) but the payoff is slowed and dropped on those samples. Candidate
 separate fix: rho = 1 on done rows.
+
+### PBRS screen on ckpt_00480000 — 2026-09-11 (launch at eta .05)
+
+rl/offline/potential_screen.py, 32 self-play games from ckpts/gen9/ckpt_00480000
+(the live run's newest; its Ctrl-C checkpoint was skipped, the known
+interrupt-checkpoint defect), 64 chunks / 16 batches, 98.8% of rows carrying
+the potential. eta 0 against eta .05 with the head fresh at 0:
+- Policy-logit gradient: RMS perturbation .031 against the .10 budget (norms
+  .475 -> .478, cosine .9995); voluntary-switch rows (54) .026, stay rows
+  (1362) .035. PASSED with a 3x margin.
+- Applied update, shared params: RMS perturbation .0047 (action_head .018,
+  encoder .006, the rest <= .0013).
+- Global norm under the clip at eta .05: FAILED as written (max 18.3 vs 10) --
+  but the clip already binds at eta 0 on 8 of 16 batches (7.0 to 18.3): the
+  criterion's premise (logged player_gradient_norm 3.2-9.1, clip inactive) was
+  false for these on-policy batches. PBRS's own part: the global norm moves by
+  x1.0002-1.0109; the head's share of it is .024-.142 (added in quadrature).
+  The pre-registered fallback (give the head its own optax transform) was
+  conditioned on the clip binding BECAUSE of the head; that trigger is not met.
+- The channel's advantage std share at W = 0: .021-.053.
+Decision: launch at eta .05 (the user asked for the relaunch once done); the
+clip criterion's failure is recorded here rather than reinterpreted. Watch
+player_potential_head_grad_share and player_potential_adv_share falling; the
+clip binding at eta 0 on half the fresh batches is itself new information
+about the lineage. Revert: eta 0.
