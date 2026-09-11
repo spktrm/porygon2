@@ -367,8 +367,14 @@ class RegressionValueLogitHead(nn.Module):
     @nn.compact
     def __call__(self, x: jax.Array):
         # f32 out: scalar regression targets (reg value, builder ev /
-        # conditional entropy) are all f32-MSE consumers.
-        x = MLP(**self.cfg.mlp.to_dict())(x).astype(jnp.float32)
+        # conditional entropy, the PBRS potential channel) are all f32-MSE
+        # consumers.
+        mlp_config = self.cfg.mlp.to_dict()
+        if getattr(self.cfg, "zero_init_output", False):
+            # A head whose output must start at a known point: zero last
+            # kernel, and Dense biases start at zero, so it reads exactly 0.
+            mlp_config["final_kernel_init"] = nn.initializers.zeros
+        x = MLP(**mlp_config)(x).astype(jnp.float32)
         if getattr(self.cfg, "output_activation", None) is not None:
             x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))

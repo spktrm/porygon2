@@ -61,6 +61,7 @@ from rl.online.training.targets import (
     compute_player_targets,
     reference_kl,
     thresholded_target_ratio,
+    unit_potential,
 )
 from rl.online.training.telemetry import (
     ActionAxisMasks,
@@ -72,6 +73,7 @@ from rl.online.training.telemetry import (
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
     head_param_telemetry,
+    potential_telemetry,
     promote_map,
     ratio_ess_and_tail,
 )
@@ -1005,12 +1007,18 @@ def train_step(
         target_value_log_probs = player_target_pred.priv_value_head.log_probs
     else:
         target_value_log_probs = player_target_pred.value_head.log_probs
+    # The PBRS potential channel (2026-09-11) bootstraps on the TARGET
+    # potential head, like the win channel on the target critic.
+    potential_values = None
+    if config.player_potential_strength > 0:
+        potential_values = player_target_pred.potential_head.logits
     player_targets, channel_logs = compute_player_targets(
         batch,
         value_log_probs=target_value_log_probs,
         isr=target_actor_ratio,
         config=config,
         isr_raw=target_actor_ratio_raw,
+        potential_values=potential_values,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
@@ -1135,6 +1143,17 @@ def train_step(
     voluntary_switch_mask = acted_mask & taken_switch & has_move
     forced_switch_mask = acted_mask & taken_switch & jnp.logical_not(has_move)
     move_mask = acted_mask & jnp.logical_not(taken_switch)
+    training_logs.update(
+        potential_telemetry(
+            unit_potential(player_transitions.env_output),
+            player_targets.potential_advantages,
+            pg_advantages,
+            policy_mask,
+            value_mask,
+            voluntary_switch_mask,
+            move_mask,
+        )
+    )
     # Realised behaviour frequency on the axis every collapse formed in
     # (RENAMED off the player_q_* prefix 2026-08-30 with the last of the Q
     # machinery — same quantities, fresh wandb continuity by design).
@@ -1255,6 +1274,36 @@ def train_step(
             ),
             value_mask,
         )
+        # The PBRS potential channel's head (2026-09-11): regressed on its
+        # own channel returns over live nonterminal rows (its value is forced
+        # 0 on done rows, so their label carries nothing). Coefficient 1:
+        # its input is under stop_gradient, so this is its only gradient --
+        # though that gradient still enters the global clip norm.
+        loss_potential = 0.0
+        potential_logs = {}
+        if config.player_potential_strength > 0:
+            potential_mask = value_mask & jnp.logical_not(
+                player_transitions.env_output.done
+            )
+            potential_prediction = learner_player_pred.potential_head.logits
+            potential_label = player_targets.potential_returns.astype(jnp.float32)
+            loss_potential = mse_value_loss(
+                pred=potential_prediction, target=potential_label, valid=potential_mask
+            )
+            potential_logs = {
+                "player_loss_potential": loss_potential,
+                "player_potential_head_r2": calculate_r2(
+                    value_prediction=potential_prediction,
+                    value_target=potential_label,
+                    mask=potential_mask,
+                ),
+                # Distance from inert: the head against its EXACT target, -Phi.
+                "player_potential_head_fit_r2": calculate_r2(
+                    value_prediction=potential_prediction,
+                    value_target=-unit_potential(player_transitions.env_output),
+                    mask=potential_mask,
+                ),
+            }
         # Belief-state shaping: CE from each matched public row's belief
         # logits to the STOPPED hidden-token code (the code net trains
         # through the privileged value CE, never through its own
@@ -1531,6 +1580,8 @@ def train_step(
             # it a matched control for an architecture that is now gone.
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
+            # The potential channel's head, unscaled (see above).
+            + loss_potential
             + config.player_belief_coef * loss_belief
             + config.player_dynamics_coef * loss_transition
             # The species control, unscaled: its only param is the table
@@ -1685,6 +1736,7 @@ def train_step(
                 row_mask=belief_mask,
                 prefix="player_hidden_code",
             ),
+            **potential_logs,
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
@@ -1767,6 +1819,13 @@ def train_step(
             if any(substring in k for substring in ("decoder", "encoder"))
         }
     )
+    if config.player_potential_strength > 0:
+        # The potential head's gradient enters the GLOBAL clip norm
+        # (artifact.py clip_by_global_norm): its share is the coupling a
+        # stop_gradient reach test cannot see.
+        training_logs["player_potential_head_grad_share"] = optax.global_norm(
+            player_grads["params"]["potential_head"]
+        ) / (optax.global_norm(player_grads) + 1e-12)
 
     # --- Builder ---
     if config.smogon_format != "randombattle":

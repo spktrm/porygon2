@@ -50,3 +50,42 @@ def test_the_model_never_reads_the_potential_slot(
         not np.array_equal(base_leaf, control_leaf)
         for base_leaf, control_leaf in zip(base, control, strict=True)
     )
+
+
+def test_the_potential_loss_reaches_only_its_head(real_model_and_trajectory):
+    """The head reads CLS under stop_gradient, so a loss on its output (the
+    human-fitted potential's channel returns) reaches its own params and
+    nothing it reads."""
+    import jax.numpy as jnp
+
+    from tests.conftest import open_zero_init_paths
+
+    network, params, actor_input, actor_output = real_model_and_trajectory
+    target = jnp.asarray(
+        np.random.default_rng(0).uniform(-1, 1, actor_input.env.done.shape),
+        jnp.float32,
+    )
+
+    def potential_loss(params: dict) -> jax.Array:
+        output = network.apply(params, actor_input, actor_output, HeadParams())
+        return jnp.mean(jnp.square(output.potential_head.logits - target))
+
+    def cls_value_loss(params: dict) -> jax.Array:
+        output = network.apply(params, actor_input, actor_output, HeadParams())
+        return jnp.mean(output.value_head.expectation)
+
+    def reached_by(grads: dict) -> set[str]:
+        reached = set()
+        for path, leaf in jax.tree_util.tree_leaves_with_path(grads):
+            if float(jnp.abs(leaf).max()) > 0.0:
+                reached.add(path[1].key)
+        return reached
+
+    # The head's last kernel is zero-init, which alone would block every
+    # gradient behind it -- opened, so "the trunk is not reached" cannot
+    # pass vacuously.
+    opened = open_zero_init_paths(params, ["potential_head"])
+    assert reached_by(jax.jit(jax.grad(potential_loss))(opened)) == {"potential_head"}
+    # Control: the same CLS row read WITHOUT stop_gradient reaches the trunk,
+    # so the instrument can see what the stop_gradient removes.
+    assert "encoder" in reached_by(jax.jit(jax.grad(cls_value_loss))(opened))

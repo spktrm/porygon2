@@ -144,6 +144,12 @@ class PlayerActorOutput:
     priv_value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
+    # Learner-only (2026-09-11): the potential channel's value, in unit
+    # potential units (targets.compute_player_targets). Built only when
+    # player_potential_strength > 0.
+    potential_head: RegressionValueHeadOutput = field(
+        default_factory=RegressionValueHeadOutput
+    )
     opp_code: ArrayLike = ()
     hidden_code: ArrayLike = ()
     # The belief head: (T, 6, G, K) logits predicting hidden_code from the
@@ -394,6 +400,11 @@ class PlayerTargets:
     pg_advantages: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()
+    # The potential channel (2026-09-11): the potential head's labels in unit
+    # potential units, and the channel's advantage (already inside
+    # pg_advantages). () when player_potential_strength is 0.
+    potential_returns: ArrayLike = ()
+    potential_advantages: ArrayLike = ()
 
 
 @dataclass

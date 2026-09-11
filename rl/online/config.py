@@ -420,6 +420,17 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # run continues on the deployable estimator without a lineage break and
     # the privileged head stays an observer.
     player_privileged_targets: bool = True
+    # PBRS as a potential channel (2026-09-11; docs/human-switch-pbrs-
+    # 2026-09-11.md, LESSONS "PBRS potential channel"): eta, the scale on the
+    # service's unit position potential Phi (INFO_FEATURE__STATE_POTENTIAL,
+    # the human-replay outcome fit). > 0 runs a second v-trace channel beside
+    # the win channel -- reward gamma * Psi' - Psi with Psi = eta * Phi (0 on
+    # done rows, uncentred), bootstrapped by the learner-only potential_head --
+    # and adds its advantage to pg_advantages. The channel's exact value is
+    # -Psi under any policy, so a fitted head makes it inert: the head starts
+    # at 0 and its lag IS the shaping. The win critics never see it. 0.0
+    # builds neither the head nor the channel -- today's learning rule.
+    player_potential_strength: float = 0.0
     # Belief-state shaping (2026-09-01): CE from the matched public rows'
     # belief logits to the sg'd opponent code. Bounded (<= log K per group),
     # pi-free, touches representations not logits; 0.0 is an inert-loss off

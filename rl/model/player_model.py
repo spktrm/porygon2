@@ -50,6 +50,7 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     FlatActionReadout,
     HeadParams,
+    RegressionValueLogitHead,
     SlotConditioning,
     compute_policy_metrics,
     sample_categorical,
@@ -164,6 +165,10 @@ class Porygon2PlayerModel(nn.Module):
         # params exist in the learner-initialised tree and an actor apply
         # never visits them; nothing at deploy consumes its output.
         self.priv_v_head = CategoricalValueLogitHead(self.cfg.priv_v_head)
+        # The PBRS potential channel's value (2026-09-11): learner-only, and
+        # absent unless the channel runs, so strength 0 keeps today's tree.
+        if self.cfg.potential_head.enabled:
+            self.potential_head = RegressionValueLogitHead(self.cfg.potential_head)
         # The belief head (2026-09-01): from each opponent mon's PUBLIC row
         # (post-trunk, policy-readable -- deduction from what the agent can
         # see), predict that mon's discrete code. CE against the sg'd code
@@ -671,6 +676,13 @@ class Porygon2PlayerModel(nn.Module):
                 ],
                 "history_gate_mean": history_stats["gate_mean"],
             }
+            if self.cfg.potential_head.enabled:
+                # CLS under stop_gradient: the channel's label is the
+                # human-fitted potential, so its loss reaches this head and
+                # nothing it reads (test_potential_slot, the reach test).
+                learner_only["potential_head"] = self.potential_head(
+                    jax.lax.stop_gradient(sequence[CLS_ROW])
+                )
         return PlayerActorOutput(
             action_head=action_head,
             # The CLS row, and only the CLS row.

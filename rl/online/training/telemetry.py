@@ -213,6 +213,56 @@ def collect_batch_telemetry_data(
     return telemetry
 
 
+def potential_telemetry(
+    potential: jax.Array,
+    potential_advantages: jax.Array | tuple,
+    pg_advantages: jax.Array,
+    policy_mask: jax.Array,
+    value_mask: jax.Array,
+    voluntary_switch_mask: jax.Array,
+    move_mask: jax.Array,
+) -> dict[str, jax.Array]:
+    """The position potential (2026-09-11, unit scale, eta-free) and -- when
+    the PBRS channel runs -- its part of the actor's advantage.
+
+    The switch delta Phi(t+1) - Phi(t) on voluntary switches is DESCRIPTIVE:
+    self-play need not reproduce the human-replay sign (-0.038 mean). The
+    channel's advantage share should FALL as the potential head fits (the
+    head's lag is the shaping); a floor is the unfitted part persisting.
+    """
+    mean = average(potential, value_mask)
+    following = jnp.concatenate([potential[1:], potential[-1:]], axis=0)
+    has_following = jnp.arange(potential.shape[0])[:, None] < potential.shape[0] - 1
+    logs = {
+        "player_potential_mean": mean,
+        "player_potential_std": jnp.sqrt(
+            average(jnp.square(potential - mean), value_mask)
+        ),
+        "player_potential_switch_delta_mean": average(
+            following - potential, voluntary_switch_mask & has_following
+        ),
+    }
+    if isinstance(potential_advantages, tuple):
+        return logs
+
+    def centred(values: jax.Array) -> tuple[jax.Array, jax.Array]:
+        values = values.astype(jnp.float32)
+        deviation = values - average(values, policy_mask)
+        return deviation, jnp.sqrt(average(jnp.square(deviation), policy_mask))
+
+    channel = potential_advantages.astype(jnp.float32)
+    channel_deviation, channel_std = centred(channel)
+    win_deviation, win_std = centred(pg_advantages - channel)
+    _, total_std = centred(pg_advantages)
+    logs["player_potential_adv_share"] = channel_std / (total_std + 1e-8)
+    logs["player_potential_win_adv_corr"] = average(
+        channel_deviation * win_deviation, policy_mask
+    ) / (channel_std * win_std + 1e-8)
+    logs["player_potential_adv_switch"] = average(channel, voluntary_switch_mask)
+    logs["player_potential_adv_move"] = average(channel, move_mask)
+    return logs
+
+
 def calculate_r2(
     value_prediction: jax.Array,
     value_target: jax.Array,

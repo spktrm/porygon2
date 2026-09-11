@@ -5278,3 +5278,82 @@ cells and a +-1e4 saturating row at both temperatures. Read it by
 `player_support_frac_below_p01` / `_p005` and the switch cells on the floor
 at the ~430k check; revert by setting the temperature to 0.0 (exact) or by
 reverting this commit.
+
+## Addition ledger — 2026-09-11 PBRS potential channel (lands dark at eta 0)
+
+**What.** The human-replay position potential (2cedbaf fit, H+N+M) enters
+learning as a second v-trace channel beside the win channel. The service
+(406efe0) writes the public-view unit potential into
+INFO_FEATURE__STATE_POTENTIAL on every state: both sides from publicBattle,
+own HP through the sim's shared percentage rule, so p1 == -p2 exactly (the
+harness requires it). The learner: `player_potential_strength` (eta) > 0 runs
+`scalar_vtrace` (e04483e, the structure-only extraction) on reward
+d * Psi' - Psi, Psi = eta * Phi on live nonterminal rows, value
+W = eta * potential_head (target net) forced 0 on done and padding rows, and
+adds its advantage to pg_advantages before normalisation. The learner-only
+potential_head (RegressionValueLogitHead, zero-init output, built only at
+eta > 0) reads stop_gradient(CLS) and regresses its channel returns (MSE,
+coefficient 1, live nonterminal rows). The win critics are untouched.
+
+**Why this form** (user decisions 2026-09-11; derivation and review record in
+docs/human-switch-pbrs-2026-09-11.md and the session plan):
+- The channel's exact value is -Psi under any policy; with it every channel
+  TD is 0 (PBRS invariance). A zero-init head starts at W = 0, where the
+  channel adds -Psi_t + (1 - lambda) * sum_k lambda^(k-1) * Psi_(t+k) on
+  fully on-policy rows, and converges to -Psi: the head's lag IS the shaping.
+  Handing the head -Phi analytically would be inert.
+- At a merge the channel's advantage equals a win critic shifted by
+  +eta * Phi (max difference 1e-17 over 4,000 random thresholded games). The
+  residual-critic alternative absorbs that by retargeting the trained win
+  critic -- support migration, introduced clipping, a (1 + eta) merge
+  rescale, a rollback that reinterprets rather than restores. Declined.
+- Uncentred on purpose: the per-game shaping sum is -eta * Phi(h0),
+  |.| <= .0046 at eta .05 (H = N = 0 at the first request, no team
+  preview), action-independent. Centred rewards give the same learner only
+  with the start offset ALSO on the value; centred with a plain head never
+  goes inert (a residual eta * Phi(h0) on the final transition).
+  tests/test_potential_channel.py pins both.
+- Done rows: rho there is a sampled ratio on a no-decision row (the actor
+  forwards the terminal state; thresholded_target_ratio has no done case).
+  Forcing W = 0 makes the done-row channel TD exactly 0 whatever rho is.
+- Declined: shaped reward with a win-only critic and no head (the July
+  927d80d shape -- a permanent, non-overridable near-term-potential bias);
+  a head with trunk gradients (a permanent auxiliary regression of the trunk
+  onto a human-derived target).
+- Lineage: 925b620 (2026-04-02) learned potential-head channel -> 357f357
+  one-step F on the advantage (not invariant) -> 927d80d Phi-valued channel
+  with its own lambda (July) -> retired August.
+
+**Bounds are measured, not claimed.** The only analytic bound is the loose
+2 * eta / (1 - lambda) = .50 at W = 0; observed .107 max over 4,000 random
+thresholded games; the review's thresholded counterexample reached .132. The
+head's gradient enters the GLOBAL clip norm (clip_by_global_norm 10; logged
+player_gradient_norm 3.2-9.1), a coupling the stop_gradient reach test cannot
+see -- read `player_potential_head_grad_share`.
+
+**Verified at landing.** vitest 43 passed (one Illusion slot-alignment flake,
+known-open, clean on 4 reruns); pytest fast 395 passed + 2 GPU-OOM failures
+that reproduce on e04483e (a live learner held 9.4 of 12 GB); e04483e
+bit-identical on ex.bin; 7 channel tests with controls; Python/TS fixture
+parity. NOT yet run, all gated on a learner-free window:
+tests/test_potential_slot.py (slot invariance, gradient reach), the eta > 0
+train_step slow test, the slow suite, and the Step 3 gradient screen
+(runtime/pbrs-screen) that gates any launch.
+
+**Panels.** player_potential_{mean,std,switch_delta_mean} (eta-free; the
+switch delta is descriptive, humans read -0.038); player_potential_adv_share
+(should fall as the head fits; a floor is the unfitted part persisting);
+player_potential_head_fit_r2 (the head against its exact target -Phi, the
+distance from inert; pre-registered >= .9 by 20k); player_potential_head_r2;
+player_potential_win_adv_corr; player_potential_adv_{switch,move};
+player_potential_head_grad_share.
+
+**Revert.** eta 0: the head is not built, the param merge drops its leaf, and
+the learning rule is today's exactly (the win critic was never retargeted).
+Or revert this commit and 406efe0 (the slot then reads 0 again).
+
+**Found during verification, outside this change.** The WIN payoff's done-row
+TD is rho_done * (r - V_done) with rho_done a sampled ratio, 0 when the
+sampled cell is thresholded away. The fixed point is intact (V_done -> r while
+E[rho] > 0) but the payoff is slowed and dropped on those samples. Candidate
+separate fix: rho = 1 on done rows.

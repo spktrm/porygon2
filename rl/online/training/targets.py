@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from rl.environment.data import CAT_VF_SUPPORT
+from rl.environment.data import CAT_VF_SUPPORT, MAX_RATIO_TOKEN
 from rl.environment.interfaces import (
     Batch,
     BuilderActorOutput,
@@ -9,6 +9,7 @@ from rl.environment.interfaces import (
     PlayerTargets,
     Trajectory,
 )
+from rl.environment.protos.features_pb2 import InfoFeature
 from rl.model.utils import prune_log_policy
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.telemetry import ratio_ess_and_tail
@@ -91,6 +92,15 @@ def trace_run_length(continues: jax.Array) -> jax.Array:
     return runs
 
 
+def unit_potential(env_output) -> jax.Array:
+    """The service's position potential (INFO_FEATURE__STATE_POTENTIAL,
+    int16 at MAX_RATIO_TOKEN) as a unit-scale float: the human-replay
+    outcome fit, in [-1, 1] win-loss units (service/src/server/
+    position_potential.ts)."""
+    potential = env_output.info[..., InfoFeature.INFO_FEATURE__STATE_POTENTIAL]
+    return potential.astype(jnp.float32) / MAX_RATIO_TOKEN
+
+
 def scalar_vtrace(
     reward: jax.Array,
     value: jax.Array,
@@ -130,6 +140,7 @@ def compute_player_targets(
     isr: jax.Array,
     config: Porygon2LearnerConfig,
     isr_raw: jax.Array | None = None,
+    potential_values: jax.Array | None = None,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
     """Computes Retrace VALUE targets on the win/loss channel plus the
     plain v-trace POLICY advantage the PPO surrogate reads (2026-08-26 —
@@ -210,6 +221,34 @@ def compute_player_targets(
     # two-hot distribution (two_hot clips to the support range).
     win_returns = two_hot(scalar_returns, support) * mask[..., None]
 
+    # The PBRS potential channel (2026-09-11; config.player_potential_strength
+    # carries the algebra). `potential_values` is the TARGET potential head,
+    # unit scale. Uncentred: Psi = eta * Phi on nonterminal on-mask rows and 0
+    # on done and padding rows, and the channel value W is forced 0 there
+    # too -- the terminal channel value is exactly 0, which makes a done
+    # row's TD exactly 0 whatever its sampled rho. The exact W is -Psi under
+    # any policy, so a fitted head adds nothing (tests/test_potential_channel).
+    potential_returns = ()
+    potential_advantages = ()
+    if potential_values is not None:
+        strength = config.player_potential_strength
+        if strength <= 0:
+            raise ValueError("potential_values need player_potential_strength > 0")
+        live = mask * (1 - dones).astype(jnp.float32)
+        psi = strength * unit_potential(batch.player_transitions.env_output) * live
+        psi_next = jnp.concatenate([psi[1:], psi[-1:]], axis=0)
+        channel_returns, potential_advantages = scalar_vtrace(
+            discount_t * psi_next - psi,
+            strength * potential_values.astype(jnp.float32) * live,
+            discount_t,
+            mask,
+            rho_t,
+            c_t,
+            config.player_lambda,
+        )
+        potential_returns = channel_returns / strength
+        pg_advantages = pg_advantages + potential_advantages
+
     value_mask = mask.astype(jnp.bool_)
     # Chunked unrolls: a chunk's final row is bootstrap-only — it anchors
     # the recursions above (v_t reads its value) but
@@ -257,6 +296,8 @@ def compute_player_targets(
             pg_advantages=pg_advantages,
             policy_mask=policy_mask,
             value_mask=value_mask,
+            potential_returns=potential_returns,
+            potential_advantages=potential_advantages,
         ),
         channel_logs,
     )

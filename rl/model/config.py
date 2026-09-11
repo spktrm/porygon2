@@ -162,6 +162,15 @@ def get_player_model_config(
         len(CAT_VF_SUPPORT),
     )
     cfg.priv_v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The PBRS potential channel's value head (2026-09-11): learner-only and
+    # built only when the learner's player_potential_strength > 0 (main.py
+    # sets `enabled`). One scalar in unit potential units, zero at init so a
+    # merge starts the channel at W = 0 in params, target and reg alike.
+    cfg.potential_head = ConfigDict()
+    cfg.potential_head.enabled = False
+    cfg.potential_head.zero_init_output = True
+    cfg.potential_head.mlp = ConfigDict()
+    cfg.potential_head.mlp.layer_sizes = (2 * entity_size, entity_size, 1)
     # The opponent discrete code: per mon, num_groups categoricals of
     # num_classes -- 16x16 = a 64-bit-ish joint space over a randbats build
     # pool, with entity_size divisible by num_groups so the code embedding

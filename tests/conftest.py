@@ -55,7 +55,12 @@ def real_model_and_trajectory() -> (
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model
 
-    network = get_player_model(get_player_model_config(generation=9, train=True))
+    config = get_player_model_config(generation=9, train=True)
+    # The PBRS channel's potential head (2026-09-11) exists whenever the
+    # channel runs; the session model carries it so the slot-invariance and
+    # gradient-reach tests read it.
+    config.potential_head.enabled = True
+    network = get_player_model(config)
     actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     # Jitted init (2026-08-24): eager init dispatches the forward op by op
     # and compiles each nn.scan separately -- it was ~6 min of the slow

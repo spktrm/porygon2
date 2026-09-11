@@ -496,6 +496,9 @@ def main(args: argparse.Namespace):
     learner_player_model_config.transition.value_trains_v_head = (
         learner_config.player_transition_value_trains_v_head
     )
+    learner_player_model_config.potential_head.enabled = (
+        learner_config.player_potential_strength > 0
+    )
     learner_builder_model_config = get_builder_model_config(
         learner_config.generation, train=True
     )

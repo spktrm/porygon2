@@ -24,7 +24,8 @@ import pytest
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
-def test_train_step_smoke() -> None:
+def _ex_batch(actor_input, actor_output):
+    """The bundled ex.bin trajectory as a (T, B=1) learner batch."""
     from rl.environment.interfaces import (
         Batch,
         CategoricalValueHeadOutput,
@@ -33,26 +34,7 @@ def test_train_step_smoke() -> None:
         PlayerPolicyHeadOutput,
         PlayerTransition,
     )
-    from rl.environment.utils import get_ex_player_step
-    from rl.model.builder_model import get_builder_model
-    from rl.model.config import get_builder_model_config, get_player_model_config
-    from rl.model.player_model import get_player_model
-    from rl.online.artifact import create_train_state
-    from rl.online.config import Porygon2LearnerConfig
-    from rl.online.training.train_step import TRAIN_STEP_JIT
 
-    config = Porygon2LearnerConfig()
-    player_net = get_player_model(
-        get_player_model_config(config.generation, train=True)
-    )
-    builder_net = get_builder_model(
-        get_builder_model_config(config.generation, train=True)
-    )
-    player_state, builder_state = create_train_state(
-        player_net, builder_net, jax.random.key(0), config
-    )
-
-    actor_input, actor_output = get_ex_player_step()
     env = actor_input.env  # (T, B=1, ...)
     T, B = env.done.shape
     action_index = jnp.asarray(actor_output.action_head.action_index)
@@ -80,6 +62,31 @@ def test_train_step_smoke() -> None:
         game_length=jnp.full((1, B), T, dtype=jnp.int32),
         game_step_offset=jnp.zeros((1, B), dtype=jnp.int32),
     )
+    return batch
+
+
+def test_train_step_smoke() -> None:
+    from rl.environment.utils import get_ex_player_step
+    from rl.model.builder_model import get_builder_model
+    from rl.model.config import get_builder_model_config, get_player_model_config
+    from rl.model.player_model import get_player_model
+    from rl.online.artifact import create_train_state
+    from rl.online.config import Porygon2LearnerConfig
+    from rl.online.training.train_step import TRAIN_STEP_JIT
+
+    config = Porygon2LearnerConfig()
+    player_net = get_player_model(
+        get_player_model_config(config.generation, train=True)
+    )
+    builder_net = get_builder_model(
+        get_builder_model_config(config.generation, train=True)
+    )
+    player_state, builder_state = create_train_state(
+        player_net, builder_net, jax.random.key(0), config
+    )
+
+    actor_input, actor_output = get_ex_player_step()
+    batch = _ex_batch(actor_input, actor_output)
 
     # The learner's compiled train_step (donates the states; nothing below
     # reads the pre-step ones). The eager function was ~25 min here.
@@ -292,3 +299,71 @@ def test_train_step_smoke() -> None:
     # At init every logit is exactly 0, so the policy is uniform over legal
     # cells and the reference it just snapped from is the same distribution.
     assert float(logs["player_ref_kl"]) == pytest.approx(0.0, abs=1e-5)
+
+
+def test_train_step_runs_the_potential_channel() -> None:
+    """One static config per train_step test: eta > 0 builds the potential
+    head and runs its channel (2026-09-11). ex.bin predates the service's
+    potential, so the slot is filled synthetically -- all zeros would hand
+    the head a zero label and a zero gradient, and pass vacuously."""
+    from rl.environment.protos.features_pb2 import InfoFeature
+    from rl.environment.utils import get_ex_player_step
+    from rl.model.builder_model import get_builder_model
+    from rl.model.config import get_builder_model_config, get_player_model_config
+    from rl.model.player_model import get_player_model
+    from rl.online.artifact import create_train_state
+    from rl.online.config import Porygon2LearnerConfig
+    from rl.online.training.train_step import TRAIN_STEP_JIT
+
+    config = Porygon2LearnerConfig().replace(player_potential_strength=0.05)
+    player_config = get_player_model_config(config.generation, train=True)
+    player_config.potential_head.enabled = True
+    player_net = get_player_model(player_config)
+    builder_net = get_builder_model(
+        get_builder_model_config(config.generation, train=True)
+    )
+    player_state, builder_state = create_train_state(
+        player_net, builder_net, jax.random.key(0), config
+    )
+    head_before = [
+        np.asarray(leaf)
+        for leaf in jax.tree.leaves(player_state.params["params"]["potential_head"])
+    ]
+
+    actor_input, actor_output = get_ex_player_step()
+    info = np.asarray(actor_input.env.info).copy()
+    info[..., InfoFeature.INFO_FEATURE__STATE_POTENTIAL] = np.random.default_rng(
+        0
+    ).integers(-12000, 12000, size=info.shape[:-1])
+    actor_input = actor_input.replace(
+        env=actor_input.env.replace(info=jnp.asarray(info))
+    )
+    batch = _ex_batch(actor_input, actor_output)
+
+    new_player_state, _, logs = TRAIN_STEP_JIT(
+        player_state, builder_state, batch, config
+    )
+
+    for key in (
+        "player_loss_potential",
+        "player_potential_head_r2",
+        "player_potential_head_fit_r2",
+        "player_potential_adv_share",
+        "player_potential_win_adv_corr",
+        "player_potential_adv_switch",
+        "player_potential_adv_move",
+        "player_potential_head_grad_share",
+        "player_potential_mean",
+        "player_potential_std",
+        "player_potential_switch_delta_mean",
+    ):
+        assert key in logs, key
+        assert np.isfinite(np.asarray(logs[key])).all(), key
+    # The zero-init head reads W = 0, so the channel carries the full
+    # near-term-potential force on this first step.
+    assert float(logs["player_potential_adv_share"]) > 0.0
+    head_after = jax.tree.leaves(new_player_state.params["params"]["potential_head"])
+    assert any(
+        not np.array_equal(before, np.asarray(after))
+        for before, after in zip(head_before, head_after, strict=True)
+    )

@@ -151,7 +151,12 @@ TypeScript game service speaking protobuf over websockets.
   `tests/test_dtype_policy.py` pins this with an allowlist (a new f32
   activation fails and names itself).
 - All training/exploration signals derive from self-play — no scripted
-  heuristics, no human-derived shaping.
+  heuristics, no human-derived shaping. ONE scoped exception (user,
+  2026-09-11): the human-replay position potential may enter ONLY as the
+  PBRS potential channel of the actor advantage (`player_potential_strength`,
+  default 0), bootstrapped by a stop_gradient head that learns it away —
+  policy-invariant at convergence, never a loss the policy or trunk must
+  agree with (LESSONS "PBRS potential channel").
 - Checkpoint writes are atomic; a step>0 checkpoint with no league file
   refuses to load.
 

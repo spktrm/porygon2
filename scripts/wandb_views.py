@@ -1087,6 +1087,37 @@ def rl_sections():
                     ["player_priv_value_gap"],
                 ),
                 lp(
+                    # The PBRS potential channel (2026-09-11): its std share
+                    # of the actor advantage should FALL as the potential
+                    # head fits (the head's lag IS the shaping; a floor is
+                    # the unfitted part persisting). fit_r2 is the head
+                    # against its EXACT target -Phi -- the distance from
+                    # inert; the pre-registered read is >= .9 by 20k.
+                    "PBRS potential channel",
+                    [
+                        "player_potential_adv_share",
+                        "player_potential_head_fit_r2",
+                        "player_potential_head_r2",
+                        "player_potential_win_adv_corr",
+                    ],
+                ),
+                lp(
+                    # The unit position potential (eta-free, on the wire at
+                    # any strength). switch_delta is DESCRIPTIVE (human
+                    # replays: -0.038); adv_switch/move split the channel's
+                    # advantage by the taken modality; grad_share is the
+                    # head's part of the global clip norm.
+                    "Position potential",
+                    [
+                        "player_potential_mean",
+                        "player_potential_std",
+                        "player_potential_switch_delta_mean",
+                        "player_potential_adv_switch",
+                        "player_potential_adv_move",
+                        "player_potential_head_grad_share",
+                    ],
+                ),
+                lp(
                     # Directed-message sanity: fraction of valid history
                     # steps with an identified SOURCE row (expect >> 0.5).
                     "History src fraction",
