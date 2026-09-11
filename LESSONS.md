@@ -5464,7 +5464,132 @@ user's call. Step 2 (after the hold): `player_privileged_targets` ->
 `player_value_target_route` in {deploy, privileged, pair_public,
 pair_private}, `compute_player_targets` taking a scalar bootstrap.
 
-Reference numbers at landing: uddwfke8 CLS R2 deploy .540 / privileged .513
-at 485k (wandb summaries; the 2026-09-01 gate is FAILING on the CLS
-instrument and unrecorded until this row). Revert handle: this commit;
-`player_pair_value_loss_coef 0` is the bit-exact off.
+Reference numbers at landing: uddwfke8 CLS R2 at the stop for this
+relaunch (637,000, ckpt_00637000): deploy .8173 / privileged .8481, gap
+.0586 -- the 2026-09-01 gate PASSING. The 485k summaries had read .540 /
+.513 (privileged below deployable for ~120k steps from ~365k), a dip the
+run climbed out of, not a standing failure; recorded here because no row
+carried it. Revert handle: this commit; `player_pair_value_loss_coef 0`
+is the bit-exact off.
+
+## Removal ledger — 2026-09-12 latent world model, opponent code and dynamics rows (explored; open to revisit)
+
+Explored, not failed. The latent world model (stochastic transition
+g(h_t, u, z), latent action u, chance code z, K=2 unroll, recursive
+decision/chance backup, MCTS), the opponent discrete code with its belief SSL
+stack, and the dynamics target rows were removed in one pass because the
+scope is too large while the base agent is not yet strong (49.5% vs
+SimpleHeuristic at T=1, ~1M fresh chunks, Tera-by-turn-3 82% vs human 3%,
+voluntary switches 13% vs 20%). The documents of the time are explicit that
+the offline reads "are not independent falsifications of all world-model
+architectures" and that "weak aggregate calibration and improved play can
+coexist"; the privileged critic STAYS and now reads the raw private-sheet
+latent (the same embedder output the code used to quantise). Long-form
+retrospective, timeline, every measured number and the reusable pieces:
+`docs/latent-world-model-retrospective-2026-09-12.md` (local, gitignored).
+
+Reopen when: the base agent is clearly above the heuristic baseline at T=1
+with human-scale behaviour statistics; a value-blind search control exists;
+the pooled uncentred prior-expectation delta gain clears copy with an interval
+excluding 0 (it straddled 0 on every checkpoint: −0.073 [−0.186, +0.040]
+@1.80M, −0.056 [−0.151, +0.020] @1.835M, −0.064 [−0.105, −0.012] @1.889M);
+or a format with more chance / hidden information makes the Step-1 instrument
+read above its 0.10 bar (gen9 randbats read 0.051). For the belief code: a
+label whose margin over the mon's own revealed row (measured 0.044) is worth
+its cost.
+
+Tag `pre-world-model-removal-2026-09-12` on 7d222e1 (branch
+`pair-value-critic`). Recovery for any row:
+`git checkout pre-world-model-removal-2026-09-12 -- <paths>`; each removing
+commit is a single `git revert`.
+
+| mechanism | paths deleted | removing SHA | recovery |
+|---|---|---|---|
+| offline probes + the unpaired interval stack (REMOVED) | `rl/offline/{transition_probe,event_probe,search_samples_probe,search_ablation,interval_features,interval_data,train_interval,direct_interval}.py`, `rl/model/interval_transition.py`, `tests/{test_search_samples_probe,test_interval_transition,test_interval_scaffold,test_interval_data,test_direct_interval}.py` | `<sha>` | `git checkout pre-world-model-removal-2026-09-12 -- rl/offline/transition_probe.py rl/offline/event_probe.py rl/offline/search_samples_probe.py rl/offline/search_ablation.py rl/offline/interval_features.py rl/offline/interval_data.py rl/offline/train_interval.py rl/offline/direct_interval.py rl/model/interval_transition.py` |
+| search + MCTS (REMOVED): the recursive decision/chance backup, `mcts_root` / `_guarded_cond`, `cfg.search`, `SearchOutput` / `PlayerActorOutput.search`, `search_bonus`, `actor_params_view(search=)`, the inference server's `--search` / `--search-depth`, the offline harness's search args | `rl/model/search.py`, `rl/model/mcts.py`, `tests/test_mcts.py`, `tests/test_search.py` (the `eval_game_logs` half rehomed to `tests/test_eval_game_logs.py`), edits in `rl/model/player_model.py`, `rl/model/config.py`, `rl/environment/interfaces.py`, `inference/{model,server}.py`, `rl/offline/harness.py`, `tests/test_actor_device.py` | `<sha>` | `git checkout pre-world-model-removal-2026-09-12 -- rl/model/search.py rl/model/mcts.py tests/test_mcts.py tests/test_search.py` + `git revert <sha>` for the edits |
+| `TransitionModel` (REMOVED): `rl/model/transition.py` (latent action encoder / candidate generator, chance prior / posterior, `RowRead`, `imagine`, grounding / kind+done / terminal-outcome readers, K-step unroll), `transition_objectives.py` (exact decode loss, Plackett–Luce candidate targets), `categoricals.py`; `_forward_transition`, `dynamics_alignment`; `cfg.transition`; the `transition_*` output leaves, `OFFSET_LEADING_LEAVES` / `batch_out_axes`; the eight learner coefficients (`player_dynamics_coef`, `player_transition_{dyn,rep}_coef`, `_free_nats`, `_cons_coef`, `_value_trains_v_head`, `_decode_coef`, `_align_coef`); `train_step.{dynamics_losses,transition_losses,…}` + the learner `sampling` rng; `hp_input_rows`; `_TRANSITION_LEAVES` + the seven transition grad-norm panels; wandb section 3b | `rl/model/transition.py`, `rl/model/transition_objectives.py`, `rl/model/categoricals.py`, `tests/test_transition_model.py`, edits in `rl/model/{player_model,config,state_features}.py`, `rl/environment/interfaces.py`, `rl/online/{config,artifact}.py`, `rl/online/training/{train_step,telemetry}.py`, `rl/offline/potential_screen.py`, `scripts/wandb_views.py`, `tests/{test_train_step,test_privileged_partition,test_history_carry}.py` | `<sha>` | `git checkout pre-world-model-removal-2026-09-12 -- rl/model/transition.py rl/model/transition_objectives.py rl/model/categoricals.py tests/test_transition_model.py` + `git revert <sha>` |
+| opponent discrete code + belief SSL (REMOVED): `opp_code_logits` / `opp_code_embedding` / `_opp_code_rows` (the 16×16 straight-through code on the secret rows), `belief_alignment`, `OppCodeLabels`, `_hidden_code` / `_opp_code_labels` (the hidden-token label), `belief_head`, `species_belief`, `revealed_belief`, `cfg.encoder.opp_code` / `cfg.belief_head` / `cfg.revealed_belief`, `player_belief_coef` 0.25, the `opp_code` / `hidden_code` / `belief_*` output leaves, `train_step`'s belief block, `telemetry.{_OPP_CODE_LEAVES,code_usage_logs,belief_accuracy_logs,_code_marginal}`, wandb section 3 + the two opp-code drift panels | `tests/{test_hidden_code_label,test_belief_telemetry,test_revealed_control,test_species_control,test_opp_code_telemetry}.py`, edits in `rl/model/{encoder,player_model,config,constants}.py`, `rl/environment/interfaces.py`, `rl/online/config.py`, `rl/online/training/{train_step,telemetry}.py`, `scripts/wandb_views.py`, `tests/{test_privileged_partition,test_train_step,test_actor_sequence,test_model_forward,test_resume_merge}.py` | `<sha>` | `git checkout pre-world-model-removal-2026-09-12 -- tests/test_hidden_code_label.py tests/test_belief_telemetry.py tests/test_revealed_control.py tests/test_species_control.py tests/test_opp_code_telemetry.py` + `git revert <sha>` |
+| dynamics target rows (REMOVED): `DYNAMICS_TARGET_ROWS` / `DYNAMICS_GROUP_SLICES` / `NUM_DYNAMICS_ROWS`, `Encoder.dynamics_rows`, `PlayerActorOutput.dynamics_target` | edits in `rl/model/{constants,encoder,player_model}.py`, `rl/environment/interfaces.py`, `tests/test_actor_sequence.py` | `<sha>` | `git revert <sha>` |
+
+**Numbers move at the next relaunch** (checkpoint-mode by-path merge drops the
+removed subtrees and their Adam moments; nothing is a manifest field): the
+shared `v_head` loses the imagined-row CE it trained on under
+`value_trains_v_head`; the global grad clip at 10 stops counting the
+transition and code gradients, so every surviving parameter's effective step
+changes; the privileged critic reads the raw sheet latent instead of the
+16×16 code (strictly more information; `opp_code_*` params dropped). Watch
+`player_priv_value_head_r2` against its standing gate
+(`>= player_value_head_r2` from 20k on; at ckpt_00637000 it read .8481 vs
+.8173). The actor forward is structurally untouched (`search.enabled` was
+False; every removed encoder branch was under `cfg.train`). Slow suite and
+the full-lattice `train_step` smoke owed at the next learner-free window.
+
+**What was measured (compressed; each: what it measures, which way is good).**
+Delta gain = 1 − SSE(pred vs V_{t+1}) / SSE(V_t vs V_{t+1}), copy = 0, higher
+is better. Step 1 (mean head, ckpt_01220000, 3,340 transitions): value gap
+0.051 on hp-moved rows vs copy 0.074, bar ≥ 0.10 — neither gate branch fired;
+long-span cost nil (0.038 vs 0.045: semi-Markov diagnosis unsupported).
+Launch check 1: content grounding head loss 17.8, grad norm 22 vs clip 10 →
+delta form. Launch check 2: prob_switch 0.04 → 0.014 through an uncounted path
+(next-policy loss through the live readout = KL(π_{t+1}‖π_t) on the real
+trunk) → observer stop-gradients. Launch check 3: kl_free_frac 0.93 (F = 1
+nat over 2 groups) → F 0.0625 + RowRead. Step-2b hold: kl 0.12–0.18 (band
+0.5–3), post perplexity 2.6/16 (bar 3) — "price it by play". Step 3: root_kl
+0.015–0.04 (band 0.05–0.5, "search agrees with π"), 3.4× latency; "Do 1"
+probe: branch spread 0.039, oracle gain 0.014, root_kl floor ~0.02 at 64
+draws — sampling is not the lever; value_r2 0.84 VACUOUS (copy scores high on
+the t+1 label). B: out_proj_rms 0.017 pinned across three gradient regimes.
+D (rep 0): kl 0.17 → 0.64, kept; post perplexity flat 2.6. Posterior sampling:
+perplexity FELL 2.54 → 2.50, rich-get-richer falsified. Event probe: prior z
+≈ best MLP on its own input; label ceiling ~0.25. Rescored calibration
+(pooled, exact 256 codes, whole-game bootstrap): posterior +0.33/+0.34, prior
+expectation −0.073/−0.056 straddling 0, switches +0.18 [+0.07, +0.24] above
+copy, moves −0.11 below. Search win rate +5.8 pp [+2.1, +9.5] on evolving
+checkpoints (the one positive search read); at 01861967 the arm moved root KL
+by 1e-5 — pricing nothing. Latent actions: decode_acc 0.80, action_mi 1.35
+nats, value_delta_r2 +0.18 at launch; depth-2 arm 11× depth 1, learner RSS
+13.7–14.4 GB. MCTS pilots (plain / MCTS1 / MCTS2 / exp1 / exp2): 45/48/50/41/50
+then 55/47/42/45/51 — within noise, 1/64 forced-coverage confound unremoved;
+GPU latency 118 → 20 ms at depth 1 after the mctx-style layout, bit-identical.
+Action-code audit: 87% reconstruction, MI 1.59 nats, 35.6% of same-move
+Tera pairs aliased, predicted value gap 0.002. Interval stack: held-out −0.35
+/ −0.29 / −0.59 at train +0.99 (fits, does not generalise); direct probes
+select step 0; bypass paired +0.011 [−0.007, +0.029], inconclusive; teacher
+KL improves while successor MSE worsens 8% (different targets). Consistency
+preflight: 99.3–99.7% of the loss from absent PREV_ACTION rows (norms
+2,477–8,256 vs 12–21) → endpoint-union validity. Belief: accuracy .847 vs
+revealed-row control .803 vs species .551; above-marginal .442 / .399 / .146;
+context margin .044; code params moved ~10% in 182k through the priv-value CE
+alone; the cosine mean dynamics head never positive over 230k (−0.27 → −0.019).
+
+**Reusable pieces (one line each; a paragraph each in the doc).** Zero-init
+delta-form grounding head (starts at copy, loss 1 / gain 0). Observer
+stop-gradients + frozen-clone head application + the inverted reach test.
+`RowRead` per-row read + per-group free nats ("the floor never goes up").
+Latent action alphabet with the EXACT finite-alphabet decode objective and
+without-replacement autoregressive candidates (nothing masked past the root).
+Conditional terminal-outcome head: B = (1−c)T + c Σ μ Q fixes the (1−c)V +
+cE[Q] double count. Straight-through posterior sampling with a liveness panel.
+mctx-style traversal/expansion split + `_guarded_cond` (singleton vmap keeps
+batched arithmetic). Endpoint-union consistency validity ("the missing mask is
+in the comparison loss"). Calibration accounting: uncentred delta gain, exact
+code grid, whole-game bootstrap, modality splits. Dreamer-style
+straight-through code as a learner-only bottleneck grounded by a value loss;
+the hidden-token label (mask every token the public row shows) with its
+species and revealed-row controls. The rename rule: a head whose meaning
+changes under an unchanged shape is renamed or the by-path merge resumes it.
+
+**Verdicts (quoted).** "~0.02 is the depth-1 operator's ceiling and sampling
+is NOT the lever." "The all-rows interval STRADDLES 0 on both checkpoints: the
+block on C and rung 2 stays." "Implementing the architecture is distinct from
+training its parameters." "MCTS does not improve in this pilot … no
+value-blind matched control was run, so do not attribute the complete gameplay
+deficit to the world model." "They are not independent falsifications of all
+world-model architectures … This does not prove the achievable gain is zero
+here or validate the current world model." "Keep policy-gradient baseline;
+test representation/action-effect calibration and value-blind search control
+before promoting search." "The root representation … was learned for
+policy/value prediction. Its sufficiency for a Markov transition model is not
+guaranteed." Belief: "most predictability is available from the mon's own
+revealed row." User, on why Step 2 proceeded past a failed Step-1 gate: "in
+other formats it will absolutely be necessary."

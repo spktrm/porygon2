@@ -181,10 +181,10 @@ def test_scope_is_the_v_trace_ratio_and_nothing_else() -> None:
     )
     from rl.environment.utils import get_ex_player_step
     from rl.model.builder_model import get_builder_model
-    from rl.model.config import get_builder_model_config, get_player_model_config
+    from rl.model.config import get_builder_model_config
     from rl.model.player_model import get_player_model
     from rl.model.utils import open_zero_init_paths
-    from rl.online.artifact import create_train_state
+    from rl.online.artifact import create_train_state, player_model_config_for
     from rl.online.training.train_step import TRAIN_STEP_JIT
 
     actor_input, actor_output = get_ex_player_step()
@@ -231,7 +231,9 @@ def test_scope_is_the_v_trace_ratio_and_nothing_else() -> None:
     for threshold in (0.0, 0.3):
         config = Porygon2LearnerConfig(player_prune_threshold=threshold)
         player_net = get_player_model(
-            get_player_model_config(config.generation, train=True)
+            # The learner's own config function (the potential head is on at
+            # the default strength, and the pairwise critics with it).
+            player_model_config_for(config)
         )
         builder_net = get_builder_model(
             get_builder_model_config(config.generation, train=True)
