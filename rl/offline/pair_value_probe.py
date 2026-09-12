@@ -46,15 +46,14 @@ HEAD_INPUTS = {
         ("public_team", EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO),
         ("public_team", EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO),
     ),
+    # The sheet head pairs my sheet rows with the opponent's PUBLIC rows
+    # (board slots 6-11), so its opponent side steps the public channel.
     "private": (
         (
             "private_team",
             EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO,
         ),
-        (
-            "opp_private_team",
-            EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO,
-        ),
+        ("public_team", EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO),
     ),
 }
 
