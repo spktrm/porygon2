@@ -86,7 +86,6 @@ export class AsyncQueue<T> implements Queue<T> {
 
         this.items.push(item);
 
-        // If there are waiting resolvers, immediately resolve the oldest one
         if (this.waitingResolvers.length > 0) {
             const resolver = this.waitingResolvers.shift()!;
             resolver(this.items.shift()!);
@@ -97,14 +96,11 @@ export class AsyncQueue<T> implements Queue<T> {
         return this.items.shift();
     }
 
-    // Async version that waits for items to be available
     async dequeueAsync(): Promise<T> {
-        // If items are available, return immediately
         if (this.items.length > 0) {
             return this.items.shift()!;
         }
 
-        // Otherwise, wait for an item to be enqueued
         return new Promise<T>((resolve) => {
             this.waitingResolvers.push(resolve);
         });
@@ -120,9 +116,7 @@ export class AsyncQueue<T> implements Queue<T> {
 
     clear(): void {
         this.items = [];
-        // Reject all waiting promises
         this.waitingResolvers.forEach((resolver) => {
-            // You might want to reject with an error instead
             resolver(undefined as never);
         });
         this.waitingResolvers = [];
@@ -132,7 +126,6 @@ export class AsyncQueue<T> implements Queue<T> {
         return this.items[0];
     }
 
-    // Get a copy of all items without removing them
     getItems(): T[] {
         return [...this.items];
     }
@@ -351,10 +344,8 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     }
 
     private async getTrainingActorChoice() {
-        // Create game state and put it in outgoing queue
         const gameState = this.createGameState();
 
-        // Wait for action from incoming queue
         const stepRequest = await this.generateStepRequest(gameState);
 
         if (stepRequest.getRqid() !== gameState.getRqid()) {
@@ -523,7 +514,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
 
                         choices.push(choice);
 
-                        // Process the received action
                         try {
                             this.choose(choice);
                         } catch (err) {
@@ -533,7 +523,6 @@ export class TrainablePlayerAI extends RandomPlayerAI {
                             );
                         }
 
-                        // Increment internal counters
                         this.requestCount += 1;
                     }
                 }
@@ -599,7 +588,6 @@ function hpDiff(battle: Battle): number {
         const side = battle.sides[i];
         let knownHp = 0;
 
-        // Use a standard for-loop instead of .reduce
         for (let j = 0; j < side.team.length; j++) {
             const pkmn = side.team[j];
             if (pkmn.fainted) continue;
@@ -688,7 +676,6 @@ export function createBattle(
     (async () => {
         const spectator = new Battle(globalGens, null);
 
-        // Replace your tracking variables with this:
         const windowSize = 40;
         const maxChange = 0.01;
 
@@ -703,17 +690,14 @@ export function createBattle(
                 if (line.startsWith("|turn")) {
                     const currentHpDiff = hpDiff(spectator);
 
-                    // Log the current HP diff into our circular buffer
                     hpHistory[historyIndex] = currentHpDiff;
                     historyIndex = (historyIndex + 1) % windowSize;
                     turnsLogged++;
 
-                    // Only check for stagnation if we've filled the window
                     if (turnsLogged >= windowSize) {
                         let maxDiff = -Infinity;
                         let minDiff = Infinity;
 
-                        // Find the highest and lowest HP diffs in the last 40 turns
                         for (let i = 0; i < windowSize; i++) {
                             if (hpHistory[i] > maxDiff) maxDiff = hpHistory[i];
                             if (hpHistory[i] < minDiff) minDiff = hpHistory[i];

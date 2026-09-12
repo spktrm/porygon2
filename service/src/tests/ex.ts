@@ -12,8 +12,6 @@ import { getSampleTeam } from "../server/state";
 
 async function playerController(player: TrainablePlayerAI, playerName: string) {
     console.log(`${playerName}: Controller started.`);
-    // The loop will continue as long as the player's stream is open.
-    // The `receiveEnvironmentResponse` will resolve when a request is available.
 
     const trajectory = new EnvironmentTrajectory();
 
@@ -24,7 +22,6 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
 
             const info = new Int16Array(state.getInfo_asU8().buffer);
             const done = info[InfoFeature.INFO_FEATURE__DONE];
-            // if (done || info[InfoFeature.INFO_FEATURE__TURN] > 10) {
             if (done) {
                 console.log(
                     `${playerName}: Received 'done' state. Exiting loop.`,
@@ -32,7 +29,6 @@ async function playerController(player: TrainablePlayerAI, playerName: string) {
                 break;
             }
 
-            // A request is pending, so we need to choose an action.
             const randomAction = GetRandomAction({ player });
 
             const stepRequest = new StepRequest();
@@ -80,28 +76,21 @@ async function runBattle() {
             p1team: getSampleTeam("gen9ou"),
             p2team: getSampleTeam("gen9ou", "Zoroark"),
             smogonFormat: "gen9randombattle",
-            // smogonFormat: "gen9ou",
-            // smogonFormat: "gen9vgc2026regf",
-            // smogonFormat: "gen9randomdoublesbattle",
-            // smogonFormat: "gen9vgc2025regibo3",
         });
 
         console.log("Starting asynchronous player controllers...");
         const trajectories = [];
 
         try {
-            // Create a promise for each player's control loop.
             const p1Promise = playerController(p1, "P1");
             const p2Promise = playerController(p2, "P2");
 
-            // Wait for both player loops to complete. This happens when the battle ends.
             trajectories.push(...(await Promise.all([p1Promise, p2Promise])));
 
             console.log("\nBattle has concluded.");
         } catch (error) {
             console.error("An error occurred during the battle:", error);
         } finally {
-            // Ensure players are properly cleaned up regardless of outcome.
             console.log("Destroying player instances.");
             p1.destroy();
             p2.destroy();
@@ -127,7 +116,6 @@ async function runBattle() {
     fs.renameSync(tmpPath, EX_BIN_PATH);
     console.log("File saved successfully.");
 
-    // Write battle log as txt
     for (let i = 0; i < battleLogs.length; i++) {
         const logFilePath = path.join(
             __dirname,
@@ -143,7 +131,6 @@ async function runBattle() {
     }
 }
 
-// Execute the battle run
 runBattle().catch((error) => {
     console.error("Unhandled error in runBattle:", error);
 });

@@ -69,8 +69,6 @@ export class WorkerHandler {
     private port: MessagePort | null | undefined = parentPort;
     private playerMapping = new Map<string, TrainablePlayerAI>();
 
-    // Changed: We now map a specific GameID to a single Waiting Player.
-    // Logic: First player to arrive sits here. Second player triggers the match.
     private pendingGames = new Map<string, WaitingPlayer>();
 
     constructor(port: MessagePort | null | undefined) {
@@ -149,12 +147,11 @@ export class WorkerHandler {
 
     private async resetPlayerFromTrainingUserName(args: {
         userName: string;
-        gameId: string; // Added gameId param
+        gameId: string;
         smogonFormat: string;
         packedTeam: number[] | undefined;
     }): Promise<WaitingPlayerResolveArgs> {
         const { userName, gameId, smogonFormat, packedTeam } = args;
-        // Destroy old player if one exists
         const player = this.playerMapping.get(userName);
         if (player !== undefined) {
             player.destroy();
@@ -170,7 +167,6 @@ export class WorkerHandler {
             packedTeam,
         };
 
-        // Check if someone is already waiting for this Game ID
         const opponent = this.pendingGames.get(gameId);
 
         if (opponent !== undefined) {
@@ -196,7 +192,6 @@ export class WorkerHandler {
                 );
             }
 
-            // 1. Create the battle
             const { p1: player1, p2: player2 } = createBattle({
                 p1Name: opponent.playerDetails.userName,
                 p2Name: userName,
@@ -208,21 +203,17 @@ export class WorkerHandler {
                 smogonFormat,
             });
 
-            // 2. Register players in the map
             this.playerMapping.set(opponent.playerDetails.userName, player1);
             this.playerMapping.set(userName, player2);
 
-            // 3. "Wake up" the waiting opponent
             opponent.resolve({
                 player: player1,
             });
 
-            // 4. Return the args for the *current* player
             return Promise.resolve({
                 player: player2,
             });
         } else {
-            // --- CASE 2: No one is here yet (We are the 1st player) ---
             console.log(
                 `Waiting for opponent on GameID ${gameId} (User: ${userName})`,
             );
@@ -431,7 +422,7 @@ export class WorkerHandler {
 
     private resetPlayerFromUserName(
         userName: string,
-        gameId: string, // Added param
+        gameId: string,
         smogonFormat: string,
         packedTeam: number[] | undefined,
     ): Promise<WaitingPlayerResolveArgs> {
@@ -492,5 +483,4 @@ export class WorkerHandler {
     }
 }
 
-// Initialize the worker handler
 new WorkerHandler(parentPort);

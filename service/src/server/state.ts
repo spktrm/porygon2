@@ -221,14 +221,11 @@ function int16ArrayToBitIndices(arr: Int16Array): number[] {
     for (let i = 0; i < arr.length; i++) {
         let num = arr[i];
 
-        // Process each of the 16 bits in the int16 value
         for (let bitPosition = 0; bitPosition < 16; bitPosition++) {
-            // Check if the least significant bit is 1
             if ((num & 1) !== 0) {
-                indices.push(i * 16 + bitPosition); // Calculate the bit index
+                indices.push(i * 16 + bitPosition);
             }
 
-            // Right shift the number to check the next bit
             num >>>= 1;
         }
     }
@@ -237,20 +234,15 @@ function int16ArrayToBitIndices(arr: Int16Array): number[] {
 }
 
 function bigIntToInt16Array(value: bigint): Int16Array {
-    // Determine the number of 16-bit chunks needed to store the BigInt
-    const bitSize = value.toString(2).length; // Number of bits in the BigInt
+    const bitSize = value.toString(2).length;
     const chunkCount = Math.ceil(bitSize / 16);
 
-    // Create an Int16Array to store the chunks
     const result = new Int16Array(chunkCount);
 
-    // Mask to extract 16 bits
     const mask = BigInt(0xffff);
 
     for (let i = 0; i < chunkCount; i++) {
-        // Extract the lower 16 bits
         result[i] = Number(value & mask);
-        // Shift the BigInt to the right by 16 bits
         value >>= BigInt(16);
     }
 
@@ -552,7 +544,7 @@ function getPrefix<T extends EnumMappings>(enumDatum: T): string | null {
         return prefix;
     }
 
-    return null; // Handle cases where enumDatum has no keys
+    return null;
 }
 
 function SanitizeKey<T extends EnumMappings>(
@@ -566,18 +558,14 @@ function SanitizeKey<T extends EnumMappings>(
         );
     }
 
-    // Construct the raw key
     const rawKey = `${prefix}__${key}`;
 
-    // Check if the sanitized key is cached
     if (sanitizeKeyCache.has(rawKey)) {
         return sanitizeKeyCache.get(rawKey)!;
     }
 
-    // Sanitize the key (remove non-alphanumeric characters and make uppercase)
     const sanitizedKey = rawKey.replace(/\W/g, "").toUpperCase();
 
-    // Cache the sanitized key
     sanitizeKeyCache.set(rawKey, sanitizedKey);
     return sanitizedKey;
 }
@@ -601,7 +589,6 @@ export function IndexValueFromEnum<T extends EnumMappings>(
 ): T[keyof T] {
     const sanitizedKey = SanitizeKey(enumDatum, key) as keyof T;
 
-    // Retrieve the value from the enumDatum using the sanitized key
     const value = enumDatum[sanitizedKey];
     if (value === undefined) {
         throw new Error(`${sanitizedKey.toString()} not in mapping`);
@@ -610,18 +597,15 @@ export function IndexValueFromEnum<T extends EnumMappings>(
 }
 
 export function concatenateArrays<T extends TypedArray>(arrays: T[]): T {
-    // Step 1: Calculate the total length
     let totalLength = 0;
     for (const arr of arrays) {
         totalLength += arr.length;
     }
 
-    // Step 2: Create a new array using the constructor of the first array in the list
     const result = new (arrays[0].constructor as { new (length: number): T })(
         totalLength,
     );
 
-    // Step 3: Copy each array into the result
     let offset = 0;
     for (const arr of arrays) {
         result.set(arr, offset);
@@ -650,15 +634,12 @@ function getUnkRevealedPokemon() {
     data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES] =
         SpeciesEnum.SPECIES_ENUM___UNK;
 
-    // Item
     data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ITEM] =
         ItemsEnum.ITEMS_ENUM___UNK;
 
-    // Ability
     data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY] =
         AbilitiesEnum.ABILITIES_ENUM___UNK;
 
-    // Moves
     data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID0] =
         MovesEnum.MOVES_ENUM___UNK;
     data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID1] =
@@ -668,7 +649,6 @@ function getUnkRevealedPokemon() {
     data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__MOVEID3] =
         MovesEnum.MOVES_ENUM___UNK;
 
-    // Teratype
     data[EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__TERA_TYPE] =
         TypechartEnum.TYPECHART_ENUM___UNK;
     return data;
@@ -686,7 +666,7 @@ function getUnkPublicPokemon() {
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__MAXHP] = 100;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO] =
-        MAX_RATIO_TOKEN; // Full Health;
+        MAX_RATIO_TOKEN;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__STATUS] =
         StatusEnum.STATUS_ENUM___NULL;
     data[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__TOXIC_TURNS] = 0;
@@ -743,7 +723,6 @@ function getUnkPokemon(n: number) {
     const publicData = getUnkPublicPokemon();
     const revealedData = getUnkRevealedPokemon();
 
-    // Side
     publicData[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE] = n;
     return { publicData, revealedData };
 }
@@ -802,7 +781,6 @@ function tryFindIndex(enumDatum: EnumMappings, keys: string[]) {
 
 function getArrayFromPrivatePokemon(
     candidate: Pokemon | null | undefined,
-    // pokemonSet: PokemonSet,
     pokemonSet: Protocol.Request.Pokemon,
     firstPokemonSet: Protocol.Request.Pokemon,
     entityIdxPlusOne: number,
@@ -961,7 +939,6 @@ function getArrayFromPublicPokemon(
         pokemon = candidate;
     }
 
-    // Terastallized
     const teraType = pokemon.terastallized
         ? IndexValueFromEnum(TypechartEnum, pokemon.terastallized)
         : TypechartEnum.TYPECHART_ENUM___UNK;
@@ -2373,7 +2350,6 @@ export class EventHandler implements Protocol.Handler {
 
     findLastMoveLine() {
         const log = this.player.log;
-        // Iterate backwards starting from the very last item
         for (let i = log.length - 1; i >= 0; i--) {
             const line = log[i];
 
@@ -3386,7 +3362,6 @@ export class EventHandler implements Protocol.Handler {
             for (const effect of [
                 this.getCondition(kwArgs.from),
                 this.getCondition(conditionId1),
-                // this.getCondition(conditionId2),
             ]) {
                 this.latestEdge.updateEdgeFromOf({ effect, pokemon });
             }
@@ -3469,26 +3444,6 @@ export class EventHandler implements Protocol.Handler {
     "|done|"(args: Args["|done|"]) {
         const [argName] = args;
 
-        // let edge = undefined;
-        // for (const side of this.player.publicBattle.sides) {
-        //     for (const active of side.active) {
-        //         if (active !== null) {
-        //             const { pokemon } = this.getPokemon(active.originalIdent);
-        //             if (pokemon === null) {
-        //                 throw new Error(`Pokemon ${pokeIdent} not found`);
-        //             }
-        //             if (edge === undefined) {
-        //                 edge = new Edge(this.player);
-        //             }
-        //             if (edgeIndex >= 0) {
-        //                 edge.addMajorArg({ argName, edgeIndex });
-        //             }
-        //         }
-        //     }
-        // }
-        // if (edge !== undefined && this.turnOrder > 0) {
-        //     this.addEdge();
-        // }
         this.addEdge();
     }
 
@@ -4431,22 +4386,6 @@ export class StateHandler {
                 publicOffset += numPublicEntityNodeFeatures;
                 revealedOffset += numRevealedEntityNodeFeatures;
             }
-
-            // const {
-            //     publicData: publicNullData,
-            //     revealedData: revealedNullData,
-            // } = nullPokemon;
-            // for (let i = Math.max(team.length, 6); i < 11; i++) {
-            //     publicBuffer.set(publicNullData, publicOffset);
-            //     revealedBuffer.set(revealedNullData, revealedOffset);
-            //     publicOffset += numPublicEntityNodeFeatures;
-            //     revealedOffset += numRevealedEntityNodeFeatures;
-            // }
-
-            // for (let i = side.totalPokemon; i < 6; i++) {
-            //     revealedBuffer.set(nullPokemon, revealedOffset);
-            //     revealedOffset += numRevealedEntityNodeFeatures;
-            // }
         } catch (error) {
             console.log(error);
             console.log(team);
@@ -4535,20 +4474,6 @@ export class StateHandler {
             privateOrder = [...requestPokemon];
 
             // TODO: Fix the sorting here
-            // if (request.teamPreview) {
-            //     privateOrder = [...requestPokemon];
-            //     for (const [toIdx, choice] of this.player.choices.entries()) {
-            //         const fromIdx = parseInt(choice.split(" ")[1]) - 1;
-            //         [privateOrder[toIdx], privateOrder[fromIdx]] = [
-            //             privateOrder[fromIdx],
-            //             privateOrder[toIdx],
-            //         ];
-            //     }
-            // } else {
-            //     privateOrder = [...requestPokemon].sort((a, b) => {
-            //         return a.ident.localeCompare(b.ident);
-            //     });
-            // }
 
             for (const member of privateOrder) {
                 const name = toID(member.speciesForme);

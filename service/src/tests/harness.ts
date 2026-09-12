@@ -544,7 +544,6 @@ export async function playerController(player: TrainablePlayerAI) {
                 }
             }
 
-            // A request is pending, so we need to choose an action.
             const stepRequest = new StepRequest();
 
             const action = GetRandomAction({ player });
@@ -662,7 +661,6 @@ export async function runBattle(
     let results: Awaited<ReturnType<typeof playerController>>[] = [];
 
     try {
-        // Create a promise for each player's control loop.
         const promises = [];
         promises.push(playerController(p1));
         if (!battleOptions.p2Name.startsWith("baseline-")) {
@@ -670,7 +668,6 @@ export async function runBattle(
             promises.push(p2Promise);
         }
 
-        // Wait for both player loops to complete. This happens when the battle ends.
         results = await Promise.all(promises);
         if (results.length === 2) {
             assertPotentialAntisymmetry(
@@ -681,7 +678,6 @@ export async function runBattle(
 
         console.log("\nBattle has concluded.");
     } finally {
-        // Ensure players are properly cleaned up regardless of outcome.
         console.log("Destroying player instances.");
         for (const player of players) {
             if (player) {

@@ -43,8 +43,8 @@ interface WorkerInfo {
 export class WorkerPool {
     private tasks: TaskQueueSystem<WorkerResponse>;
     private readonly workerInfos: WorkerInfo[] = [];
-    private rr = 0; // round-robin counter for training actors
-    private er = 0; // round-robin counter for eval actors
+    private rr = 0;
+    private er = 0;
 
     private readonly sessionToWorkerIndex = new Map<string, number>();
     private closing = false;
@@ -316,7 +316,6 @@ export class WorkerPool {
         return await this.send(info, workerRequest);
     }
 
-    /** Graceful shutdown */
     shutdown(): void {
         this.closing = true;
         for (const { worker } of this.workerInfos) worker.terminate();
@@ -481,7 +480,6 @@ export class GameServer {
     }
 }
 
-// Initialize the server
 new GameServer(Number(process.env.PORT ?? 8080), {
     // Each worker is a full V8 isolate with its own dex/sim data
     // (~150MB baseline before any battles). Under the learner's

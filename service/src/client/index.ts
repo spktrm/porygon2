@@ -15,12 +15,8 @@ import { generateTeamFromArray } from "../server/state";
 const RL_SERVER_URL = process.env.RL_SERVER_URL || "http://localhost:8001";
 
 const server = "ws://localhost:8000/showdown/websocket";
-// const server = "wss://sim3.psim.us/showdown/websocket";
-// const server = "wss://pokeagentshowdown.com/showdown/websocket";
-const MAX_BATTLES = 5; // Maximum number of battles to run in sequence
-// const smogonFormat = "gen9ou";
+const MAX_BATTLES = 5;
 const smogonFormat = "gen9randombattle";
-// const smogonFormat = "gen9randomdoublesbattle";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
@@ -81,7 +77,6 @@ function processAssertion(details: { username: string }, assertion: string) {
 }
 
 function sanitizeRoomId(roomId: string): string {
-    // remove last hyphen section if split length >= 4
     const parts = roomId.split("-");
     if (parts.length >= 4) {
         parts.pop();
@@ -157,7 +152,6 @@ class Battle {
         this.prevMessage = undefined;
 
         this.conn.send(`${this.battleId}|/timer on`);
-        // this.ws.send(`${this.battleId}|${welcomeMessage}`);
 
         this.stream = new ClientStream();
         this.player = new TrainablePlayerAI(
@@ -186,7 +180,6 @@ class Battle {
                     method: "POST",
                     body: state.serializeBinary(),
                 });
-                // await new Promise((resolve) => setTimeout(resolve, rateLimit));
 
                 const { cell } = await response.json();
                 const stepRequest = new StepRequest();
@@ -229,7 +222,6 @@ class BattleStorage {
     }
 
     addBattle(roomId: string, battle: Battle) {
-        // remove last hyphen section if split length > 4
         const battleId = sanitizeRoomId(roomId);
         this.battles[battleId] = battle;
     }
@@ -401,7 +393,7 @@ class User {
                 this.searchUpdated = false;
             }
             for (const gameId in games) {
-                if (this.battles.getBattle(gameId)) continue; // Already in a battle
+                if (this.battles.getBattle(gameId)) continue;
                 this.createNewBattle(gameId);
                 this.numBattles++;
             }
@@ -417,7 +409,6 @@ async function waitForServer(waitTimeout: number = 1000) {
     while (true) {
         try {
             const response = await fetch(`${RL_SERVER_URL}/ping`, {
-                // Ensure this URL is correct for your setup
                 method: "GET",
             });
             const pong = await response.text();
@@ -437,14 +428,13 @@ waitForServer().then(() => {
     const user = new User(connection);
 
     const result = dotenv.config({
-        path: path.resolve(__dirname, "../../../.env"), // Adjust path if your .env is elsewhere
+        path: path.resolve(__dirname, "../../../.env"),
     });
     if (result.error) {
         console.error(
             "Error loading .env file. Please ensure it exists and is configured correctly.",
             result.error,
         );
-        // throw result.error; // Or handle more gracefully
         process.exit(1);
     }
 

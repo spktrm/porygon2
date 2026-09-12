@@ -30,10 +30,6 @@ import {
     TARGET_SLOT_INDICES,
 } from "../data";
 
-/* ----------------------------------------------------------------- */
-/* ----------------------- cell classification ---------------------- */
-/* ----------------------------------------------------------------- */
-
 /** What a legal block cell asks for, in the terms the scoring reads. */
 type CellChoice =
     | { kind: "switch"; teamIndex: number; ally: number }
@@ -124,10 +120,6 @@ function isPassTarget(target: number): boolean {
     );
 }
 
-/* ----------------------------------------------------------------- */
-/* ----------------------- battle primitives ------------------------ */
-/* ----------------------------------------------------------------- */
-
 /** Showdown boost stage (-6..6) to a stat multiplier. */
 function stageMultiplier(stage: number): number {
     return stage >= 0 ? (2 + stage) / 2 : 2 / (2 - stage);
@@ -192,10 +184,6 @@ function severelyDebuffed(mon: Pokemon): boolean {
         (b?.spa ?? 0) <= -3
     );
 }
-
-/* ----------------------------------------------------------------- */
-/* --------------------------- move scoring ------------------------- */
-/* ----------------------------------------------------------------- */
 
 const RECOVERY_MOVES = new Set([
     "recover",
@@ -323,10 +311,6 @@ function scoreMove(
     return statusScore(battle, attacker, defender, move);
 }
 
-/* ----------------------------------------------------------------- */
-/* ------------------------- switch scoring ------------------------- */
-/* ----------------------------------------------------------------- */
-
 /** Generic "good lead / good Pokemon" score, used at team preview. */
 function leadScore(mon: Pokemon): number {
     const s = mon.baseSpecies.baseStats;
@@ -359,10 +343,6 @@ function voluntarySwitchScore(
     const candMatch = matchup(battle, candidate, opp);
     return candMatch * 3 - SWITCH_COST + (emergency ? 4 : 0);
 }
-
-/* ----------------------------------------------------------------- */
-/* --------------------------- main entry --------------------------- */
-/* ----------------------------------------------------------------- */
 
 function legalChoices(
     legalCells: boolean[],
@@ -414,7 +394,7 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
         legalCells,
         structuredMask.getActiveSlot(),
     )) {
-        let score = -1e4; // Default fallback for unhandled cells
+        let score = -1e4;
 
         if (choice.kind === "other") {
             if (
@@ -468,7 +448,6 @@ export const GetSimpleHeuristicAction: EvalActionFnType = ({ player }) => {
             }
         }
 
-        // TypeScript can track this synchronous mutation perfectly
         if (best === null || score > best.score) {
             best = { cell, score };
         }

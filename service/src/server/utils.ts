@@ -8,14 +8,12 @@ export class TaskQueueSystem<T> {
         this.pointer = 0;
     }
 
-    // Method to generate a unique key for each task
     private generateKey(): number {
         const currentKey = this.pointer;
         this.pointer += 1;
         return currentKey;
     }
 
-    // Method to create a job and return a key
     public createJob(): number {
         const key = this.generateKey();
         this.results.set(
@@ -27,7 +25,6 @@ export class TaskQueueSystem<T> {
         return key;
     }
 
-    // Method to submit a result for a given job key
     public submitResult(id: number, result: T): void {
         if (this.resolvers.has(id)) {
             this.resolvers.get(id)!(result);
@@ -37,7 +34,6 @@ export class TaskQueueSystem<T> {
         }
     }
 
-    // Method to await the result of a completed job
     public async getResult(key: number): Promise<T> {
         const resultPromise = this.results.get(key);
         if (resultPromise) {
@@ -184,7 +180,6 @@ export class OneDBoolean<T extends TypedArray = Uint8Array> {
         const baseSize = Math.floor(this.length / parts);
         const remainder = this.length % parts;
 
-        // Use the same buffer constructor as the original
         const bufferConstructor = this.data.constructor as {
             new (length: number): T;
         };

@@ -237,10 +237,8 @@ export function chooseWildcardKeyword(available: {
     return undefined;
 }
 
-// Define the path to the JSON file
 const filePath = "../data/data/data.json";
 
-// Read the file synchronously
 const fileContent = fs.readFileSync(filePath, "utf-8");
 
 function transformJson(
@@ -250,7 +248,6 @@ function transformJson(
 
     for (const [key, value] of Object.entries(json)) {
         if (typeof value === "object" && value !== null) {
-            // Recursive transformation for nested objects
             transformed[key] = Object.fromEntries(
                 Object.entries(value).map(([innerKey, innerValue]) => [
                     innerValue as number,
@@ -258,14 +255,13 @@ function transformJson(
                 ]),
             );
         } else {
-            transformed[key] = value; // Keep non-object entries as-is
+            transformed[key] = value;
         }
     }
 
     return transformed;
 }
 
-// Parse the JSON content
 export const jsonDatum = transformJson(JSON.parse(fileContent));
 
 export const sampleTeams: { [format: string]: string[] } = {
