@@ -16,9 +16,7 @@ ROWS = 2 * PER_SIDE
 # The head's zero-init leaves, by the exact key open_zero_init_paths matches.
 ZERO_INIT_KEYS = [
     "cross_query",
-    "cross_weight_query",
     "synergy_query",
-    "synergy_weight_query",
     "unary",
 ]
 
@@ -55,7 +53,10 @@ def _swap_sides(rows, valid, alive):
     )
 
 
-def test_value_is_exactly_zero_and_weights_uniform_at_init() -> None:
+def test_value_is_exactly_zero_and_weights_live_at_init() -> None:
+    """The weights are the live factor of each pair product: normalised
+    over the alive pairs but NOT uniform, or the centred pair term they
+    multiply would have no gradient."""
     head, params, inputs = _init()
     out = head.apply(params, *inputs)
     np.testing.assert_array_equal(np.asarray(out.value), 0.0)
@@ -65,22 +66,21 @@ def test_value_is_exactly_zero_and_weights_uniform_at_init() -> None:
     np.testing.assert_array_equal(np.asarray(out.partials), 0.0)
     cross_weight = np.asarray(out.cross_weight)
     assert cross_weight.shape == (PER_SIDE, PER_SIDE)
-    np.testing.assert_allclose(cross_weight, 1.0 / (PER_SIDE * PER_SIDE), rtol=1e-6)
+    np.testing.assert_allclose(cross_weight.sum(), 1.0, rtol=1e-5)
+    assert cross_weight.max() > 1.5 / (PER_SIDE * PER_SIDE)
     synergy_weight = np.asarray(out.synergy_weight)
     assert synergy_weight.shape == (2, PER_SIDE, PER_SIDE)
     np.testing.assert_array_equal(np.diagonal(synergy_weight, axis1=-2, axis2=-1), 0)
-    off_diagonal = ~np.eye(PER_SIDE, dtype=bool)
-    np.testing.assert_allclose(
-        synergy_weight[:, off_diagonal], 1.0 / (PER_SIDE * (PER_SIDE - 1)), rtol=1e-6
-    )
+    np.testing.assert_allclose(synergy_weight.sum((-2, -1)), 1.0, rtol=1e-5)
+    assert synergy_weight.max() > 1.5 / (PER_SIDE * (PER_SIDE - 1))
 
 
 def test_queries_and_unary_move_at_step_one_keys_and_weights_at_step_two() -> None:
     """The two-factor stall guard, per pair function: the zero factor's
     gradient is live at step 1, its partner's is exactly 0 for one step and
-    unfreezes once the zero factor is nudged. The weight scores are frozen
-    one step too: their gradients are proportional to the pair terms, 0 at
-    init."""
+    unfreezes once the zero factor is nudged. The weight scores, live at
+    init, are frozen one step too: their gradients are proportional to the
+    centred pair terms, 0 at init."""
     head, params, inputs = _init()
 
     def total(p: dict) -> jax.Array:
@@ -217,3 +217,27 @@ def test_masked_softmax_is_exact_on_and_off_the_mask() -> None:
     np.testing.assert_array_equal(
         np.asarray(masked_softmax(scores, jnp.zeros_like(mask))), 0.0
     )
+
+
+def test_pair_terms_are_zero_mean_over_the_alive_pairs() -> None:
+    """The structural restriction (2026-09-13): a state-wide offset cannot
+    live in a pair term. Control: the terms are not degenerate zeros, and
+    the mean over a subset of the alive pairs is NOT zero, so the zero is
+    the alive-pair mean specifically."""
+    head, params, inputs = _init()
+    opened = _opened(params)
+    rows, valid, alive = inputs
+    alive = alive.at[2].set(False).at[PER_SIDE + 4].set(False)
+    out = head.apply(opened, rows, valid, alive)
+    cross = np.asarray(out.cross)
+    cross_alive = np.asarray(out.cross_weight) > 0
+    assert cross_alive.sum() == (PER_SIDE - 1) ** 2
+    assert np.abs(cross).max() > 1e-3
+    assert abs(cross[cross_alive].mean()) < 1e-6
+    np.testing.assert_array_equal(cross[~cross_alive], 0.0)
+    assert abs(cross[cross_alive][:PER_SIDE].mean()) > 1e-4
+    synergy = np.asarray(out.synergy)
+    synergy_alive = np.asarray(out.synergy_weight) > 0
+    for side in range(2):
+        assert abs(synergy[side][synergy_alive[side]].mean()) < 1e-6
+        np.testing.assert_array_equal(synergy[side][~synergy_alive[side]], 0.0)

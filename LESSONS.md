@@ -5472,6 +5472,81 @@ run climbed out of, not a standing failure; recorded here because no row
 carried it. Revert handle: this commit; `player_pair_value_loss_coef 0`
 is the bit-exact off.
 
+## Addition ledger — 2026-09-13 pair terms centred over the alive pairs (numbers move)
+
+What the 100k hold read (uddwfke8 from ckpt_00637000, bins of 20k): both
+pair R2 .77 -> .80 against CLS .80 -> .80, privileged .81 -> .80 — parity,
+the private head not above the public. Part shares: public unary .21 ->
+.60, cross .32 -> .03, synergy .39 -> .015; private cross .31 -> .40,
+synergy .45 -> .006; unary cancellation private 1.4 -> 2.1, public .8 ->
+1.0; weight entropies (normalised) .86-.93 throughout. Query kernel RMS grew
+like a square root (.0046 / .0084 / .0107 / .0122 over the four 40k bins, a
+random walk under Adam — sign-inconsistent gradients); the keys sat at their
+lecun init (.062 -> .061), never moved.
+
+Offline read (740k target params, 3,057 rows of the 182k lineage dump,
+label = game outcome, scratch script — the outcome label puts every head
+near .2, relative order is the read): CLS .204, privileged .211, public
+pair .209, private pair .211. Public: V without the cross term .220, unary
+alone .218 — the pair terms are noise on this label, cross std .09 vs
+unary .43. Private: V without the cross term .052, cross alone (linear
+refit) .200 — the cross term carries the fit, but corr(cross, unary) .75
+and every matchup bucket sits at the same mean (type-disadvantaged -.163,
+neutral -.127, type-advantaged -.142): a state-wide offset repeated over
+all 36 pairs. corr(m, type-effectiveness asymmetry) .05 public / .03
+private; corr(m, hit-point difference) .30 / .17; the softmax weights vs
+|type asymmetry| -.09 / -.05 — noise: the pair actually on the field is
+exactly as type-lopsided as the average alive pair (.742 vs .737 over 666
+states), so the selection story is falsified. The within-state variance
+split and the hit-point monotonicity probe were killed twice by the host
+low-memory watchdog beside the live learner (9 GB RSS) — owed at a
+learner-free window.
+
+Diagnosis: the label is one scalar per state; each term of an additive
+model learns only from the residual the others leave, and a unary over
+POST-trunk rows (row i already carries j through attention) absorbs
+sum_j g(i, j) entirely. The pair term found the cheapest thing left — the
+per-side offset — and the weights, whose only gradient is a pair's
+deviation from the weighted mean (d/d logit_ij = (V - y) alpha_ij (m_ij -
+sum alpha m)), had nothing to move on. Sparsity penalties were declined
+again (the 09-12 form dropped them once): a force where the task gives
+none picks an arbitrary pair; L1 on the cross term is coefficient 0 with
+a panel; L1 on the unary moves the offset into the pair term (the private
+head already shows that shape). Not a temperature: `bilinear_pair` already
+divides by sqrt(qk), and the logits are 0 at init by the zero query.
+
+Change (heads.PairValueHead, `centred_over`): m and s are centred over the
+alive pairs of the state (cross over the 6x6, synergy per side) — a hard
+structural restriction, no coefficient: an offset cannot live in a pair
+term, only in the unary, so whatever a pair term carries differs across
+pairs, which is also the only gradient its weights can receive. The
+weight queries (`cross_weight_query`, `synergy_weight_query`) take a LIVE
+lecun init, found by the new test: a centred term under exactly uniform
+weights is two zero factors (d/dm_ij = alpha_ij - 1/n = 0 and d/dalpha
+proportional to m - mean m = 0) — an exact saddle the pair queries' zero
+init cannot leave. V == 0 at init still (the pair queries are zero);
+"weights uniform at init" is no longer a property. Side-swap
+antisymmetry holds by construction (the mean is symmetric under the swap).
+Each pair part is now bounded by two units, not one. No new parameters;
+the weight queries resume from their checkpoint values (RMS .012, a
+contrast already). Numbers move: the unary must re-absorb the offset the
+pair terms carried, expect a transient on the pair losses at the relaunch.
+The hit-point monotonicity probe reads the CENTRED m: stepping one mon
+shifts every other pair by -delta/n, a known 1/n contamination of its
+per-pair sign test.
+
+What this does NOT do: create per-pair information. That needs a per-pair
+label (which mon damaged or knocked out which, from the self-play history
+— 36 labels per state, self-play derived, on the head not the trunk) or a
+unary that cannot see the partner (raw rows). Moving only the cross term
+to pre-trunk rows does NOT fix it either: it competes for the same
+residual against a contextual unary and loses — the 09-10 probe's .63 was
+a raw pair bilinear alone. Pre-registered read (hold 50k): weight entropy
+(normalised) leaving .9 and public cross share off the floor (> .1) by
+25k; pair R2 not below CLS - .02 at 50k. Otherwise the pair machinery is
+cost without a read and the coefficient goes to 0. Revert handle: this
+commit; the centring is one call per term.
+
 ## Removal ledger — 2026-09-12 latent world model, opponent code and dynamics rows (explored; open to revisit)
 
 Explored, not failed. The latent world model (stochastic transition

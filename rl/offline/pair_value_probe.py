@@ -10,7 +10,9 @@ weaker against any i (delta m_ij >= 0). Reported per head: the fraction of
 alive cross pairs whose change has the wrong sign beyond a tolerance, and
 the share of the total absolute change those violations carry. Known true
 exceptions (Flail, Reversal, Endeavor, berry thresholds) are the reason this
-is a measurement and not a loss (the plan's §3).
+is a measurement and not a loss (the plan's §3). The cross term is centred
+over the alive pairs (2026-09-13), so stepping one mon also shifts every
+other pair by -delta/n: a 1/n contamination of the per-pair sign test.
 
     env/bin/python -m rl.offline.pair_value_probe --ckpt <dir> --chunks <dump>
 

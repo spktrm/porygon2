@@ -88,10 +88,11 @@ class PairValueHeadOutput:
     """The pairwise entity critic (2026-09-12, rl/model/heads.py
     PairValueHead): a generalised additive model over 12 entity rows, my
     side first. `value` is the scalar; `unary` (12,) the per-mon terms;
-    `cross` (6, 6) the antisymmetric my-vs-their pair term m_ij in [-1, 1]
-    and `cross_weight` its softmax weights over alive pairs; `synergy`
-    (2, 6, 6) the symmetric same-side term per side and `synergy_weight`
-    its weights; `partials` (5,) the signed parts (unary mine, unary
+    `cross` (6, 6) the antisymmetric my-vs-their pair term m_ij, centred
+    over the alive pairs (zero-mean, in [-2, 2]), and `cross_weight` its
+    softmax weights over alive pairs; `synergy` (2, 6, 6) the symmetric
+    same-side term per side, centred over each side's alive pairs, and
+    `synergy_weight` its weights; `partials` (5,) the signed parts (unary mine, unary
     theirs, cross, synergy mine, synergy theirs) that sum to `value`. All
     float32; every leaf () on the actor."""
 
