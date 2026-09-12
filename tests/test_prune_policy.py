@@ -78,7 +78,7 @@ def test_removed_cell_has_zero_gradient_through_its_own_logit() -> None:
 
     gradient = np.asarray(jax.grad(kept_log_prob)(logits))
     # The removed cell's gradient is two cancelling log-sum-exp terms, zero
-    # to float32 rounding (measured -2.4e-10); the illegal cell's exactly.
+    # to float32 rounding; the illegal cell's exactly.
     assert abs(gradient[1]) < 1e-6 and gradient[2] == 0.0
     assert abs(gradient[0]) > 0.1 and abs(gradient[3]) > 0.1
 

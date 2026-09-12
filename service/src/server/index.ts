@@ -72,14 +72,13 @@ export class WorkerPool {
         }
     }
 
-    // One worker isolate at routing index i. A worker that throws
-    // (2026-08-23: a TypeError in sendFinalState after a mid-battle
-    // destroy) used to be logged and left in the routing table, so every
-    // gameId hashing to it — 1/numWorkers of all games — waited on a dead
-    // isolate forever. Now its in-flight tasks are failed back to their
-    // clients and a fresh isolate takes its slot; sessions that lived on
-    // the dead one get "No player found" on their next step, which the
-    // python side turns into a BattleError and a new game.
+    // One worker isolate at routing index i. A worker that throws used to
+    // be logged and left in the routing table, so every gameId hashing to
+    // it — 1/numWorkers of all games — waited on a dead isolate forever.
+    // Now its in-flight tasks are failed back to their clients and a fresh
+    // isolate takes its slot; sessions that lived on the dead one get "No
+    // player found" on their next step, which the python side turns into a
+    // BattleError and a new game.
     private spawnWorker(i: number): WorkerInfo {
         const worker = new Worker(WORKER_PATH);
         const info: WorkerInfo = { worker, id: i, pending: new Set() };
@@ -188,10 +187,7 @@ export class WorkerPool {
      * can never arrive on either — a silent, un-erroring hang identical
      * in shape to a genuine deadlock. It has always been latent — it just
      * needs enough concurrent pairs (or workers) actually in flight to
-     * surface. (This once carried a justification about the exploiter
-     * "three-population redesign" raising the odds; those populations were
-     * deleted 2026-08-21 and the league is one population again, but the
-     * routing invariant is unchanged and still load-bearing.) */
+     * surface. */
     private hashGameId(gameId: string): number {
         // FNV-1a — cheap, well-distributed, no external dependency.
         let hash = 2166136261;

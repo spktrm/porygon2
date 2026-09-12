@@ -57,24 +57,16 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         smogon_format=learner_config.smogon_format,
         entity_size=int(model_cfg.entity_size),
         num_decision_slots=int(model_cfg.num_decision_slots),
-        # "flat_bilinear_readout" (2026-08-29) = FlatActionReadout over ONE
-        # flat sequence: one pair form for sheet rows x the ally row a switch
-        # replaces (2026-09-11) AND for moves x targets, a scalar per target
-        # row for the standalone actions, and a flat pre-RMSNorm trunk behind
-        # it. Predecessors:
-        # "action_score_grouped_micro" (2026-08-25, ActionScoreHead with
-        # per-slot-group micro and per-modality macro, Q composed in
-        # heads.compose_q), "hierarchical_two_rung" (2026-08-20) and
-        # "privileged_two_rung" (2026-08-17).
+        # "flat_bilinear_readout" = FlatActionReadout over ONE flat
+        # sequence: one pair form for sheet rows x the ally row a switch
+        # replaces AND for moves x targets, a scalar per target row for the
+        # standalone actions, and a flat pre-RMSNorm trunk behind it.
         #
-        # BUMPING THIS IS NOT COSMETIC: the literal was left stale through
-        # the 2026-08-25 redesign, so a pre-redesign checkpoint passed
-        # check_manifest STRICT and would have been restored onto a
-        # structurally different param tree. The manifest exists precisely to
-        # stop that, and it only works if the literal moves with the head.
-        #
-        # `q_head` sat beside it until 2026-08-29 and went with the advantage
-        # head itself.
+        # BUMPING THIS IS NOT COSMETIC: a stale literal lets a checkpoint
+        # from a different head pass check_manifest STRICT and be restored
+        # onto a structurally different param tree. The manifest exists
+        # precisely to stop that, and it only works if the literal moves
+        # with the head.
         pi_head="flat_bilinear_readout",
     )
 
@@ -125,14 +117,11 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    # NashPG reference policy pi_reg (2026-08-22; snap semantics
-    # 2026-08-25): a periodic hard SNAP of target_params, in place, every
-    # config.player_reg_snap_steps, frozen between snaps. The magnet
-    # KL(pi || pi_reg) in the policy objective is measured against it;
-    # the snap bounds the log-ratio gap structurally — the continuous
-    # EMA it replaces (1e-4, then 5e-5) never reset, and the compounding
-    # gap drove the pgaijs6l/2wvnlsz3 grad-norm runaways. One param set:
-    # a hard reset needs no crossfade pair, no 4th net.
+    # NashPG reference policy pi_reg: a periodic hard SNAP of
+    # target_params, in place, every config.player_reg_snap_steps, frozen
+    # between snaps. The magnet KL(pi || pi_reg) in the policy objective is
+    # measured against it; the snap bounds the log-ratio gap structurally.
+    # One param set: a hard reset needs no crossfade pair, no 4th net.
     reg_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     step_count: jax.Array = struct.field(
@@ -184,9 +173,8 @@ def create_train_state(
     )
 
     # Jitted init: eager flax init of the player model dispatches the
-    # whole forward op by op and compiles every nn.scan separately --
-    # ~6-10 min on the training box (2026-08-24 slow-suite timing); one
-    # compile is a fraction of that and persists in the compile cache.
+    # whole forward op by op and compiles every nn.scan separately; one
+    # jitted compile is far cheaper and persists in the compile cache.
     player_params_init_fn = functools.partial(
         jax.jit(player_network.init),
         head_params=HeadParams(),
@@ -554,7 +542,7 @@ def load_from_checkpoint(
     else:
         league = _init_league(learner_config, player_state, builder_state)
 
-    # Every tree is merged BY PATH onto the fresh state's own (2026-09-02):
+    # Every tree is merged BY PATH onto the fresh state's own:
     # a param leaf added since the checkpoint keeps its fresh init and, in
     # the optimiser state, its fresh ZERO moments; a leaf the architecture
     # no longer has is dropped rather than riding along dead in every
@@ -861,12 +849,12 @@ def load_train_state(
     else:
         latest_ckpt = _get_checkpoint_path(learner_config)
 
-    # 2. No checkpoint found -> fall back to scratch, loudly. A bare print()
-    # here is how 1335's ~300k-step lineage and its league got lost between
-    # it and 1336 without anyone noticing — mode was "checkpoint" (a resume
-    # was expected) and it silently became a fresh run instead. Still
-    # auto-falls back (the launch entry point doesn't set LOAD_STATE_MODE
-    # per-run), but now at warning level so it can't scroll by unnoticed.
+    # 2. No checkpoint found -> fall back to scratch, loudly. A silent
+    # fallback loses a whole lineage and its league: the mode was
+    # "checkpoint" (a resume was expected) and it becomes a fresh run
+    # instead. Still auto-falls back (the launch entry point doesn't set
+    # LOAD_STATE_MODE per-run), but at warning level so it can't scroll by
+    # unnoticed.
     if not latest_ckpt:
         logger.warning(
             "LOAD_STATE_MODE=%r but no checkpoint found under %s "

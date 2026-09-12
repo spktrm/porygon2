@@ -24,13 +24,12 @@ Teams.setGeneratorFactory(TeamGenerators);
 // parked the client's receive forever: the worker's catch only logged,
 // nothing ever went back over the socket, and the python side polls its
 // receive only against training shutdown. Both actor slots of that game
-// were then silently lost for the rest of the run (~2% of games in the
-// 2026-08-23 offline sweep). Every await on a battle is now bounded and
-// every failure reaches the client as an ErrorResponse.
+// were then silently lost for the rest of the run. Every await on a
+// battle is now bounded and every failure reaches the client as an
+// ErrorResponse.
 // 10 min, not 2: a step legitimately stalls for the learner's lattice
-// precompile (~9 min at launch, actors blocked behind the GPU lock) — the
-// 2026-08-23 first launch aborted every battle in flight and restarted
-// them. The watchdog is for battles that NEVER resolve.
+// precompile (actors blocked behind the GPU lock). The watchdog is for
+// battles that NEVER resolve.
 const STEP_TIMEOUT_MS = Number(process.env.STEP_TIMEOUT_MS ?? 600_000);
 const RESET_TIMEOUT_MS = Number(process.env.RESET_TIMEOUT_MS ?? 300_000);
 

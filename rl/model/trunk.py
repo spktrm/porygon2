@@ -1,19 +1,9 @@
 """The trunk: N standard pre-RMSNorm blocks over one sequence.
 
-Replaces `RoundBlock` (2026-08-29), which carried three separate residual
-streams -- 48 Perceiver latents, 41 action slots, 4 value queries -- wired
-together by five individually-gated, block-masked attentions per round, four
-rounds deep, at 3.69M parameters a round. Every route those masks encoded is
-a subset of one all-pairs attention over the 80 rows the sequence now has,
-and at 80 rows the trunk can simply carry them: 80 x 80 is 6.4k attention
-cells against the 24k the old routing plus its two feeding cross-attention
-reads paid, so the masks were buying nothing but their own complexity.
-
 No gates. `RMSNorm` is `normed * (1 + scale)` with `scale` zeros-init, i.e.
 exactly identity at step 0, and the residual adds are ungated -- so the
 trunk is live at init by construction and an "is it wired" test needs no
-gate opening. That also retires the 2026-08-24 gate-contribution finding
-structurally rather than by tuning it.
+gate opening.
 """
 
 import jax
@@ -85,17 +75,8 @@ class Trunk(nn.Module):
     `nothing_saveable`, not the house `checkpoint_dots`: the latter saves
     exactly the wide SwiGLU hidden activations that dominate the backward
     pass's memory, which is what OOM'd the train step when it was tried.
-
-    MEASURED, not assumed (2026-09-01 sweep, full train_step compiled at the
-    largest lattice entry (64, 256) x batch 4; XLA memory_analysis temp +
-    15-step timing): the step is memory-bandwidth-bound, so recomputing is
-    genuinely cheaper than storing -- NO remat is both 3.8x the memory AND
-    ~10% SLOWER. Full table (trunk x entity pool, temp MiB / steps per sec):
-    nothing+nothing 796/12.26 (this), nothing+dots 1071/12.65, dots+nothing
-    1244/12.32, dots+dots 1508/12.60, none+nothing 3019/11.03, none+dots
-    3402/11.29. The fastest fitting variant buys +3.2% for +275MiB, landing
-    on the >=1.5GB headroom boundary (the 12GB box peaked ~10.5GB all-in),
-    so the cheapest policy stays.
+    The step is memory-bandwidth-bound, so recomputing is genuinely cheaper
+    than storing, and the cheapest policy is the one that stays.
     """
 
     cfg: ConfigDict
@@ -151,10 +132,9 @@ class Trunk(nn.Module):
             )
         block = nn.remat(TrunkBlock, policy=jax.checkpoint_policies.nothing_saveable)
         # A sow is a silent no-op unless its collection is lifted through
-        # every transform above it, and this scan lifted only params from
-        # a1c18ed to 2026-09-02 -- so the block's attention sow captured
-        # NOTHING and scripts/attn_probe.py never saw a trunk attention.
-        # Stacked along the block axis, as the old round trunk's scan did.
+        # every transform above it -- the intermediates collection must be
+        # in `variable_axes` or the block's attention sow captures NOTHING.
+        # Stacked along the block axis.
         variable_axes = {"params": 0}
         if COLLECT_INTERMEDIATES:
             variable_axes["intermediates"] = 0
@@ -172,12 +152,10 @@ def group_row_l2(
     sequence: jax.Array, row_valid: jax.Array, group_ids: jax.Array, num_groups: int
 ) -> tuple[jax.Array, jax.Array]:
     """Per-group residual magnitude: (sum of valid-row L2 norms, valid-row
-    count), each (..., num_groups) over the trailing (rows, dim) axes. The
-    live twin of the 2026-09-10 offline norm table (first_block_diagnostics):
-    every row now ENTERS at RMS 1, so the trunk's output norm per group is
-    the read of which rows the blocks write to -- unnormalised, the history
-    rows sat at ~1040 in and out while CLS went 2.85 -> 1012. Summed rather
-    than averaged so the caller's mean weights every valid row once."""
+    count), each (..., num_groups) over the trailing (rows, dim) axes. Every
+    row ENTERS at RMS 1, so the trunk's output norm per group is the read of
+    which rows the blocks write to. Summed rather than averaged so the
+    caller's mean weights every valid row once."""
     l2 = jnp.linalg.norm(sequence.astype(jnp.float32), axis=-1)
     membership = jax.nn.one_hot(group_ids, num_groups, dtype=jnp.float32)
     valid = row_valid.astype(jnp.float32)

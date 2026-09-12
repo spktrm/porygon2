@@ -116,9 +116,7 @@ class PolicyHeadOutput:
 
 @dataclass
 class PlayerPolicyHeadOutput(PolicyHeadOutput):
-    # `src_index`/`tgt_index` lived here until 2026-08-31: coordinates into
-    # the 41x41 scoring grid the wire Action used to carry. `action_index`
-    # IS the wire action now -- an index into the block space.
+    # `action_index` IS the wire action -- an index into the block space.
     normalized_modality_entropy: ArrayLike = ()
 
 
@@ -174,12 +172,6 @@ class PlayerActorOutput:
 
     def without_history_carry(self) -> "PlayerActorOutput":
         return self.replace(history_carry=HistoryCarry())
-
-    # `advantage` and `q` lived here until 2026-08-29: the learner-only
-    # Q = V + A decomposition over the flat src x tgt grid, composed in the
-    # model by heads.compose_q. The policy stopped reading it at the NashPG
-    # switch, which left it a matched-control observer for an architecture
-    # that no longer exists; its last readings are banked in the ledger.
 
 
 @dataclass

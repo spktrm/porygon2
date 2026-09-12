@@ -182,15 +182,14 @@ def _final_margin(
     ended. The sign is clamped to the recorded result: a mid-game forfeit
     can leave the winner behind on mons, and the result is the ground truth.
 
-    Endings (measured on 50k rated gen9randombattle games, July 2026):
-    - "played_out" (~48%): the loser's six mons all fainted — exact margin.
-    - "conceded" (~41%): forfeit/timeout with the winner ahead on mons —
-      the margin is the count at concession, a compressed lower bound on
-      the played-out margin (concessions cluster at 1-3, played-out games
-      reach 4-6 far more often).
-    - "clamped" (~11%): forfeit/timeout with the winner NOT ahead (rage
-      quit / timer / disconnect) — the position contradicts the result, so
-      the ±1 margin is pure label noise.
+    Endings:
+    - "played_out": the loser's six mons all fainted — exact margin.
+    - "conceded": forfeit/timeout with the winner ahead on mons — the
+      margin is the count at concession, a compressed lower bound on the
+      played-out margin.
+    - "clamped": forfeit/timeout with the winner NOT ahead (rage quit /
+      timer / disconnect) — the position contradicts the result, so the ±1
+      margin is pure label noise.
     - "tie": rare, margin 0.
 
     Also returns the |margin| cap: the winner's alive-mon count at game

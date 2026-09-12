@@ -12,8 +12,8 @@ a game are not independent.
 
 Two commands. `collect` plays the cohort ONCE against the service's
 SimpleHeuristic at T=.5 with fixed seeds and pickles it — fixed forever
-after, so every checkpoint is read on the same contexts (the
-runtime/priority-audit-01861967 recipe). Point PS_SERVICE_URI at a
+after, so every checkpoint is read on the same contexts. Point
+PS_SERVICE_URI at a
 service started with BATTLE_LOG_DIR set so the simulator's own `-immune`
 lines confirm the taken-move events. `read` runs a checkpoint's target
 params over the cohort and emits the metric at T=1 and T=.5.

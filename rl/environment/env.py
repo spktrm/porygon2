@@ -88,8 +88,7 @@ class SinglePlayerSyncEnvironment:
 
     def close(self) -> None:
         """Releases the websocket. Offline harnesses construct one env per
-        game; without this every game leaked a connection (600 open
-        sockets after the 2026-08-23 check)."""
+        game; without this every game leaks a connection."""
         try:
             self.websocket.close()
         except Exception:  # noqa: BLE001 — best effort on teardown

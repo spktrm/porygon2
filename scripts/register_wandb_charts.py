@@ -16,9 +16,8 @@ _DISPLAY_NAME = "League payoff heatmap"
 
 
 def _winrate_hex(winrate: float) -> str:
-    """Red/gold/green hex for a win rate. Self-contained: the learner-side
-    twin this used to mirror no longer exists, and this script has no
-    jax/model deps by design."""
+    """Red/gold/green hex for a win rate. Self-contained: this script has
+    no jax/model deps by design."""
     red, gold, green = (211, 0, 0), (255, 205, 50), (50, 205, 50)
     if winrate <= 0.25:
         r, g, b = red
@@ -33,26 +32,15 @@ def _winrate_hex(winrate: float) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-# v3-v6 (explicit color.scale.range hex array), v7 (color.scale.scheme +
-# domain + clamp), v8 (per-cell literal hex column + scale: null), and v9
-# (v8 with the template field key renamed off "color") were all confirmed
-# spec-correct -- via wandb's own GraphQL API re-fetching the stored spec
-# byte-for-byte, and via a neutral standalone Vega-Lite renderer
-# (vl-convert) producing exactly the intended red -> gold -> green -- yet
-# every one rendered as either an unrelated pink/black/blue palette or a
-# single flat colour in wandb's actual custom-chart panel (confirmed via
-# the downloaded panel SVG: every cell baked in with the identical literal
-# fill regardless of field name or data values). The common factor across
-# every failing version: the rect mark's fill was bound to a table FIELD
-# via "field" in the color encoding. The one encoding that DID render
-# correctly the whole time was the text mark's black/white choice, which
-# uses "condition"/"value" with NO "field" at all -- pure literal values
-# selected by a boolean test. v10 applies that same pattern to the rect:
-# a chain of "condition" tests against the (quantitative, field-bound)
-# winrate value picking a literal hex "value" per 5%-wide band, and a
-# fallback "value" for the top band. No field is ever bound directly to
-# color/fill -- only used inside test expressions -- which is the one
-# combination not yet tried.
+# CONSTRAINT: a mark's fill must never be bound to a table FIELD via
+# "field" in the colour encoding -- wandb's custom-chart panel does not
+# honour it, whatever the spec says. Only "condition"/"value" pairs render,
+# i.e. pure literal values selected by a boolean test, which is how the text
+# mark's black/white choice is written. The rect fill follows the same
+# pattern: a chain of "condition" tests against the (quantitative,
+# field-bound) winrate value picking a literal hex "value" per 5%-wide band,
+# and a fallback "value" for the top band. No field is ever bound directly
+# to color/fill -- only used inside test expressions.
 _THRESHOLDS = [round(0.05 * i, 2) for i in range(1, 20)]
 _COLOR_CONDITIONS = [
     {

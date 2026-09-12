@@ -169,7 +169,7 @@ class SlotConditioning(nn.Module):
     NOTE this keeps the MODEL side of doubles reachable and nothing more. The
     plumbing outside it -- per-slot masks in requests, two stored action
     indices, the (2, NUM_ACTION_CELLS) log_policy the learner would need, and
-    the ~75% slot-alignment defect in the service -- is the known-open
+    the slot-alignment defect in the service -- is the known-open
     doubles workstream.
     """
 
@@ -248,12 +248,6 @@ def bilinear_pair(
 class FlatActionReadout(nn.Module):
     """The whole action readout: three small heads over named trunk rows.
 
-    Replaces the hierarchical stack -- `MacroMicroHead` = per-modality
-    queries, five MLPs and five zero-init output layers, over a per-slot-group
-    `PointerLogits` grid with a stop-grad RMS gauge and three zero-init local
-    routes -- which was instantiated twice, once for the policy and once for
-    an advantage head the policy did not read. 2.65M parameters became 0.13M.
-
     The three heads are the three blocks of the action space (the flattening
     of ActionMask's fields -- proto/service.proto `Action`), emitted directly
     since 2026-08-31; the 41x41 scatter they used to land in is gone:
@@ -273,12 +267,10 @@ class FlatActionReadout(nn.Module):
     INIT CONTRACT. Every logit is exactly 0 at init, so the policy starts
     UNIFORM over legal cells and `compute_policy_metrics(prior=None)` -- which
     already defaults to uniform-over-legal -- is the consistent anchor for the
-    magnet and for the zero-avoiding KL. `calculate_hierarchical_prior` was
-    that anchor while the head was hierarchical and retires with it.
+    magnet and for the zero-avoiding KL.
 
-    Getting to exact zero WITHOUT re-creating the two-factor stall (LESSONS.md
-    13: a learned grid behind a zero-init scale sat at lecun init for 60k
-    steps) is the whole subtlety here:
+    Getting to exact zero WITHOUT re-creating the two-factor stall is the
+    whole subtlety here:
 
       * Each pair's `query` (source side) is zero-init and its `key` is
         not. The bilinear is exactly 0 at init, and d/d query is a rank-1
@@ -362,10 +354,9 @@ class CategoricalValueLogitHead(nn.Module):
 
     @nn.compact
     def __call__(self, embedding: jax.Array):
-        # f32 from the head outwards (2026-08-24): a handful of bins, and
-        # the main critic's CE, the v-trace bootstrap probs and the
-        # expectation all read them -- the 1.0-weighted head was the one
-        # rung still paying bf16 while the ladder heads were cast f32.
+        # f32 from the head outwards: a handful of bins, and the main
+        # critic's CE, the v-trace bootstrap probs and the expectation all
+        # read them.
         logits = MLP(**self.cfg.mlp.to_dict())(embedding).astype(jnp.float32)
 
         log_probs = nn.log_softmax(logits, axis=-1)

@@ -1,11 +1,8 @@
 """Probe E -- type effectiveness: does the trunk compute it, and does the
 policy act on it?
 
-Motivated by the 2026-09-03 behavioural comparison (ckpt_00240000 vs 2000
-human >=1900 replays): the model lands twice the human rate of IMMUNE hits
-(0.047-0.051 vs 0.024) and fewer supereffective ones (0.175 vs 0.195). Types ARE on
-the wire: `species.npy` / `moves.npy` are multi-hot attribute tables with a
-dedicated column per type (verified 2026-09-03), so each operand row carries
+Types ARE on the wire: `species.npy` / `moves.npy` are multi-hot attribute
+tables with a dedicated column per type, so each operand row carries
 its type bits pre-trunk, and the enemy target row the readout multiplies is
 built by ADDING the opp active's public row (`_assemble_sequence`). "The state
 has it" is therefore literal; the question is whether the trunk and the

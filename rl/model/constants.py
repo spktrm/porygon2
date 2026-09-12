@@ -3,17 +3,14 @@
 WHY NOT IN proto/enums.proto. That file is this project's source of
 constants truth BETWEEN `service/` and `rl/`, and the discriminating test is
 whether both sides read it. Token types fail that test: the service has
-never emitted one, and nothing here crosses the wire. Routing them through
-the proto was tried on 2026-08-25 and reverted, because it bought nothing
-an IntEnum does not (the count is derived either way) while costing a
-generated-but-unused TypeScript enum and, worse, an extra table row --
-protolint mandates a `___UNSPECIFIED` zero value, which would have taken
-the token-type table from 12 rows to 13 with row 0 never indexed.
+never emitted one, and nothing here crosses the wire. An IntEnum gives the
+same derived count without a generated-but-unused TypeScript enum and
+without the extra table row protolint's mandatory `___UNSPECIFIED` zero
+value would add, never indexed.
 
 The derived count is the point. Every `NUM_*` below is a `len()`, not a
-literal: on 2026-08-25 a token type was deleted and the literal `13` had to
-be hand-edited to `12` -- exactly the edit that silently leaves a dead
-embedding row, or an out-of-range gather, when someone forgets.
+literal -- a hand-edited literal is exactly the edit that silently leaves a
+dead embedding row, or an out-of-range gather, when someone forgets.
 
 Environment-side layout -- feature counts, action-slot partitions, modality
 masks -- lives in `rl/environment/data.py` and is imported here; this module
@@ -94,12 +91,9 @@ PRIVATE_TOKEN_TYPES = np.array(
 class SequenceGroup(IntEnum):
     """Rows of the trunk's one sequence, one group per kind of thing.
 
-    ONE TOKEN PER THING (2026-08-29). Before this the board was unpacked into
-    189 attribute tokens -- 10 or 11 per entity -- and a Perceiver read
-    compressed them to 48 latents for a trunk that could not afford the rows.
-    With entities pooled to a vector each the whole board is 80 rows, the
-    trunk carries them directly, and the read, the latents and the separate
-    action stream all go.
+    ONE TOKEN PER THING. With entities pooled to a vector each the whole
+    board is 80 rows and the trunk carries them directly: there is no
+    Perceiver read, no latents and no separate action stream.
 
     What that trades away is on the record: with one token per mon, THEIR
     individual revealed moves no longer coexist with anything as separate

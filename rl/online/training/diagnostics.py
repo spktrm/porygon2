@@ -70,9 +70,8 @@ def log_memory_diagnostics(run_state: RunState, league, logs: dict) -> None:
         logs[f"diag_py_threads_{key}"] = count
 
     # Heap census: attributes host RSS the byte-exact counters below
-    # (replay buffers, league cache) don't cover — e.g. the ~3GB the
-    # 2026-08-18 fork jump left unexplained by thread counts
-    # and league cache alone. sys.getsizeof is shallow (a dict/list's
+    # (replay buffers, league cache) don't cover.
+    # sys.getsizeof is shallow (a dict/list's
     # own overhead, not its contents), but that's exactly what surfaces
     # a genuine culprit: a huge COUNT of one type (numpy arrays, proto
     # objects, EnvironmentState instances) dominating aggregate bytes.

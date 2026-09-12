@@ -457,7 +457,7 @@ export class TrainablePlayerAI extends RandomPlayerAI {
         this.actions = [];
         // actionCells is NOT cleared here: the last cell has to survive into
         // the next request's state as its previous action. Clearing it with
-        // every request (4c8836d, 2026-08-31) held HAS_PREV_ACTION at 0.
+        // every request holds HAS_PREV_ACTION at 0.
 
         return choice;
     }
@@ -560,16 +560,14 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // BattleStream._writeEnd unconditionally re-runs battle.destroy(),
     // which throws on a second call (already-nulled internals), and
     // writeEnd() is async so a plain try/catch around it catches
-    // nothing — the rejection killed workers as an unhandled 'error'
-    // (see the 2026-08-13 service crash).
+    // nothing — the rejection kills workers as an unhandled 'error'.
     endBattleStream: (() => void) | undefined;
 
     // Set by destroy(): the client Battles null their sides, so nothing
     // may build a state from them afterwards. `start()`'s loop exits when
     // destroy() ends the stream and would otherwise build the final state
-    // on the torn-down battle -- an unhandled rejection that took the
-    // WORKER down with every other game on it (2026-09-03, at a watchdog
-    // abort: `Cannot read properties of null (reading 'team')`).
+    // on the torn-down battle -- an unhandled rejection that takes the
+    // WORKER down with every other game on it.
     destroyed = false;
 
     destroy() {

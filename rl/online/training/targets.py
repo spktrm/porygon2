@@ -179,20 +179,13 @@ def compute_player_targets(
     discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
 
     # Truncated importance weights, AlphaStar/IMPALA: clipped IS only.
-    # rho and c were ONE quantity from 2026-08-21 (the player_alpha blend
-    # between raw and clipped IS that once separated them never moved off
-    # 1.0) until 2026-09-09, when they split again on a different axis:
     # rho carries the threshold, c does not (see the docstring).
     rho_t = jnp.minimum(1.0, isr).astype(jnp.float32)
     c_t = jnp.minimum(1.0, isr_raw).astype(jnp.float32)
 
-    # Scalar-space recursion (2026-08-26). The recursion used to run
-    # per-atom in distribution space, accumulating signed measures
-    # (advantage_shift, r_t as a distribution) into a CE label that was
-    # NOT a probability distribution — negative components, mass != 1.
-    # softmax CE tolerates that algebraically, but the label stopped
-    # meaning "a distribution over outcomes". The scalar form is the
-    # same estimator (v-trace is linear, so @ support commutes with the
+    # Scalar-space recursion: the same estimator as the per-atom
+    # distribution-space form (v-trace is linear, so @ support commutes
+    # with the
     # recursion) projected once through two_hot at the end, so the label
     # is always on the simplex and the recursion is one channel instead
     # of n_bins. f32 throughout (LESSONS 2: value recursions run and
@@ -202,14 +195,9 @@ def compute_player_targets(
 
     v_tm1 = jnp.exp(value_log_probs.astype(jnp.float32)) @ support
 
-    # Plain v-trace: the subtracted baseline is V(s). Between 2026-08-25 and
-    # 2026-08-29 it was the COMPOSED Q = V(s) + A(s, a), i.e. this residual
-    # also subtracted the target critic's advantage at the taken action, so
-    # rho attenuated only environment noise rather than the whole residual.
-    # That went with the advantage head; the file's own note promised
-    # adv_taken = 0 was the exact revert, and this is it.
+    # Plain v-trace: the subtracted baseline is V(s).
     #
-    # Policy advantage (2026-08-26): a PLAIN v-trace pass over the V
+    # Policy advantage: a PLAIN v-trace pass over the V
     # readout — no Retrace baseline shift — feeding the PPO surrogate's
     # taken-action advantage (scalar_vtrace; the same construction as the
     # builder's pg_advantages). done rows are excluded by policy_mask.
@@ -221,7 +209,7 @@ def compute_player_targets(
     # two-hot distribution (two_hot clips to the support range).
     win_returns = two_hot(scalar_returns, support) * mask[..., None]
 
-    # The PBRS potential channel (2026-09-11; config.player_potential_strength
+    # The PBRS potential channel (config.player_potential_strength
     # carries the algebra). `potential_values` is the TARGET potential head,
     # unit scale. Uncentred: Psi = eta * Phi on nonterminal on-mask rows and 0
     # on done and padding rows, and the channel value W is forced 0 there
@@ -292,7 +280,7 @@ def compute_player_targets(
     return (
         PlayerTargets(
             win_returns=win_returns,
-            # The pairwise critics' label (2026-09-12): the same scalar,
+            # The pairwise critics' label: the same scalar,
             # clipped as two_hot clips, so it IS win_returns @ support.
             scalar_returns=jnp.clip(scalar_returns, support[0], support[-1]) * mask,
             pg_advantages=pg_advantages,

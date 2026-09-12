@@ -108,13 +108,9 @@ function assertSlotAlignment(
 }
 
 /**
- * The private-side shape contract. Until 2026-08-25 these two buffers were
- * decoded here only to feed the frozen-opponent-sheet invariants; when those
- * were deleted with the privileged critic the decodes stayed behind an
- * eslint-disable, i.e. a decode-does-not-throw smoke test wearing the costume
- * of an assertion. This is the replacement: the encoder's own shape contract,
- * which is what the python decoder (`rl/environment/utils.process_state`)
- * reshapes against and will throw on if it ever drifts.
+ * The private-side shape contract: the encoder's own shape contract, which
+ * is what the python decoder (`rl/environment/utils.process_state`) reshapes
+ * against and will throw on if it ever drifts.
  *
  * Deliberately NOT cross-checked against the action mask here: the moveset ->
  * legal-action correspondence runs straight through the doubles slot-alignment
@@ -153,11 +149,10 @@ const MAX_RATIO_TOKEN_HARNESS = 16384;
  * Also asserts the alignment key: a row's entityIdxPlusOne, when present,
  * must point at a stable entity index that appears in MY side's
  * PUBLIC_ORDER permutation -- i.e. the tag connects to a real public row.
- * KNOWN ~0.1% false-positive class (2 in 1791 soak battles): a my-side
- * Illusion mon's own index attaches to no public row until |replace| --
- * the wire is CORRECT there (the hidden mon has no public identity yet,
- * the tag reads as absent model-side), and vitest's retry: 2 absorbs it
- * like the rest of the Illusion family.
+ * KNOWN false-positive class: a my-side Illusion mon's own index attaches
+ * to no public row until |replace| -- the wire is CORRECT there (the hidden
+ * mon has no public identity yet, the tag reads as absent model-side), and
+ * vitest's retry: 2 absorbs it like the rest of the Illusion family.
  */
 function assertPrivateTruthChannel(
     privateTeam: ReturnType<typeof StateHandler.toReadablePrivate>,

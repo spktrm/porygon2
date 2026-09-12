@@ -26,12 +26,6 @@ from rl.online.training.run_state import AddReason, EvalSnapshot, RunState
 logger = logging.getLogger(__name__)
 
 
-# (_measure_exploitability/_update_exploit_controller/_apply_exploit_
-# scale removed 2026-08-14 with the ExploitabilityController — the
-# worst-matchup win-rate signal still exists in _should_add_new_player's
-# "dominant" gate; it just doesn't actuate anything anymore.)
-
-
 def should_add_new_player(
     run_state: RunState, league: League, config: Porygon2LearnerConfig
 ) -> AddReason | None:
@@ -158,7 +152,7 @@ def add_player_to_league(
     )
 
 
-# Best-response child runs (2026-08-27). A BR run trains in its own
+# Best-response child runs. A BR run trains in its own
 # checkpoint subtree (config.ckpt_subdir) against one frozen target and
 # publishes its latest params into the PARENT run's players/ dir on every
 # stop. The offset keeps the published key clear of any step main itself

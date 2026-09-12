@@ -256,11 +256,10 @@ def test_untruncated_tail_window_forward_matches_within_bf16(
 ) -> None:
     """The same window, through the model, agrees only to bf16 precision.
 
-    Exact equality is UNATTAINABLE here and the test used to demand it
-    (atol=1e-5, failing at 0.023 since before 2026-08-25). Windowing changes
-    the leading dimension of history_encoder's `message_projection` Dense
-    (H*K: 2048 -> 708 on this fixture) with bit-identical inputs and weights,
-    XLA autotunes a different bf16 GEMM for the new shape, and the 177-step
+    Exact equality is UNATTAINABLE here. Windowing changes the leading
+    dimension of history_encoder's `message_projection` Dense (H*K: 2048 ->
+    708 on this fixture) with bit-identical inputs and weights, XLA
+    autotunes a different bf16 GEMM for the new shape, and the 177-step
     GRU scan amplifies the resulting 1 ULP (0.0078125) into ~0.02 on the
     value logits. The tell that it is kernel selection and not data loss:
     the effect is NON-MONOTONE in how much padding is removed — clipping the

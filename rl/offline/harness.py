@@ -4,9 +4,7 @@ Plays self-play games against a game service with a plain params pytree —
 no Learner, InferenceServer, league, replay buffer or wandb — and re-runs
 the learner-side model (train=True heads) over the collected chunks so
 critic questions can be answered against real trajectories without a
-training run. Born from the critic-weakness check that needed a stub
-learner, a monkeypatched SERVER_URI and a sed'd copy of the service to
-exist at all.
+training run.
 
 Typical use (a second service instance keeps the training one's battles
 untouched):
@@ -23,9 +21,8 @@ untouched):
     '
 
 Every game is bounded by `deadline_s` in play_games: the service has no
-turn cap yet, and a battle that never resolves (seen on 2026-08-23, ~2%
-of games) would otherwise pin a slot forever — stragglers are dropped,
-not waited on, and the count is logged.
+turn cap yet, and a battle that never resolves would otherwise pin a slot
+forever — stragglers are dropped, not waited on, and the count is logged.
 """
 
 from __future__ import annotations

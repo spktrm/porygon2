@@ -33,8 +33,8 @@ def pfsp(win_rates: np.ndarray, weighting: PsfpWeighting = "squared") -> np.ndar
 MAIN_KEY = -1
 # Live (currently-training) identities share the historical snapshots'
 # payoff table, so a win-rate between any pair of live/historical
-# identities falls out of the same statistics code. One entry since the
-# exploiter populations were removed (LESSONS.md 9); the tuple shape is
+# identities falls out of the same statistics code. One entry today; the
+# tuple shape is
 # what keeps the live-vs-historical distinction explicit at every call
 # site rather than hard-coding "== MAIN_KEY".
 LIVE_KEYS = (MAIN_KEY,)
@@ -54,8 +54,8 @@ class PlayerRef(NamedTuple):
     player_key: str = "params"
     builder_key: str = "params"
     # Explicit provenance tag, not inferred from step_count's numeric
-    # range. One value since the exploiter populations were removed
-    # (LESSONS.md 9), but kept as a field: refs pickled by older revisions
+    # range. One value today, but kept as a field: refs pickled by older
+    # revisions
     # carry "main_exploiter"/"league_exploiter"/"exploiter" here, and a
     # NamedTuple must be able to unpickle them without a migration step.
     # The default is what makes a ref written before the field existed

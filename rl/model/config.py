@@ -77,13 +77,8 @@ def get_player_model_config(
     # The trunk: `num_blocks` standard pre-RMSNorm blocks over ONE sequence
     # of NUM_SEQUENCE_ROWS rows (80; the actor assembles the 73
     # policy-readable ones, encoder.kept_rows) -- see rl/model/trunk.py.
-    # Replaces the
-    # four-round, three-stream, five-masked-attention RoundBlock on
-    # 2026-08-29: at 80 rows an all-pairs attention is 6.4k cells, so the
-    # block masks that encoded the routing were buying nothing but their own
-    # complexity, and the 48 latents they fed were a bottleneck between rows
-    # the trunk can now simply carry. Depth is the knob: a block costs ~1.05M
-    # params and almost no attention at this sequence length.
+    # Depth is the knob: at this sequence length a block is almost all
+    # feed-forward parameters and almost no attention.
     cfg.encoder.trunk = ConfigDict()
     cfg.encoder.trunk.num_blocks = 6
     cfg.encoder.trunk.num_registers = 4
@@ -95,12 +90,9 @@ def get_player_model_config(
     cfg.encoder.trunk.use_bias = encoder_use_bias
     cfg.encoder.trunk.qk_layer_norm = encoder_qk_layer_norm
 
-    # The action readout (2026-08-29). Three small heads over named trunk
-    # rows -- a scalar per sheet row for switching, ONE bilinear for
-    # moves x targets, a scalar per target row for pass/default -- replacing
-    # the hierarchical macro/micro stack that was instantiated twice, for a
-    # policy and for an advantage head the policy did not read. 2.65M
-    # parameters became 0.13M.
+    # The action readout. Three small heads over named trunk rows -- a
+    # scalar per sheet row for switching, ONE bilinear for moves x targets,
+    # a scalar per target row for pass/default.
     #
     # qk_size is the bilinear's projection width. It is the ONLY dimension
     # here: there is no adapter (the head reads the trunk's rows directly),

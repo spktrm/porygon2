@@ -147,11 +147,7 @@ def run_training_actor_pair(
             battle_errors = [e for e in errors if isinstance(e, BattleError)]
             if battle_errors:
                 # The abort is usually the SYMPTOM: the other side died
-                # first (2026-09-03: league snapshots from a superseded
-                # param tree raised on their first forward, p0 then sat
-                # 600 s on the service watchdog), and raising the abort
-                # alone hid that for an hour. Log every other exception
-                # before it goes.
+                # first. Log every other exception before it goes.
                 for error in errors:
                     if error is not None and not isinstance(error, BattleError):
                         logger.error(
@@ -536,20 +532,16 @@ def main(args: argparse.Namespace):
         )
 
     learning_agent = make_agent()
-    # The eval slate (2026-09-09): two slots against the same baseline,
+    # The eval slate: two slots against the same baseline,
     # both the EMA params at temp 1.0 -- the temperature the training
     # actors sample at, and the only one comparable across head
     # parameterisations (the flat readout's single division vs the
-    # hierarchical head's two, 2026-08-29). `plain-t1` samples the policy
+    # hierarchical head's two). `plain-t1` samples the policy
     # exactly as the training actors do; `thresholded` samples it with
     # every legal cell below player_prune_threshold removed and the rest
     # renormalised -- the distribution the learner's v-trace ratios are
     # built on, sampled nowhere else. wr(thresholded) - wr(plain-t1) on
-    # the same checkpoint prices the threshold in play. The search eval
-    # actor (depth-1 expectimax, 2026-09-06) was deleted here 2026-09-09:
-    # its measured influence at 01861967 was root KL .000026-.000101 with
-    # both inspected bad actions still ranked first in 16/16 seeds
-    # (LESSONS.md "Removal ledger — 2026-09-09 search eval actor").
+    # the same checkpoint prices the threshold in play.
     eval_slate = (
         (make_agent(HeadParams(temp=1.0), HeadParams(temp=1.0)), "-plain-t1"),
         (
@@ -570,9 +562,8 @@ def main(args: argparse.Namespace):
     # HeadParams as learning_agent — eval actors stay on their agents'
     # direct path (the thresholded slot's HeadParams differ, and 2
     # low-volume threads don't warrant a second server), and builder actors too
-    # (one team-build per game vs ~35 player steps). The server's
-    # constructor defaults are the values the deleted inference_* config
-    # fields held (b219d84). Under "cpu" there is no server: every actor
+    # (one team-build per game vs ~35 player steps). Under "cpu" there is
+    # no server: every actor
     # is its own batch-1 host forward through learning_agent.
     inference_server = None
     if learner_config.player_actor_device == "gpu":
@@ -839,10 +830,9 @@ def main(args: argparse.Namespace):
         )
     except Exception:
         # Learner.train() already logged the full traceback; this handler
-        # exists so the finish() below can mark the wandb runs FAILED.
-        # Letting the exception fly past an unconditional finish() left
-        # session 1786537634's OOM crash showing as three cleanly-
-        # "finished" runs, which sent the postmortem down the wrong path.
+        # exists so the finish() below can mark the wandb runs FAILED:
+        # an exception flying past an unconditional finish() leaves the
+        # runs showing as cleanly "finished".
         crashed = True
     finally:
         # From here the process is exiting as fast as it safely can — a

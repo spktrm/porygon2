@@ -223,10 +223,9 @@ def test_suffix_carry_replays_the_game_within_bf16(
     The bound is MEASURED, not assumed: the same window tail-clipped to
     the learner's stored width with no carry is pure shape noise (content
     identical, leading dims different), and the carry may not exceed
-    that floor or 0.05, whichever is larger. Under the opened readout the
-    floor on log_policy reads ~0.14 (2026-09-02: carry worst 0.093
-    against it; value log-probs 0.022 against a 0.026 floor) -- the
-    chunking test's 0.05 was calibrated on value log-probs alone."""
+    that floor or 0.05, whichever is larger. The chunking test's 0.05 was
+    calibrated on value log-probs alone, which is why the floor is
+    recomputed here rather than reused."""
     from rl.environment.utils import clip_history_suffix, clip_history_windows_tail
     from rl.model.history_encoder import invalid_history_carry
     from rl.online.config import get_learner_config
@@ -304,9 +303,8 @@ def test_suffix_carry_replays_the_game_within_bf16(
         last_step_index = _last_step_index(window)
     # The floor is ONE draw of the bf16 leading-dim class (the 256-row
     # tail) and the carry path runs another (the 32-row suffix bucket), so
-    # the bound carries a margin over it -- read 0.093 vs 0.14 (2026-09-03)
-    # and 0.101 vs 0.096 (2026-09-05); the shifted-carry control below sits
-    # ~2.0 away, so the margin costs the test nothing.
+    # the bound carries a margin over it; the shifted-carry control below
+    # sits ~2.0 away, so the margin costs the test nothing.
     policy_bound = max(0.05, 1.5 * floor_policy)
     value_bound = max(0.05, 1.5 * floor_value)
     assert worst_policy <= policy_bound, (worst_policy, floor_policy)
@@ -423,9 +421,8 @@ def test_server_mixed_group_matches_single_forwards(
     (single_plain,) = run([request(2, plain)])
     mixed_carrying, mixed_plain = run([request(1, carrying), request(2, plain)])
     # Batch 1 vs batch 2 is a bf16 GEMM leading-dim change, and the noise
-    # it makes is content-dependent (0.042 on the plain request, 0.067 on
-    # the carrying one, 2026-09-02, opened readout), so the read is
-    # structural: each grouped output sits within the shape-noise class
+    # it makes is content-dependent, so the read is structural:
+    # each grouped output sits within the shape-noise class
     # of ITS OWN single forward and far from the other's -- a dropped or
     # misrouted carry lands ~2.0 from its single (the plain/carrying
     # separation) and would fail both halves.

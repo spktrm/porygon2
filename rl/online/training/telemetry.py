@@ -146,9 +146,8 @@ def collect_batch_telemetry_data(
         ),
         # Whole-game length, read off the terminal chunk's done row (its
         # REQUEST_COUNT/TURN are game totals). The only game-length signal
-        # since chunking made trajectory_length chunk-local — and the
-        # distribution to watch now that the service's 96-request force-tie
-        # is gone (chunked-unrolls change, 2026-08-16).
+        # since chunking made trajectory_length chunk-local, and the
+        # distribution to watch: games run to their natural length.
         game_length_requests_mean=renormalize(
             (request_counts * done).max(axis=0).astype(jnp.float32),
             is_terminal_chunk,
@@ -373,13 +372,10 @@ def _has(tree, path) -> bool:
 
 # The action readout's leaves, and what each must DO.
 #
-# These panels are not decoration. The dx65cpwp micro runaway lived entirely
-# in head params -- micro_local_tgt 0.0028 -> 0.070 rms, the adapter out
-# kernel 0.0058 -> 0.105 -- and was invisible on wandb; diagnosing it needed
-# checkpoint forensics. The head that grew those numbers is gone, but the
-# flat readout has its own way to fail and it is the same shape: the bilinear
-# is a two-factor product with ONE zero-init factor, and LESSONS.md 13 records
-# a learned grid behind a zero-init scale sitting at lecun init for 60k steps.
+# These panels are not decoration. A head can run away or stall entirely in
+# its own params, invisibly on wandb: the bilinear is a two-factor product
+# with ONE zero-init factor, and a zero-init factor that never leaves zero
+# holds the whole pair at its init.
 #
 # Expected at init and what to watch:
 #   query        0, must leave 0 within ~200 steps (its gradient is a rank-1
@@ -394,9 +390,9 @@ def _has(tree, path) -> bool:
 #                signal to promote it to an MLP.
 #   switch/other 0, single-factor, must leave 0 from step 1.
 #
-# src/tgt stay SPLIT deliberately: the 7.5x tgt-over-src growth asymmetry --
-# a tgt column is read by every legal move cell of a row -- was itself the
-# dx65cpwp diagnostic.
+# src/tgt stay SPLIT deliberately: a tgt column is read by every legal move
+# cell of a row, so the two grow at different rates and a shared panel would
+# hide it.
 _ACTION_HEAD_LEAVES = {
     "player_pointer_query_rms": (("action_head", "query", "kernel"),),
     "player_pointer_key_rms": (("action_head", "key", "kernel"),),
@@ -626,8 +622,7 @@ def state_kernel_telemetry(params) -> dict[str, jax.Array]:
 
 def masked_mean(x: jax.Array, mask: jax.Array) -> jax.Array:
     """Mean over mask, NaN when the mask is empty (wandb skips NaN points;
-    a 0.0 would read as a measurement — the player_q_calibration_r2_fresh
-    lesson of 2026-08-23)."""
+    a 0.0 would read as a measurement)."""
     return jnp.where(mask.any(), jnp.mean(x, where=mask), jnp.nan)
 
 
@@ -797,10 +792,9 @@ def critic_outcome_telemetry(
     )
     logs["player_v_outcome_r2_late"] = masked_r2(v_target, G, vm & (phase >= 2 / 3))
 
-    # Previous-row action, split forced / voluntary: after a FORCED switch
-    # (a mon just fainted) V read +0.23 optimistic on the collapsed
-    # baseline, while the offline post-VOLUNTARY-switch read was
-    # pessimistic — two populations, two panels. Row 0 has no local
+    # Previous-row action, split forced / voluntary: a forced switch (a mon
+    # just fainted) and a voluntary one are two populations with opposite
+    # critic biases, so they get two panels. Row 0 has no local
     # predecessor and is excluded.
     def shift(x):
         return jnp.concatenate([jnp.zeros_like(x[:1]), x[:-1]], axis=0)

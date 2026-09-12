@@ -1,9 +1,7 @@
 """The one surviving host-side controller: the replay-reuse PI loop.
 
 ``PILogController`` is the actuator — a PI update in log space with clipped
-bounds. Every other controller this project built (lambda, adaptivity, magnet
-watchdog, plasticity) has been removed; LESSONS.md 10 records what each one
-measured and why it went, including the evidence that pulls both ways.
+bounds.
 """
 
 import numpy as np

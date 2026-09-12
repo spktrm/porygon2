@@ -175,11 +175,10 @@ def train_step(
     flat_action_mask = player_transitions.env_output.action_mask
     target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
     # mu/pi_target clipped at 2, telemetry only (player_impact_clip_frac):
-    # the IMPACT surrogate it once recentred is gone; the panel still
-    # reads how far behaviour has drifted from the fast target.
+    # the panel reads how far behaviour has drifted from the fast target.
     actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
     # The v-trace ratio pi_target / mu with the TARGET policy thresholded at
-    # player_prune_threshold first (2026-09-09, DeepNash's FineTuning
+    # player_prune_threshold first (DeepNash's FineTuning
     # placement): a taken action the target has dropped below the line
     # gets ratio 0 and v-trace discards the row. This is the only place
     # the thresholded distribution enters the learner -- the learner
@@ -203,7 +202,7 @@ def train_step(
     # reference policy and value/kl bootstraps. Under
     # player_privileged_targets the bootstraps -- and therefore
     # pg_advantages -- come from the PRIVILEGED head (asymmetric
-    # actor-critic, 2026-09-01); False is bit-for-bit the old estimator.
+    # actor-critic); False is bit-for-bit the deployable-head estimator.
     if config.player_privileged_targets:
         target_value_log_probs = player_target_pred.priv_value_head.log_probs
     else:
@@ -254,9 +253,7 @@ def train_step(
     )
     # NashPG reference SNAP: reg_params <- target_params every
     # player_reg_snap_steps — their outer-loop rho reset, in place,
-    # still three param sets, FROZEN between snaps. (The continuous EMA
-    # this replaced never reset, so the KL gap compounded with policy
-    # speed: 2wvnlsz3 hit ref_kl 2.07 nats by 98k.) Step 0 snaps
+    # still three param sets, FROZEN between snaps. Step 0 snaps
     # trivially (reg = target = init), and a resume at a snap multiple
     # snaps on its first step, repairing any accumulated gap at restart.
     reg_snap = player_state.step_count % config.player_reg_snap_steps == 0
@@ -348,9 +345,7 @@ def train_step(
             move_mask,
         )
     )
-    # Realised behaviour frequency on the axis every collapse formed in
-    # (RENAMED off the player_q_* prefix 2026-08-30 with the last of the Q
-    # machinery — same quantities, fresh wandb continuity by design).
+    # Realised behaviour frequency on the axis every collapse formed in.
     training_logs["player_taken_switch_frac"] = average(
         taken_switch.astype(jnp.float32), acted_mask
     )
@@ -360,8 +355,7 @@ def train_step(
 
     # Off-policy attenuation audit, split by the TAKEN modality. isr =
     # pi_target/mu_actor is what v-trace multiplies its TD errors by
-    # (targets.py: rho_t = c_t = min(1, isr) — Retrace went 2026-08-23
-    # and the alpha blend 2026-08-21). As pi(switch) decays, isr on
+    # (targets.py: rho_t = c_t = min(1, isr)). As pi(switch) decays, isr on
     # switch-taken rows falls
     # below 1 and those rows contribute proportionally less.
     #
@@ -386,8 +380,8 @@ def train_step(
     )
 
     if not isinstance(batch.game_outcome, tuple):
-        # Step-1 panels (docs/critic-weakness-analysis.md): the realised-
-        # outcome instruments, a property of the games, not of any critic.
+        # The realised-outcome instruments, a property of the games, not
+        # of any critic.
         training_logs.update(
             critic_outcome_telemetry(
                 game_outcome=batch.game_outcome,
@@ -489,7 +483,7 @@ def train_step(
                     mask=potential_mask,
                 ),
             }
-        # The pairwise entity critics (2026-09-12): each head's scalar
+        # The pairwise entity critics: each head's scalar
         # regressed on the v-trace scalar return the CLS critics' two-hot
         # is built from, under the same mask, gradient live into what the
         # head reads. One coefficient for both (config.py carries the
@@ -545,18 +539,13 @@ def train_step(
         # a MOVE are legal. This is the slice the collapse forms in, and
         # every policy-modality readout below is scoped to it.
         #
-        # STRICT since 2026-08-25. This previously required a switch and any
-        # legal NON-switch, which also admitted WILDCARD / OTHER / TARGET
-        # cells — so a row offering {switch, pass} counted as a stay/switch
-        # decision here while the identically-described `has_both` in the Q
-        # panels excluded it, and LESSONS.md 3's rule reads the two families
-        # against each other. A stay/switch decision only means something
+        # STRICT: a switch and a legal MOVE, never a WILDCARD / OTHER /
+        # TARGET cell. A stay/switch decision only means something
         # when staying and attacking is actually on offer.
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # JOINT surrogate: one pi/mu ratio on the taken action (the
-        # 2026-08-27 per-level split is reverted — 2026-08-28 ledger).
+        # JOINT surrogate: one pi/mu ratio on the taken action.
         learner_log_policy = learner_action_head.log_policy
         pi_learner = masked_policy(learner_log_policy, flat_action_mask)
 
@@ -573,8 +562,7 @@ def train_step(
         # Per-level entropies (macro = modality marginal, micro = within
         # the taken modality) are OBSERVERS only — the collapse instruments
         # the acceptance gates read. The regulariser itself is NashPG's:
-        # the plain joint entropy bonus at the static player_ent_coef
-        # (2026-08-30; the per-axis dual temperatures are removed).
+        # the plain joint entropy bonus at the static player_ent_coef.
         h_macro_rows, h_micro_rows = factorised_entropies(
             learner_log_policy, axis.taken_modality, flat_action_mask
         )
@@ -591,11 +579,11 @@ def train_step(
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
 
-        # The flat support hinge (2026-09-09, loss.support_hinge_loss): the
+        # The flat support hinge (loss.support_hinge_loss): the
         # one restoring force in this bracket, holding every legal cell at
         # player_support_tau and, at temperature 0, exactly silent above it
-        # (smoothed in log space by player_support_temperature since
-        # 2026-09-11, nearly silent from 2 tau up). It is not
+        # (smoothed in log space by player_support_temperature, nearly
+        # silent from 2 tau up). It is not
         # pi-prefactored on the cell it lifts, so it is the only term still
         # acting on an abandoned action; unlike the modality-marginal KL it
         # replaced it says nothing above the line, where the critic ranks.
@@ -610,10 +598,8 @@ def train_step(
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
         # over legal switch vs non-switch cells of real-choice rows.
-        # Loss-agnostic, kept across the 2026-08-26 policy-loss transition:
-        # prob_ratio falling with absadv_ratio ~ 1 is still the
-        # starvation signature to watch, now with nothing but the magnet
-        # cycle and entropy to oppose it.
+        # Loss-agnostic: prob_ratio falling with absadv_ratio ~ 1 is the
+        # starvation signature to watch.
         pg_row = switch_choice_mask[..., None]
         pg_switch_cells = flat_action_mask & switch_actions & pg_row
         pg_move_cells = flat_action_mask & jnp.logical_not(switch_actions) & pg_row
@@ -692,18 +678,14 @@ def train_step(
                 + config.player_mag_coef * loss_mag
                 + config.player_support_hinge_coef * loss_support
             )
-            # v: one critic, on the deploy-time information set. The
-            # all-action advantage that sat beside it retired 2026-08-29 --
-            # the policy stopped reading it at the NashPG switch, which left
-            # it a matched control for an architecture that is now gone.
+            # v: one critic, on the deploy-time information set.
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
             # The potential channel's head, unscaled (see above).
             + loss_potential
-            # The pairwise critics (2026-09-12), both heads' MSE.
+            # The pairwise critics, both heads' MSE.
             + config.player_pair_value_loss_coef * loss_pair_value
-            # The actor backward KL is a diagnostic only since 2026-09-09
-            # (config.py, the removed player_kl_loss_coef): the trust region
+            # The actor backward KL is a diagnostic only: the trust region
             # against the behaviour policy is the clip and the magnet.
         )
 
@@ -741,7 +723,7 @@ def train_step(
             player_history_gate_mean=average(
                 learner_player_pred.history_gate_mean, value_mask
             ),
-            # Diagnostic since 2026-09-09: no coefficient scales it.
+            # Diagnostic only: no coefficient scales it.
             player_loss_kl=loss_actor_backward_kl,
             # Per head entropies (diagnostics only — no longer regularized)
             player_action_entropy=action_head_entropy,
@@ -788,16 +770,15 @@ def train_step(
                 mask=value_mask,
             ),
             # THE discriminator for the privileged premise: this pair on one
-            # panel. The 2026-08-25 rung read WORSE than the deployable head
-            # and was deleted for it; priv < deploy sustained past 30k is
-            # this pass's pre-registered abort.
+            # panel. priv < deploy sustained past 30k is this pass's
+            # pre-registered abort.
             player_priv_value_head_r2=calculate_r2(
                 value_prediction=learner_priv_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=value_mask,
             ),
-            # Mean absolute priv-minus-deploy expectation gap: the "worth
-            # 0.005 value units" number, re-measured live.
+            # Mean absolute priv-minus-deploy expectation gap: what the
+            # privileged input is worth, re-measured live.
             player_priv_value_gap=average(
                 jnp.abs(
                     learner_priv_value_head.expectation - learner_value_head.expectation

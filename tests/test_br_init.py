@@ -6,8 +6,7 @@ stays in the fast suite. The init_fn stub records the key it is called
 with, which is what lets the seed-independence contract be pinned: the
 first sp75 probe drew its "fresh" component from the lineage seed the
 TARGET also grew from, so the perturb was a rewind along the target's
-own training path (measured cos 0.95 to the target at the BR's first
-checkpoint, 2026-08-30).
+own training path.
 """
 
 from collections.abc import Callable

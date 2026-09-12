@@ -239,8 +239,8 @@ def pad_history_to_level(
     )
 
 
-# All eight RELEVANT_ENTITY_IDX columns (the model's _RELEVANT_ENTITY_
-# FEATURES reads the first four; the service writes up to eight).
+# All eight RELEVANT_ENTITY_IDX columns: the service writes up to eight and
+# the model's _RELEVANT_ENTITY_FEATURES reads all of them.
 _ALL_RELEVANT_IDX_COLUMNS = np.array(
     [FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{k}") for k in range(8)]
 )
@@ -374,8 +374,8 @@ def clip_history_windows_tail(
 # The actor path's geometric-bucket base for BOTH history axes: the actor
 # clips to these bucket values and the inference server re-buckets the
 # batch against the same base (a shared level per group), so the two must
-# agree -- written once, read by both. 32 (was 64, 2026-09-02): a carried
-# request's suffix is ~3 steps / ~5 packed rows, so the smallest bucket is
+# agree -- written once, read by both. A carried
+# request's suffix is a handful of steps and packed rows, so the smallest bucket is
 # what the carry path runs at; levels 32/64/128/256/512 are ONE extra
 # forward-only compile per batch bucket on the actor family (the learner's
 # shape lattice is untouched), and the scan is O(log H), so 16 would buy

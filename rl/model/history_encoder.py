@@ -35,10 +35,9 @@ FIELD_ROW_GLOBAL, FIELD_ROW_MINE, FIELD_ROW_THEIRS = 0, 1, 2
 # ENTITY_PUBLIC_NODE_FEATURE__SIDE == 1 is mine (service isMySide).
 SIDE_MINE = 1
 
-# All EIGHT columns the service writes (state.ts maxRelevant = 8). Until
-# 2026-09-01 this listed only IDX0..3, so any step touching more than four
-# entities -- spread moves, hazard cascades -- had rows 5-8 silently dropped
-# before the scatter ever saw them.
+# All EIGHT columns the service writes (state.ts maxRelevant = 8). Listing
+# fewer silently drops the rows of any step touching more entities than are
+# listed -- spread moves, hazard cascades -- before the scatter sees them.
 _RELEVANT_ENTITY_FEATURES = np.array(
     [
         FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{index}")
@@ -344,10 +343,10 @@ class GatedLinearCell(nn.Module):
     Gate and candidate read the INPUT only -- never h_{t-1} -- so each
     step is a per-channel affine map of the carry and the whole sequence
     is an associative scan (gated_linear_scan) of depth O(log H) instead
-    of a serial chain of H dependent kernels. That is what the GRU it
-    replaces (2026-09-02) could not offer: its scan sat on a ~26us/step
-    dependency-latency floor that hoisting (-8.6%) and unrolling could
-    not move. The price is the candidate's blindness to the carry,
+    of a serial chain of H dependent kernels -- which is what the GRU it
+    replaces (2026-09-02) could not offer, its scan sitting on a
+    dependency-latency floor that neither hoisting nor unrolling could
+    move. The price is the candidate's blindness to the carry,
     accepted for windows of 256-512 steps; the RG-LRU form (a learned
     per-channel decay in place of 1 - z_t) is the recorded fallback.
     Selectivity is kept: z_t is input-dependent, so a slot writes what
@@ -433,11 +432,10 @@ class PerSlotHistoryEncoder(nn.Module):
         # (2026-09-02; see _recur). The slot input is [messages ;
         # field_vec ; flat_field_{t-1}] = 5D wide -- the three field states
         # after the PREVIOUS step, exactly the carry the GRU read, now an
-        # input column because the field scan runs first. A mean over the
-        # other slots' states used to ride here too (the "gestalt"); it
-        # was redundant with flat_field -- which is fed the SUM of every
-        # message -- and with the trunk's read-time attention over the
-        # HISTORY_ENTITY rows (deleted 2026-09-02).
+        # input column because the field scan runs first. No mean over the
+        # other slots' states rides here: flat_field is fed the SUM of every
+        # message, and the trunk attends over the HISTORY_ENTITY rows at
+        # read time.
         self.slot_cell = GatedLinearCell(
             entity_size, dtype=self.cfg.dtype, name="slot_cell"
         )

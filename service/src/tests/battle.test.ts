@@ -6,12 +6,11 @@ import { describe, expect, test } from "vitest";
 
 import { runBattle, testFormats } from "./harness";
 
-// Doubles formats currently violate the slot-alignment invariant (~75% of
-// battles; 622 hits over one ~3200-battle soak) — a pre-existing defect the
-// old harness swallowed (its controller caught and console.error'd every
-// invariant throw). Doubles service plumbing is a known-incomplete
-// workstream; strict-test singles only until it lands, but keep the doubles
-// entries visible as skips rather than deleting them.
+// Doubles formats currently violate the slot-alignment invariant — a
+// pre-existing defect the old harness swallowed (its controller caught and
+// console.error'd every invariant throw). Doubles service plumbing is a
+// known-incomplete workstream; strict-test singles only until it lands, but
+// keep the doubles entries visible as skips rather than deleting them.
 const singlesFormats = testFormats.filter(
     (format) => !format.includes("doubles") && !format.includes("vgc"),
 );
@@ -29,9 +28,8 @@ describe("battle invariants", () => {
 
     // retry: the slot-alignment assert has a documented false-positive
     // class (Illusion/forme changes — and the gen9ou sample team is a
-    // Zoroark team), observed at ~1% of soak battles. Three independent
-    // failures (~1e-6 by chance) still fail the suite, so a systematic
-    // regression stays fatal.
+    // Zoroark team). Three independent failures still fail the suite, so a
+    // systematic regression stays fatal.
     test.each(singlesFormats)(
         "vs baseline heuristic: %s",
         { retry: 2 },

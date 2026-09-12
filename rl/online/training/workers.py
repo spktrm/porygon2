@@ -261,7 +261,7 @@ def stop_workers(run_state: RunState, strict: bool = True) -> None:
         # strict=False is the whole-PROCESS shutdown path (train()'s
         # finally, incl. Ctrl-C): the straggler raise exists to stop a
         # rebuild from starting on top of state a leaked
-        # thread still holds (the 2026-08-11 RAM/VRAM leak) — at
+        # thread still holds — at
         # process exit there is no next phase to protect, every
         # thread is a daemon that dies with the process, and raising
         # here would convert a clean Ctrl-C into a "crashed" outcome

@@ -43,11 +43,6 @@ class EntitySumPool(nn.Module):
     entity vector stays LINEAR in its attribute multi-hots: a matchup the
     readout's bilinear turns on (my move's type x their species' types) is
     then a fixed subspace of the row, not a function the pool has to route.
-    Measured 2026-09-03 (`rl/offline/type_probe.py` and the supervised
-    ceiling beside it): the same readout form reached held-out 0.60 on the
-    attention-pooled rows and 0.79 on summed ones, against 0.80 from the raw
-    multi-hots — the attention pool was eroding type legibility, not adding
-    within-entity interactions the trunk could use.
     """
 
     num_token_types: int
@@ -77,22 +72,16 @@ class SequenceNormalisation(nn.Module):
     `output_normalisation` (2026-09-11) every row LEAVES it at that
     magnitude for the heads -- the final norm every pre-norm transformer
     carries (GPT-2's ln_f, LLaMA's model.norm, ViT's head norm), which the
-    trunk had without: on ckpt_00280000 the heads read CLS at RMS 9.8
-    against move rows at 0.99, the disparity this norm removed at the input
-    coming back at the output.
+    trunk had without.
 
     Each valid row is RMS-normalised across channels and scaled per group by
     a learned channel vector (effective scale 1 + a zero-init parameter, so
     the groups start equal and may drift apart). RMS 1 per row is what a
     regular transformer's embedding lookup gives -- torch's N(0, 1) table,
-    the original Transformer's sqrt(d_model)-scaled embedding, PaLM's -- and
-    it puts the input at 1.6x the first block's update at init (Gemma's
-    .01*sqrt(D) rows sit at 0.75-1.1x; measured 2026-09-10, block-1 update
-    RMS 0.62 at width 256 under the pre-norm blocks, independent of the
-    input scale). Under those blocks a row's residual magnitude decides how
-    much any block can move it: unnormalised, the history rows entered at
-    L2 ~1040 against CLS at 2.85 and a block update of ~60, so six blocks
-    moved them 2% -- frozen input the trunk could read but never revise.
+    the original Transformer's sqrt(d_model)-scaled embedding, PaLM's.
+    Under the pre-norm blocks a row's residual magnitude decides how much
+    any block can move it: an unnormalised row far above the block update
+    scale is frozen input the trunk can read but never revise.
     Statistics never cross rows, so the privileged partition is untouched,
     and invalid rows stay exactly zero. The full-layout scale bank is
     shared by the actor and the learner; the trunk's registers pass through
@@ -123,8 +112,7 @@ def activation_fn(array: jax.Array) -> jax.Array:
 
 def layer_norm(array: jax.Array) -> jax.Array:
     """Apply layer normalisation. (Named for the operation, not the class:
-    this is nn.LayerNorm, not the RMSNorm above — the docstring claimed RMS
-    for months while the code did not.)"""
+    this is nn.LayerNorm, not the RMSNorm above.)"""
     return nn.LayerNorm(dtype=array.dtype)(array)
 
 
@@ -237,23 +225,15 @@ class MultiHeadAttention(nn.Module):
             )
 
         # DELIBERATELY the plain einsum, not jax.nn.dot_product_attention /
-        # cuDNN flash. Measured 2026-09-01 (fwd+bwd ms, bf16, 4 heads x 64,
-        # B*T = 8192 tokens; einsum / dpa-xla / cudnn+dense-mask /
-        # cudnn+seq_lengths): seq 64: 0.12/0.27/0.54/0.32; 128:
-        # 0.16/0.42/0.46/0.53; 256: 0.68/0.70/0.73/0.58; 512:
-        # 1.02/0.72/1.30/0.75; 1024: 1.42/1.53/2.33/1.71; 2048:
-        # 4.11/OOM/4.23/3.09. At the trunk's 73-80 rows the einsum is 2-4x
-        # FASTER than every flash variant (kernel overhead dominates), and
-        # the only variant that ever clearly wins (cudnn+seq_lengths, from
-        # ~256 and decisively at 2048 where plain xla OOMs) cannot express
+        # cuDNN flash. At the trunk's sequence length the einsum is faster
+        # than every flash variant (kernel overhead dominates), and the only
+        # variant that ever clearly wins (cudnn+seq_lengths) cannot express
         # this module's SCATTERED validity mask -- seq_lengths is
         # prefix-only, and a dense mask is folded into an additive bias
         # whose materialisation eats the flash win (and trips cuDNN's
         # odd-length training limitation at 61). Revisit only when a design
         # grows the sequence past ~512 WITH prefix-shaped masking; the
-        # softcap below is not a blocker then -- max |pre-cap logit| on the
-        # trained model measured 7.6 against the 50 cap (qk layer norm
-        # bounds it), so it is deletable insurance.
+        # softcap below is not a blocker then.
         attn_logits = jnp.einsum("...thd,...Thd->...htT", query_heads, key_heads)
         attn_logits = softcap(attn_logits / np.sqrt(qk_size).astype(q.dtype))
 

@@ -73,10 +73,7 @@ class RunState:
     run_gate: "threading.Event" = None
     eval_snapshot: EvalSnapshot | None = None
     replay_pi: PILogController | None = None
-    # Fixed at config.player_replay_kl_target — the ExploitabilityController
-    # that used to scale it was removed 2026-08-14 (last of the adaptive
-    # hyperparameter loops; see rl/online/training/controllers.py's module
-    # docstring).
+    # Fixed at config.player_replay_kl_target; nothing scales it.
     replay_kl_target: float = 0.045
     replay_ctrl_kl_sum: float = 0.0
     replay_ctrl_kl_count: int = 0

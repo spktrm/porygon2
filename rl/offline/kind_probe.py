@@ -3,11 +3,8 @@
 The trunk is one sequence of ~10 row KINDS (public entities, my sheet,
 move slots, target slots, history, field, ...) through one attention and
 ONE shared MLP, told apart only by the additive group bias. The
-readout consumes the rows AFTER six blocks, and the type ceiling read
-post-trunk rows as LESS legible than the assembled input (0.50 vs 0.60)
-while `player_trunk_row_participation` fell 7.1 -> 4.5 over irqeetfg.
-This asks, per block, whether that is the trunk squeezing the kinds into
-a shared subspace:
+readout consumes the rows AFTER six blocks. This asks, per block, whether
+the trunk squeezes the kinds into a shared subspace:
 
   1. OWN legibility -- a ridge readout of each row's own wire attribute
      (species types, hp, move type) from the row at every block, held out

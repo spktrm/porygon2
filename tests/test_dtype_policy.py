@@ -1,7 +1,6 @@
 """The mixed-precision contract, pinned for VRAM auditing.
 
-Two properties, and they are different things (conflating them wasted a
-measurement on 2026-08-25):
+Two properties, and they are different things:
 
   param_dtype  what parameters are STORED in. f32, always. Optimiser state
                and the EMA target track it, so this is most of the resident

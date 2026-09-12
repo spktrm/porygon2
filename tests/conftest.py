@@ -23,10 +23,8 @@ logging.getLogger("jax._src.dispatch").setLevel(logging.ERROR)
 os.environ.setdefault("JAX_EXPLAIN_CACHE_MISSES", "false")
 # The learner's env sets JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=all (kernel +
 # autotune caches alongside the executable cache). Under that flag every new
-# executable rewrites the whole ~340 MB xla_gpu_kernel_cache_file: the four
-# four tiny loss unit tests took 75 s with it and 6 s without (2026-08-24),
-# and the fast suite as a whole 264 s. Tests compile hundreds of small
-# programs, so the executable cache alone is the right setting here; the
+# executable rewrites the whole kernel cache file. Tests compile hundreds of
+# small programs, so the executable cache alone is the right setting here; the
 # learner keeps its own env. Explicit override (not setdefault) on purpose.
 os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] = "none"
 
@@ -73,8 +71,8 @@ def real_model_and_trajectory() -> (
     network = get_player_model(session_player_model_config())
     actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     # Jitted init (2026-08-24): eager init dispatches the forward op by op
-    # and compiles each nn.scan separately -- it was ~6 min of the slow
-    # suite, paid again inside create_train_state (also jitted now).
+    # and compiles each nn.scan separately, and that cost is paid again
+    # inside create_train_state (also jitted now).
     params = jax.jit(network.init)(
         jax.random.key(0), actor_input, actor_output, HeadParams()
     )

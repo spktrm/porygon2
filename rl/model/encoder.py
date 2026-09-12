@@ -96,8 +96,7 @@ from rl.model.trunk import Trunk, group_row_l2
 # Typed action-slot groups (canonical partition lives in
 # rl/environment/data.py next to the modality masks): move slots are
 # move-feature-derived, switch slots entity-derived, target/structural
-# slots key-only. Since 2026-08-17 the groups are not just decoder
-# bookkeeping — each is its own residual stream through the round trunk.
+# slots key-only.
 
 
 def _forward_vmap():
@@ -130,8 +129,8 @@ def _lifted_entity_vmap(method):
     the embedders only APPLY setup-defined submodules, never create
     variables), and the surrounding lifted `nn.jit` makes each embedder
     its own XLA subcomputation instead of being inlined wholesale into
-    the caller's graph — smaller HLO and cheaper compiles (the retained-
-    executable RAM lesson from run 1326), plus trace reuse whenever two
+    the caller's graph — smaller HLO and cheaper compiles (retained
+    executables cost host RAM), plus trace reuse whenever two
     call sites agree on shapes. Composing lifted transforms (rather than
     plain jax ones) is what keeps this legal to nest under flax's other
     lifted transforms (nn.scan/nn.checkpoint) elsewhere in the model."""
@@ -186,9 +185,8 @@ class Encoder(nn.Module):
         self.side_bias = nn.Embed(2, name="side_bias", **embed_kwargs)
         self.pos_bias = nn.Embed(3, name="pos_bias", **embed_kwargs)
 
-        # One learned identity per target slot. Replaces the separate
-        # pass_embeddings / target_embeddings tables (2026-08-29): those two
-        # plus the four entity-derived targets were three ways of saying "a
+        # One learned identity per target slot. Pass, the structural slots
+        # and the four entity-derived targets are all ways of saying "a
         # thing a move can be aimed at", and the readout wants them as one
         # contiguous block it can score against.
         self.target_slot_embeddings = self.param(
@@ -198,8 +196,7 @@ class Encoder(nn.Module):
         )
         # My own private sheet's identity tag. NOT side_bias(0): the service
         # writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so row 1 of
-        # side_bias is MINE and row 0 is the opponent's -- the sheet was
-        # carrying the opponent's tag (fixed 2026-08-28). It gets its own
+        # side_bias is MINE and row 0 is the opponent's. It gets its own
         # param rather than side_bias(1) because the sheet's provenance is
         # already the read's group_bias; what it needs here is only "mine".
         self.private_side_bias = self.param(
@@ -210,10 +207,7 @@ class Encoder(nn.Module):
         # value query row (VALUE_CLS) reads them -- SEQUENCE_READ_MASK is
         # what keeps every policy-readable row blind to both. The rows carry
         # the opponent's sheet latent -- the same private embedder as my own
-        # sheet -- under their own side bias. (Until 2026-09-12 they carried
-        # a Dreamer-style discrete code grounded by the privileged value
-        # loss, with a belief head predicting it from the public rows;
-        # LESSONS "Removal ledger -- 2026-09-12".)
+        # sheet -- under their own side bias.
         self.opp_private_side_bias = self.param(
             "opp_private_side_bias", embedding_init, (1, entity_size)
         )
@@ -221,13 +215,13 @@ class Encoder(nn.Module):
             "value_cls_embedding", embedding_init, (1, entity_size)
         )
         # Whose side a field token describes. Row 1 = mine, row 0 = theirs —
-        # the SIDE convention, written once. Until 2026-08-28 these two
-        # tokens borrowed pos_bias rows 1/0, but pos_bias is indexed by
+        # the SIDE convention, written once. These tokens must NOT borrow
+        # pos_bias, which is indexed by
         # ENTITY_PUBLIC_NODE_FEATURE__ACTIVE (= scoreOrder, {0, 2} in
-        # singles), so row 0 meant "benched pokemon" AND "opponent side
-        # conditions" — one vector, two meanings, coupled gradients. It is
-        # also the only thing separating my hazards from theirs, since both
-        # go through side_condition_linear.
+        # singles): its row 0 would mean "benched pokemon" AND "opponent
+        # side conditions" — one vector, two meanings, coupled gradients.
+        # This bias is also the only thing separating my hazards from
+        # theirs, since both go through side_condition_linear.
         self.field_side_bias = self.param(
             "field_side_bias", embedding_init, (2, entity_size)
         )
@@ -255,21 +249,17 @@ class Encoder(nn.Module):
         # loss_v_win's gradient reaches the trunk through it and it is the row
         # that has to aggregate the board. It is also unconditionally valid,
         # which is what stops a terminal step -- every action row masked off --
-        # from attending over an empty key set and returning NaN. Replaces the
-        # 4-row value_embeddings_table and its (4 * entity_size,) concat.
+        # from attending over an empty key set and returning NaN.
         self.cls_embedding = self.param(
             "cls_embedding", embedding_init, (1, entity_size)
         )
         # The sequence's own identity: one bias per row GROUP, what kind of
-        # thing a row is. There is no per-row table (2026-09-10): the rows
-        # are a set with a fixed layout, not a sequence, and WHICH row of a
-        # group is either read positionally by the action readout (move,
-        # sheet and target rows) or carried by the row's own embedder (the
-        # field triple's and the previous-action pair's biases) -- measured
-        # on ckpt_02339569 after 2.34M steps, the per-row table's
-        # within-group spread sat at its init noise (0.06-0.08 against an
-        # init of 0.0625) for six of the twelve groups. Embedding init, since
-        # this is the only identity a row has at step 0.
+        # thing a row is. There is no per-row table: the rows are a set with
+        # a fixed layout, not a sequence, and WHICH row of a group is either
+        # read positionally by the action readout (move, sheet and target
+        # rows) or carried by the row's own embedder (the field triple's and
+        # the previous-action pair's biases). Embedding init, since this is
+        # the only identity a row has at step 0.
         self.sequence_group_bias = self.param(
             "sequence_group_bias", embedding_init, (NUM_SEQUENCE_GROUPS, entity_size)
         )
@@ -291,9 +281,9 @@ class Encoder(nn.Module):
         )
 
         # Entity pool, shared between private and public entities: a masked
-        # sum of the attribute tokens plus the token-type bias (see
-        # `EntitySumPool` for the measurement that retired the intra-entity
-        # attention block it replaces). Token provenance is carried by the
+        # sum of the attribute tokens plus the token-type bias -- an
+        # intra-entity attention block here would erode type legibility
+        # (`EntitySumPool`). Token provenance is carried by the
         # token-type bias table; per-provenance input norms downstream keep
         # the two entity kinds separable.
         self.entity_pool = EntitySumPool(
@@ -336,9 +326,7 @@ class Encoder(nn.Module):
         )
 
         # The trunk. One sequence, `num_blocks` standard pre-RMSNorm blocks,
-        # no gates and no block masks -- see rl/model/trunk.py for why the
-        # three gated streams and their two feeding cross-attention reads all
-        # collapse into this at 80 rows.
+        # no gates and no block masks -- see rl/model/trunk.py.
         # Every row's CONTENT enters the trunk at RMS 1, a fresh embedding
         # table's magnitude, normalised per row and rescaled per group, with
         # the additive group/row identity on top -- the registers the trunk
@@ -351,7 +339,7 @@ class Encoder(nn.Module):
         # The same module on the way OUT (2026-09-11): every row leaves the
         # trunk at RMS 1, rescaled per group, so the heads read every row
         # at one magnitude rather than at whatever the blocks' writes left
-        # it -- CLS at 9.8 against move rows at 0.99 on ckpt_00280000.
+        # it.
         self.output_normalisation = SequenceNormalisation(
             num_groups=NUM_SEQUENCE_GROUPS, name="output_normalisation"
         )
@@ -565,8 +553,7 @@ class Encoder(nn.Module):
 
     def _embed_private_entity(self, private: jax.Array, num_stat_bands: int = 8):
         """Entity-LOCAL pooling -- see `_embed_public_entity`. The path for
-        MY OWN private team rows (the opponent's sheet, which this once also
-        served, was deleted 2026-08-25)."""
+        the private sheet rows."""
         tokens, token_mask, mask = self._private_entity_tokens(private, num_stat_bands)
         private_embedding = self.entity_pool(tokens, token_mask, PRIVATE_TOKEN_TYPES)
         return private_embedding, mask
@@ -891,17 +878,14 @@ class Encoder(nn.Module):
 
         # ---- the entities, one pooled vector each -------------------------
         # `_embed_public_entity` / `_embed_private_entity` are the SAME
-        # entity-local pools the packed history cache runs on; before
-        # 2026-08-29 the current board took a second path that emitted 10-11
-        # raw attribute tokens per entity instead.
+        # entity-local pools the packed history cache runs on.
         public_rows, public_valid = _lifted_entity_vmap(Encoder._embed_public_entity)(
             self, env_step.public_team, env_step.revealed_team
         )
-        # Until 2026-09-01 the history states were SUMMED into the public
-        # rows here ("entity i's 11th attribute token"). They are their own
-        # HISTORY_ENTITY rows now -- built below, once public_tag_index
-        # exists -- so attention routes board-now vs diary instead of one
-        # vector carrying their sum.
+        # The history states are NOT summed into the public rows here: they
+        # are their own HISTORY_ENTITY rows -- built below, once
+        # public_tag_index exists -- so attention routes board-now vs diary
+        # instead of one vector carrying their sum.
 
         private_latents, private_valid = self._embed_private_entities(
             env_step.private_team
@@ -909,13 +893,10 @@ class Encoder(nn.Module):
         private_rows = private_latents + self.private_side_bias.astype(
             private_latents.dtype
         )
-        # No learned join key between a sheet row and its public row
-        # (entity_index_tag, 2026-08-31 -> 2026-09-02): it never trained
-        # (rms 0.0634 -> 0.0661 over 182k steps, ~3% of the row's norm) and
-        # a public-only read from the sheet row scored no higher after the
-        # trunk than before it, so the tag joined nothing. What relates the
-        # two rows is their shared content -- one species/ability/item/move
-        # embedder feeds both -- and the wire's ENTITY_IDX enters no row.
+        # No learned join key between a sheet row and its public row. What
+        # relates the two rows is their shared content -- one
+        # species/ability/item/move embedder feeds both -- and the wire's
+        # ENTITY_IDX enters no row.
 
         # ---- history as its own rows (2026-09-01) --------------------------
         # Entity i's diary: GRU slot state + the latest raw node snapshot
@@ -1002,8 +983,7 @@ class Encoder(nn.Module):
         # and its target row (heads.chosen_bank_rows) -- gathered out of THIS
         # step's pre-trunk private/move/target rows, so the previous action is
         # described by what it named rather than by a slot id. Not circular:
-        # those rows are built above from this step's features alone, where
-        # the pre-2026-08-29 gather read a sequence built over these rows.
+        # those rows are built above from this step's features alone.
         prev_source, prev_target = chosen_bank_rows(
             private_rows,
             move_rows,
@@ -1038,7 +1018,7 @@ class Encoder(nn.Module):
         # ---- the sequence --------------------------------------------------
         # Row validity from the block mask: a move row is live if any of its
         # target cells is, a target row if any move can reach it or it stands
-        # alone -- the same content the old grid's any-over-both-axes gave.
+        # alone.
         not_done = jnp.logical_not(env_step.done)
         move_cells = env_step.action_mask[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET].reshape(
             len(MOVE_INDICES), len(TARGET_SLOT_INDICES)
@@ -1104,10 +1084,10 @@ class Encoder(nn.Module):
 
         # The content is normalised FIRST and the identity goes on AFTER
         # (2026-09-10): the norm divides a row by its own content RMS, so a
-        # bias added before it is divided too -- 35% of a CLS row (content
-        # RMS 0.18) but 0.1% of a history row (RMS ~66), with the gradient
-        # into the bias shrunk by the same factor, which is the very
-        # disparity the norm removes from the content. Added after, every
+        # bias added before it is divided too -- by a factor that differs
+        # by orders of magnitude between a CLS row and a history row, with
+        # the gradient into the bias shrunk by the same factor, which is the
+        # very disparity the norm removes from the content. Added after, every
         # row carries the same identity share with an unattenuated gradient
         # -- the token-plus-type embedding form. Param shapes are the FULL
         # layout's on both paths (one checkpoint); the actor indexes the
@@ -1343,8 +1323,7 @@ class Encoder(nn.Module):
         aligned_order = public_order.clip(0, NUM_PUBLIC_SLOTS - 1)[..., None]
         row_states = jnp.take_along_axis(slot_states, aligned_order, axis=1)
         # The latest raw node snapshot per entity, same alignment -- the
-        # TGN staleness fix the RL path used to discard (only the offline
-        # critic read it; "the GRU-only readout loses the latest node").
+        # TGN staleness fix: a GRU-only readout loses the latest node.
         snapshot_rows = jnp.take_along_axis(node_snapshots, aligned_order, axis=1)
         return row_states, order_valid, field_state, snapshot_rows, history_output
 

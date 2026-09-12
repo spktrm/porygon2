@@ -291,8 +291,7 @@ ENEMY_TARGET_INDICES = np.array(
 # order -- see proto/service.proto `Action`. Offsets derive from the three
 # slot-list lengths, which are the shared contract with the service
 # (service/src/server/data.ts derives the same three and both suites assert
-# the 295 total). The 41x41 (src, tgt) grid this replaced kept ~82% dead
-# cells purely so the readout's scatter had somewhere to land.
+# the 295 total).
 NUM_SWITCH_CELLS = len(RESERVE_ENTITY_INDICES)
 NUM_MOVE_SLOTS = len(MOVE_INDICES)
 MOVE_SLOT_INDICES = MOVE_INDICES

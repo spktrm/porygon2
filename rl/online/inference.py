@@ -227,11 +227,8 @@ class InferenceServer:
             # bucket level is part of the key deliberately: vmap forces
             # one padded history length on the whole batch, so batching a
             # turn-3 game (level-64 history) with a turn-90 one (level
-            # 256) made the short game's forward pay the long game's
-            # attention FLOPs — with ~12 actors at random game stages,
-            # most batches contained one long game, so nearly EVERY step
-            # ran at worst-case history length and the batching win
-            # leaked away as padding compute. Splitting by level trades a
+            # 256) would make the short game's forward pay the long
+            # game's attention FLOPs. Splitting by level trades a
             # little batch size for every slice running at its own true
             # cost; the traced-shape budget is unchanged (batch buckets x
             # history buckets, same product as before — grouping only

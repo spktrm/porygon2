@@ -106,9 +106,8 @@ class Learner:
         # of the compile cache key. One Learner, constructed once, holds
         # one config for the life of the process — nothing varies it. A
         # value that DOES vary during a run must not live in it at all; it
-        # needs its own traced pytree argument, because retained
-        # executables per distinct static value OOM-killed run 1326
-        # (LESSONS.md 1).
+        # needs its own traced pytree argument: retained executables per
+        # distinct static value are an OOM.
 
         if debug:
             self._train_step_jit = train_step
@@ -164,9 +163,8 @@ class Learner:
             # made every post-restart add key smaller than the restored
             # league's, so the stale pre-restart ref stayed "latest" forever,
             # frames_passed never reset, and "overdue" fired on every
-            # league-management tick (the 2026-08-14 10:15 add storm; also
-            # the p_{step:08} snapshot-dir overwrite hazard once the counter
-            # caught up).
+            # league-management tick, plus the p_{step:08} snapshot-dir
+            # overwrite hazard once the counter caught up.
             host_step=int(jax.device_get(player_state.step_count)),
             replay_pi=PILogController(
                 initial_log=float(np.log(config.player_replay_ratio)),
@@ -243,11 +241,8 @@ class Learner:
         # 2026-08-13; lambda_ctrl/exploit_ctrl 2026-08-14) carry those
         # sections — simply never read, same as any other extra section.
 
-    # No _update_hyper_controllers anymore: every coefficient a controller
-    # actuated has since been deleted outright — the magnet KL
-    # (2026-08-22) and UPGO with the single-action PG (2026-08-21) — see
-    # LESSONS.md 10 and the removal ledgers. The replay
-    # reuse-cap controller below is the one remaining per-log-tick loop.
+    # The replay reuse-cap controller below is the one remaining
+    # per-log-tick loop.
 
     def _ready_run_state(self) -> RunState | None:
         """The run state if it is ready to train this tick, else None:
@@ -278,9 +273,8 @@ class Learner:
         try:
             # num_steps bounds TRAIN steps (host_step, seeded from the
             # restored step counter), not loop ticks: the idle/empty
-            # continues below burn iterations without training, which at
-            # a small --num-steps ended the first BR run at 1891 of 5000
-            # steps — replay warm-up alone is ~600 ticks/minute.
+            # continues below burn iterations without training, so at a
+            # small --num-steps a run can end well short of its budget.
             while self.run_state.host_step < self.config.num_steps:
                 if self.done:
                     break
@@ -338,8 +332,7 @@ class Learner:
             # handler routes through tqdm.write(), so the traceback prints
             # cleanly above the progress bars — print_exc() wrote raw to
             # stderr and got shredded line-by-line into the concurrent bar
-            # redraws (session 1786537634's OOM traceback was near-
-            # unreadable in the captured console for exactly this reason).
+            # redraws.
             logger.exception("Learner training crashed")
             raise
         finally:
@@ -497,9 +490,7 @@ class Learner:
         ):
             logs.update(self._actor_stats.drain())
             # The SYSTEM rate: learner steps per wall second over the
-            # drain interval — actor-bound today, and the number the
-            # cross-run comparisons (4.17-4.41 on irqeetfg) were read
-            # by hand from _timestamp deltas until now.
+            # drain interval — actor-bound today.
             now = time.perf_counter()
             logs["learner_steps_per_sec"] = self.config.actor_stats_log_steps / (
                 now - self._actor_stats_drained_at

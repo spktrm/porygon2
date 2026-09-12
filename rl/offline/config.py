@@ -21,11 +21,7 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     holdout_modulus: int = 20
     shuffle_buffer_size: int = 256
 
-    # Forfeit handling (measured on 50k rated gen9randombattle games, July
-    # 2026: ~48% played out, ~41% conceded with the winner ahead, ~11%
-    # forfeited with the winner NOT ahead on mons).
-    #
-    # Drop games where the sign-clamp engages (forfeit/timeout with the
+    # Forfeit handling. Drop games where the sign-clamp engages (forfeit/timeout with the
     # winner not ahead): the recorded result contradicts the position, so
     # every step's label is noise — and it's perspective-consistent,
     # side-differenced noise, exactly the signal shape the antisymmetric
@@ -104,11 +100,8 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     num_steps: int = 50_000
 
     # Learning params. Supervised training wants momentum, unlike the RL
-    # learner's b1=0. Regularization is sized to constrain without eroding:
-    # 1e-2 decay + 0.05 smoothing produced a peak-then-decay-to-plateau
-    # accuracy curve (smoothed CE saturates once fit; decay keeps shrinking
-    # the solution until CE re-engages — a stable equilibrium below the
-    # peak). The structural defenses (antisymmetric probe, pair batching,
+    # learner's b1=0. Regularization is sized to constrain without eroding
+    # the fit. The structural defenses (antisymmetric probe, pair batching,
     # deep supervision) carry the anti-memorization burden instead.
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-3)
     learning_rate: float = 3e-4

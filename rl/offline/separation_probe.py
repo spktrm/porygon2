@@ -2,9 +2,7 @@
 
 Two probes over one fixed batch of real self-play states, both answering
 "can this ARCHITECTURE tell a modality's candidates apart?" before any
-training time is spent (docs: the 2026-08-27 measurement found within-row
-switch Q std 0.0196 vs move 0.0374 vs between-row 0.507 on the live
-checkpoint — the collapse's representational reading).
+training time is spent.
 
 Probe A — routing. Swap the SPECIES feature of two legal reserves in one
 batch column (species -> embedding is computed at forward time, legality
@@ -92,9 +90,6 @@ from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
 
-# Batch selection, moved here from rl/offline/overfit_probe.py when that
-# file retired with the Q head on 2026-08-29. This probe was its only
-# remaining consumer.
 _FLAT = np.asarray(CELL_MODALITY_MASK)
 _SWITCH_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__SWITCH
 _MOVE_CELLS = _FLAT == ModalityEnum.MODALITY_ENUM__MOVE
@@ -186,9 +181,7 @@ def cell_identities(env, mode: str = "identity") -> np.ndarray:
     OPPONENT ACTIVE species) instead: the label then changes when the
     opponent changes, so a lookup of the candidate alone cannot fit it —
     only RELATIONAL routing (candidate x opponent, the matchup shape the
-    deployment task actually needs) generalises. Lookup labels measured
-    2026-08-27: both architectures ~0.73-0.75 held-seen — lookup does not
-    discriminate them."""
+    deployment task actually needs) generalises."""
     priv_species = np.asarray(env.private_team)[..., _SPECIES_PRIV]
     rev_species = np.asarray(env.revealed_team)[..., _SPECIES_REV]
     move_ids = np.asarray(env.my_moveset)[..., _MOVE_ID]
@@ -273,12 +266,11 @@ def group_masks(eval_mask: np.ndarray, ids: np.ndarray, seen_ids=None):
     cells of the same group. Identity spaces are per-group (species vs move
     ids share integers), so the restriction must be per-group too.
 
-    Why the restriction exists (measured 2026-08-27): held-out labels are
-    hashes of identity, so a species never seen in training is UNLEARNABLE
-    by any architecture — and randombattle teams barely overlap across
-    games (seen-frac 0.267 for switch cells vs 0.793 for move cells on the
-    12-game cache), so unrestricted held-out r is overlap-capped and reads
-    as an architecture gap that is actually a data artefact."""
+    Why the restriction exists: held-out labels are hashes of identity, so
+    a species never seen in training is UNLEARNABLE by any architecture —
+    and randombattle teams barely overlap across games, so unrestricted
+    held-out r is overlap-capped and reads as an architecture gap that is
+    actually a data artefact."""
     out = {}
     for name, group_cells in GROUPS:
         cells = eval_mask & group_cells
@@ -341,8 +333,7 @@ def run_probe_b(
     """The gate metric is the HELD-OUT read. On a fixed training batch the
     species<->slot assignment is frozen per row, so a full-param overfit can
     memorise per-row-per-slot values through state features without ever
-    routing species -> cell — measured 2026-08-27: the shared-stream
-    architecture hits train r = 1.000 by step 100. Identity-keyed labels
+    routing species -> cell. Identity-keyed labels
     generalise to UNSEEN states only through genuine candidate routing
     (same species -> same z everywhere), so held-out r is the capacity
     reading and train r is only the trainability sanity check."""
@@ -666,9 +657,8 @@ def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float
     reserve = {"features": [], "hp": [], "fainted": [], "legal": [], "chunk": []}
     # Controls are SEQUENCE rows that carry the named entity: my active's
     # ally-target row and the opponent active's enemy-target row (the
-    # entity-derived target rows). The grid era read the 41-slot action
-    # stream here; the flat trunk has no such stream, so the rows are named
-    # off rl/model/constants like every head does.
+    # entity-derived target rows). The rows are named off rl/model/constants
+    # like every head does.
     controls = {
         "ally_1_target": (
             TARGET_ROWS.start + int(ALLY_TARGET_ROWS[0]),
@@ -809,11 +799,8 @@ def run_probe_d(net, variables, chunks, batch_size: int, seed: int, alpha: float
     trunk?
 
     History row i is `gru_state + node_snapshot` (+ its group and row bias)
-    -- addends summed into one vector, the shape the 2026-09-01 pass
-    deleted one level up -- and its join to public row i is positional.
-    Until 2026-09-02 both also carried a shared `entity_index_tag`, measured
-    at 0.028 of the other addends' rms on ckpt_00182000 and deleted for
-    never training. This is the behavioural read: a ridge readout over the
+    -- addends summed into one vector -- and its join to public row i is
+    positional. This is the behavioural read: a ridge readout over the
     post-trunk history row
     predicting (1) the entity index the row carries (13-way one-hot of
     public_order + 1; the index is structural, so a cross-chunk split is

@@ -10,9 +10,8 @@ def factorised_entropies(
     taken_modality: jax.Array,
     legal_mask: jax.Array,
 ):
-    """(H_macro, H_micro_taken) per row, f32 — OBSERVERS since 2026-08-30
-    (the per-axis entropy loss terms and their dual temperatures are gone;
-    the regulariser is the plain joint entropy bonus). These stay as the
+    """(H_macro, H_micro_taken) per row, f32 — OBSERVERS: the regulariser
+    is the plain joint entropy bonus. These stay as the
     collapse instruments the acceptance gates read.
 
     H_macro is the entropy of the modality marginal over live modalities;
@@ -63,7 +62,7 @@ def support_hinge_loss(
     tau_max_mass: float = SUPPORT_TAU_MAX_MASS,
     temperature: float = 0.0,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """The FLAT SUPPORT HINGE (2026-09-09): per row, over the legal cells
+    """The FLAT SUPPORT HINGE: per row, over the legal cells
     read as flat complete actions (a move x target or a switch is one
     cell, no hierarchy),
 
@@ -132,8 +131,8 @@ def ppo_objective(
     advantages: jax.Array,
     clip_ppo: float,
 ):
-    """PPO clipped surrogate (Schulman et al. 2017; restored 2026-08-26
-    from the pre-4234016 form): min(r*A, clip(r, 1-eps, 1+eps)*A). The
+    """PPO clipped surrogate (Schulman et al. 2017):
+    min(r*A, clip(r, 1-eps, 1+eps)*A). The
     min is one-sided pessimism — the gradient is exactly zero once the
     ratio leaves the band IN THE DIRECTION the advantage pushes, and
     untouched when the clip would flatter the objective."""

@@ -744,8 +744,7 @@ const nullPokemon = getNullPokemon();
 // Warn once per distinct unmapped key per worker: cosmetic-forme
 // fallbacks (e.g. Vivillon patterns) are expected and harmless, but the
 // per-occurrence line printed thousands of times per session and buried
-// real errors in the pane (the 2026-08-13 worker crash was nearly
-// scrolled out by it). A NEW name appearing here still logs — that's
+// real errors in the pane. A NEW name appearing here still logs — that's
 // the signal worth keeping, in case a non-cosmetic species ever starts
 // falling back.
 const warnedEnumFallbacks = new Set<string>();
@@ -864,12 +863,10 @@ function getArrayFromPrivatePokemon(
     // condition string ("245/272 tox", "0 fnt") -- the one source that is
     // authoritative by construction. NOT the privateBattle `candidate`: its
     // hp is log-event-driven and reads 0/0 for a mon the log has not yet
-    // given a reading (measured: request "252/342" against candidate 0/0,
-    // caught by the harness truth invariant on its first run), and NOT the
-    // transform-unwrapped `pokemon`: transform copies appearance, never
-    // condition. Turn counters live only on `candidate.statusState` (the
-    // string has no counters), event-driven and 0 when uninitialised --
-    // exactly the no-status default.
+    // given a reading, and NOT the transform-unwrapped `pokemon`: transform
+    // copies appearance, never condition. Turn counters live only on
+    // `candidate.statusState` (the string has no counters), event-driven and
+    // 0 when uninitialised -- exactly the no-status default.
     const conditionParts = pokemonSet.condition.split(" ");
     const conditionFainted = conditionParts[1] === "fnt";
     dataArr[EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__FAINTED] =
@@ -4265,12 +4262,9 @@ export class StateHandler {
                 kind = ActionRequestKind.ACTION_REQUEST_KIND__TEAM_PREVIEW;
                 // Team preview is "which mon", full stop: the position being
                 // filled is always the next one (this.player.choices.length),
-                // so it carries no choice. Until 2026-08-29 the mask lit one
-                // cell per REMAINING position -- up to 7 -- while
-                // choiceFromAction ignored the target entirely, so the policy
-                // spread its mass over up to 7 exact duplicates of one choice
-                // and the micro-entropy cell count was inflated to match. One
-                // cell per candidate now, at the canonical column.
+                // so it carries no choice. One cell per candidate, at the
+                // canonical column: a cell per REMAINING position would stand
+                // for the same choice up to 7 times over.
                 const alreadyChosen = new Set(
                     this.player.choices
                         .filter((choice) => choice.startsWith("switch "))

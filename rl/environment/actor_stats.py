@@ -5,9 +5,7 @@ only actor-side wandb call); everything else rides the learner's log
 queue. This is the one shared sink: every training PlayerActor, its
 env and the InferenceServer ``record`` into it from their own threads,
 and the learner drains it every ``actor_stats_log_steps`` into ``logs``
-as per-name means. Built for the 2026-09-02 actor-step decomposition
-(the system rate is actor-bound and no panel said WHERE the actor's
-time went) — the baseline the history-carry pass is judged against.
+as per-name means. It is what says WHERE an actor's step time went.
 """
 
 import threading

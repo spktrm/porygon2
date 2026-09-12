@@ -94,14 +94,13 @@ def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
     return wr.LinePlot(**{k: v for k, v in kwargs.items() if v is not None})
 
 
-# The eval slate since 2026-09-09 (rl/online/main.py): two slots against
-# the simple heuristic, both the EMA params at T=1. `plain-t1` samples the
-# policy exactly as the training actors do; `thresholded` samples it with
-# every legal cell below player_prune_threshold removed and the rest
-# renormalised (HeadParams.prune_threshold) -- the distribution the
-# learner's v-trace ratios are built on. Their gap prices the threshold
-# in play. Series are keyed by the eval thread's name, so the earlier
-# `-0`/`-1` (T=0.5) and `-t1-2` series end at that restart.
+# The eval slate (rl/online/main.py): two slots against the simple
+# heuristic, both the EMA params at T=1. `plain-t1` samples the policy
+# exactly as the training actors do; `thresholded` samples it with every
+# legal cell below player_prune_threshold removed and the rest renormalised
+# (HeadParams.prune_threshold) -- the distribution the learner's v-trace
+# ratios are built on. Their gap prices the threshold in play. Series are
+# keyed by the eval thread's name.
 SH = "EvalActor-simpleheuristic"
 PLAIN_T1_ACTOR = f"{SH}-plain-t1-0"
 THRESHOLDED_ACTOR = f"{SH}-thresholded-1"
@@ -128,11 +127,8 @@ def rl_sections():
             # NEED-TO-KNOW ONLY: is this run winning, is it healthy, is it
             # collapsing, is the critic calibrated, is it about to OOM.
             # Everything else is drill-down detail in the sections below.
-            # 2026-08-30 redesign collapsed 16 sections -> 10 and pulled the
-            # canonical copy of every metric that used to be duplicated
-            # across 3+ sections up here (scripts/wandb_views.py history —
-            # see the old panel list in git log if you need the pre-redesign
-            # layout back).
+            # This section holds the canonical copy of every metric that
+            # would otherwise be duplicated across several sections.
             name="0 · At a glance",
             is_open=True,
             panels=[
@@ -159,20 +155,17 @@ def rl_sections():
                 lp(
                     # player_update_skipped is the non-finite gate — a
                     # poisoned update is permanent and the next periodic
-                    # save overwrites the last good checkpoint with it
-                    # (LESSONS.md), so this is checkpoint protection, not
-                    # just a numerics footnote. Never surfaced before this
-                    # redesign.
+                    # save overwrites the last good checkpoint with it, so
+                    # this is checkpoint protection, not just a numerics
+                    # footnote.
                     "Loss & non-finite gate",
                     ["player_loss", "player_update_skipped"],
                 ),
                 lp(
                     # THE collapse watch panel — with the adaptivity
-                    # controller removed (2026-08-13) and the entropy-floor
-                    # dual controllers removed (2026-08-30), modality
-                    # collapse has no automated backstop, only these
-                    # eyes-on axes (1330 died at modality entropy 0.08;
-                    # 1328 gained strength at 0.18-0.26).
+                    # controller and the entropy-floor dual controllers both
+                    # removed, modality collapse has no automated backstop,
+                    # only these eyes-on axes.
                     "Collapse watch: entropy axes & switch rate",
                     [
                         "switch_ratio",
@@ -186,10 +179,9 @@ def rl_sections():
                     # loss and calibration.
                     "Value R2 (main head)",
                     [
-                        # THE privileged-premise discriminator (2026-09-01):
-                        # priv >= deploy from 20k is the gate; priv < deploy
-                        # sustained past 30k is the abort (the 2026-08-25
-                        # falsification re-run on its own instrument).
+                        # THE privileged-premise discriminator: priv >=
+                        # deploy from 20k is the gate; priv < deploy
+                        # sustained past 30k is the abort.
                         "player_value_head_r2",
                         "player_priv_value_head_r2",
                         # The pairwise critics (2026-09-12), same target and
@@ -235,13 +227,11 @@ def rl_sections():
                     ["player_pg_adv_mean", "player_pg_adv_std"],
                 ),
                 lp(
-                    # The ABORT instrument for the flat support hinge
-                    # (2026-09-09), on its own panel: the sp75c row-form
-                    # uniform KL pinned this at .93 while the control fell
-                    # to .84 and halved the exploit. The hinge is silent
-                    # above tau, so this should hold its ~.49; rising
-                    # toward .93 with ineffective_confident_mass unmoved is
-                    # the whole-set revert.
+                    # The ABORT instrument for the flat support hinge, on
+                    # its own panel: the hinge is silent above tau, so this
+                    # should hold its ~.49; rising toward .93 with
+                    # ineffective_confident_mass unmoved is the whole-set
+                    # revert.
                     "Within-taken-modality normalised entropy (abort instrument)",
                     ["player_entropy_micro_taken"],
                     range_y=(0, 1),
@@ -294,13 +284,9 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # What is left of the critic section after the advantage head
-            # retired (2026-08-29) and the one-step-label panels went with
-            # the last of the Q machinery (2026-08-30), merged with Step 1
-            # of docs/critic-weakness-analysis.md (2026-08-23): the per-row
-            # JOINT statistics that judge every later step, from the
-            # completed-game outcome carried on every chunk. NaN where a
-            # batch has no rows in the slice (wandb skips them).
+            # The per-row JOINT statistics that judge every later step,
+            # from the completed-game outcome carried on every chunk. NaN
+            # where a batch has no rows in the slice (wandb skips them).
             name="2 · Switch & critic evidence",
             is_open=True,
             panels=[
@@ -316,13 +302,12 @@ def rl_sections():
                     ],
                 ),
                 lp(
-                    # The flat readout's own way to fail, and it is the same
-                    # SHAPE as the dx65cpwp runaway these panels were built
-                    # for: the bilinear is a two-factor product with ONE
-                    # zero-init factor. query must leave 0 within ~200 steps
-                    # (its gradient is a rank-1 outer product of live rows);
-                    # key must leave lecun 0.0625 shortly after (its gradient
-                    # is proportional to query, so it is frozen for exactly
+                    # The flat readout's own way to fail: the bilinear is
+                    # a two-factor product with ONE zero-init factor. query
+                    # must leave 0 within ~200 steps (its gradient is a
+                    # rank-1 outer product of live rows); key must leave
+                    # lecun 0.0625 shortly after (its gradient is
+                    # proportional to query, so it is frozen for exactly
                     # one step). Either still flat at 2k IS the stall.
                     "Action readout: drift from init",
                     [
@@ -354,9 +339,7 @@ def rl_sections():
                     # Rows of the trunk's OUTPUT converging to one direction
                     # (Noci et al. 2022 rank collapse): cosine rising toward
                     # 1 / participation falling toward 1 is the alarm
-                    # (> 0.9 / < 4 pre-registered); ckpt_00182000 read
-                    # 0.173 / 10.9 offline, and the first live points
-                    # after that restart must match.
+                    # (> 0.9 / < 4 pre-registered).
                     "Trunk row cosine similarity",
                     ["player_trunk_row_cosine"],
                     range_y=(-1, 1),
@@ -366,11 +349,10 @@ def rl_sections():
                     ["player_trunk_row_participation"],
                 ),
                 lp(
-                    # 2026-09-10: every row enters at RMS 1 (L2 16 at 256),
-                    # so a group's OUTPUT L2 is what the six blocks wrote on
-                    # it. Unnormalised, the history rows sat at ~1040 in and
-                    # out (moved 2%) while CLS went 2.85 -> 1012; a group
-                    # pinned near 16 is one the trunk does not revise.
+                    # Every row enters at RMS 1 (L2 16 at 256), so a
+                    # group's OUTPUT L2 is what the six blocks wrote on it;
+                    # a group pinned near 16 is one the trunk does not
+                    # revise.
                     "Trunk output row L2 per group",
                     [],
                     regex="^player_trunk_out_row_l2_",
@@ -408,8 +390,7 @@ def rl_sections():
                 ),
                 lp(
                     # Realised outcome of voluntary switches minus moves at
-                    # matched V(s). Offline: pooled -0.147 -> matched
-                    # -0.048±0.054. Per-batch n is tiny; read smoothed and
+                    # matched V(s). Per-batch n is tiny; read smoothed and
                     # with the n panel beside it.
                     "Matched-V realised gap (vol switch − move) per V bin",
                     [
@@ -435,15 +416,14 @@ def rl_sections():
                 ),
                 lp(
                     # Selection, directly: V at the states where switches
-                    # are taken vs where moves are (offline -0.04 vs +0.08).
+                    # are taken vs where moves are.
                     "V(s) at voluntary switches vs moves",
                     ["player_mv_v_at_vol_switch", "player_mv_v_at_move"],
                     smooth=0.99,
                 ),
                 lp(
-                    # Outcome calibration of the V head (offline 0.265 on
-                    # fresh on-policy games). prev_switch vs prev_move is
-                    # the post-switch pessimism read.
+                    # Outcome calibration of the V head. prev_switch vs
+                    # prev_move is the post-switch pessimism read.
                     "V outcome R²: all / phase / after switch vs move",
                     [
                         "player_v_outcome_r2_all",
@@ -480,8 +460,7 @@ def rl_sections():
                     # batch the path stops being visited at all and no
                     # gradient can restore it (APO, arXiv:2602.05717). Log-y
                     # so the decay reads as a straight line and the approach
-                    # to the 1.0 floor is legible: 6ta9hmp6 ran 60.4 (3k) ->
-                    # 3.9 (33k), halving every ~8k.
+                    # to the 1.0 floor is legible.
                     "Voluntary-switch rows per batch (absorbing floor = 1.0)",
                     [
                         "player_vol_switch_rows",
@@ -508,8 +487,7 @@ def rl_sections():
         ws.Section(
             # The eval slate: the policy as the training actors sample it
             # against the same policy thresholded at sampling, both EMA at
-            # T=1. The search eval actor was deleted 2026-09-09 (LESSONS.md
-            # "Removal ledger — 2026-09-09 search eval actor").
+            # T=1.
             name="3c · Eval slate · T=1 plain vs thresholded",
             is_open=True,
             panels=[
@@ -537,9 +515,9 @@ def rl_sections():
         ),
         ws.Section(
             # Observer critic quality. The policy no longer reads a Q stack
-            # (retired 2026-08-26/30; its link to return is the v-trace
-            # advantage), but an action-flat critic still voids the matched
-            # control and the starvation discriminators above.
+            # (its link to return is the v-trace advantage), but an
+            # action-flat critic still voids the matched control and the
+            # starvation discriminators above.
             name="4 · Critic quality & value",
             is_open=True,
             panels=[
@@ -551,8 +529,7 @@ def rl_sections():
                     ["player_loss_v_win", "player_loss_v_win_priv"],
                 ),
                 lp(
-                    # Mean |priv - deploy| expectation: the 2026-08-25
-                    # "worth 0.005 value units" number, re-measured live.
+                    # Mean |priv - deploy| expectation, re-measured live.
                     "Privileged value gap",
                     ["player_priv_value_gap"],
                 ),
@@ -573,10 +550,10 @@ def rl_sections():
                 ),
                 lp(
                     # The unit position potential (eta-free, on the wire at
-                    # any strength). switch_delta is DESCRIPTIVE (human
-                    # replays: -0.038); adv_switch/move split the channel's
-                    # advantage by the taken modality; grad_share is the
-                    # head's part of the global clip norm.
+                    # any strength). switch_delta is DESCRIPTIVE;
+                    # adv_switch/move split the channel's advantage by the
+                    # taken modality; grad_share is the head's part of the
+                    # global clip norm.
                     "Position potential",
                     [
                         "player_potential_mean",
@@ -617,9 +594,7 @@ def rl_sections():
                     ["player_history_gate_mean"],
                 ),
                 lp(
-                    # Fresh-row calibration. Was framed as "Q fresh/replay
-                    # vs V fresh" pre-2026-08-30 — the Q side retired with
-                    # the Q head; only the V-fresh reading remains.
+                    # Fresh-row calibration, the V-fresh reading.
                     "Value R2 calibration (fresh rows)",
                     ["player_value_r2_fresh"],
                 ),
@@ -633,9 +608,7 @@ def rl_sections():
                 ),
                 lp(
                     # Pre-clip grad norm per policy-head subtree, the
-                    # policy pathway's own gradient scale (the retired
-                    # Q-head pair stayed calm through both dx65cpwp
-                    # failures).
+                    # policy pathway's own gradient scale.
                     "Action-head gradient norm",
                     ["player_action_head_gradient_norm"],
                 ),
@@ -845,9 +818,7 @@ def rl_sections():
                 # winrate_heatmap): plot_table under key
                 # "league_winrate_heatmap" stores its table at
                 # "<key>_table". Interactive grid with proper axis
-                # titles and a diverging win-rate colour scale —
-                # replaces both the old matplotlib MediaBrowser image
-                # panel and the later confusion-matrix-preset hijack.
+                # titles and a diverging win-rate colour scale.
                 wr.CustomChart(
                     query={
                         "summaryTable": {"tableKey": "league_winrate_heatmap_table"}
@@ -884,9 +855,9 @@ def rl_sections():
                 lp("Reward mean", ["reward_mean"]),
                 lp("History & wildcard", ["history_lengths_mean", "wildcard_turn"]),
                 lp(
-                    # Whole-game length off terminal chunks' done rows — the
-                    # distribution to watch since the 96-request force-tie
-                    # was removed (2026-08-16).
+                    # Whole-game length off terminal chunks' done rows;
+                    # there is no request cap, so this is the distribution
+                    # to watch.
                     "Game length",
                     [
                         "game_length_requests_mean",
@@ -974,9 +945,8 @@ def rl_sections():
                 lp(
                     # What Adam APPLIED to the readout leaves a support
                     # force acts on (post-clip, post-revert rms): the switch
-                    # pair's query and ally-side scalar (which replaced the
-                    # switch_bias whose delta started the pattern) beside the
-                    # move pair's.
+                    # pair's query and ally-side scalar beside the move
+                    # pair's.
                     "Applied update rms · action readout leaves",
                     [
                         "player_applied_delta_rms_switch_query",
@@ -1009,11 +979,9 @@ def rl_sections():
                 ),
                 lp(
                     # Which (chunk_rows, history_rows) combo of
-                    # player_shape_lattice a batch hit — relevant given the
-                    # shape-lattice OOM-guard history (the first bullet
-                    # under CLAUDE.md's "Invariants"): a
-                    # surprise top-bucket compile is what killed three runs
-                    # before the lattice was enumerated up front.
+                    # player_shape_lattice a batch hit — a surprise
+                    # top-bucket compile is the OOM-guard failure the
+                    # enumerated lattice exists to prevent.
                     "Shape lattice combo (T, H)",
                     ["player_shape_T", "player_shape_H"],
                     smooth=0,
@@ -1025,8 +993,7 @@ def rl_sections():
             # every training actor, its env and the InferenceServer record
             # wall-time per phase, drained every actor_stats_log_steps as
             # means over the pool. Where an actor's step goes — the
-            # system rate is actor-bound (learner alone ~3x faster), and
-            # this is the baseline the history-carry pass is judged on.
+            # system rate is actor-bound.
             name="9b · Actor step timing",
             panels=[
                 lp(
@@ -1062,9 +1029,8 @@ def rl_sections():
                 ),
                 lp(
                     # The carry path's own read: steps / packed rows of
-                    # the suffix a request actually sends (ex.bin ~3 / ~5
-                    # per request against the 64/128+ a full window pads
-                    # to).
+                    # the suffix a request actually sends, against the
+                    # 64/128+ a full window pads to.
                     "History carry: suffix size per request",
                     ["actor_history_suffix_steps", "actor_history_suffix_rows"],
                 ),

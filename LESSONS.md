@@ -5636,3 +5636,2345 @@ The full-model partition test now requires both opened pairwise heads to be
 invariant to opponent-private perturbations. No strength result or training
 restart is claimed. Revert: restore the sheet head's opponent slice and
 validity to `OPP_PRIVATE_ROWS`, and its opponent alive flags to private HP.
+
+
+## Comment sweep — 2026-09-12 evidence migrated out of the code (tag `pre-comment-sweep-2026-09-12`)
+
+The comment policy landed the same day: a comment carries the WHY only — a
+non-obvious constraint, a deliberate deviation, a workaround — and never
+narration, a restated name, a re-verified signature or change context. 445
+narration lines went first, then 50 comments that made FALSE claims were
+corrected or deleted (five still called the sequence 61 rows against the
+code's asserted 80). What follows is the third pass: the measured evidence
+that was living in the source, moved here so it survives the code it
+annotates, which is what this file is for. The code kept the constraint and
+lost the measurement; nothing was discarded. Subsections are keyed by the
+file the evidence came from, so grep the path as well as the mechanism.
+
+Pre-registered thresholds, gates and revert triggers stayed in the code:
+they govern decisions not yet taken, so they are live constraints rather
+than findings. So did algebraic forms, cross-file contracts, Showdown
+protocol quirks and the statement of what each test's positive control
+proves. Pairwise-critic figures are not restated here — they live in
+"Addition ledger — 2026-09-12 pairwise entity critics" and its amendments.
+
+# Migrated evidence — `rl/model/**` and `rl/environment/*.py`
+
+Removed from code comments/docstrings on 2026-09-12. Every number, date, run
+id and checkpoint name is verbatim from the source it was removed from.
+
+### rl/model/modules.py — EntitySumPool, the type-legibility measurement
+
+Measured 2026-09-03 (`rl/offline/type_probe.py` and the supervised ceiling
+beside it): the same readout form reached held-out 0.60 on the
+attention-pooled rows and 0.79 on summed ones, against 0.80 from the raw
+multi-hots — the attention pool was eroding type legibility, not adding
+within-entity interactions the trunk could use.
+
+### rl/model/modules.py — SequenceNormalisation, why RMS 1 and what the output norm fixed
+
+The final norm every pre-norm transformer carries (GPT-2's ln_f, LLaMA's
+model.norm, ViT's head norm), which the trunk had without: on ckpt_00280000
+the heads read CLS at RMS 9.8 against move rows at 0.99, the disparity this
+norm removed at the input coming back at the output.
+
+RMS 1 per row is what a regular transformer's embedding lookup gives —
+torch's N(0, 1) table, the original Transformer's sqrt(d_model)-scaled
+embedding, PaLM's — and it puts the input at 1.6x the first block's update at
+init (Gemma's .01*sqrt(D) rows sit at 0.75-1.1x; measured 2026-09-10, block-1
+update RMS 0.62 at width 256 under the pre-norm blocks, independent of the
+input scale). Under those blocks a row's residual magnitude decides how much
+any block can move it: unnormalised, the history rows entered at L2 ~1040
+against CLS at 2.85 and a block update of ~60, so six blocks moved them 2% —
+frozen input the trunk could read but never revise.
+
+### rl/model/modules.py — `layer_norm` naming
+
+The docstring claimed RMS for months while the code did not (it is
+nn.LayerNorm, not the RMSNorm above).
+
+### rl/model/modules.py — attention backend benchmark
+
+DELIBERATELY the plain einsum, not jax.nn.dot_product_attention / cuDNN
+flash. Measured 2026-09-01 (fwd+bwd ms, bf16, 4 heads x 64, B*T = 8192
+tokens; einsum / dpa-xla / cudnn+dense-mask / cudnn+seq_lengths):
+
+| seq | einsum | dpa-xla | cudnn+dense-mask | cudnn+seq_lengths |
+|---|---|---|---|---|
+| 64 | 0.12 | 0.27 | 0.54 | 0.32 |
+| 128 | 0.16 | 0.42 | 0.46 | 0.53 |
+| 256 | 0.68 | 0.70 | 0.73 | 0.58 |
+| 512 | 1.02 | 0.72 | 1.30 | 0.75 |
+| 1024 | 1.42 | 1.53 | 2.33 | 1.71 |
+| 2048 | 4.11 | OOM | 4.23 | 3.09 |
+
+At the trunk's 73-80 rows the einsum is 2-4x FASTER than every flash variant
+(kernel overhead dominates), and the only variant that ever clearly wins
+(cudnn+seq_lengths, from ~256 and decisively at 2048 where plain xla OOMs)
+cannot express this module's SCATTERED validity mask. The softcap is not a
+blocker for a future flash switch — max |pre-cap logit| on the trained model
+measured 7.6 against the 50 cap (qk layer norm bounds it), so it is deletable
+insurance.
+
+### rl/model/trunk.py — what the flat trunk replaced
+
+Replaces `RoundBlock` (2026-08-29), which carried three separate residual
+streams — 48 Perceiver latents, 41 action slots, 4 value queries — wired
+together by five individually-gated, block-masked attentions per round, four
+rounds deep, at 3.69M parameters a round. Every route those masks encoded is
+a subset of one all-pairs attention over the 80 rows the sequence now has,
+and at 80 rows the trunk can simply carry them: 80 x 80 is 6.4k attention
+cells against the 24k the old routing plus its two feeding cross-attention
+reads paid, so the masks were buying nothing but their own complexity.
+
+The ungated pre-RMSNorm design also retires the 2026-08-24 gate-contribution
+finding structurally rather than by tuning it.
+
+### rl/model/trunk.py — remat policy sweep
+
+MEASURED, not assumed (2026-09-01 sweep, full train_step compiled at the
+largest lattice entry (64, 256) x batch 4; XLA memory_analysis temp +
+15-step timing): the step is memory-bandwidth-bound, so recomputing is
+genuinely cheaper than storing — NO remat is both 3.8x the memory AND ~10%
+SLOWER. Full table (trunk x entity pool, temp MiB / steps per sec):
+
+| trunk + entity pool | temp MiB | steps/sec |
+|---|---|---|
+| nothing+nothing (this) | 796 | 12.26 |
+| nothing+dots | 1071 | 12.65 |
+| dots+nothing | 1244 | 12.32 |
+| dots+dots | 1508 | 12.60 |
+| none+nothing | 3019 | 11.03 |
+| none+dots | 3402 | 11.29 |
+
+The fastest fitting variant buys +3.2% for +275MiB, landing on the >=1.5GB
+headroom boundary (the 12GB box peaked ~10.5GB all-in), so the cheapest
+policy stays.
+
+### rl/model/trunk.py — the silent sow incident
+
+This scan lifted only params from a1c18ed to 2026-09-02 — so the block's
+attention sow captured NOTHING and scripts/attn_probe.py never saw a trunk
+attention. (The scan is stacked along the block axis, as the old round
+trunk's scan did.)
+
+### rl/model/trunk.py — group_row_l2 reference numbers
+
+The live twin of the 2026-09-10 offline norm table
+(first_block_diagnostics): every row now ENTERS at RMS 1, so the trunk's
+output norm per group is the read of which rows the blocks write to —
+unnormalised, the history rows sat at ~1040 in and out while CLS went 2.85
+-> 1012.
+
+### rl/model/config.py — the trunk that replaced RoundBlock
+
+Replaces the four-round, three-stream, five-masked-attention RoundBlock on
+2026-08-29: at 80 rows an all-pairs attention is 6.4k cells, so the block
+masks that encoded the routing were buying nothing but their own complexity,
+and the 48 latents they fed were a bottleneck between rows the trunk can now
+simply carry. Depth is the knob: a block costs ~1.05M params and almost no
+attention at this sequence length.
+
+### rl/model/config.py — the action readout's parameter saving
+
+The action readout (2026-08-29). Three small heads over named trunk rows —
+a scalar per sheet row for switching, ONE bilinear for moves x targets, a
+scalar per target row for pass/default — replacing the hierarchical
+macro/micro stack that was instantiated twice, for a policy and for an
+advantage head the policy did not read. 2.65M parameters became 0.13M.
+
+### rl/model/constants.py — token types routed through the proto, tried and reverted
+
+Routing them through the proto was tried on 2026-08-25 and reverted, because
+it bought nothing an IntEnum does not (the count is derived either way)
+while costing a generated-but-unused TypeScript enum and, worse, an extra
+table row — protolint mandates a `___UNSPECIFIED` zero value, which would
+have taken the token-type table from 12 rows to 13 with row 0 never indexed.
+
+### rl/model/constants.py — why every NUM_* is a len()
+
+On 2026-08-25 a token type was deleted and the literal `13` had to be
+hand-edited to `12` — exactly the edit that silently leaves a dead embedding
+row, or an out-of-range gather, when someone forgets.
+
+### rl/model/constants.py — what ONE TOKEN PER THING replaced
+
+ONE TOKEN PER THING (2026-08-29). Before this the board was unpacked into
+189 attribute tokens — 10 or 11 per entity — and a Perceiver read compressed
+them to 48 latents for a trunk that could not afford the rows. With entities
+pooled to a vector each the whole board is 80 rows, the trunk carries them
+directly, and the read, the latents and the separate action stream all go.
+
+### rl/model/heads.py — the doubles slot-alignment defect rate
+
+`SlotConditioning` keeps the MODEL side of doubles reachable and nothing
+more; the plumbing outside it includes the ~75% slot-alignment defect in the
+service (the figure removed from the docstring, which now names the defect
+without the rate).
+
+### rl/model/heads.py — FlatActionReadout replaced the hierarchical stack
+
+Replaces the hierarchical stack — `MacroMicroHead` = per-modality queries,
+five MLPs and five zero-init output layers, over a per-slot-group
+`PointerLogits` grid with a stop-grad RMS gauge and three zero-init local
+routes — which was instantiated twice, once for the policy and once for an
+advantage head the policy did not read. 2.65M parameters became 0.13M.
+
+`calculate_hierarchical_prior` was the uniform-at-init anchor while the head
+was hierarchical and retires with it.
+
+### rl/model/heads.py — the two-factor stall the init contract avoids
+
+LESSONS.md 13: a learned grid behind a zero-init scale sat at lecun init for
+60k steps. That is what "getting to exact zero WITHOUT re-creating the
+two-factor stall" refers to.
+
+### rl/model/heads.py — why the categorical value head is f32 from the head outwards
+
+f32 from the head outwards (2026-08-24): the 1.0-weighted head was the one
+rung still paying bf16 while the ladder heads were cast f32.
+
+### rl/model/player_model.py — the fourth module that retired
+
+The model was four modules, two of them the same class — a policy
+ActionScoreHead and an advantage one over the same grid. The advantage head,
+`compose_q` and the Retrace baseline it fed retired on 2026-08-29: the
+policy had not read it since the NashPG switch, so it was a matched-control
+observer for an architecture that no longer exists, and its last readings
+are banked in the ledger.
+
+### rl/model/encoder.py — typed action-slot groups as residual streams
+
+Since 2026-08-17 the groups are not just decoder bookkeeping — each is its
+own residual stream through the round trunk. (The round trunk is gone; the
+remaining comment keeps only the canonical-partition note.)
+
+### rl/model/encoder.py — why the entity embedders are lifted (nn.jit / nn.vmap)
+
+The surrounding lifted `nn.jit` makes each embedder its own XLA
+subcomputation instead of being inlined wholesale into the caller's graph —
+smaller HLO and cheaper compiles: the retained-executable RAM lesson from
+run 1326.
+
+### rl/model/encoder.py — the target slot table that replaced two others
+
+Replaces the separate pass_embeddings / target_embeddings tables
+(2026-08-29): those two plus the four entity-derived targets were three ways
+of saying "a thing a move can be aimed at", and the readout wants them as
+one contiguous block it can score against.
+
+### rl/model/encoder.py — the private sheet carried the opponent's side tag
+
+The service writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so row
+1 of side_bias is MINE and row 0 is the opponent's — the sheet was carrying
+the opponent's tag (fixed 2026-08-28).
+
+### rl/model/encoder.py — what the OPP_PRIVATE rows carried before 2026-09-12
+
+Until 2026-09-12 the learner-only OPP_PRIVATE_ENTITY rows carried a
+Dreamer-style discrete code grounded by the privileged value loss, with a
+belief head predicting it from the public rows; LESSONS "Removal ledger —
+2026-09-12". They now carry the opponent's sheet latent from the same
+private embedder as my own sheet.
+
+### rl/model/encoder.py — field_side_bias vs pos_bias (the 2026-08-28 fix)
+
+Until 2026-08-28 these two field tokens borrowed pos_bias rows 1/0, but
+pos_bias is indexed by ENTITY_PUBLIC_NODE_FEATURE__ACTIVE (= scoreOrder,
+{0, 2} in singles), so row 0 meant "benched pokemon" AND "opponent side
+conditions" — one vector, two meanings, coupled gradients.
+
+### rl/model/encoder.py — the CLS row replaced the value embeddings table
+
+The CLS row replaces the 4-row value_embeddings_table and its
+(4 * entity_size,) concat.
+
+### rl/model/encoder.py — the per-row bias table, measured dead
+
+There is no per-row table (2026-09-10): measured on ckpt_02339569 after
+2.34M steps, the per-row table's within-group spread sat at its init noise
+(0.06-0.08 against an init of 0.0625) for six of the twelve groups. The rows
+are a set with a fixed layout, not a sequence, so only the per-GROUP bias
+survives.
+
+### rl/model/encoder.py — the entity pool's retired intra-entity attention
+
+The `EntitySumPool` docstring carried the measurement that retired the
+intra-entity attention block the masked sum replaces (see the
+rl/model/modules.py EntitySumPool section above for the numbers).
+
+### rl/model/encoder.py — what the trunk collapsed
+
+See rl/model/trunk.py for why the three gated streams and their two feeding
+cross-attention reads all collapse into one sequence at 80 rows.
+
+### rl/model/encoder.py — output normalisation reference number
+
+Every row leaves the trunk at RMS 1, rescaled per group, so the heads read
+every row at one magnitude rather than at whatever the blocks' writes left
+it — CLS at 9.8 against move rows at 0.99 on ckpt_00280000.
+
+### rl/model/encoder.py — the private embedder once served the opponent's sheet
+
+`_embed_private_entity` is the path for MY OWN private team rows (the
+opponent's sheet, which this once also served, was deleted 2026-08-25).
+
+### rl/model/encoder.py — the second board path before the entity pools
+
+`_embed_public_entity` / `_embed_private_entity` are the SAME entity-local
+pools the packed history cache runs on; before 2026-08-29 the current board
+took a second path that emitted 10-11 raw attribute tokens per entity
+instead.
+
+### rl/model/encoder.py — history states used to be summed into the public rows
+
+Until 2026-09-01 the history states were SUMMED into the public rows here
+("entity i's 11th attribute token"). They are their own HISTORY_ENTITY rows
+now.
+
+### rl/model/encoder.py — entity_index_tag measured dead
+
+No learned join key between a sheet row and its public row
+(entity_index_tag, 2026-08-31 -> 2026-09-02): it never trained (rms 0.0634
+-> 0.0661 over 182k steps, ~3% of the row's norm) and a public-only read
+from the sheet row scored no higher after the trunk than before it, so the
+tag joined nothing.
+
+### rl/model/encoder.py — the previous-action gather before 2026-08-29
+
+The previous action's rows are gathered out of this step's pre-trunk
+private/move/target rows. Not circular: those rows are built above from this
+step's features alone, where the pre-2026-08-29 gather read a sequence built
+over these rows.
+
+### rl/model/encoder.py — row validity vs the old grid
+
+Move-row and target-row validity from the block mask is the same content the
+old grid's any-over-both-axes gave.
+
+### rl/model/encoder.py — why the identity is added after the input norm
+
+The norm divides a row by its own content RMS, so a bias added before it is
+divided too — 35% of a CLS row (content RMS 0.18) but 0.1% of a history row
+(RMS ~66), with the gradient into the bias shrunk by the same factor.
+
+### rl/model/encoder.py — the raw node snapshot the RL path used to discard
+
+The latest raw node snapshot per entity is the TGN staleness fix the RL path
+used to discard (only the offline critic read it; "the GRU-only readout
+loses the latest node").
+
+### rl/model/history_encoder.py — the four-column RELEVANT_ENTITY bug
+
+All EIGHT columns the service writes (state.ts maxRelevant = 8). Until
+2026-09-01 this listed only IDX0..3, so any step touching more than four
+entities — spread moves, hazard cascades — had rows 5-8 silently dropped
+before the scatter ever saw them.
+
+### rl/model/history_encoder.py — what the minGRU replaced
+
+That is what the GRU it replaces (2026-09-02) could not offer: its scan sat
+on a ~26us/step dependency-latency floor that hoisting (-8.6%) and unrolling
+could not move.
+
+### rl/model/history_encoder.py — the deleted "gestalt" slot input
+
+A mean over the other slots' states used to ride in the slot input too (the
+"gestalt"); it was redundant with flat_field — which is fed the SUM of every
+message — and with the trunk's read-time attention over the HISTORY_ENTITY
+rows (deleted 2026-09-02).
+
+### rl/model/capacity.py — the 1e-4 learning-rate collapse these probes caught
+
+These probes are what caught the 1e-4 learning-rate collapse:
+action-embedding srank fell to 0.27 by 13k steps while actor-KL sat quietly
+at 0.002, so KL headroom was never evidence the LR could rise (LESSONS.md
+5).
+
+### rl/environment/interfaces.py — src_index / tgt_index
+
+`src_index`/`tgt_index` lived on PlayerPolicyHeadOutput until 2026-08-31:
+coordinates into the 41x41 scoring grid the wire Action used to carry.
+`action_index` IS the wire action now — an index into the block space.
+
+### rl/environment/interfaces.py — advantage and q
+
+`advantage` and `q` lived on PlayerActorOutput until 2026-08-29: the
+learner-only Q = V + A decomposition over the flat src x tgt grid, composed
+in the model by heads.compose_q. The policy stopped reading it at the NashPG
+switch, which left it a matched-control observer for an architecture that no
+longer exists; its last readings are banked in the ledger.
+
+### rl/environment/data.py — the 41x41 grid the block action space replaced
+
+The 41x41 (src, tgt) grid this replaced kept ~82% dead cells purely so the
+readout's scatter had somewhere to land.
+
+### rl/environment/utils.py — the actor's geometric-bucket base
+
+The actor path's geometric-bucket base for BOTH history axes is 32 (was 64,
+2026-09-02): a carried request's suffix is ~3 steps / ~5 packed rows, so the
+smallest bucket is what the carry path runs at.
+
+### rl/environment/env.py — the leaked websockets
+
+Offline harnesses construct one env per game; without `close()` every game
+leaked a connection — 600 open sockets after the 2026-08-23 check.
+
+### rl/environment/actor_stats.py — why the timing sink exists
+
+Built for the 2026-09-02 actor-step decomposition (the system rate is
+actor-bound and no panel said WHERE the actor's time went) — the baseline
+the history-carry pass is judged against.
+
+# Evidence migrated out of `rl/online/**` — 2026-09-12
+
+Every block below was deleted from or trimmed in the source. `Removed:` is the original comment text verbatim; `Kept:` is what the code now says in its place (blank when the whole block went).
+
+### rl/online/config.py — eval_baseline — saturated baselines and the retired eval slots
+Removed:
+
+```
+experimental. Random/Default were saturated (93%/72% at 163k steps).
+The slate itself is fixed at two slots (rl/online/main.py, 2026-09-09):
+```
+
+Kept in code:
+
+```
+experimental.
+The slate itself is fixed at two slots (rl/online/main.py):
+```
+
+### rl/online/config.py — eval_baseline — the T=0.5 slots and the search eval actor
+Removed:
+
+```
+play. The earlier T=0.5 slots and the search eval actor are gone
+(LESSONS.md "Removal ledger — 2026-09-09 search eval actor").
+```
+
+Kept in code:
+
+```
+play.
+```
+
+### rl/online/config.py — eval_main_params_every — why not every game
+Removed:
+
+```
+params by only ~1/player_ema_update_rate steps, so alternating every
+game (the old behaviour) logged two near-duplicate series at half the
+effective sample size each. 0 = EMA params only.
+```
+
+Kept in code:
+
+```
+params by only ~1/player_ema_update_rate steps. 0 = EMA params only.
+```
+
+### rl/online/config.py — unroll_length — the removed MAX_REQUEST_COUNT force-tie
+Removed:
+
+```
+pre-split to this count), NOT a target length: the service's
+MAX_REQUEST_COUNT force-tie at 96 requests was removed alongside the
+chunked-unroll change (2026-08-16) — games now run to their natural
+outcome (Showdown's turn-limit/endless-battle clauses and the
+```
+
+Kept in code:
+
+```
+pre-split to this count), NOT a target length: games run to their
+natural outcome (Showdown's turn-limit/endless-battle clauses and the
+```
+
+### rl/online/config.py — player_chunk_length — the geometric bucket family's three OOMs
+Removed:
+
+```
+Fixed-length chunked unrolls (2026-08-16): every stored trajectory is
+```
+
+Kept in code:
+
+```
+Fixed-length chunked unrolls: every stored trajectory is
+```
+
+### rl/online/config.py — player_chunk_length — what the bucket family cost
+Removed:
+
+```
+sees ONE shape forever instead of a geometric bucket family (each
+bucket was a separate compiled variant with its own workspace; the
+first top-bucket batch ~20min into a session is what OOM'd
+1786537634, the Aug-15 03:26 run, and the Aug-15 23:33 run alike).
+Targets bootstrap at the cut from the critic
+```
+
+Kept in code:
+
+```
+sees ONE shape forever. Targets bootstrap at the cut from the critic
+```
+
+### rl/online/config.py — player_shape_lattice — date
+Removed:
+
+```
+Static shape lattice for the learner batch (2026-08-20): a CHAIN of
+```
+
+Kept in code:
+
+```
+Static shape lattice for the learner batch: a CHAIN of
+```
+
+### rl/online/config.py — player_shape_lattice — the surprise-compile OOMs
+Removed:
+
+```
+real history is ever dropped). This is NOT the geometric bucket
+family that OOM'd three runs: that compiled a data-derived variant
+per shape, with the first top-bucket batch arriving as a SURPRISE
+compile ~20min in. Here the variants are a fixed, enumerated set —
+```
+
+Kept in code:
+
+```
+real history is ever dropped). NEVER a data-derived shape family:
+the variants are a fixed, enumerated set —
+```
+
+### rl/online/config.py — player_shape_lattice — the Aug-20 fill measurement
+Removed:
+
+```
+single-shape behaviour exactly. Combos chosen from the Aug-20
+measurement (batch_size 4): batch-max chunk fill mean ~42 of 64,
+history fill mean ~85 of 256 — retune from the player_shape_T/H
+logs.
+```
+
+Kept in code:
+
+```
+single-shape behaviour exactly. Retune the combos from the
+player_shape_T/H logs.
+```
+
+### rl/online/config.py — player_replay_fresh_fraction — provenance
+Removed:
+
+```
+The fresh stream (2026-09-08, 224582c): the share of each batch's
+```
+
+Kept in code:
+
+```
+The fresh stream: the share of each batch's
+```
+
+### rl/online/config.py — player_replay_fresh_fraction — the archive reads
+Removed:
+
+```
+restores uniform capped sampling exactly. Reads: LESSONS.md "Fresh
+replay stream and decision accounting — 2026-09-08" and the
+2026-09-09 first-18.1k-update read.
+```
+
+Kept in code:
+
+```
+restores uniform capped sampling exactly.
+```
+
+### rl/online/config.py — player_replay_kl_target — where 0.045 came from
+Removed:
+
+```
+Ceiling: the actor-KL level the buffer-capacity plateau diagnosis
+identified as the healthy/stale boundary. This is a pathology
+```
+
+Kept in code:
+
+```
+Ceiling: the actor-KL level that marks the healthy/stale boundary.
+This is a pathology
+```
+
+### rl/online/config.py — main_player_update_steps — the params-cache working-set measurement
+Removed:
+
+```
+directly sets the inference server's params-cache working set: at 10
+(~6s of main training), main alone kept 5-10 versions live at once;
+50 (~30s) collapses that to ~2, letting inference_params_cache_size
+=12 cover the whole working set without LRU thrash. Staleness cost:
+actors act on params up to ~30s old — measured actor-KL is 0.005-
+0.006 vs the 0.045 replay target, ~5x headroom, and the replay-KL
+controller cuts reuse if that ever stops being true.
+```
+
+Kept in code:
+
+```
+directly sets the inference server's params-cache working set: a
+longer interval keeps fewer versions live, so
+inference_params_cache_size covers the whole working set without LRU
+thrash. Staleness cost: at 50 the actors act on params up to ~30s
+old, and the replay-KL controller cuts reuse if the actor KL climbs.
+```
+
+### rl/online/config.py — add_player_max_frames — the 3e6 and 9e6 eras
+Removed:
+
+```
+this clock only paces snapshots while the agent is NOT visibly
+improving. At 3e6 (~11.5k steps) it filled the league with
+~0.5-winrate near-copies of main (mirror play with extra staleness)
+and made the stagnation clock hair-trigger. 9e6 (~44k steps at the
+live batch shape) fired every add of irqeetfg to 640k — the dominant
+gate never did — and was doubled 2026-09-04 (~88k steps) together
+with the batch cull below.
+```
+
+Kept in code:
+
+```
+this clock only paces snapshots while the agent is NOT visibly
+improving. Too short and the league fills with near-copies of main
+(mirror play with extra staleness) and the stagnation clock goes
+hair-trigger; 1.8e7 is ~88k steps at the live batch shape.
+```
+
+### rl/online/config.py — minimum_historical_player_steps — the mirror-only measurement
+Removed:
+
+```
+populated league rather than pure mirror self-play — mirror-only runs
+measured 93% vs Random but ~10% vs SimpleHeuristic at 163k steps,
+the signature of self-exploiting policies that don't transfer to
+stylistically alien opponents.
+```
+
+Kept in code:
+
+```
+populated league rather than pure mirror self-play, which produces
+self-exploiting policies that don't transfer to stylistically alien
+opponents.
+```
+
+### rl/online/config.py — br_stop_winrate — the standard-error calibration of 0.7
+Removed:
+
+```
+games behind it (n=20 puts the SE at ~0.11, so 0.7 is a ~1.8 SE
+signal — the old promotion-bar lesson). 0.0 = off; the CLI defaults
+```
+
+Kept in code:
+
+```
+games behind it. 0.0 = off; the CLI defaults
+```
+
+### rl/online/config.py — br_init — the pre-2026-08-30 default
+Removed:
+
+```
+params verbatim (the pre-2026-08-30 behaviour — the probe searches
+only the target's own basin, and its blind spot is the collapsed
+switch axis it inits from). "head-reset" grafts a fresh-init
+```
+
+Kept in code:
+
+```
+params verbatim (the probe searches only the target's own basin, and
+its blind spot is the collapsed switch axis it inits from).
+"head-reset" grafts a fresh-init
+```
+
+### rl/online/config.py — br_init — what shrink-perturb was justified by
+Removed:
+
+```
+br_perturb_frac (Ash & Adams, arXiv:1910.08475 — the ~179k
+perturbation is the one event observed to revive collapsed switch
+mass). "scratch" ignores the target's params entirely — recorded
+```
+
+Kept in code:
+
+```
+br_perturb_frac (Ash & Adams, arXiv:1910.08475).
+"scratch" ignores the target's params entirely — recorded
+```
+
+### rl/online/config.py — br_perturb_frac — the 2026-08-30 calibration
+Removed:
+
+```
+ancestor and rotates nothing. Measured calibration (2026-08-30,
+vs ckpt_00254992): full-tree fresh/trained norm ratio 0.925, so
+frac maps near-linearly onto direction — 0.75 lands at cos 0.40
+to the target (0.34 predicted orthogonal; the excess is
+structural, e.g. LayerNorm scales ~1.0 in both nets).
+```
+
+Kept in code:
+
+```
+ancestor and rotates nothing.
+```
+
+### rl/online/config.py — memory_diag_interval — the session that motivated it
+Removed:
+
+```
+census + exact replay-buffer/league-cache byte counts. Added after
+session 1786537634's RSS climbed 5.9->17GB (threads 478->775) with
+no way to attribute it from wandb alone. 0 disables. Cost per tick
+```
+
+Kept in code:
+
+```
+census + exact replay-buffer/league-cache byte counts. 0 disables.
+Cost per tick
+```
+
+### rl/online/config.py — actor_stats_log_steps — the history-carry baseline
+Removed:
+
+```
+dict merge. The actor-step decomposition it feeds (service wait /
+decode / history clip / inference, and the inference server's own
+phases) is the baseline the history-carry pass is judged against.
+```
+
+Kept in code:
+
+```
+dict merge. It feeds the actor-step decomposition (service wait /
+decode / history clip / inference, and the inference server's own
+phases).
+```
+
+### rl/online/config.py — player_actor_device — the 2026-09-03 timing
+Removed:
+
+```
+alone. Measured 2026-09-03 beside a live learner: per-actor CPU
+inference 23-60 ms against 147 ms through the GPU server (76 of it
+queue wait, none of it compute: the server's forward shared one
+device stream with the train step). f32 because XLA:CPU only
+```
+
+Kept in code:
+
+```
+alone. f32 because XLA:CPU only
+```
+
+### rl/online/config.py — oom_guard_enabled — the crash that prompted it
+Removed:
+
+```
+safety valve, not a leak fix — added after 1361 crashed, though that
+specific crash turned out to be an unrelated websocket failure to the
+game server, not RAM exhaustion. Checks available system RAM every
+```
+
+Kept in code:
+
+```
+safety valve, not a leak fix. Checks available system RAM every
+```
+
+### rl/online/config.py — representation-health probe — moved offline 2026-08-21
+Removed:
+
+```
+NOTE the representation-health probe (dormant-unit fraction,
+srank@0.99) moved OFFLINE 2026-08-21 — rl/model/capacity.py, run
+against a saved checkpoint by tests/test_checkpoint_collapse.py. It
+cost an extra encoder forward plus an eigendecomposition per probe
+inside the train loop, and no training decision read it. The
+per-step fresh-vs-replayed value-error gap below stays: it is
+computed from tensors train_step already has.
+```
+
+Kept in code: nothing — the block was deleted.
+
+### rl/online/config.py — player_adam / builder_adam — the b1 and eps lineage
+Removed:
+
+```
+Learning params. Player b1 back to 0.9 (2026-08-26): the b1=0
+detour was specific to the previous prefactor-free logit force
+(momentum carried each push ~1/(1-b1) steps past the stiff
+equilibria its analytic shifts created — the dx65cpwp runaway).
+The player now runs the same trust-regioned PPO surrogate as the
+builder, the exact case the pro-momentum argument was always
+about; NashPG's own optimiser is AdamW with default moments.
+Player eps 1e-5 (2026-08-31): the NashPG reference explicitly
+overrides optax's 1e-8 (`optax.adamw(lr, eps=1e-5)`) and the
+reference-diff ledger flagged it as "the one to test" — Adam is
+scale-invariant, so a param whose gradient has gone tiny (a starved
+switch cell's) still steps at ~full lr along a noise-dominated
+direction, and eps is the ONLY damper; 1e-5 engages 1000x sooner.
+Builder keeps 1e-8: the divergence concerned the player bracket.
+```
+
+Kept in code:
+
+```
+Learning params. The player runs the same trust-regioned PPO
+surrogate as the builder, and NashPG's own optimiser is AdamW with
+default moments, so b1 stays at 0.9.
+Player eps 1e-5 follows the NashPG reference, which explicitly
+overrides optax's 1e-8 (`optax.adamw(lr, eps=1e-5)`): Adam is
+scale-invariant, so a param whose gradient has gone tiny (a starved
+switch cell's) still steps at ~full lr along a noise-dominated
+direction, and eps is the ONLY damper.
+Builder keeps 1e-8: the divergence concerned the player bracket.
+```
+
+### rl/online/config.py — player_learning_rate — the 1e-4 collapse
+Removed:
+
+```
+3e-5. A 1e-4 trial (Aug 2026, zany-leaf-1305) collapsed: pre-clip grad
+norms 10-100x the clip, action-emb srank at 0.27 by 13k steps (vs
+0.82 at 3e-5), value CE degrading and eval regressing from ~40k —
+all while actor-KL sat quietly at 0.002, so KL headroom is NOT
+evidence the LR can rise (the trust region bounds per-update policy
+movement, not representation damage).
+```
+
+Kept in code:
+
+```
+KL headroom is NOT evidence the LR can rise: the trust region bounds
+per-update policy movement, not representation damage.
+```
+
+### rl/online/config.py — player_lambda — the 1328 sweep and the retired bootstrap-gap readout
+Removed:
+
+```
+Value-target lambda. AlphaStar's own choice: TD(lambda=0.8), a
+short (~5-step) bootstrap horizon — they could afford heavy
+bootstrapping because supervised init gave them a sane critic from
+step one. This project starts from scratch AND the 1328 five-arm
+sweep pointed the same direction (monotone lower-lambda-better,
+confounded but directional), so 0.8 is adopted as-is. NOTE: the
+lambda=1.0 MC-anchor row of the aux spectrum used to keep a live
+bootstrap-bias readout (player_bootstrap_gap) on this
+bootstrap-heavy target; the aux heads went 2026-08-21, so that
+instrument is gone with them (LESSONS.md ledger).
+```
+
+Kept in code:
+
+```
+Value-target lambda. AlphaStar's own choice: TD(lambda=0.8), a
+short (~5-step) bootstrap horizon. Lower = more bootstrapping and
+less Monte-Carlo variance.
+```
+
+### rl/online/config.py — removed controllers — AdaptivityController and ExploitabilityController
+Removed:
+
+```
+No adaptivity/entropy controller fields anymore. The
+AdaptivityController was removed entirely 2026-08-13 (hard to tune,
+harder to predict — see LESSONS.md 10
+for the bug history). Its entropy sensors are still logged from
+train_step (player_action_normalized_entropy,
+player_normalized_modality_entropy); modality collapse (1330 died
+at 0.08 on that axis) is now watched on the dashboard, not
+auto-corrected.
+
+No ExploitabilityController anymore (removed 2026-08-14, the last
+adaptive hyperparameter loop — see rl/online/training/controllers.py's
+module docstring). The replay KL target is fixed at
+player_replay_kl_target; the worst-matchup win-rate it sensed still
+exists as _should_add_new_player's "dominant" gate, it just doesn't
+actuate anything.
+
+Both fields below now serve main's VERIFICATION branch
+```
+
+Kept in code:
+
+```
+The replay KL target is fixed at player_replay_kl_target; the
+worst-matchup win-rate lives on in _should_add_new_player's
+"dominant" gate, which actuates nothing.
+
+Both fields below serve main's VERIFICATION branch
+```
+
+### rl/online/config.py — exploit_ctrl_min_games_per_opponent — the 1338 false positive
+Removed:
+
+```
+recent self), which looks exactly like a real hole (1338: two
+snapshots 5.5k/26.9k steps old, win-rate never left 0.48-0.54 — a
+false positive from exactly this).
+```
+
+Kept in code:
+
+```
+recent self), which looks exactly like a real hole.
+```
+
+### rl/online/config.py — player_kl_loss_coef — removed 2026-09-09
+Removed:
+
+```
+(`player_kl_loss_coef`, the actor backward-KL force, was REMOVED
+2026-09-09 -- LESSONS.md "Removal ledger — 2026-09-09 actor
+backward-KL force".)
+player_value_head_loss_coef: float = 1.0
+```
+
+Kept in code:
+
+```
+player_value_head_loss_coef: float = 1.0
+```
+
+### rl/online/config.py — privileged critic — dates
+Removed:
+
+```
+The privileged critic (2026-09-01): trained beside the deployable head
+```
+
+Kept in code:
+
+```
+The privileged critic: trained beside the deployable head
+```
+
+### rl/online/config.py — player_privileged_targets — the pre-2026-09-01 estimator
+Removed:
+
+```
+pre-2026-09-01 estimator (deployable head), the live fallback: the
+```
+
+Kept in code:
+
+```
+deployable-head estimator, the live fallback: the
+```
+
+### rl/online/config.py — player_potential_strength — provenance
+Removed:
+
+```
+PBRS as a potential channel (2026-09-11; docs/human-switch-pbrs-
+2026-09-11.md, LESSONS "PBRS potential channel"): eta, the scale on the
+```
+
+Kept in code:
+
+```
+PBRS as a potential channel: eta, the scale on the
+```
+
+### rl/online/config.py — player_potential_strength — the offline screen and the launch
+Removed:
+
+```
+builds neither the head nor the channel -- today's learning rule.
+Launched at .05 on 2026-09-11 from ckpt_00480000 after the offline
+screen (rl/offline/potential_screen.py): logit-gradient RMS
+perturbation .031 vs the .10 budget, shared-param update .0047 --
+LESSONS "PBRS screen on ckpt_00480000".
+```
+
+Kept in code:
+
+```
+builds neither the head nor the channel -- today's learning rule.
+```
+
+### rl/online/config.py — player_pg_coef — date
+Removed:
+
+```
+THE policy gradient (2026-08-26): NashPG (arXiv:2510.18183, TMLR
+```
+
+Kept in code:
+
+```
+THE policy gradient: NashPG (arXiv:2510.18183, TMLR
+```
+
+### rl/online/config.py — player_pg_coef — the section 5.4 ablation
+Removed:
+
+```
+player_reg_snap_steps. Their section 5.4 ablation is the reason
+for the operator choice: swapping PPO into the older reward-
+transform framework closes most of its gap in larger games, i.e.
+the inner update rule, not the regularisation cycle, was the
+bottleneck.
+The whole bracket shares this coefficient;
+```
+
+Kept in code:
+
+```
+player_reg_snap_steps.
+The whole bracket shares this coefficient;
+```
+
+### rl/online/config.py — player_ppo_clip — the runaway class it replaced
+Removed:
+
+```
+stiff equilibrium — the structural fix for the runaway class the
+previous logit-force loss needed a force clip, centred logits and
+b1=0 to contain.
+```
+
+Kept in code:
+
+```
+stiff equilibrium.
+```
+
+### rl/online/config.py — player_pg_objective — date
+Removed:
+
+```
+(the smooth quadratic the builder also runs, 2026-08-30) or "ppo"
+```
+
+Kept in code:
+
+```
+(the smooth quadratic the builder also runs) or "ppo"
+```
+
+### rl/online/config.py — player_mag_coef — the 2026-08-26 rename
+Removed:
+
+```
+argument. Called "forward" here until 2026-08-26; that was wrong by
+this package's own convention (loss.py's approx_forward_kl is the k3
+estimator for KL(actor || learner), reference first). Reverse =
+mode-seeking, which is exactly why it cannot refill a dropped
+modality (the removed support-anchor family was built for that; see
+the note below player_ent_coef).
+```
+
+Kept in code:
+
+```
+argument. Reverse = mode-seeking, which is exactly why it cannot
+refill a dropped modality.
+```
+
+### rl/online/config.py — player_mag_coef — the prefactor-free bet
+Removed:
+
+```
+gradient is pi-prefactored — with the PPO surrogate there is no
+prefactor-free refill force anywhere any more; the bet (theirs) is
+that the magnet cycle plus entropy keep pi interior so starvation
+never starts. switch_ratio through the 13k wire is the acceptance
+```
+
+Kept in code:
+
+```
+gradient is pi-prefactored, so it cannot by itself restore an
+abandoned action. switch_ratio through the 13k wire is the acceptance
+```
+
+### rl/online/config.py — player_ent_coef — the removed per-axis split and dual temperatures
+Removed:
+
+```
+Entropy bonus, differentiated — NashPG's ent_coef verbatim
+(2026-08-30): the plain JOINT entropy over legal cells, one static
+coefficient. Up to a constant this is the reverse KL to uniform.
+The per-axis split (H(macro) + H(micro|taken), 2026-08-27) and the
+SAC-style dual temperatures holding each at a normalised target
+(2026-08-28) are removed with the forward-KL-to-uniform term — the
+per-level entropies survive as OBSERVER panels only
+(loss.factorised_entropies). Revert handles in the LESSONS.md
+ledgers.
+```
+
+Kept in code:
+
+```
+Entropy bonus, differentiated — NashPG's ent_coef verbatim: the
+plain JOINT entropy over legal cells, one static coefficient. Up to
+a constant this is the reverse KL to uniform. The per-level
+entropies are OBSERVER panels only (loss.factorised_entropies).
+```
+
+### rl/online/config.py — player_prune_threshold — the offline cut audit
+Removed:
+
+```
+only: the trace ratio c stays raw, the pre-registered restriction
+the offline cut audit fired (7.8% of chunks cut before the midpoint
+against the 5% gate; targets.compute_player_targets). The
+```
+
+Kept in code:
+
+```
+only: the trace ratio c stays raw, the pre-registered restriction
+(targets.compute_player_targets). The
+```
+
+### rl/online/config.py — player_support_tau — the bench-cell calibration
+Removed:
+
+```
+factor of two is the hysteresis band. Calibration: 5-6 bench cells at
+.01 induce a switch-mass floor of 5-6%, just under the .07171 the KL
+was holding -- low enough that evidence, not the floor, sets the
+resting level. Confirm against player_switch_mass_choice in the
+```
+
+Kept in code:
+
+```
+factor of two is the hysteresis band. The floor it induces must stay
+low enough that evidence, not the floor, sets the resting switch
+mass. Confirm against player_switch_mass_choice in the
+```
+
+### rl/online/config.py — player_support_temperature — provenance
+Removed:
+
+```
+The hinge's smoothing width, in LOG-PROBABILITY space (2026-09-11, the
+user's call on docs/porygon2_support_loss_recommendations.md; the hard
+hinge's kink was not measured to cost anything first): each legal cell
+```
+
+Kept in code:
+
+```
+The hinge's smoothing width, in LOG-PROBABILITY space: each legal cell
+```
+
+### rl/online/config.py — player_support_hinge_coef — date
+Removed:
+
+```
+The FLAT SUPPORT HINGE (2026-09-09, loss.support_hinge_loss): over a
+```
+
+Kept in code:
+
+```
+The FLAT SUPPORT HINGE (loss.support_hinge_loss): over a
+```
+
+### rl/online/config.py — support-anchor family — removed 2026-08-27
+Removed:
+
+```
+The support-anchor family (forward KL toward a temperature-raised /
+advantage-tilted reference; player_support_{coef,temperature,
+adv_temperature}) was REMOVED 2026-08-27 after phases 1-4: every
+mass-restoring variant either erased within-modality discrimination
+(mode-covering targets + the snap ratchet) or taught the mean
+switch's losing value. Replaced by the per-level ENTROPY terms above
+(the PPO surrogate was split per-level in the same pass and
+re-joined 2026-08-28 — see that revert commit) — see train_step's
+policy bracket and the LESSONS.md ledgers for history and handles.
+Snap period of the reference:
+```
+
+Kept in code:
+
+```
+Snap period of the reference:
+```
+
+### rl/online/config.py — player_reg_snap_steps — the continuous EMA it replaced
+Removed:
+
+```
+re-clone every 10k for 25 outer rounds). Frozen between snaps —
+the continuous EMA it replaced never reset, so the KL gap
+compounded with policy speed (2wvnlsz3: ref_kl 2.07 nats). A
+shorter period approaches an EMA magnet, which chases the policy
+and degenerates into a short-horizon trust region (LESSONS 4).
+```
+
+Kept in code:
+
+```
+re-clone every 10k for 25 outer rounds). Frozen between snaps.
+A shorter period approaches an EMA magnet, which chases the policy
+and degenerates into a short-horizon trust region.
+```
+
+### rl/online/main.py — the battle-abort handler — the 2026-09-03 league-snapshot incident
+Removed:
+
+```
+The abort is usually the SYMPTOM: the other side died
+first (2026-09-03: league snapshots from a superseded
+param tree raised on their first forward, p0 then sat
+600 s on the service watchdog), and raising the abort
+alone hid that for an hour. Log every other exception
+before it goes.
+```
+
+Kept in code:
+
+```
+The abort is usually the SYMPTOM: the other side died
+first. Log every other exception before it goes.
+```
+
+### rl/online/main.py — the eval slate — the deleted search eval actor and the head-parameterisation date
+Removed:
+
+```
+The eval slate (2026-09-09): two slots against the same baseline,
+both the EMA params at temp 1.0 -- the temperature the training
+actors sample at, and the only one comparable across head
+parameterisations (the flat readout's single division vs the
+hierarchical head's two, 2026-08-29). `plain-t1` samples the policy
+exactly as the training actors do; `thresholded` samples it with
+every legal cell below player_prune_threshold removed and the rest
+renormalised -- the distribution the learner's v-trace ratios are
+built on, sampled nowhere else. wr(thresholded) - wr(plain-t1) on
+the same checkpoint prices the threshold in play. The search eval
+actor (depth-1 expectimax, 2026-09-06) was deleted here 2026-09-09:
+its measured influence at 01861967 was root KL .000026-.000101 with
+both inspected bad actions still ranked first in 16/16 seeds
+(LESSONS.md "Removal ledger — 2026-09-09 search eval actor").
+```
+
+Kept in code:
+
+```
+The eval slate: two slots against the same baseline,
+both the EMA params at temp 1.0 -- the temperature the training
+actors sample at, and the only one comparable across head
+parameterisations (the flat readout's single division vs the
+hierarchical head's two). `plain-t1` samples the policy
+exactly as the training actors do; `thresholded` samples it with
+every legal cell below player_prune_threshold removed and the rest
+renormalised -- the distribution the learner's v-trace ratios are
+built on, sampled nowhere else. wr(thresholded) - wr(plain-t1) on
+the same checkpoint prices the threshold in play.
+```
+
+### rl/online/main.py — InferenceServer construction — the deleted inference_* config fields
+Removed:
+
+```
+(one team-build per game vs ~35 player steps). The server's
+constructor defaults are the values the deleted inference_* config
+fields held (b219d84). Under "cpu" there is no server: every actor
+```
+
+Kept in code:
+
+```
+(one team-build per game vs ~35 player steps). Under "cpu" there is
+no server: every actor
+```
+
+### rl/online/main.py — the crash handler — the session 1786537634 postmortem
+Removed:
+
+```
+exists so the finish() below can mark the wandb runs FAILED.
+Letting the exception fly past an unconditional finish() left
+session 1786537634's OOM crash showing as three cleanly-
+"finished" runs, which sent the postmortem down the wrong path.
+```
+
+Kept in code:
+
+```
+exists so the finish() below can mark the wandb runs FAILED:
+an exception flying past an unconditional finish() leaves the
+runs showing as cleanly "finished".
+```
+
+### rl/online/training/learner.py — the static-config rule — run 1326's retained executables
+Removed:
+
+```
+needs its own traced pytree argument, because retained
+executables per distinct static value OOM-killed run 1326
+(LESSONS.md 1).
+```
+
+Kept in code:
+
+```
+needs its own traced pytree argument: retained executables per
+distinct static value are an OOM.
+```
+
+### rl/online/training/learner.py — league host_step seeding — the 2026-08-14 add storm
+Removed:
+
+```
+league-management tick (the 2026-08-14 10:15 add storm; also
+the p_{step:08} snapshot-dir overwrite hazard once the counter
+caught up).
+```
+
+Kept in code:
+
+```
+league-management tick, plus the p_{step:08} snapshot-dir
+overwrite hazard once the counter caught up.
+```
+
+### rl/online/training/learner.py — _update_hyper_controllers — removed with the coefficients it actuated
+Removed:
+
+```
+No _update_hyper_controllers anymore: every coefficient a controller
+actuated has since been deleted outright — the magnet KL
+(2026-08-22) and UPGO with the single-action PG (2026-08-21) — see
+LESSONS.md 10 and the removal ledgers. The replay
+reuse-cap controller below is the one remaining per-log-tick loop.
+```
+
+Kept in code:
+
+```
+The replay reuse-cap controller below is the one remaining
+per-log-tick loop.
+```
+
+### rl/online/training/learner.py — num_steps bounds train steps — the first BR run's early stop
+Removed:
+
+```
+continues below burn iterations without training, which at
+a small --num-steps ended the first BR run at 1891 of 5000
+steps — replay warm-up alone is ~600 ticks/minute.
+```
+
+Kept in code:
+
+```
+continues below burn iterations without training, so at a
+small --num-steps a run can end well short of its budget.
+```
+
+### rl/online/training/learner.py — logger.exception over print_exc — the shredded OOM traceback
+Removed:
+
+```
+stderr and got shredded line-by-line into the concurrent bar
+redraws (session 1786537634's OOM traceback was near-
+unreadable in the captured console for exactly this reason).
+```
+
+Kept in code:
+
+```
+stderr and got shredded line-by-line into the concurrent bar
+redraws.
+```
+
+### rl/online/training/learner.py — learner_steps_per_sec — the irqeetfg hand-read comparisons
+Removed:
+
+```
+The SYSTEM rate: learner steps per wall second over the
+drain interval — actor-bound today, and the number the
+cross-run comparisons (4.17-4.41 on irqeetfg) were read
+by hand from _timestamp deltas until now.
+```
+
+Kept in code:
+
+```
+The SYSTEM rate: learner steps per wall second over the
+drain interval — actor-bound today.
+```
+
+### rl/online/training/workers.py — the straggler raise — the 2026-08-11 RAM/VRAM leak
+Removed:
+
+```
+rebuild from starting on top of state a leaked
+thread still holds (the 2026-08-11 RAM/VRAM leak) — at
+```
+
+Kept in code:
+
+```
+rebuild from starting on top of state a leaked
+thread still holds — at
+```
+
+### rl/online/training/league_ops.py — the removed exploitability helpers
+Removed:
+
+```
+(_measure_exploitability/_update_exploit_controller/_apply_exploit_
+scale removed 2026-08-14 with the ExploitabilityController — the
+worst-matchup win-rate signal still exists in _should_add_new_player's
+"dominant" gate; it just doesn't actuate anything anymore.)
+```
+
+Kept in code: nothing — the block was deleted.
+
+### rl/online/training/league_ops.py — best-response child runs — date
+Removed:
+
+```
+Best-response child runs (2026-08-27). A BR run trains in its own
+```
+
+Kept in code:
+
+```
+Best-response child runs. A BR run trains in its own
+```
+
+### rl/online/training/run_state.py — replay_kl_target — the ExploitabilityController that used to scale it
+Removed:
+
+```
+Fixed at config.player_replay_kl_target — the ExploitabilityController
+that used to scale it was removed 2026-08-14 (last of the adaptive
+hyperparameter loops; see rl/online/training/controllers.py's module
+docstring).
+```
+
+Kept in code:
+
+```
+Fixed at config.player_replay_kl_target; nothing scales it.
+```
+
+### rl/online/training/diagnostics.py — the heap census — the 2026-08-18 fork jump
+Removed:
+
+```
+(replay buffers, league cache) don't cover — e.g. the ~3GB the
+2026-08-18 fork jump left unexplained by thread counts
+and league cache alone. sys.getsizeof is shallow (a dict/list's
+```
+
+Kept in code:
+
+```
+(replay buffers, league cache) don't cover.
+sys.getsizeof is shallow (a dict/list's
+```
+
+### rl/online/training/controllers.py — module docstring — the removed controller family
+Removed:
+
+```
+``PILogController`` is the actuator — a PI update in log space with clipped
+bounds. Every other controller this project built (lambda, adaptivity, magnet
+watchdog, plasticity) has been removed; LESSONS.md 10 records what each one
+measured and why it went, including the evidence that pulls both ways.
+```
+
+Kept in code:
+
+```
+``PILogController`` is the actuator — a PI update in log space with clipped
+bounds.
+```
+
+### rl/online/inference.py — grouping by history bucket level — what the unsplit batches cost
+Removed:
+
+```
+256) made the short game's forward pay the long game's
+attention FLOPs — with ~12 actors at random game stages,
+most batches contained one long game, so nearly EVERY step
+ran at worst-case history length and the batching win
+leaked away as padding compute. Splitting by level trades a
+```
+
+Kept in code:
+
+```
+256) would make the short game's forward pay the long
+game's attention FLOPs. Splitting by level trades a
+```
+
+### rl/online/artifact.py — the pi_head manifest literal — its predecessors and the stale-literal incident
+Removed:
+
+```
+"flat_bilinear_readout" (2026-08-29) = FlatActionReadout over ONE
+flat sequence: one pair form for sheet rows x the ally row a switch
+replaces (2026-09-11) AND for moves x targets, a scalar per target
+row for the standalone actions, and a flat pre-RMSNorm trunk behind
+it. Predecessors:
+"action_score_grouped_micro" (2026-08-25, ActionScoreHead with
+per-slot-group micro and per-modality macro, Q composed in
+heads.compose_q), "hierarchical_two_rung" (2026-08-20) and
+"privileged_two_rung" (2026-08-17).
+
+BUMPING THIS IS NOT COSMETIC: the literal was left stale through
+the 2026-08-25 redesign, so a pre-redesign checkpoint passed
+check_manifest STRICT and would have been restored onto a
+structurally different param tree. The manifest exists precisely to
+stop that, and it only works if the literal moves with the head.
+
+`q_head` sat beside it until 2026-08-29 and went with the advantage
+head itself.
+```
+
+Kept in code:
+
+```
+"flat_bilinear_readout" = FlatActionReadout over ONE flat
+sequence: one pair form for sheet rows x the ally row a switch
+replaces AND for moves x targets, a scalar per target row for the
+standalone actions, and a flat pre-RMSNorm trunk behind it.
+
+BUMPING THIS IS NOT COSMETIC: a stale literal lets a checkpoint
+from a different head pass check_manifest STRICT and be restored
+onto a structurally different param tree. The manifest exists
+precisely to stop that, and it only works if the literal moves
+with the head.
+```
+
+### rl/online/artifact.py — reg_params — the continuous EMA it replaced
+Removed:
+
+```
+NashPG reference policy pi_reg (2026-08-22; snap semantics
+2026-08-25): a periodic hard SNAP of target_params, in place, every
+config.player_reg_snap_steps, frozen between snaps. The magnet
+KL(pi || pi_reg) in the policy objective is measured against it;
+the snap bounds the log-ratio gap structurally — the continuous
+EMA it replaces (1e-4, then 5e-5) never reset, and the compounding
+gap drove the pgaijs6l/2wvnlsz3 grad-norm runaways. One param set:
+a hard reset needs no crossfade pair, no 4th net.
+```
+
+Kept in code:
+
+```
+NashPG reference policy pi_reg: a periodic hard SNAP of
+target_params, in place, every config.player_reg_snap_steps, frozen
+between snaps. The magnet KL(pi || pi_reg) in the policy objective is
+measured against it; the snap bounds the log-ratio gap structurally.
+One param set: a hard reset needs no crossfade pair, no 4th net.
+```
+
+### rl/online/artifact.py — jitted init — the eager-init timing
+Removed:
+
+```
+whole forward op by op and compiles every nn.scan separately --
+~6-10 min on the training box (2026-08-24 slow-suite timing); one
+compile is a fraction of that and persists in the compile cache.
+```
+
+Kept in code:
+
+```
+whole forward op by op and compiles every nn.scan separately; one
+jitted compile is far cheaper and persists in the compile cache.
+```
+
+### rl/online/artifact.py — merge-by-path — date
+Removed:
+
+```
+Every tree is merged BY PATH onto the fresh state's own (2026-09-02):
+```
+
+Kept in code:
+
+```
+Every tree is merged BY PATH onto the fresh state's own:
+```
+
+### rl/online/artifact.py — the loud scratch fallback — the 1335/1336 lost lineage
+Removed:
+
+```
+2. No checkpoint found -> fall back to scratch, loudly. A bare print()
+here is how 1335's ~300k-step lineage and its league got lost between
+it and 1336 without anyone noticing — mode was "checkpoint" (a resume
+was expected) and it silently became a fresh run instead. Still
+auto-falls back (the launch entry point doesn't set LOAD_STATE_MODE
+per-run), but now at warning level so it can't scroll by unnoticed.
+```
+
+Kept in code:
+
+```
+2. No checkpoint found -> fall back to scratch, loudly. A silent
+fallback loses a whole lineage and its league: the mode was
+"checkpoint" (a resume was expected) and it becomes a fresh run
+instead. Still auto-falls back (the launch entry point doesn't set
+LOAD_STATE_MODE per-run), but at warning level so it can't scroll by
+unnoticed.
+```
+
+### rl/online/league.py — PLAYER_KEYS — one entry since the exploiter populations went
+Removed:
+
+```
+identities falls out of the same statistics code. One entry since the
+exploiter populations were removed (LESSONS.md 9); the tuple shape is
+```
+
+Kept in code:
+
+```
+identities falls out of the same statistics code. One entry today; the
+tuple shape is
+```
+
+### rl/online/league.py — the provenance tag — one value since the exploiter populations went
+Removed:
+
+```
+range. One value since the exploiter populations were removed
+(LESSONS.md 9), but kept as a field: refs pickled by older revisions
+```
+
+Kept in code:
+
+```
+range. One value today, but kept as a field: refs pickled by older
+revisions
+```
+
+# Migration — evidence removed from the tooling, offline, service and test trees
+
+Every block below is the text removed from the code, verbatim. Where one
+comment carried both semantics and evidence, the whole original comment is
+reproduced so no removed wording is lost; only the evidence half left the
+source.
+
+---
+
+## scripts/wandb_views.py
+
+### scripts/wandb_views.py — eval slate, superseded series
+Original comment:
+
+    # The eval slate since 2026-09-09 (rl/online/main.py): two slots against
+    # the simple heuristic, both the EMA params at T=1. `plain-t1` samples the
+    # policy exactly as the training actors do; `thresholded` samples it with
+    # every legal cell below player_prune_threshold removed and the rest
+    # renormalised (HeadParams.prune_threshold) -- the distribution the
+    # learner's v-trace ratios are built on. Their gap prices the threshold
+    # in play. Series are keyed by the eval thread's name, so the earlier
+    # `-0`/`-1` (T=0.5) and `-t1-2` series end at that restart.
+
+Evidence moved: the slate was cut on 2026-09-09; because series are keyed by
+the eval thread's name, the earlier `-0`/`-1` (T=0.5) and `-t1-2` series end
+at that restart.
+
+### scripts/wandb_views.py — "0 · At a glance" section, the 2026-08-30 redesign
+Original comment:
+
+    # NEED-TO-KNOW ONLY: is this run winning, is it healthy, is it
+    # collapsing, is the critic calibrated, is it about to OOM.
+    # Everything else is drill-down detail in the sections below.
+    # 2026-08-30 redesign collapsed 16 sections -> 10 and pulled the
+    # canonical copy of every metric that used to be duplicated
+    # across 3+ sections up here (scripts/wandb_views.py history —
+    # see the old panel list in git log if you need the pre-redesign
+    # layout back).
+
+Evidence moved: the 2026-08-30 redesign collapsed 16 sections -> 10 and
+pulled the canonical copy of every metric that used to be duplicated across
+3+ sections up here (scripts/wandb_views.py history — see the old panel list
+in git log if you need the pre-redesign layout back).
+
+### scripts/wandb_views.py — "Loss & non-finite gate"
+Original comment:
+
+    # player_update_skipped is the non-finite gate — a
+    # poisoned update is permanent and the next periodic
+    # save overwrites the last good checkpoint with it
+    # (LESSONS.md), so this is checkpoint protection, not
+    # just a numerics footnote. Never surfaced before this
+    # redesign.
+
+Evidence moved: the "(LESSONS.md)" pointer, and "Never surfaced before this
+redesign." — the panel was added by the 2026-08-30 redesign. The mechanism
+(a poisoned update is permanent and the next periodic save overwrites the
+last good checkpoint with it, so this is checkpoint protection) stays in the
+code.
+
+### scripts/wandb_views.py — "Collapse watch: entropy axes & switch rate"
+Original comment:
+
+    # THE collapse watch panel — with the adaptivity
+    # controller removed (2026-08-13) and the entropy-floor
+    # dual controllers removed (2026-08-30), modality
+    # collapse has no automated backstop, only these
+    # eyes-on axes (1330 died at modality entropy 0.08;
+    # 1328 gained strength at 0.18-0.26).
+
+Evidence moved: the adaptivity controller was removed 2026-08-13 and the
+entropy-floor dual controllers 2026-08-30; run 1330 died at modality entropy
+0.08, while run 1328 gained strength at 0.18-0.26.
+
+### scripts/wandb_views.py — "Value R2 (main head)", the privileged premise
+Original comment:
+
+    # THE privileged-premise discriminator (2026-09-01):
+    # priv >= deploy from 20k is the gate; priv < deploy
+    # sustained past 30k is the abort (the 2026-08-25
+    # falsification re-run on its own instrument).
+
+Evidence moved: the discriminator was registered 2026-09-01, and it is the
+2026-08-25 falsification re-run on its own instrument. The pre-registered
+gate and abort (priv >= deploy from 20k; priv < deploy sustained past 30k)
+stay in the code as live constraints.
+
+### scripts/wandb_views.py — "Within-taken-modality normalised entropy (abort instrument)"
+Original comment:
+
+    # The ABORT instrument for the flat support hinge
+    # (2026-09-09), on its own panel: the sp75c row-form
+    # uniform KL pinned this at .93 while the control fell
+    # to .84 and halved the exploit. The hinge is silent
+    # above tau, so this should hold its ~.49; rising
+    # toward .93 with ineffective_confident_mass unmoved is
+    # the whole-set revert.
+
+Evidence moved: the flat support hinge landed 2026-09-09; the sp75c row-form
+uniform KL pinned this instrument at .93 while the control fell to .84 and
+halved the exploit. The pre-registered read (hold ~.49; rising toward .93
+with ineffective_confident_mass unmoved is the whole-set revert) stays.
+
+### scripts/wandb_views.py — "2 · Switch & critic evidence" section header
+Original comment:
+
+    # What is left of the critic section after the advantage head
+    # retired (2026-08-29) and the one-step-label panels went with
+    # the last of the Q machinery (2026-08-30), merged with Step 1
+    # of docs/critic-weakness-analysis.md (2026-08-23): the per-row
+    # JOINT statistics that judge every later step, from the
+    # completed-game outcome carried on every chunk. NaN where a
+    # batch has no rows in the slice (wandb skips them).
+
+Evidence moved: what is left of the critic section after the advantage head
+retired (2026-08-29) and the one-step-label panels went with the last of the
+Q machinery (2026-08-30), merged with Step 1 of
+docs/critic-weakness-analysis.md (2026-08-23).
+
+### scripts/wandb_views.py — "Action readout: drift from init"
+Original comment:
+
+    # The flat readout's own way to fail, and it is the same
+    # SHAPE as the dx65cpwp runaway these panels were built
+    # for: the bilinear is a two-factor product with ONE
+    # zero-init factor. query must leave 0 within ~200 steps
+    # (its gradient is a rank-1 outer product of live rows);
+    # key must leave lecun 0.0625 shortly after (its gradient
+    # is proportional to query, so it is frozen for exactly
+    # one step). Either still flat at 2k IS the stall.
+
+Evidence moved: the flat readout's failure mode is the same SHAPE as the
+dx65cpwp runaway these panels were built for. The init values and the
+pre-registered ~200-step / 2k stall criteria stay in the code.
+
+### scripts/wandb_views.py — "Trunk row cosine similarity"
+Original comment:
+
+    # Rows of the trunk's OUTPUT converging to one direction
+    # (Noci et al. 2022 rank collapse): cosine rising toward
+    # 1 / participation falling toward 1 is the alarm
+    # (> 0.9 / < 4 pre-registered); ckpt_00182000 read
+    # 0.173 / 10.9 offline, and the first live points
+    # after that restart must match.
+
+Evidence moved: ckpt_00182000 read 0.173 / 10.9 offline, and the first live
+points after that restart must match. The Noci et al. 2022 citation and the
+pre-registered alarm (> 0.9 / < 4) stay.
+
+### scripts/wandb_views.py — "Trunk output row L2 per group"
+Original comment:
+
+    # 2026-09-10: every row enters at RMS 1 (L2 16 at 256),
+    # so a group's OUTPUT L2 is what the six blocks wrote on
+    # it. Unnormalised, the history rows sat at ~1040 in and
+    # out (moved 2%) while CLS went 2.85 -> 1012; a group
+    # pinned near 16 is one the trunk does not revise.
+
+Evidence moved: the 2026-09-10 date, and the pre-normalisation reading —
+unnormalised, the history rows sat at ~1040 in and out (moved 2%) while CLS
+went 2.85 -> 1012.
+
+### scripts/wandb_views.py — "Matched-V realised gap (vol switch − move) per V bin"
+Original comment:
+
+    # Realised outcome of voluntary switches minus moves at
+    # matched V(s). Offline: pooled -0.147 -> matched
+    # -0.048±0.054. Per-batch n is tiny; read smoothed and
+    # with the n panel beside it.
+
+Evidence moved: Offline: pooled -0.147 -> matched -0.048±0.054.
+
+### scripts/wandb_views.py — "V(s) at voluntary switches vs moves"
+Original comment:
+
+    # Selection, directly: V at the states where switches
+    # are taken vs where moves are (offline -0.04 vs +0.08).
+
+Evidence moved: offline -0.04 vs +0.08.
+
+### scripts/wandb_views.py — "V outcome R²: all / phase / after switch vs move"
+Original comment:
+
+    # Outcome calibration of the V head (offline 0.265 on
+    # fresh on-policy games). prev_switch vs prev_move is
+    # the post-switch pessimism read.
+
+Evidence moved: offline 0.265 on fresh on-policy games.
+
+### scripts/wandb_views.py — "Voluntary-switch rows per batch (absorbing floor = 1.0)"
+Original comment tail:
+
+    # to the 1.0 floor is legible: 6ta9hmp6 ran 60.4 (3k) ->
+    # 3.9 (33k), halving every ~8k.
+
+Evidence moved: 6ta9hmp6 ran 60.4 (3k) -> 3.9 (33k), halving every ~8k. The
+APO (arXiv:2602.05717) citation and the absorbing 1.0 floor stay.
+
+### scripts/wandb_views.py — "3c · Eval slate" section header
+Original comment:
+
+    # The eval slate: the policy as the training actors sample it
+    # against the same policy thresholded at sampling, both EMA at
+    # T=1. The search eval actor was deleted 2026-09-09 (LESSONS.md
+    # "Removal ledger — 2026-09-09 search eval actor").
+
+Evidence moved: the search eval actor was deleted 2026-09-09 (LESSONS.md
+"Removal ledger — 2026-09-09 search eval actor").
+
+### scripts/wandb_views.py — "4 · Critic quality & value" section header
+Original comment:
+
+    # Observer critic quality. The policy no longer reads a Q stack
+    # (retired 2026-08-26/30; its link to return is the v-trace
+    # advantage), but an action-flat critic still voids the matched
+    # control and the starvation discriminators above.
+
+Evidence moved: the Q stack was retired 2026-08-26/30.
+
+### scripts/wandb_views.py — "Privileged value gap"
+Original comment:
+
+    # Mean |priv - deploy| expectation: the 2026-08-25
+    # "worth 0.005 value units" number, re-measured live.
+
+Evidence moved: this panel re-measures live the 2026-08-25 "worth ... value
+units" number. Per the carve-out, the figure itself is NOT restated here —
+it is recorded in LESSONS.md, "Addition ledger — 2026-09-12 pairwise entity
+critics".
+
+### scripts/wandb_views.py — "Position potential"
+Original comment:
+
+    # The unit position potential (eta-free, on the wire at
+    # any strength). switch_delta is DESCRIPTIVE (human
+    # replays: -0.038); adv_switch/move split the channel's
+    # advantage by the taken modality; grad_share is the
+    # head's part of the global clip norm.
+
+Evidence moved: switch_delta on human replays: -0.038.
+
+### scripts/wandb_views.py — "Value R2 calibration (fresh rows)"
+Original comment:
+
+    # Fresh-row calibration. Was framed as "Q fresh/replay
+    # vs V fresh" pre-2026-08-30 — the Q side retired with
+    # the Q head; only the V-fresh reading remains.
+
+Evidence moved: the panel was framed as "Q fresh/replay vs V fresh"
+pre-2026-08-30 — the Q side retired with the Q head; only the V-fresh
+reading remains.
+
+### scripts/wandb_views.py — "Action-head gradient norm"
+Original comment:
+
+    # Pre-clip grad norm per policy-head subtree, the
+    # policy pathway's own gradient scale (the retired
+    # Q-head pair stayed calm through both dx65cpwp
+    # failures).
+
+Evidence moved: the retired Q-head pair stayed calm through both dx65cpwp
+failures.
+
+### scripts/wandb_views.py — "6 · League", the payoff heatmap preset
+Original comment tail:
+
+    # titles and a diverging win-rate colour scale —
+    # replaces both the old matplotlib MediaBrowser image
+    # panel and the later confusion-matrix-preset hijack.
+
+Evidence moved: the custom Vega-Lite preset replaces both the old matplotlib
+MediaBrowser image panel and the later confusion-matrix-preset hijack.
+
+### scripts/wandb_views.py — "Game length"
+Original comment:
+
+    # Whole-game length off terminal chunks' done rows — the
+    # distribution to watch since the 96-request force-tie
+    # was removed (2026-08-16).
+
+Evidence moved: this is the distribution to watch since the 96-request
+force-tie was removed (2026-08-16).
+
+### scripts/wandb_views.py — "Applied update rms · action readout leaves"
+Original comment tail:
+
+    # force acts on (post-clip, post-revert rms): the switch
+    # pair's query and ally-side scalar (which replaced the
+    # switch_bias whose delta started the pattern) beside the
+    # move pair's.
+
+Evidence moved: the switch pair's query and ally-side scalar replaced the
+switch_bias whose delta started the pattern.
+
+### scripts/wandb_views.py — "Shape lattice combo (T, H)"
+Original comment:
+
+    # Which (chunk_rows, history_rows) combo of
+    # player_shape_lattice a batch hit — relevant given the
+    # shape-lattice OOM-guard history (the first bullet
+    # under CLAUDE.md's "Invariants"): a
+    # surprise top-bucket compile is what killed three runs
+    # before the lattice was enumerated up front.
+
+Evidence moved: the shape-lattice OOM-guard history (the first bullet under
+CLAUDE.md's "Invariants") — a surprise top-bucket compile is what killed
+three runs before the lattice was enumerated up front.
+
+### scripts/wandb_views.py — "9b · Actor step timing" section header
+Original comment tail:
+
+    # means over the pool. Where an actor's step goes — the
+    # system rate is actor-bound (learner alone ~3x faster), and
+    # this is the baseline the history-carry pass is judged on.
+
+Evidence moved: the learner alone is ~3x faster, and this panel set is the
+baseline the history-carry pass is judged on.
+
+### scripts/wandb_views.py — "History carry: suffix size per request"
+Original comment:
+
+    # The carry path's own read: steps / packed rows of
+    # the suffix a request actually sends (ex.bin ~3 / ~5
+    # per request against the 64/128+ a full window pads
+    # to).
+
+Evidence moved: on ex.bin the suffix is ~3 steps / ~5 packed rows per
+request.
+
+---
+
+## scripts/register_wandb_charts.py
+
+### scripts/register_wandb_charts.py — `_winrate_hex` provenance
+Original docstring:
+
+    """Red/gold/green hex for a win rate. Self-contained: the learner-side
+    twin this used to mirror no longer exists, and this script has no
+    jax/model deps by design."""
+
+Evidence moved: the learner-side twin this used to mirror no longer exists.
+
+### scripts/register_wandb_charts.py — the v3-to-v9 payoff-heatmap spec ledger
+Original comment, removed in full and replaced by a constraint-only note:
+
+    # v3-v6 (explicit color.scale.range hex array), v7 (color.scale.scheme +
+    # domain + clamp), v8 (per-cell literal hex column + scale: null), and v9
+    # (v8 with the template field key renamed off "color") were all confirmed
+    # spec-correct -- via wandb's own GraphQL API re-fetching the stored spec
+    # byte-for-byte, and via a neutral standalone Vega-Lite renderer
+    # (vl-convert) producing exactly the intended red -> gold -> green -- yet
+    # every one rendered as either an unrelated pink/black/blue palette or a
+    # single flat colour in wandb's actual custom-chart panel (confirmed via
+    # the downloaded panel SVG: every cell baked in with the identical literal
+    # fill regardless of field name or data values). The common factor across
+    # every failing version: the rect mark's fill was bound to a table FIELD
+    # via "field" in the color encoding. The one encoding that DID render
+    # correctly the whole time was the text mark's black/white choice, which
+    # uses "condition"/"value" with NO "field" at all -- pure literal values
+    # selected by a boolean test. v10 applies that same pattern to the rect:
+    # a chain of "condition" tests against the (quantitative, field-bound)
+    # winrate value picking a literal hex "value" per 5%-wide band, and a
+    # fallback "value" for the top band. No field is ever bound directly to
+    # color/fill -- only used inside test expressions -- which is the one
+    # combination not yet tried.
+
+The surviving constraint in the code: a mark's fill must never be bound to a
+table FIELD via "field" in the colour encoding; only "condition"/"value"
+pairs render.
+
+---
+
+## rl/offline
+
+### rl/offline/harness.py — provenance of the harness
+Original docstring sentence:
+
+    Born from the critic-weakness check that needed a stub
+    learner, a monkeypatched SERVER_URI and a sed'd copy of the service to
+    exist at all.
+
+### rl/offline/harness.py — the unresolved-battle rate behind `deadline_s`
+Original docstring:
+
+    Every game is bounded by `deadline_s` in play_games: the service has no
+    turn cap yet, and a battle that never resolves (seen on 2026-08-23, ~2%
+    of games) would otherwise pin a slot forever — stragglers are dropped,
+    not waited on, and the count is logged.
+
+Evidence moved: battles that never resolve were seen on 2026-08-23, ~2% of
+games.
+
+### rl/offline/config.py — forfeit composition of the replay corpus
+Original comment:
+
+    # Forfeit handling (measured on 50k rated gen9randombattle games, July
+    # 2026: ~48% played out, ~41% conceded with the winner ahead, ~11%
+    # forfeited with the winner NOT ahead on mons).
+
+Evidence moved in full: measured on 50k rated gen9randombattle games, July
+2026 — ~48% played out, ~41% conceded with the winner ahead, ~11% forfeited
+with the winner NOT ahead on mons.
+
+### rl/offline/config.py — the regularisation curve behind the AdamW settings
+Original comment:
+
+    # Learning params. Supervised training wants momentum, unlike the RL
+    # learner's b1=0. Regularization is sized to constrain without eroding:
+    # 1e-2 decay + 0.05 smoothing produced a peak-then-decay-to-plateau
+    # accuracy curve (smoothed CE saturates once fit; decay keeps shrinking
+    # the solution until CE re-engages — a stable equilibrium below the
+    # peak). The structural defenses (antisymmetric probe, pair batching,
+    # deep supervision) carry the anti-memorization burden instead.
+
+Evidence moved: 1e-2 decay + 0.05 smoothing produced a peak-then-decay-to-
+plateau accuracy curve (smoothed CE saturates once fit; decay keeps
+shrinking the solution until CE re-engages — a stable equilibrium below the
+peak).
+
+### rl/offline/type_probe.py — the behavioural comparison that motivated probe E
+Original docstring:
+
+    Motivated by the 2026-09-03 behavioural comparison (ckpt_00240000 vs 2000
+    human >=1900 replays): the model lands twice the human rate of IMMUNE hits
+    (0.047-0.051 vs 0.024) and fewer supereffective ones (0.175 vs 0.195). Types ARE on
+    the wire: `species.npy` / `moves.npy` are multi-hot attribute tables with a
+    dedicated column per type (verified 2026-09-03), so each operand row carries
+    its type bits pre-trunk...
+
+Evidence moved: the 2026-09-03 behavioural comparison (ckpt_00240000 vs 2000
+human >=1900 replays) found the model lands twice the human rate of IMMUNE
+hits (0.047-0.051 vs 0.024) and fewer supereffective ones (0.175 vs 0.195);
+the type columns in `species.npy` / `moves.npy` were verified 2026-09-03.
+
+### rl/offline/kind_probe.py — the readings that motivated the kind probe
+Original docstring:
+
+    The
+    readout consumes the rows AFTER six blocks, and the type ceiling read
+    post-trunk rows as LESS legible than the assembled input (0.50 vs 0.60)
+    while `player_trunk_row_participation` fell 7.1 -> 4.5 over irqeetfg.
+    This asks, per block, whether that is the trunk squeezing the kinds into
+    a shared subspace:
+
+Evidence moved: the type ceiling read post-trunk rows as LESS legible than
+the assembled input (0.50 vs 0.60) while `player_trunk_row_participation`
+fell 7.1 -> 4.5 over irqeetfg.
+
+### rl/offline/separation_probe.py — the 2026-08-27 collapse measurement
+Original docstring:
+
+    (docs: the 2026-08-27 measurement found within-row
+    switch Q std 0.0196 vs move 0.0374 vs between-row 0.507 on the live
+    checkpoint — the collapse's representational reading).
+
+Evidence moved in full. The pre-registered gates (switch-group r >= 0.9 AND
+std ratio >= 0.8 by step 1000; the SEEN-identity correction of 2026-08-27)
+stay in the code.
+
+### rl/offline/separation_probe.py — provenance of the batch-selection block
+Original comment, removed in full:
+
+    # Batch selection, moved here from rl/offline/overfit_probe.py when that
+    # file retired with the Q head on 2026-08-29. This probe was its only
+    # remaining consumer.
+
+### rl/offline/separation_probe.py — the grid era's control rows
+Original comment:
+
+    # Controls are SEQUENCE rows that carry the named entity: my active's
+    # ally-target row and the opponent active's enemy-target row (the
+    # entity-derived target rows). The grid era read the 41-slot action
+    # stream here; the flat trunk has no such stream, so the rows are named
+    # off rl/model/constants like every head does.
+
+Evidence moved: the grid era read the 41-slot action stream here; the flat
+trunk has no such stream.
+
+### rl/offline/tactical_cohort.py — the collection recipe followed
+Original docstring:
+
+    fixed forever
+    after, so every checkpoint is read on the same contexts (the
+    runtime/priority-audit-01861967 recipe).
+
+Evidence moved: the cohort follows the runtime/priority-audit-01861967
+recipe.
+
+### rl/offline/separation_probe.py — the "pair" mode lookup control reading
+Original docstring tail:
+
+    Lookup labels measured
+    2026-08-27: both architectures ~0.73-0.75 held-seen — lookup does not
+    discriminate them.
+
+### rl/offline/separation_probe.py — the seen-identity restriction's overlap measurement
+Original docstring:
+
+    Why the restriction exists (measured 2026-08-27): held-out labels are
+    hashes of identity, so a species never seen in training is UNLEARNABLE
+    by any architecture — and randombattle teams barely overlap across
+    games (seen-frac 0.267 for switch cells vs 0.793 for move cells on the
+    12-game cache), so unrestricted held-out r is overlap-capped and reads
+    as an architecture gap that is actually a data artefact.
+
+Evidence moved: measured 2026-08-27, seen-frac 0.267 for switch cells vs
+0.793 for move cells on the 12-game cache. The reason the restriction exists
+stays in the code.
+
+### rl/offline/separation_probe.py — the train-r memorisation reading
+Original docstring:
+
+    routing species -> cell — measured 2026-08-27: the shared-stream
+    architecture hits train r = 1.000 by step 100.
+
+### rl/offline/separation_probe.py — probe D, the deleted entity_index_tag
+Original docstring:
+
+    History row i is `gru_state + node_snapshot` (+ its group and row bias)
+    -- addends summed into one vector, the shape the 2026-09-01 pass
+    deleted one level up -- and its join to public row i is positional.
+    Until 2026-09-02 both also carried a shared `entity_index_tag`, measured
+    at 0.028 of the other addends' rms on ckpt_00182000 and deleted for
+    never training.
+
+Evidence moved: the summed-addends shape is what the 2026-09-01 pass deleted
+one level up; until 2026-09-02 both rows also carried a shared
+`entity_index_tag`, measured at 0.028 of the other addends' rms on
+ckpt_00182000 and deleted for never training.
+
+### rl/offline/dataset.py — the ending composition of the replay corpus
+Original docstring:
+
+    Endings (measured on 50k rated gen9randombattle games, July 2026):
+    - "played_out" (~48%): the loser's six mons all fainted — exact margin.
+    - "conceded" (~41%): forfeit/timeout with the winner ahead on mons —
+      the margin is the count at concession, a compressed lower bound on
+      the played-out margin (concessions cluster at 1-3, played-out games
+      reach 4-6 far more often).
+    - "clamped" (~11%): forfeit/timeout with the winner NOT ahead (rage
+      quit / timer / disconnect) — the position contradicts the result, so
+      the ±1 margin is pure label noise.
+
+Evidence moved: measured on 50k rated gen9randombattle games, July 2026 —
+played_out ~48%, conceded ~41%, clamped ~11%; concessions cluster at 1-3,
+played-out games reach 4-6 far more often. The ending definitions stay in the
+code.
+
+---
+
+## tests/ and the peripheral trees
+
+(Nothing was moved out of `embeddings/`, `inference/`, `scrape/`, `serve/`, `data/src/` or `heuristics/` — they carry mechanism and deployment contracts only.)
+
+### tests/conftest.py — JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES in the test env
+The learner's env sets JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=all (kernel + autotune caches alongside the executable cache). Under that flag every new executable rewrites the whole ~340 MB xla_gpu_kernel_cache_file: the four four tiny loss unit tests took 75 s with it and 6 s without (2026-08-24), and the fast suite as a whole 264 s.
+
+### tests/conftest.py — jitted model init in the session fixture
+Jitted init (2026-08-24): eager init dispatches the forward op by op and compiles each nn.scan separately -- it was ~6 min of the slow suite, paid again inside create_train_state (also jitted now).
+
+### tests/test_train_step.py — eager vs jitted train_step cost
+The learner's compiled train_step (donates the states; nothing below reads the pre-step ones). The eager function was ~25 min here.
+
+### tests/test_train_step.py — file rename history
+Was tests/test_train_step_q.py until 2026-08-29, when the Q head it was named for retired.
+
+### tests/test_dtype_policy.py — the param_dtype/dtype conflation
+Two properties, and they are different things (conflating them wasted a measurement on 2026-08-25).
+
+### tests/test_br_init.py — the sp75 BR-init seed bug reading
+The first sp75 probe drew its "fresh" component from the lineage seed the TARGET also grew from, so the perturb was a rewind along the target's own training path (measured cos 0.95 to the target at the BR's first checkpoint, 2026-08-30).
+
+### tests/test_prune_policy.py — pruned-cell gradient magnitude
+The removed cell's gradient is two cancelling log-sum-exp terms, zero to float32 rounding (measured -2.4e-10); the illegal cell's exactly.
+
+### tests/test_model_forward.py — probe C baseline before the private truth channel existed
+Probe C's baseline read was r ~ 0.00 precisely because this input did not exist.
+
+### tests/test_chunking.py — the tail-window forward tolerance history
+Exact equality is UNATTAINABLE here and the test used to demand it (atol=1e-5, failing at 0.023 since before 2026-08-25).
+
+### tests/test_history_carry.py — the measured shape-noise floor for the carry bound
+Under the opened readout the floor on log_policy reads ~0.14 (2026-09-02: carry worst 0.093 against it; value log-probs 0.022 against a 0.026 floor) -- the chunking test's 0.05 was calibrated on value log-probs alone.
+
+### tests/test_history_carry.py — carry-vs-floor readings behind the 1.5x margin
+The floor is ONE draw of the bf16 leading-dim class (the 256-row tail) and the carry path runs another (the 32-row suffix bucket), so the bound carries a margin over it -- read 0.093 vs 0.14 (2026-09-03) and 0.101 vs 0.096 (2026-09-05); the shifted-carry control below sits ~2.0 away, so the margin costs the test nothing.
+
+### tests/test_history_carry.py — content-dependence of the batch-1-vs-2 GEMM noise
+Batch 1 vs batch 2 is a bf16 GEMM leading-dim change, and the noise it makes is content-dependent (0.042 on the plain request, 0.067 on the carrying one, 2026-09-02, opened readout).
+
+---
+
+## service/src
+
+### service/src/server/worker.ts — battle-lifecycle guarantees, 2026-08-23
+Battle-lifecycle guarantees (2026-08-23). Before these, a battle that stopped producing states — a swallowed choose() error, an RQID mismatch thrown out of the stream loop, a partner that never reset — parked the client's receive forever. Both actor slots of that game were then silently lost for the rest of the run (~2% of games in the 2026-08-23 offline sweep).
+
+### service/src/server/worker.ts — why the step watchdog is 10 min, not 2
+10 min, not 2: a step legitimately stalls for the learner's lattice precompile (~9 min at launch, actors blocked behind the GPU lock) — the 2026-08-23 first launch aborted every battle in flight and restarted them.
+
+### service/src/server/index.ts — the worker-throw that motivated isolate replacement
+A worker that throws (2026-08-23: a TypeError in sendFinalState after a mid-battle destroy) used to be logged and left in the routing table, so every gameId hashing to it — 1/numWorkers of all games — waited on a dead isolate forever.
+
+### service/src/server/index.ts — the old justification for the same-worker routing invariant
+(This once carried a justification about the exploiter "three-population redesign" raising the odds; those populations were deleted 2026-08-21 and the league is one population again, but the routing invariant is unchanged and still load-bearing.)
+
+### service/src/server/runner.ts — actionCells cleared per request
+Clearing it with every request (4c8836d, 2026-08-31) held HAS_PREV_ACTION at 0.
+
+### service/src/server/runner.ts — endBattleStream must be once-only
+... and writeEnd() is async so a plain try/catch around it catches nothing — the rejection killed workers as an unhandled 'error' (see the 2026-08-13 service crash).
+
+### service/src/server/runner.ts — the destroyed flag
+`start()`'s loop exits when destroy() ends the stream and would otherwise build the final state on the torn-down battle -- an unhandled rejection that took the WORKER down with every other game on it (2026-09-03, at a watchdog abort: `Cannot read properties of null (reading 'team')`).
+
+### service/src/server/state.ts — warn-once for unmapped enum keys
+... the per-occurrence line printed thousands of times per session and buried real errors in the pane (the 2026-08-13 worker crash was nearly scrolled out by it).
+
+### service/src/server/state.ts — the private truth channel vs the privateBattle candidate
+NOT the privateBattle `candidate`: its hp is log-event-driven and reads 0/0 for a mon the log has not yet given a reading (measured: request "252/342" against candidate 0/0, caught by the harness truth invariant on its first run), and NOT the transform-unwrapped `pokemon`.
+
+### service/src/server/state.ts — team-preview cells before 2026-08-29
+Until 2026-08-29 the mask lit one cell per REMAINING position -- up to 7 -- while choiceFromAction ignored the target entirely, so the policy spread its mass over up to 7 exact duplicates of one choice and the micro-entropy cell count was inflated to match. One cell per candidate now, at the canonical column.
+
+### service/src/tests/battle.test.ts — doubles slot-alignment violation rate
+Doubles formats currently violate the slot-alignment invariant (~75% of battles; 622 hits over one ~3200-battle soak) — a pre-existing defect the old harness swallowed (its controller caught and console.error'd every invariant throw).
+
+### service/src/tests/battle.test.ts — the Illusion/Zoroark false-positive rate behind retry: 2
+retry: the slot-alignment assert has a documented false-positive class (Illusion/forme changes — and the gen9ou sample team is a Zoroark team), observed at ~1% of soak battles. Three independent failures (~1e-6 by chance) still fail the suite, so a systematic regression stays fatal.
+
+### service/src/tests/harness.ts — what assertPrivateSideShape replaced
+The private-side shape contract. Until 2026-08-25 these two buffers were decoded here only to feed the frozen-opponent-sheet invariants; when those were deleted with the privileged critic the decodes stayed behind an eslint-disable, i.e. a decode-does-not-throw smoke test wearing the costume of an assertion. This is the replacement: the encoder's own shape contract, which is what the python decoder (`rl/environment/utils.process_state`) reshapes against and will throw on if it ever drifts.
+
+### service/src/tests/harness.ts — alignment-key false-positive rate
+KNOWN ~0.1% false-positive class (2 in 1791 soak battles): a my-side Illusion mon's own index attaches to no public row until |replace|.
+
+---
+
+## Appendix — exact original text of the trimmed offline docstrings
+
+Reproduced line for line so that no removed line is unaccounted for.
+
+### rl/offline/harness.py — original opening paragraph
+
+    critic questions can be answered against real trajectories without a
+    training run. Born from the critic-weakness check that needed a stub
+    learner, a monkeypatched SERVER_URI and a sed'd copy of the service to
+    exist at all.
+
+### rl/offline/config.py — original forfeit-handling comment
+
+    # Forfeit handling (measured on 50k rated gen9randombattle games, July
+    # 2026: ~48% played out, ~41% conceded with the winner ahead, ~11%
+    # forfeited with the winner NOT ahead on mons).
+    #
+    # Drop games where the sign-clamp engages (forfeit/timeout with the
+    # winner not ahead): the recorded result contradicts the position, so
+    # every step's label is noise
+
+### rl/offline/separation_probe.py — original probe preamble
+
+    "can this ARCHITECTURE tell a modality's candidates apart?" before any
+    training time is spent (docs: the 2026-08-27 measurement found within-row
+    switch Q std 0.0196 vs move 0.0374 vs between-row 0.507 on the live
+    checkpoint — the collapse's representational reading).
+
+### rl/offline/separation_probe.py — original "pair" mode tail
+
+    mode "pair" keys every identity-carrying cell by (candidate id,
+    OPPONENT ACTIVE species) instead: the label then changes when the
+    opponent changes, so a lookup of the candidate alone cannot fit it —
+    only RELATIONAL routing (candidate x opponent, the matchup shape the
+    deployment task actually needs) generalises. Lookup labels measured
+    2026-08-27: both architectures ~0.73-0.75 held-seen — lookup does not
+    discriminate them.
+
+### rl/offline/separation_probe.py — original held-out gate paragraph
+
+    memorise per-row-per-slot values through state features without ever
+    routing species -> cell — measured 2026-08-27: the shared-stream
+    architecture hits train r = 1.000 by step 100. Identity-keyed labels
+    generalise to UNSEEN states only through genuine candidate routing
+
+### rl/offline/separation_probe.py — original probe D paragraph
+
+    History row i is `gru_state + node_snapshot` (+ its group and row bias)
+    -- addends summed into one vector, the shape the 2026-09-01 pass
+    deleted one level up -- and its join to public row i is positional.
+    Until 2026-09-02 both also carried a shared `entity_index_tag`, measured
+    at 0.028 of the other addends' rms on ckpt_00182000 and deleted for
+    never training. This is the behavioural read: a ridge readout over the
+    post-trunk history row
+
+### rl/offline/tactical_cohort.py — original collect paragraph
+
+    SimpleHeuristic at T=.5 with fixed seeds and pickles it — fixed forever
+    after, so every checkpoint is read on the same contexts (the
+    runtime/priority-audit-01861967 recipe). Point PS_SERVICE_URI at a
+    service started with BATTLE_LOG_DIR set so the simulator's own `-immune`
+    lines confirm the taken-move events.

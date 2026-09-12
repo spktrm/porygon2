@@ -391,8 +391,7 @@ def test_private_condition_reaches_only_its_own_sheet_row(
 ) -> None:
     """The truth channel is wired: a candidate's CURRENT hp on the wire moves
     its own assembled sheet row and no other -- the input-level half of what
-    probe C measures behaviourally after training. Probe C's baseline read
-    was r ~ 0.00 precisely because this input did not exist."""
+    probe C measures behaviourally after training."""
     from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
 
     network, params, actor_input, _ = real_model_and_trajectory

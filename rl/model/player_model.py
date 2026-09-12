@@ -69,13 +69,6 @@ class Porygon2PlayerModel(nn.Module):
     def setup(self):
         """Three modules: the trunk, the action readout, the critic.
 
-        Was four, two of them the same class -- a policy ActionScoreHead and
-        an advantage one over the same grid. The advantage head, `compose_q`
-        and the Retrace baseline it fed retired on 2026-08-29: the policy had
-        not read it since the NashPG switch, so it was a matched-control
-        observer for an architecture that no longer exists, and its last
-        readings are banked in the ledger.
-
         The action readout scores the block cells from the rows it owns;
         `v_head` reads the CLS row and nothing else.
         """

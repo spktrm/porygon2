@@ -305,7 +305,7 @@ the grep targets.
 
 | workstream | sections |
 |---|---|
-| cleanup | 2026-08-21 cleanup pass |
+| cleanup | 2026-08-21 cleanup pass · 09-12 comment sweep (445 narration lines, 50 false claims, evidence migrated out of the code) |
 | policy objective + exploration | 2026-08-22 R-NaD · 08-26 NashPG transition · 08-26 support anchor · 08-26 anchor phase 3 · 08-27 factorised objective · 08-28 entropy floor · 08-30 NashPG-verbatim bracket · 08-31 zero-avoider restored (carries the algebra for why NO entropy coefficient holds a floor) |
 | model architecture | 08-25 privileged critic · 08-25 head redesign · 08-28 audit + input-read redesign · 08-29 flat trunk · 08-31 grid retired + modality-marginal KL · 09-01 centralised value + belief code · 09-02 entity_index_tag · 09-02 history encoder restructure · 09-03 entity attention pool → masked sum · 09-12 opp code + belief SSL + dynamics rows removed (in the 09-12 removal ledger) |
 | stochastic transition + search | 09-05 Step 1 (mean head priced) · 09-05 Step 2 (latent model) · 09-05 hidden-token belief label · 09-06 Step 3 (search) · 09-06 Step 3b (B and D) · 09-06 Step 3b D result + posterior sampling + event probe · 09-07 latent actions · 09-08 MCTS + interval model · 09-09 search eval actor removed · 09-12 removal ledger (explored; open to revisit) |

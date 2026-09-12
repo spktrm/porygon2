@@ -7,9 +7,6 @@ the value loss and the gradients, on the bundled ex.bin trajectory
 test that compiles the real train_step, so it is what catches a panel that
 went stale or a shape that stopped matching.
 
-Was tests/test_train_step_q.py until 2026-08-29, when the Q head it was
-named for retired.
-
 Runs on the GPU like the rest of the slow suite (it was CPU-pinned to sit
 beside a live learner, but the slow suite already cannot: host-RAM
 guard). ONE static config = one compile of the full forward + backward.
@@ -89,7 +86,7 @@ def test_train_step_smoke() -> None:
     batch = _ex_batch(actor_input, actor_output)
 
     # The learner's compiled train_step (donates the states; nothing below
-    # reads the pre-step ones). The eager function was ~25 min here.
+    # reads the pre-step ones).
     new_player_state, _, logs = TRAIN_STEP_JIT(
         player_state, builder_state, batch, config
     )
