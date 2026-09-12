@@ -556,64 +556,6 @@ def rl_sections():
                     "Privileged value gap",
                     ["player_priv_value_gap"],
                 ),
-                # The pairwise entity critics (2026-09-12): two generalised
-                # additive models over 12 entity rows (unary + antisymmetric
-                # cross pair + symmetric same-side pair, softmax weights),
-                # public rows post-trunk and both sheets pre-trunk. Their
-                # R2 sits on "Value R2 (main head)" beside the CLS critics.
-                lp(
-                    # MSE against the same scalar v-trace return the CLS
-                    # critics' two-hot is built from.
-                    "Pair value loss",
-                    ["player_loss_pair_value_public", "player_loss_pair_value_private"],
-                ),
-                lp(
-                    # Variance of each part over the variance of V (need not
-                    # sum to 1). Pre-registered: the cross share leaves the
-                    # floor while R2 rises, else the value lives in the
-                    # unary terms and the pre-trunk pair term is the fallback.
-                    "Pair value: part shares",
-                    None,
-                    regex="^player_pair_value_(public|private)_share_",
-                ),
-                lp(
-                    # Signed means of the five parts (unary mine/theirs,
-                    # cross, synergy mine/theirs): where the value sits.
-                    "Pair value: partials",
-                    None,
-                    regex="^player_pair_value_(public|private)_partial_",
-                ),
-                lp(
-                    # Normalised entropy of the softmax pair weights (1 =
-                    # uniform over alive pairs, 0 = one pair) -- concentrating
-                    # on the decisive matchup is the intended reading, so
-                    # this is descriptive; and the unary cancellation index
-                    # (mean sum |u_i| over mean |V|, >= 1).
-                    "Pair value: weights and cancellation",
-                    None,
-                    regex="^player_pair_value_(public|private)_("
-                    "cross_weight_entropy_norm|synergy_weight_entropy_norm|"
-                    "unary_cancellation)$",
-                ),
-                lp(
-                    # Mean |m| / |s| over alive pairs: the pair terms'
-                    # magnitude in [0, 1].
-                    "Pair value: pair magnitudes",
-                    None,
-                    regex="^player_pair_value_(public|private)_(cross|synergy)_abs_mean$",
-                ),
-                lp(
-                    # The four-questions drift panels: each pair function's
-                    # query (0 at init) and key (0.0625 at init) rms.
-                    "Pair value: kernel rms",
-                    None,
-                    regex="^player_pair_value_(public|private)_.*_(query|key)_rms$",
-                ),
-                lp(
-                    "Pair value: applied delta rms",
-                    None,
-                    regex="^player_applied_delta_rms_pair_value_",
-                ),
                 lp(
                     # The PBRS potential channel (2026-09-11): its std share
                     # of the actor advantage should FALL as the potential
@@ -704,6 +646,92 @@ def rl_sections():
                 lp(
                     "Win returns",
                     ["player_win_returns_sum", "player_win_returns_min"],
+                ),
+            ],
+        ),
+        ws.Section(
+            name="4b · Pair value heads",
+            is_open=True,
+            panels=[
+                lp(
+                    "Pair value R2 vs CLS critics",
+                    [
+                        "player_pair_value_public_r2",
+                        "player_pair_value_private_r2",
+                        "player_value_head_r2",
+                        "player_priv_value_head_r2",
+                    ],
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    "Pair value: gradient norms",
+                    [
+                        "player_pair_value_public_gradient_norm",
+                        "player_pair_value_private_gradient_norm",
+                    ],
+                ),
+                # The pairwise entity critics (2026-09-12): two generalised
+                # additive models over 12 entity rows (unary + antisymmetric
+                # cross pair + symmetric same-side pair, softmax weights),
+                # both over POST-trunk rows (public rows; my sheet rows and
+                # the opponent-truth rows). Their R2 also sits on "Value R2
+                # (main head)" beside the CLS critics.
+                lp(
+                    # MSE against the same scalar v-trace return the CLS
+                    # critics' two-hot is built from.
+                    "Pair value loss",
+                    ["player_loss_pair_value_public", "player_loss_pair_value_private"],
+                ),
+                lp(
+                    # Variance of each part over the variance of V (need not
+                    # sum to 1). Pre-registered: the cross share leaves the
+                    # floor while R2 rises, else the value lives in the
+                    # unary terms and the pre-trunk pair term is the fallback.
+                    "Pair value: part shares",
+                    None,
+                    regex="^player_pair_value_(public|private)_share_",
+                ),
+                lp(
+                    # Signed means of the five parts (unary mine/theirs,
+                    # cross, synergy mine/theirs): where the value sits.
+                    "Pair value: partials",
+                    None,
+                    regex="^player_pair_value_(public|private)_partial_",
+                ),
+                lp(
+                    # Normalised entropy of the softmax pair weights (1 =
+                    # uniform over alive pairs, 0 = one pair) -- concentrating
+                    # on the decisive matchup is the intended reading, so
+                    # this is descriptive.
+                    "Pair value: weight entropy",
+                    None,
+                    regex="^player_pair_value_(public|private)_("
+                    "cross_weight_entropy_norm|synergy_weight_entropy_norm)$",
+                    range_y=(0, 1),
+                ),
+                lp(
+                    "Pair value: unary cancellation",
+                    None,
+                    regex="^player_pair_value_(public|private)_unary_cancellation$",
+                ),
+                lp(
+                    # Mean |m| / |s| over alive pairs: the pair terms'
+                    # magnitude in [0, 1].
+                    "Pair value: pair magnitudes",
+                    None,
+                    regex="^player_pair_value_(public|private)_(cross|synergy)_abs_mean$",
+                ),
+                lp(
+                    # The four-questions drift panels: each pair function's
+                    # query (0 at init) and key (0.0625 at init) rms.
+                    "Pair value: kernel rms",
+                    None,
+                    regex="^player_pair_value_(public|private)_.*_(query|key)_rms$",
+                ),
+                lp(
+                    "Pair value: applied delta rms",
+                    None,
+                    regex="^player_applied_delta_rms_pair_value_",
                 ),
             ],
         ),

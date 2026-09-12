@@ -153,27 +153,13 @@ def _lifted_entity_vmap(method):
 
 class PairValueInputs(NamedTuple):
     """What the pairwise critics read beyond the trunk's rows (2026-09-12,
-    learner-only, () on the actor). `sheet_rows` (12, D): my sheet's
-    latents then the opponent's -- the SAME private embedder's output for
-    both, before either side bias, each row at unit RMS -- so the private head's two sides are one
-    representation and a side swap negates it exactly. `sheet_valid` /
-    `sheet_alive` (12,): the row exists / its hit-point ratio is above 0.
-    `public_alive` (12,): the same flag for the public rows. `field_rows`
-    (3, D): the assembled pre-trunk field triple (global, mine, theirs) at
-    unit RMS, the private head's context."""
+    learner-only, () on the actor): alive = the mon's hit-point ratio token
+    is above 0, off the wire. `public_alive` (12,) for the public rows;
+    `sheet_alive` (12,) for my sheet rows then the opponent's, the order of
+    PRIVATE_ROWS then OPP_PRIVATE_ROWS the private head reads."""
 
-    sheet_rows: jax.Array
-    sheet_valid: jax.Array
-    sheet_alive: jax.Array
     public_alive: jax.Array
-    field_rows: jax.Array
-
-
-def unit_rms(rows: jax.Array, eps: float = 1e-6) -> jax.Array:
-    """Each row divided by its own root-mean-square (parameter-free; an
-    all-zero row stays zero), f32 statistics, the rows' dtype out."""
-    square_mean = jnp.mean(jnp.square(rows.astype(jnp.float32)), axis=-1, keepdims=True)
-    return (rows * jax.lax.rsqrt(square_mean + eps)).astype(rows.dtype)
+    sheet_alive: jax.Array
 
 
 class Encoder(nn.Module):
@@ -1121,24 +1107,18 @@ class Encoder(nn.Module):
 
         pair_value_inputs = ()
         if self.cfg.train:
-            # The pairwise critics' inputs (2026-09-12, PairValueInputs):
-            # both sheets through the one private embedder, before either
-            # side bias; alive = hit-point ratio above zero, off the wire.
+            # The pairwise critics' alive flags (2026-09-12, PairValueInputs);
+            # both heads read post-trunk rows, so nothing else rides out.
             hp_public = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
             hp_private = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO
             pair_value_inputs = PairValueInputs(
-                sheet_rows=unit_rms(
-                    jnp.concatenate((private_latents, opp_latents), axis=0)
-                ).astype(dtype),
-                sheet_valid=jnp.concatenate((private_valid, opp_private_valid)),
+                public_alive=env_step.public_team[:, hp_public] > 0,
                 sheet_alive=jnp.concatenate(
                     (
                         env_step.private_team[:, hp_private] > 0,
                         env_step.opp_private_team[:, hp_private] > 0,
                     )
                 ),
-                public_alive=env_step.public_team[:, hp_public] > 0,
-                field_rows=unit_rms(field_rows).astype(dtype),
             )
 
         # The content is normalised FIRST and the identity goes on AFTER

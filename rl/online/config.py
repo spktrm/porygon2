@@ -429,10 +429,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # u a per-mon MLP, g / g_s ONE bilinear each shared across sides (the
     # sharing is what makes a side swap negate V exactly), alpha / beta
     # softmax weights over alive pairs, s = tanh(g_s(i,i') + g_s(i',i)).
-    # The public head reads the post-trunk PUBLIC rows; the private head
-    # both players' pre-trunk sheet latents, so its gradient trains the
-    # private embedder directly. Both
-    # regress on `scalar_returns` (the v-trace scalar the two-hot label is
+    # Both heads read POST-trunk rows (the trunk routes whatever context a
+    # row needs, no field context of the heads' own): the public head the
+    # PUBLIC rows, the private head my sheet rows and the opponent-truth
+    # rows (learner-only by the read mask). Both regress on `scalar_returns` (the v-trace scalar the two-hot label is
     # built from) under this coefficient, gradient live into what they
     # read; the CLS critics stay the matched control and the value
     # bootstraps keep their route (player_privileged_targets). 0.0 builds

@@ -5601,3 +5601,21 @@ all seven commits — 15 output leaves compared exactly against the dump
 taken at the tag (`runtime/tidy-bitcheck/actor_bitcheck.py`). The learner
 loss is not bit-identical by design (the notes above); the slow suite and
 the full-lattice train_step smoke are owed at the next learner-free window.
+
+### Amendment — 2026-09-12 pairwise critics: no field context, private head post-trunk (numbers move)
+
+User call at the launch check ("the trunk should share the context as it
+needs"): the head's zero-init context projection (each mon's own side's
+field row beside the global one) and the private head's pre-trunk sheet
+latents are gone. Both heads read POST-trunk rows -- the public head the
+PUBLIC rows, the private head PRIVATE_ROWS then OPP_PRIVATE_ROWS (the
+opponent-truth rows, raw sheet latents plus side bias since the code's
+removal the same morning) -- and `PairValueInputs` is the two alive
+flags only. The context existed for the pre-trunk private head, which had
+seen no field; on post-trunk rows it was redundant. Consequences: the
+private head's gradient now shapes the trunk through the secret rows
+instead of training the private embedder directly, and its side-swap
+negation is exact at the HEAD (the test) but nominal through the trunk
+(my sheet rows never read theirs; theirs read mine). Each head 591,361
+params (was 722,433). The first launch of the context form ran minutes on
+fresh heads and was stopped; the relaunch is again from ckpt_00637000.

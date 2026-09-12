@@ -438,11 +438,11 @@ class PairValueHead(nn.Module):
             + sum_{i in A, j in B} alpha_ij m_ij
             + sum_{i,i' in A} beta_ii' s_ii' - sum_{j,j' in B} beta_jj' s_jj'
 
-    u_i = u(x_i + proj(c_i)): the unary term, single-mon strength, so the
-        pair terms are interactions and not main effects in disguise.
-        c_i is the entity's context -- the global field row beside its OWN
-        side's -- through a zero-init projection ADDED to the row, so every
-        term reads the row untouched at init.
+    u_i = u(x_i): the unary term, single-mon strength, so the pair terms
+        are interactions and not main effects in disguise. The rows are
+        post-trunk (both heads, 2026-09-12 user call), so whatever field,
+        history or request context a term needs has already been routed
+        into its row by the trunk -- the head carries no context of its own.
     m_ij = tanh(g(i, j) - g(j, i)): the cross-side pair, antisymmetric by
         construction. Strength of i over j and pressure of j on i are this
         one number. g is ONE bilinear (`cross_query` x `cross_key`) over
@@ -455,11 +455,12 @@ class PairValueHead(nn.Module):
         its own symmetric softmax weights beta per side.
 
     Because u, g, h, g_s are each ONE function shared across sides, swapping
-    the two sides (rows, flags and the two side field rows) negates V
-    exactly (tests/test_pair_value_head.py). At init V == 0 (the unary's
-    last kernel and every query are zero, tanh 0 = 0, weights uniform);
-    queries and the unary's last layer move at step 1, keys, the context
-    projection and the weight scores from step 2 (their gradients are
+    the two sides (rows and flags) negates the HEAD exactly
+    (tests/test_pair_value_head.py); whether the trunk rows themselves are
+    mirror-consistent is a property of the trunk, not of this head. At init
+    V == 0 (the unary's last kernel and every query are zero, tanh 0 = 0,
+    weights uniform); queries and the unary's last layer move at step 1,
+    keys and the weight scores from step 2 (their gradients are
     proportional to the queries, which are 0 for one step). The pair parts
     are convex combinations of numbers in [-1, 1], so each is bounded by
     one unit and the unary terms carry the scale. bf16 through the
@@ -472,29 +473,12 @@ class PairValueHead(nn.Module):
     def __call__(
         self,
         rows: jax.Array,
-        field_rows: jax.Array,
         valid: jax.Array,
         alive: jax.Array,
     ) -> PairValueHeadOutput:
         per_side = rows.shape[0] // 2
-        width = rows.shape[-1]
-        dtype = rows.dtype
         zeros = nn.initializers.zeros_init()
         qk_size = self.cfg.qk_size
-
-        side_field = jnp.concatenate(
-            (
-                jnp.broadcast_to(field_rows[1][None], (per_side, width)),
-                jnp.broadcast_to(field_rows[2][None], (per_side, width)),
-            ),
-            axis=0,
-        )
-        context = jnp.concatenate(
-            (jnp.broadcast_to(field_rows[0][None], rows.shape), side_field), axis=-1
-        )
-        rows = rows + nn.Dense(
-            width, kernel_init=zeros, use_bias=False, dtype=dtype, name="context"
-        )(context)
 
         unary = MLP(
             layer_sizes=(self.cfg.unary_hidden, 1),

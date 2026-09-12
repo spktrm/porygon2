@@ -26,8 +26,8 @@ from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
-    FIELD_ROWS,
     MOVE_ROWS,
+    OPP_PRIVATE_ROWS,
     PRIVATE_ROWS,
     PUBLIC_ROWS,
     TARGET_ROWS,
@@ -424,21 +424,25 @@ class Porygon2PlayerModel(nn.Module):
                     jax.lax.stop_gradient(sequence[CLS_ROW])
                 )
             if self.cfg.pair_value_head.enabled:
-                # The public head: post-trunk public rows (mine first, by
-                # layout) with the post-trunk field triple as context. The
-                # private head: both sheets' pre-trunk latents with the
-                # pre-trunk field triple. Gradient live into what each
+                # Both heads read POST-trunk rows (user call 2026-09-12: the
+                # trunk routes whatever context a row needs; no field
+                # context of the head's own). Public: the public rows, mine
+                # first by layout. Private: my sheet rows then the
+                # opponent-truth rows, learner-only by the read mask.
+                # Gradient live into the trunk through every row each head
                 # reads (the CLS critics are the matched control).
                 learner_only["pair_value_public"] = self.pair_value_public(
                     sequence[PUBLIC_ROWS],
-                    sequence[FIELD_ROWS],
                     row_valid[PUBLIC_ROWS],
                     pair_value_inputs.public_alive,
                 )
                 learner_only["pair_value_private"] = self.pair_value_private(
-                    pair_value_inputs.sheet_rows,
-                    pair_value_inputs.field_rows,
-                    pair_value_inputs.sheet_valid,
+                    jnp.concatenate(
+                        (sequence[PRIVATE_ROWS], sequence[OPP_PRIVATE_ROWS]), axis=0
+                    ),
+                    jnp.concatenate(
+                        (row_valid[PRIVATE_ROWS], row_valid[OPP_PRIVATE_ROWS])
+                    ),
                     pair_value_inputs.sheet_alive,
                 )
         return PlayerActorOutput(

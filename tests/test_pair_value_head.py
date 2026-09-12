@@ -15,7 +15,6 @@ PER_SIDE = 6
 ROWS = 2 * PER_SIDE
 # The head's zero-init leaves, by the exact key open_zero_init_paths matches.
 ZERO_INIT_KEYS = [
-    "context",
     "cross_query",
     "cross_weight_query",
     "synergy_query",
@@ -29,12 +28,10 @@ def _head() -> PairValueHead:
 
 
 def _inputs(key: jax.Array):
-    keys = jax.random.split(key, 2)
-    rows = jax.random.normal(keys[0], (ROWS, WIDTH))
-    field_rows = jax.random.normal(keys[1], (3, WIDTH))
+    rows = jax.random.normal(key, (ROWS, WIDTH))
     valid = jnp.ones(ROWS, dtype=jnp.bool_)
     alive = jnp.ones(ROWS, dtype=jnp.bool_)
-    return rows, field_rows, valid, alive
+    return rows, valid, alive
 
 
 def _init():
@@ -48,13 +45,11 @@ def _opened(params: dict) -> dict:
     return open_zero_init_paths(params, ZERO_INIT_KEYS)
 
 
-def _swap_sides(rows, field_rows, valid, alive):
-    """The mirror: the two sides' rows and flags exchanged, and the two side
-    field rows with them (the global one stays)."""
+def _swap_sides(rows, valid, alive):
+    """The mirror: the two sides' rows and flags exchanged."""
     order = jnp.concatenate((jnp.arange(PER_SIDE, ROWS), jnp.arange(PER_SIDE)))
     return (
         rows[order],
-        field_rows[jnp.asarray([0, 2, 1])],
         valid[order],
         alive[order],
     )
@@ -86,9 +81,9 @@ def test_value_is_exactly_zero_and_weights_uniform_at_init() -> None:
 def test_queries_and_unary_move_at_step_one_keys_and_weights_at_step_two() -> None:
     """The two-factor stall guard, per pair function: the zero factor's
     gradient is live at step 1, its partner's is exactly 0 for one step and
-    unfreezes once the zero factor is nudged. The weight scores and the
-    context projection are frozen one step too: their gradients are
-    proportional to the pair terms and the queries, both 0 at init."""
+    unfreezes once the zero factor is nudged. The weight scores are frozen
+    one step too: their gradients are proportional to the pair terms, 0 at
+    init."""
     head, params, inputs = _init()
 
     def total(p: dict) -> jax.Array:
@@ -105,7 +100,6 @@ def test_queries_and_unary_move_at_step_one_keys_and_weights_at_step_two() -> No
         "cross_weight_key",
         "synergy_weight_query",
         "synergy_weight_key",
-        "context",
     ):
         np.testing.assert_array_equal(np.asarray(grads[name]["kernel"]), 0.0)
 
@@ -118,7 +112,6 @@ def test_queries_and_unary_move_at_step_one_keys_and_weights_at_step_two() -> No
     # The cross term is now nonzero, so its weights matter: both weight
     # factors unfreeze together (the query side over live rows).
     assert np.abs(np.asarray(nudged_grads["cross_weight_query"]["kernel"])).max() > 0
-    assert np.abs(np.asarray(nudged_grads["context"]["kernel"])).max() > 0
 
 
 # --- structure -------------------------------------------------------------
@@ -170,32 +163,32 @@ def test_swapping_the_sides_negates_the_value_exactly() -> None:
         rtol=1e-5,
         atol=1e-6,
     )
-    rows, field_rows, valid, alive = inputs
-    control = head.apply(opened, rows.at[3].add(1.0), field_rows, valid, alive)
+    rows, valid, alive = inputs
+    control = head.apply(opened, rows.at[3].add(1.0), valid, alive)
     assert not np.allclose(np.asarray(control.value), np.asarray(out.value))
 
 
 def test_an_invalid_row_contributes_nothing_bit_identically() -> None:
     head, params, inputs = _init()
     opened = _opened(params)
-    rows, field_rows, valid, alive = inputs
+    rows, valid, alive = inputs
     dropped = valid.at[8].set(False)
-    base = head.apply(opened, rows, field_rows, dropped, alive)
-    moved = head.apply(opened, rows.at[8].add(5.0), field_rows, dropped, alive)
+    base = head.apply(opened, rows, dropped, alive)
+    moved = head.apply(opened, rows.at[8].add(5.0), dropped, alive)
     np.testing.assert_array_equal(np.asarray(base.value), np.asarray(moved.value))
     np.testing.assert_array_equal(np.asarray(base.partials), np.asarray(moved.partials))
     assert float(np.asarray(base.unary)[8]) == 0.0
     # Control: the same perturbation on a VALID row moves the value.
-    control = head.apply(opened, rows.at[8].add(5.0), field_rows, valid, alive)
+    control = head.apply(opened, rows.at[8].add(5.0), valid, alive)
     assert not np.array_equal(np.asarray(control.value), np.asarray(base.value))
 
 
 def test_a_fainted_row_keeps_its_unary_term_and_no_pair_weight() -> None:
     head, params, inputs = _init()
     opened = _opened(params)
-    rows, field_rows, valid, alive = inputs
+    rows, valid, alive = inputs
     fainted = alive.at[2].set(False)
-    out = head.apply(opened, rows, field_rows, valid, fainted)
+    out = head.apply(opened, rows, valid, fainted)
     live = head.apply(opened, *inputs)
     np.testing.assert_array_equal(np.asarray(out.unary), np.asarray(live.unary))
     np.testing.assert_array_equal(np.asarray(out.cross_weight)[2], 0.0)
@@ -209,9 +202,9 @@ def test_a_fainted_row_keeps_its_unary_term_and_no_pair_weight() -> None:
 
 def test_an_empty_board_is_zero_and_finite() -> None:
     head, params, inputs = _init()
-    rows, field_rows, valid, alive = inputs
+    rows, valid, alive = inputs
     nobody = jnp.zeros(ROWS, dtype=jnp.bool_)
-    out = head.apply(_opened(params), rows, field_rows, nobody, nobody)
+    out = head.apply(_opened(params), rows, nobody, nobody)
     for leaf in jax.tree.leaves(out):
         assert np.isfinite(np.asarray(leaf)).all()
     np.testing.assert_array_equal(np.asarray(out.value), 0.0)
