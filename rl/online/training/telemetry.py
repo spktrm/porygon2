@@ -280,8 +280,8 @@ def pair_value_telemetry(
     under the same mask; the share of the value's variance each part
     carries (unary / cross / synergy, variance of the part over the
     variance of V -- shares need not sum to 1); unary_cancellation (mean
-    sum_i |u_i| over mean |V|, >= 1, large = the unary terms cancel
-    across sides); each weight distribution's normalised entropy over rows
+    sum_i |u_i| over mean |V|: below 1 when the pair parts carry the
+    value, large when the unary terms cancel across sides); each weight distribution's normalised entropy over rows
     with at least two alive pairs; the mean |m| / |s| over alive pairs; and
     the mean of every signed partial."""
     prefix = f"player_pair_value_{name}"
