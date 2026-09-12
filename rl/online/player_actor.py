@@ -260,7 +260,6 @@ class PlayerActor:
             with add_cond:
                 add_cond.notify_all()
 
-            # Reset the player environment.
             team_tokens = builder_history.packed_team_member_tokens
             if np.any(
                 team_tokens[..., PackedSetFeature.PACKED_SET_FEATURE__TERATYPE] == 0
@@ -292,7 +291,6 @@ class PlayerActor:
         last_step_index = -1
         last_rewrite_count = self._env.history_rewrite_count
 
-        # Rollout the player environment.
         # One STEP_TOTAL sample per loop iteration (clip + inference +
         # env.step's receive), taken at the top of the next one.
         iteration_start = None
@@ -448,7 +446,7 @@ class PlayerActor:
             for player in self._learner.league.players.values()
             if player.step_count not in LIVE_KEYS
         ]
-        if not historical:  # No historical players to play against
+        if not historical:
             return None
 
         own_player = self.pull_own_player()
@@ -542,7 +540,7 @@ class PlayerActor:
         # games played against it is 50%.
         if coin_toss < 0.5:
             opponent = self._pfsp_branch()
-            if opponent is not None:  # Found a historical opponent
+            if opponent is not None:
                 return opponent, False
         elif coin_toss < 0.65:
             # AlphaStar-style verification slice (their split is 50% PFSP /

@@ -52,7 +52,6 @@ from rl.model.modules import PretrainedEmbedding, ZeroEmbedding
 
 NUM_GENDERS = len(GendernameEnum.keys())
 NUM_STATUS = len(StatusEnum.keys())
-# NUM_TYPES = len(TypesEnum.keys())
 NUM_VOLATILE_STATUS = len(VolatilestatusEnum.keys())
 NUM_TYPECHART = len(TypechartEnum.keys())
 NUM_SIDE_CONDITION = len(SideconditionEnum.keys())

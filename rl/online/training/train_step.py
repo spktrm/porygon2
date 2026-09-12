@@ -902,7 +902,6 @@ def train_step(
             player_grads["params"]["potential_head"]
         ) / (optax.global_norm(player_grads) + 1e-12)
 
-    # --- Builder ---
     if config.smogon_format != "randombattle":
         builder_actor_input = BuilderActorInput(
             env=builder_transitions.env_output,
@@ -920,7 +919,6 @@ def train_step(
             builder_transitions.agent_output.actor_output.action_head
         )
 
-        # Calculate importance sampling ratios for off-policy correction.
         builder_actor_log_prob = builder_actor_action_head.log_prob
         builder_target_log_prob = builder_target_pred.action_head.log_prob
         builder_actor_target_log_ratio = (
@@ -942,7 +940,6 @@ def train_step(
         builder_valid = builder_valid & player_transitions.env_output.done.any(axis=0)[
             None, :
         ].astype(jnp.bool_)
-        # Compute builder targets inside train_step (JAX/JIT compatible).
         builder_targets = compute_builder_targets(
             batch,
             builder_target_pred,
@@ -1053,12 +1050,10 @@ def train_step(
                 builder_loss_entropy=loss_builder_entropy,
                 builder_loss_conditional_entropy=loss_builder_conditional_entropy,
                 builder_loss_human=loss_human,
-                # Ratios
                 builder_learner_actor_ratio=average(learner_actor_ratio, builder_valid),
                 builder_learner_target_ratio=average(
                     learner_target_ratio, builder_valid
                 ),
-                # Approx KL values
                 builder_learner_actor_approx_kl=loss_forward_kl,
                 builder_learner_condtional_entropy_head_mean=average(
                     learner_conditional_entropy_head.logits, builder_valid
@@ -1066,7 +1061,6 @@ def train_step(
                 builder_learner_condtional_entropy_head_std=jnp.std(
                     learner_conditional_entropy_head.logits, where=builder_valid
                 ),
-                # Extra stats
                 builder_value_function_r2=calculate_r2(
                     value_prediction=learner_value_head.expectation,
                     value_target=builder_returns.win_returns @ cat_vf_support,

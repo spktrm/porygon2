@@ -66,7 +66,6 @@ class BuilderActor:
                 builder_unroll_length - len(build_traj)
             )
 
-        # Pack the trajectory and reset parent state.
         builder_trajectory = jax.device_get(build_traj)
         builder_trajectory: BuilderTransition = jax.tree.map(
             lambda *xs: np.stack(xs), *builder_trajectory

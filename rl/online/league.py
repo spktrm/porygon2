@@ -295,8 +295,6 @@ class League:
         bonus = self.ucb_c * float(np.sqrt(np.log(total + 1.0) / (n + 1.0)))
         return challenge + bonus
 
-    # --- selection (metadata only) ------------------------------------------
-
     def get_latest_player(self, origin: str | None = None) -> PlayerRef | None:
         """Newest historical snapshot, optionally restricted to one origin.
 

@@ -166,7 +166,6 @@ def test_unwritten_units_hold_initial_exactly() -> None:
     assert np.abs(states[0, 0] - np.asarray(initial[0])).max() > 1e-3
 
 
-# ---- the step GAT ---------------------------------------------------------
 # One attention layer over the rows of a history step (2026-09-02, replacing
 # the masked source mean). Pins: the zeros-init output projection makes it
 # exactly silent at init yet trainable; a padded row places and receives no

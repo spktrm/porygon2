@@ -16,9 +16,6 @@ import requests
 
 from rl.environment.data import STOI
 
-# -----------------------------------------------------------------------------
-# Scikit-Learn Imports
-# -----------------------------------------------------------------------------
 try:
     import warnings
 
@@ -34,10 +31,6 @@ except ImportError:
         "This script requires scikit-learn. Please run: pip install scikit-learn"
     )
 
-# -----------------------------------------------------------------------------
-# Math & Probability Helpers
-# -----------------------------------------------------------------------------
-
 
 def _esp_k(odds: np.ndarray, k: int) -> float:
     E = np.zeros(k + 1, dtype=np.float64)
@@ -47,11 +40,6 @@ def _esp_k(odds: np.ndarray, k: int) -> float:
         for d in range(upto, 0, -1):
             E[d] += o * E[d - 1]
     return float(E[k])
-
-
-# -----------------------------------------------------------------------------
-# Data Classes
-# -----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -77,11 +65,6 @@ class CategoricalSpace:
         c = np.cumsum(self.probs)
         k = int(np.searchsorted(c, mass, side="left")) + 1
         return CategoricalSpace(self.names[:k].copy(), self.probs[:k].copy())
-
-
-# -----------------------------------------------------------------------------
-# Sampler Logic
-# -----------------------------------------------------------------------------
 
 
 class PokemonSetSampler:
@@ -283,10 +266,6 @@ class PokemonSetSampler:
         if not raw_pool:
             return [], stats
 
-        # ---------------------------------------------------------------------
-        # Feature Encoding
-        # ---------------------------------------------------------------------
-
         # 1. Moves (Multi-Label)
         mlb = MultiLabelBinarizer()
         moves_matrix = mlb.fit_transform([p["moves"] for p in raw_pool])
@@ -319,15 +298,11 @@ class PokemonSetSampler:
         ev_mat_np = np.array(ev_matrix, dtype=np.float32)
         iv_mat_np = np.array(iv_matrix, dtype=np.float32)
 
-        # Concatenate all features
         # [Moves | Items | Abilities | Nature | EVs | IVs]
         X = np.hstack(
             (moves_matrix, item_mat, ability_mat, nature_mat, ev_mat_np, iv_mat_np)
         )
 
-        # ---------------------------------------------------------------------
-        # Clustering
-        # ---------------------------------------------------------------------
         n_samples = X.shape[0]
         unique_rows = np.unique(X, axis=0).shape[0]
 
@@ -455,11 +430,6 @@ def get_stats_url(generation: int, smogon_format: str) -> Optional[Dict]:
         return None
 
 
-# -----------------------------------------------------------------------------
-# Worker Function
-# -----------------------------------------------------------------------------
-
-
 def process_species(args: Tuple) -> Tuple[str, List[str], Dict[str, Any]]:
     species, stats, slots = args
     sampler = PokemonSetSampler(stats)
@@ -474,15 +444,10 @@ def process_species(args: Tuple) -> Tuple[str, List[str], Dict[str, Any]]:
     return species, packed_sets, stats_info
 
 
-# -----------------------------------------------------------------------------
-# Main
-# -----------------------------------------------------------------------------
-
 ALL_FORMATS = ["ubers", "ou", "uu", "ru", "nu", "pu", "zu"]
 
 
 def main():
-    # Reverted to ThreadPoolExecutor as requested
     MAX_WORKERS = os.cpu_count() or 4
 
     for generation in range(9, 10):
@@ -501,7 +466,6 @@ def main():
             for species, stats in pokemon_data.items():
                 tasks.append((species, stats, 1024))
 
-            # ThreadPoolExecutor used here
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 future_to_species = {
                     executor.submit(process_species, t): t[0] for t in tasks

@@ -89,47 +89,47 @@ class OfflineExample:
     # Allowed-bins mask per (step, slot): one-hot where the faint step was
     # observed, an interval mask where right-censored. Loss is
     # -log(predicted mass inside the mask) — exact rows reduce to CE.
-    survival_target: ArrayLike  # (T, NUM_SLOTS, NUM_SURVIVAL_BINS)
+    survival_target: ArrayLike
     survival_mask: ArrayLike  # (T, NUM_SLOTS) — revealed & currently alive
     # Next-action aux: the id of the next move this slot's mon executes
     # after step t (any distance into the future), ACTION_NONE_CLASS when
     # the replay played out without it acting again, -1 = no supervision
     # (unrevealed/fainted slot, or right-censored by an early ending).
-    action_target: ArrayLike  # (T, NUM_SLOTS) int32
+    action_target: ArrayLike
     # 1.0 where the labelled next action is that move's FIRST use — i.e.
     # the model is being asked to predict a move it has never seen. The
     # loss slice over these rows is the anticipation learning curve.
-    action_is_reveal: ArrayLike  # (T, NUM_SLOTS)
+    action_is_reveal: ArrayLike
     # Unseen-move hazard aux: allowed-bins masks over y =
     # unseen_discount**(requests until this mon next uses a move that is
     # unrevealed as of step t); same censoring scheme as survival_target.
-    unseen_target: ArrayLike  # (T, NUM_SLOTS, NUM_SURVIVAL_BINS)
-    unseen_mask: ArrayLike  # (T, NUM_SLOTS)
+    unseen_target: ArrayLike
+    unseen_mask: ArrayLike
     # Set-prediction aux (eventually-revealed moves), shipped compactly:
     # per slot the move ids revealed by game end (-1 pad), the step each
     # was first revealed at (T when padded), and whether the mon's full
     # move count was eventually observed (making non-set moves certain
     # negatives). Positives at step t are the entries with reveal_step > t.
-    set_eventual: ArrayLike  # (NUM_SLOTS, NUM_MOVE_SLOTS) int32
-    set_reveal_step: ArrayLike  # (NUM_SLOTS, NUM_MOVE_SLOTS) int32
-    set_fully_observed: ArrayLike  # (NUM_SLOTS,)
+    set_eventual: ArrayLike
+    set_reveal_step: ArrayLike
+    set_fully_observed: ArrayLike
     set_mask: ArrayLike  # (T, NUM_SLOTS) — revealed, alive, set not yet full
 
 
 @chex.dataclass(frozen=True)
 class OfflineBatch:
-    actor_input: PlayerActorInput  # leaves (T, B, ...)
-    labels: ArrayLike  # (B, NUM_MARGIN_BINS)
-    survival_targets: ArrayLike  # (T, B, NUM_SLOTS, NUM_SURVIVAL_BINS)
-    survival_masks: ArrayLike  # (T, B, NUM_SLOTS)
-    action_targets: ArrayLike  # (T, B, NUM_SLOTS) int32
-    action_is_reveal: ArrayLike  # (T, B, NUM_SLOTS)
-    unseen_targets: ArrayLike  # (T, B, NUM_SLOTS, NUM_SURVIVAL_BINS)
-    unseen_masks: ArrayLike  # (T, B, NUM_SLOTS)
-    set_eventual: ArrayLike  # (B, NUM_SLOTS, NUM_MOVE_SLOTS) int32
-    set_reveal_steps: ArrayLike  # (B, NUM_SLOTS, NUM_MOVE_SLOTS) int32
-    set_fully_observed: ArrayLike  # (B, NUM_SLOTS)
-    set_masks: ArrayLike  # (T, B, NUM_SLOTS)
+    actor_input: PlayerActorInput
+    labels: ArrayLike
+    survival_targets: ArrayLike
+    survival_masks: ArrayLike
+    action_targets: ArrayLike
+    action_is_reveal: ArrayLike
+    unseen_targets: ArrayLike
+    unseen_masks: ArrayLike
+    set_eventual: ArrayLike
+    set_reveal_steps: ArrayLike
+    set_fully_observed: ArrayLike
+    set_masks: ArrayLike
 
 
 def list_shards(config: Porygon2OfflineConfig) -> list[str]:
@@ -363,7 +363,7 @@ def _discounted_bin_targets(
     target = np.eye(NUM_SURVIVAL_BINS, dtype=np.float32)[bin_idx]
     if ending != "played_out":
         step_idx = np.arange(num_steps)
-        bound = discount ** (num_steps - 1 - step_idx)  # (T,)
+        bound = discount ** (num_steps - 1 - step_idx)
         bound_bin = np.minimum(
             (bound * NUM_SURVIVAL_BINS).astype(np.int64), NUM_SURVIVAL_BINS - 1
         )
@@ -436,9 +436,9 @@ def _action_targets(
     move_ids, move_pp = view["move_ids"], view["move_pp"]
     num_steps = revealed.shape[0]
 
-    valid_move = ~np.isin(move_ids, _INVALID_MOVE_IDS)  # (T, S, 4)
+    valid_move = ~np.isin(move_ids, _INVALID_MOVE_IDS)
     # First step each (slot, move-slot) is revealed at; T when never.
-    any_reveal = valid_move.any(axis=0)  # (S, 4)
+    any_reveal = valid_move.any(axis=0)
     first_reveal = np.where(any_reveal, valid_move.argmax(axis=0), num_steps)
     slot_idx = np.arange(NUM_SLOTS)[:, None]
     move_slot_idx = np.arange(NUM_MOVE_SLOTS)[None, :]
@@ -448,7 +448,7 @@ def _action_targets(
         -1,
     ).astype(np.int32)
 
-    revealed_count = valid_move.sum(axis=-1)  # (T, S)
+    revealed_count = valid_move.sum(axis=-1)
     num_moves = view["num_moves"].max(axis=0)  # (S,) constant per mon
     num_moves = np.where(num_moves > 0, num_moves, NUM_MOVE_SLOTS).clip(
         max=NUM_MOVE_SLOTS
@@ -470,7 +470,7 @@ def _action_targets(
         & (move_pp[1:] > move_pp[:-1])
     )
     event = reveal_event | pp_used_rise
-    has_event = event.any(axis=-1)  # (T, S)
+    has_event = event.any(axis=-1)
     event_move_slot = event.argmax(axis=-1)
     used_id = np.where(
         has_event,
@@ -509,13 +509,13 @@ def _action_targets(
     action_target = np.where(base, action_target, -1).astype(np.int32)
     action_is_reveal = (next_is_reveal & (action_target >= 0)).astype(np.float32)
 
-    fully_revealed = revealed_count >= num_moves[None]  # (T, S)
+    fully_revealed = revealed_count >= num_moves[None]
     unseen_target = _discounted_bin_targets(
         reveal_dist, fully_revealed, ending, unseen_discount
     )
     unseen_mask = base.astype(np.float32)
 
-    eventual_count = (eventual >= 0).sum(axis=-1)  # (S,)
+    eventual_count = (eventual >= 0).sum(axis=-1)
     return dict(
         action_target=action_target,
         action_is_reveal=action_is_reveal,

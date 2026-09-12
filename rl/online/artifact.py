@@ -134,7 +134,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     # a hard reset needs no crossfade pair, no 4th net.
     reg_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    # Force these to be dynamic JAX arrays (PyTree nodes) instead of static Python scalars
     step_count: jax.Array = struct.field(
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
@@ -552,7 +551,6 @@ def load_from_checkpoint(
             cull_size=learner_config.league_cull_size,
         )
     else:
-        # Fallback if league is missing in ckpt
         league = _init_league(learner_config, player_state, builder_state)
 
     # Every tree is merged BY PATH onto the fresh state's own (2026-09-02):
@@ -845,7 +843,6 @@ def load_train_state(
             "— scratch and params modes already start main-only"
         )
 
-    # 1. Force Scratch
     if mode == "scratch":
         if ckpt_path is not None:
             raise ValueError(
@@ -884,7 +881,6 @@ def load_train_state(
             latest_ckpt, learner_config, player_state, builder_state
         )
 
-    # 4. Standard Checkpoint Load (Default)
     return load_from_checkpoint(
         latest_ckpt,
         learner_config,

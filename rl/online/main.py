@@ -134,7 +134,6 @@ def run_training_actor_pair(
             # Grab the result from either self play or playing historical opponents
             future1 = executor.submit(player.unroll_and_push, player_params)
 
-            # Will only push if is_trainable is True
             future2 = executor.submit(
                 opponent.unroll_and_push, opponent_params, is_trainable
             )

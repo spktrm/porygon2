@@ -163,28 +163,21 @@ class PairValueInputs(NamedTuple):
 
 
 class Encoder(nn.Module):
-    """
-    Encoder model for processing environment steps and history to generate embeddings.
-    """
-
     cfg: ConfigDict
 
     def setup(self):
-        # Extract configuration parameters for embedding sizes.
         entity_size = self.cfg.entity_size
         self.entity_size = entity_size
 
         embed_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
         dense_kwargs = dict(features=entity_size, dtype=self.cfg.dtype)
 
-        # Initialize embeddings for various entities and features.
         self.effect_from_source_embedding = nn.Embed(
             num_embeddings=NUM_FROM_SOURCE_EFFECTS,
             name="effect_from_source_embedding",
             **embed_kwargs,
         )
 
-        # Positional / Modality Embeddings
         embedding_init = nn.initializers.variance_scaling(
             1.0, "fan_in", "normal", out_axis=0
         )
@@ -245,7 +238,6 @@ class Encoder(nn.Module):
             "prev_action_tgt_bias", embedding_init, (1, entity_size)
         )
 
-        # Action biases
         self.regular_move_bias = self.param(
             "regular_move_bias", bias_init, (1, entity_size)
         )
@@ -282,7 +274,6 @@ class Encoder(nn.Module):
             "sequence_group_bias", embedding_init, (NUM_SEQUENCE_GROUPS, entity_size)
         )
 
-        # Initialize linear layers for encoding various entity features.
         self.species_linear = nn.Dense(
             name="species_linear", use_bias=False, **dense_kwargs
         )
@@ -318,7 +309,6 @@ class Encoder(nn.Module):
             name="private_state_linear", use_bias=False, **dense_kwargs
         )
 
-        # Initialize aggregation modules for combining feature embeddings.
         self.action_sum = SumEmbeddings(
             output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
         )
@@ -726,9 +716,6 @@ class Encoder(nn.Module):
         return embedding, mask
 
     def _embed_field(self, field: jax.Array):
-        """
-        Embed features of the field
-        """
         turn_order_value = field[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE]
         request_count = field[FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
 
@@ -853,9 +840,6 @@ class Encoder(nn.Module):
         return _lifted_entity_vmap(Encoder._embed_private_entity)(self, private_team)
 
     def _embed_action(self, action: jax.Array) -> jax.Array:
-        """
-        Encode features of a move, including its type, species, and action ID.
-        """
         boolean_code = one_hot_concat_jax(
             [
                 encode_sqrt_one_hot_action(

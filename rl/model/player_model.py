@@ -459,9 +459,6 @@ class Porygon2PlayerModel(nn.Module):
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
     ):
-        """
-        Shared forward pass for encoder and policy head.
-        """
         (
             sequence,
             row_valid,

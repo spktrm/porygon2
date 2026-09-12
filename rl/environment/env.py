@@ -213,7 +213,6 @@ class TeamBuilderEnvironment:
         self.gender_masks = load_mask("gender")
         self.teratype_masks = load_mask("teratypes")
 
-        # Initial Masks
         self.initial_species_mask = teammate_mask.any(axis=-1)
         self.initial_item_mask = self.item_masks.any(axis=0)
         self.initial_ability_mask = self.ability_masks.any(axis=0)
@@ -311,11 +310,8 @@ class TeamBuilderEnvironment:
         self, action_index: jax.Array, state: BuilderActorInput
     ) -> BuilderActorInput:
 
-        # 1. Apply Agent Action
         state = self._transition(state, action_index)
 
-        # 2. Initialize Autofill Loop Logic
-        #    Check if the state resulting from the agent's action forces a move
         def _get_initial_autofill():
             return self._get_autofill_state(state)
 
@@ -335,10 +331,8 @@ class TeamBuilderEnvironment:
         def body_fun(val):
             curr_state, _, action_to_apply = val
 
-            # Transition with forced action
             next_state = self._transition(curr_state, action_to_apply)
 
-            # Check if *next* state forces another move
             def _calc_next_autofill():
                 return self._get_autofill_state(next_state)
 
@@ -384,7 +378,7 @@ class TeamBuilderEnvironment:
             return state.replace(
                 env=state.env.replace(
                     ts=next_ts,
-                    ev_reward=ev_fulfillment_per_member.mean(),  # Average EV fulfillment across the team
+                    ev_reward=ev_fulfillment_per_member.mean(),
                     done=jnp.array(True, dtype=jnp.bool),
                 ),
                 history=state.history.replace(
@@ -401,8 +395,6 @@ class TeamBuilderEnvironment:
                 -1, NUM_PACKED_SET_FEATURES
             )
 
-            # --- Member Context Selection ---
-            # [cite_start]Extract all current attributes for the member being edited [cite: 54, 55, 56]
             current_member_tokens = packed_set_tokens[next_position]
             m_species = current_member_tokens[
                 PackedSetFeature.PACKED_SET_FEATURE__SPECIES
@@ -429,8 +421,6 @@ class TeamBuilderEnvironment:
                 PackedSetFeature.PACKED_SET_FEATURE__TERATYPE
             ]
 
-            # --- Proactive Species Pool (Fix 2) ---
-            # [cite_start]A species is valid only if it satisfies EVERY attribute selected so far. [cite: 53]
             # Attributes set to 0 (Unspecified) are ignored in the constraint.
             species_pool = (
                 self.initial_species_mask
@@ -455,23 +445,19 @@ class TeamBuilderEnvironment:
                 other_species, NUM_SPECIES, dtype=jnp.bool_
             ).any(axis=0)
 
-            other_species_mask = team_species_one_hot.at[m_species].set(
-                False
-            )  # Don't mask yourself
+            other_species_mask = team_species_one_hot.at[m_species].set(False)
 
             # Mask duplicate species from formes
             formes_mask = self.formes_mask[other_species].all(axis=0)
 
             species_pool = species_pool & ~other_species_mask & formes_mask
 
-            # Finalize species mask for this step
             next_species_mask = jnp.where(
                 (m_species == 0)[None],
                 species_pool,
                 jax.nn.one_hot(m_species, NUM_SPECIES, dtype=jnp.bool_),
             )
 
-            # --- Derived Attribute Masks ---
             next_item_mask = next_species_mask @ self.item_masks
             next_ability_mask = next_species_mask @ self.ability_masks
             next_teratype_mask = next_species_mask @ self.teratype_masks

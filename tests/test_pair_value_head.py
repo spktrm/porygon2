@@ -55,9 +55,6 @@ def _swap_sides(rows, valid, alive):
     )
 
 
-# --- init contract ---------------------------------------------------------
-
-
 def test_value_is_exactly_zero_and_weights_uniform_at_init() -> None:
     head, params, inputs = _init()
     out = head.apply(params, *inputs)
@@ -112,9 +109,6 @@ def test_queries_and_unary_move_at_step_one_keys_and_weights_at_step_two() -> No
     # The cross term is now nonzero, so its weights matter: both weight
     # factors unfreeze together (the query side over live rows).
     assert np.abs(np.asarray(nudged_grads["cross_weight_query"]["kernel"])).max() > 0
-
-
-# --- structure -------------------------------------------------------------
 
 
 def test_partials_are_signed_and_sum_to_the_value() -> None:

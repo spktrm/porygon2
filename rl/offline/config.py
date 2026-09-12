@@ -94,7 +94,6 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # rating where the board already says everything.
     rating_dropout: float = 0.25
 
-    # Batch iteration params
     batch_size: int = 8
     min_history_length: int = 64
     # Trajectories are padded to geometric time buckets in [lo, hi] to bound
@@ -137,7 +136,6 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # mirror of the learner's potential_uncertainty_scale.
     eval_gate_scale: float = 5.0
 
-    # Eval / checkpoint cadence
     log_interval_steps: int = 100
     eval_interval_steps: int = 2_000
     eval_batches: int = 32

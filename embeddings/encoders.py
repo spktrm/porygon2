@@ -147,7 +147,6 @@ def encode_continuous_values(series: pd.Series, n_bins):
 
 
 def binary_encode(series: pd.Series, n_bits: int = None):
-    # Calculate the binary representation of each number
     values = series.values[:, None].astype(int).copy()
     values -= values.min()
     values += 1

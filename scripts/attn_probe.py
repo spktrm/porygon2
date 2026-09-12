@@ -141,7 +141,6 @@ def main():
         for qn, d in rows.items():
             print(f"{qn:<14}" + "".join(f"{d[kn]:>13.4f}" for kn, _, _ in k_edges))
 
-    # ---- HTML ----
     def bar(v):
         pct = max(0.0, min(1.0, v)) * 100
         return (

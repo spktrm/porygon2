@@ -194,11 +194,11 @@ def _set_prediction_loss(
     """
     logits = logits.astype(jnp.float32)
     num_steps, vocab = logits.shape[0], logits.shape[-1]
-    row_weight = masks * value_mask[..., None]  # (T, B, slots)
+    row_weight = masks * value_mask[..., None]
     ev_idx = jnp.broadcast_to(
         jnp.clip(eventual, 0)[None], (num_steps,) + eventual.shape
     )
-    gathered = jnp.take_along_axis(logits, ev_idx, axis=-1)  # (T, B, slots, 4)
+    gathered = jnp.take_along_axis(logits, ev_idx, axis=-1)
     ev_valid = (eventual >= 0)[None]
     future = ev_valid & (
         reveal_steps[None] > jnp.arange(num_steps)[:, None, None, None]
@@ -533,7 +533,7 @@ def evaluate_ensemble(
     for key in keys:
         values = np.average(
             np.stack([m[key] for m in member_rows]), axis=0, weights=weights
-        )  # (K,)
+        )
         logs[f"eval_{key}_mean"] = float(values.mean())
         for k, value in enumerate(values):
             logs[f"eval_{key}_m{k}"] = float(value)
@@ -638,7 +638,7 @@ def run_ensemble(config: Porygon2OfflineConfig, seed: int):
         # same states, so member metrics are directly comparable and the
         # gate can be measured live.
         value_heads, aux = jax.vmap(lambda p: apply_fn(p, batch.actor_input))(params)
-        logits = value_heads.logits  # (K, T, B, bins)
+        logits = value_heads.logits
         mask = _value_mask(batch.actor_input.env.done)
 
         def member_metrics(member_head, member_aux):

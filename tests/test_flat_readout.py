@@ -61,9 +61,6 @@ def _init() -> tuple[FlatActionReadout, dict, tuple[jax.Array, jax.Array, jax.Ar
     return head, params, rows
 
 
-# --- layout ---------------------------------------------------------------
-
-
 def test_sequence_layout_is_derived_and_contiguous() -> None:
     assert NUM_SEQUENCE_ROWS == 80
     assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
@@ -77,9 +74,6 @@ def test_sequence_layout_is_derived_and_contiguous() -> None:
     # hand a head someone else's rows and nothing else would notice.
     assert PRIVATE_ROWS.stop == MOVE_ROWS.start
     assert MOVE_ROWS.stop == TARGET_ROWS.start
-
-
-# --- the readout's init contract ------------------------------------------
 
 
 def test_every_logit_is_exactly_zero_at_init() -> None:
@@ -148,9 +142,6 @@ def test_the_pointer_is_not_symmetric() -> None:
     )
 
 
-# --- the readout writes only the cells its modality owns -------------------
-
-
 def _open(params: dict, seed: int = 5) -> dict:
     """Non-zero every zero-init leaf, so the grid actually varies."""
     keys = iter(jax.random.split(jax.random.key(seed), 16))
@@ -215,9 +206,6 @@ def test_a_move_row_moves_only_its_own_move_cells() -> None:
     # Control: it did change something, so the invariance above is not the
     # readout simply ignoring its move rows.
     assert changed.any()
-
-
-# --- the trunk ------------------------------------------------------------
 
 
 def _trunk_cfg(num_blocks: int = 2) -> ConfigDict:

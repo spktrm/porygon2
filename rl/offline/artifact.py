@@ -111,7 +111,7 @@ def make_potential_apply(
             half = probs.shape[-1] // 2  # bins: [-6..-1, 0, +1..+6]
             phi = probs[..., half + 1 :].sum(-1) - probs[..., :half].sum(-1)
         else:
-            phi = value_head.expectation.astype(jnp.float32)  # (K, T, B)
+            phi = value_head.expectation.astype(jnp.float32)
         mean = phi.mean(axis=0)
         std = phi.std(axis=0)
         # exp(0) == 1, so scale = 0 disables the gate exactly; kept

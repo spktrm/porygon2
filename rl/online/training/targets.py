@@ -349,24 +349,20 @@ def compute_builder_targets(
     )
     builder_transitions = traj.builder_transitions
 
-    builder_valid = jnp.logical_not(builder_transitions.env_output.done)  # (T_b, B)
+    builder_valid = jnp.logical_not(builder_transitions.env_output.done)
     T_b, B = builder_valid.shape
 
-    # --- V-Trace IMPALA Variables ---
     rho_t = jnp.minimum(1.0, importance_sampling_ratios)
     c_t = jnp.minimum(1.0, importance_sampling_ratios)
 
-    # --- 1. Extract and Scale Base Values & Rewards ---
-    # Value
     builder_value_probs = jnp.exp(
         builder_transitions.agent_output.actor_output.value_head.log_probs
     )
     n_bins = builder_value_probs.shape[-1]
 
-    final_reward = traj.player_transitions.env_output.win_reward[-1]  # (B, 3)
-    num_valid_steps = builder_valid.astype(jnp.int32).sum(axis=0)  # (B,)
+    final_reward = traj.player_transitions.env_output.win_reward[-1]
+    num_valid_steps = builder_valid.astype(jnp.int32).sum(axis=0)
 
-    # Use n_bins directly instead of hardcoding 3 for safety/scalability
     builder_reward = jnp.zeros((T_b, B, n_bins), dtype=builder_value_probs.dtype)
     safe_idx = jnp.clip(num_valid_steps, 0, T_b - 1)
     batch_idx = jnp.arange(B)
@@ -375,7 +371,6 @@ def compute_builder_targets(
         final_reward * has_terminal[:, None]
     )
 
-    # Entropy
     builder_log_prob = (
         builder_transitions.agent_output.actor_output.action_head.log_prob
     )
@@ -385,15 +380,12 @@ def compute_builder_targets(
     )
     ent_reward = -builder_log_prob
 
-    # --- 2. Concatenate Rewards, Values, and Next Values ---
-    # Shape: (T_b, B, n_bins + 1)
     combined_rewards = jnp.concatenate([builder_reward, ent_reward[..., None]], axis=-1)
 
     combined_values = jnp.concatenate(
         [builder_value_probs, builder_ent_scaled[..., None]], axis=-1
     )
 
-    # Construct the offset for next values, padding the end of the trajectory
     last_values = jnp.concatenate(
         [builder_value_probs[-1:], jnp.zeros_like(builder_ent_scaled[:1])[..., None]],
         axis=-1,
@@ -404,12 +396,10 @@ def compute_builder_targets(
         * builder_valid[..., None]
     )
 
-    # --- 3. Compute Combined Deltas in one batched operation ---
     combined_td_errors = rho_t[..., None] * (
         combined_rewards + combined_next_values - combined_values
     )
 
-    # --- 5. Discounts & Batched Segmented Cumsum ---
     vtrace_errors = vtrace(
         combined_td_errors, builder_valid[..., None], c_t[..., None] * lambda_
     )
@@ -424,7 +414,6 @@ def compute_builder_targets(
     q_estimate = combined_rewards + builder_valid[..., None] * q_bootstrap
     pg_advantages = rho_t[..., None] * (q_estimate - combined_values)
 
-    # --- 6. Split Outputs ---
     win_returns = returns[..., :n_bins]
     ent_returns = returns[..., n_bins]
 

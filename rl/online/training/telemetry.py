@@ -105,7 +105,7 @@ def collect_batch_telemetry_data(
     # Chunked unrolls: only a game's terminal chunk carries the outcome at
     # win_reward[-1] — outcome-derived stats read those columns only, and
     # "early game" means early REQUESTS, not a chunk's first rows.
-    is_terminal_chunk = done.any(axis=0).astype(player_valid.dtype)  # (B,)
+    is_terminal_chunk = done.any(axis=0).astype(player_valid.dtype)
     request_counts = batch.player_transitions.env_output.info[
         ..., InfoFeature.INFO_FEATURE__REQUEST_COUNT
     ]

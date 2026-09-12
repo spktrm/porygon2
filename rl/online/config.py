@@ -91,10 +91,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
         (64, 256),
     )
 
-    # Batch iteration params
     batch_size: int = 4
 
-    # Replay buffer params
     # Kept small on purpose: steady-state throughput is set entirely by
     # replay_ratio (samples per trajectory), so capacity only controls how
     # stale a trajectory is when sampled. 256 keeps mean sample age well
@@ -152,7 +150,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_replay_ctrl_ki: float = 0.02
     player_replay_ctrl_interval: int = 100
 
-    # Self-play evaluation params
     save_interval_steps: int = 20_000
     league_winrate_log_steps: int = 1_000
     # How often (learner steps) the run publishes fresh live params for
@@ -405,8 +402,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # player_pg_objective).
     builder_ppo_clip_threshold: float = 0.3
 
-    # Loss coefficients
-    ## Player
     # (`player_kl_loss_coef`, the actor backward-KL force, was REMOVED
     # 2026-09-09 -- LESSONS.md "Removal ledger — 2026-09-09 actor
     # backward-KL force".)
@@ -606,7 +601,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # shorter period approaches an EMA magnet, which chases the policy
     # and degenerates into a short-horizon trust region (LESSONS 4).
     player_reg_snap_steps: int = 10_000
-    ## Builder
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1
@@ -615,7 +609,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     builder_entropy_prediction_normalising_constant: float = 100
     builder_entropy_advantage_scale: float = 1e-3
 
-    # Human
     builder_human_loss_coef: float = 1e-2
 
 

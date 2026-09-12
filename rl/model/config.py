@@ -7,14 +7,6 @@ from rl.environment.data import CAT_VF_SUPPORT
 
 
 def set_attributes(config_dict: ConfigDict, **kwargs) -> None:
-    """
-    Sets multiple attributes on a ConfigDict object using keyword arguments.
-    Args:
-        config_dict (ConfigDict): The configuration object to update.
-        **kwargs: Arbitrary keyword arguments representing attribute names and their corresponding values to set on the config_dict.
-    Example:
-        set_attributes(config, learning_rate=0.01, batch_size=32)
-    """
     for key, value in kwargs.items():
         setattr(config_dict, key, value)
 

@@ -11,7 +11,6 @@ from urllib.parse import urljoin
 import aiohttp
 from bs4 import BeautifulSoup
 
-# --- Constants ---
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 TIMEOUT = aiohttp.ClientTimeout(total=15)
 # The strict prefix required for all internal links
@@ -97,7 +96,6 @@ async def main(args: argparse.Namespace):
                         ):
                             to_visit.append((full_url, current_depth + 1))
 
-                # Live logging
                 sys.stdout.write(
                     f"\r[Smogon Scrape] Depth: {current_depth}/{args.depth} | Pages: {total_pages_scanned} | Q: {len(to_visit)} | Teams: {len(pokepaste_links)} "
                 )

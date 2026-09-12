@@ -68,7 +68,6 @@ def make_reader(net):
             variables, actor_input, method=_sequences, mutable=["intermediates"]
         )
         residual = mutated["intermediates"]["encoder"]["trunk"]["blocks"]["residual"][0]
-        # (T, blocks + 1, rows, dim)
         stack = jnp.concatenate([assembled.astype(jnp.float32)[:, None], residual], 1)
         readings = {"all": row_homogeneity(stack)}
         for group in GROUPS:
@@ -80,7 +79,6 @@ def make_reader(net):
 
     def read(variables, batch):
         readings, trunk_out = batched(variables, actor_input_of(batch))
-        # (T, blocks + 1, B) -> (blocks + 1, T, B)
         readings = jax.tree.map(lambda x: np.asarray(x).transpose(1, 0, 2), readings)
         return readings, np.asarray(direct(trunk_out)[1])
 

@@ -6,7 +6,6 @@ from jaxtyping import ArrayLike
 
 @dataclass
 class PlayerEnvOutput:
-    # Standard Info
     info: ArrayLike = ()
     done: ArrayLike = ()
     win_reward: ArrayLike = ()

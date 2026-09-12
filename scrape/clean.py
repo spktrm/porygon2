@@ -24,7 +24,7 @@ def extract_team(url: str) -> dict | None:
     try:
         team = team_from_url(url)  # may raise if URL bad / not a team
         if len(team.members) == 6:
-            data = team.to_dict()  # convert to dict
+            data = team.to_dict()
             data["source_url"] = url  # keep provenance
             return data
     except Exception as e:

@@ -53,9 +53,6 @@ class Porygon2BuilderModel(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        """
-        Initializes the encoder, policy head, and value head using the configuration.
-        """
         entity_size = self.cfg.entity_size
         self.cfg.dtype
 
@@ -587,8 +584,6 @@ def get_builder_model(config: ConfigDict = None) -> nn.Module:
 
 
 def get_packed_team_string(packed_team_member_tokens: jax.Array):
-    # 1. Reshape flat array to (Team_Size, Features)
-    #    We assume NUM_PACKED_SET_FEATURES is available globally or imported
     reshaped_tokens = packed_team_member_tokens.reshape(-1, NUM_PACKED_SET_FEATURES)
 
     reconstructed_sets = []
@@ -604,8 +599,6 @@ def get_packed_team_string(packed_team_member_tokens: jax.Array):
             row[PackedSetFeature.PACKED_SET_FEATURE__ABILITY].item(), ""
         )
 
-        # 2. Fix moves iteration
-        #    Using indices 0 to 3 added to base MOVE1 index
         moves = [
             ITOS["moves"].get(
                 row[PackedSetFeature.PACKED_SET_FEATURE__MOVE1 + i].item(), ""
@@ -617,7 +610,6 @@ def get_packed_team_string(packed_team_member_tokens: jax.Array):
             row[PackedSetFeature.PACKED_SET_FEATURE__NATURE].item(), ""
         )
 
-        # 3. EVs iteration (Indices 0 to 5 added to base HP_EV)
         evs = [
             str(4 * row[PackedSetFeature.PACKED_SET_FEATURE__HP_EV + i].item())
             for i in range(6)
@@ -645,7 +637,6 @@ def get_packed_team_string(packed_team_member_tokens: jax.Array):
             row[PackedSetFeature.PACKED_SET_FEATURE__TERATYPE].item(), ""
         )
 
-        # 4. Safer f-string formatting (using single quotes for joins)
         reconstructed_set = (
             f"|{species}|{item}|{ability}|{','.join(moves)}|{nature}|"
             f"{','.join(evs)}|{gender}|{ivs}|{shiny}|{level}|"

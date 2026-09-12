@@ -108,9 +108,6 @@ encode_divided_one_hot_edge = partial(
 
 
 def get_public_entity_mask(revealed: jax.Array) -> jax.Array:
-    """
-    Generate a mask to identify valid entities based on species tokens.
-    """
     species_token = revealed[
         EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__SPECIES
     ]
@@ -122,9 +119,6 @@ def get_public_entity_mask(revealed: jax.Array) -> jax.Array:
 
 
 def get_private_entity_mask(private: jax.Array) -> jax.Array:
-    """
-    Generate a mask to identify valid entities based on species tokens.
-    """
     species_token = private[
         EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__SPECIES
     ]

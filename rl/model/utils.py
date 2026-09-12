@@ -33,7 +33,6 @@ PredT = TypeVar("PredT")  # whatever structure 'pred' has, we return the same
 
 
 def legal_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
-    """A soft-max policy that respects legal_actions."""
     chex.assert_equal_shape((logits, legal_actions), dims=-1)
     # Fiddle a bit to make sure we don't generate NaNs or Inf in the middle.
     masked_logits = jnp.where(legal_actions, logits, -1e9)

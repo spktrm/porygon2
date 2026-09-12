@@ -86,7 +86,6 @@ def major_arg_step_mask(history_field: jax.Array, edge_cache: jax.Array) -> jax.
 
 @chex.dataclass
 class PerSlotHistoryOutput:
-    # Per-history-step snapshots: (H, 12, D) / (H, D).
     slot_snapshots: ArrayLike = ()
     field_snapshots: ArrayLike = ()
     # Latest raw node embedding per slot as of each step (H, 12, D): the

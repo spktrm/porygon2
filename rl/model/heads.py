@@ -43,10 +43,6 @@ class PolicyMetrics(NamedTuple):
 def compute_policy_metrics(
     logits: jax.Array, valid_mask: jax.Array, prior: jax.Array = None
 ):
-    """
-    Computes standard policy distributions, entropy, normalized entropy,
-    and the KL divergence (exploration magnet) penalty.
-    """
     log_policy = legal_log_policy(logits, valid_mask)
     policy = legal_policy(logits, valid_mask)
     entropy = -jnp.sum(policy * log_policy, axis=-1)

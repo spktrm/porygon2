@@ -118,9 +118,6 @@ class SequenceNormalisation(nn.Module):
 
 
 def activation_fn(array: jax.Array) -> jax.Array:
-    """
-    Apply activation function.
-    """
     return nn.gelu(array)
 
 
@@ -132,24 +129,12 @@ def layer_norm(array: jax.Array) -> jax.Array:
 
 
 def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
-    """
-    Apply softcap function.
-    """
     return max_value * nn.tanh(array / max_value)
 
 
 def apply_rope(
     inputs: jax.Array, positions: jax.Array, max_wavelength: int = 10_000
 ) -> jax.Array:
-    """
-    Get rotary position embeddings.
-
-    Args:
-        x (jax.Array): Input array.
-
-    Returns:
-        jax.Array: Rotary position embeddings.
-    """
     *_, seq_len, num_heads, head_dim = inputs.shape
     fraction = 2 * jnp.arange(0, head_dim // 2, dtype=jnp.int32) / head_dim
     timescale = max_wavelength**fraction
@@ -169,16 +154,6 @@ def apply_rope(
 
 class MultiHeadAttention(nn.Module):
     """Multi-headed attention (MHA) module.
-
-    This module is intended for attending over sequences of vectors.
-
-    Rough sketch:
-    - Compute keys (K), queries (Q), and values (V) as projections of inputs.
-    - Attention weights are computed as W = softmax(QK^T / sqrt(key_size)).
-    - Output is another projection of WV^T.
-
-    For more detail, see the original Transformer paper:
-      "Attention is all you need" https://arxiv.org/abs/1706.03762.
 
     Glossary of shapes:
     - T: Sequence length.
@@ -247,7 +222,6 @@ class MultiHeadAttention(nn.Module):
 
             _apply_rope = jax.vmap(apply_rope, in_axes=(-1, -1), out_axes=-1)
 
-            # Get the positions for the sequence.
             axial_query_heads = query_heads.reshape(
                 *query_heads.shape[:-1], -1, q_positions.shape[-1]
             )
@@ -305,7 +279,6 @@ class MultiHeadAttention(nn.Module):
                 jnp.nan_to_num(attn_entropy, nan=0.0).astype(jnp.float32),
             )
 
-        # Weight the values by the attention and flatten the head vectors.
         attn = jnp.einsum("...htT,...Thd->...thd", attn_probs, value_heads)
         attn = jnp.reshape(attn, (*q_leading_dims, -1))  # [T', H*V]
 
@@ -318,16 +291,6 @@ class MultiHeadAttention(nn.Module):
 def create_attention_mask(
     mask1: jax.Array | None = None, mask2: jax.Array | None = None
 ) -> jax.Array | None:
-    """
-    Create a combined attention mask for cross-attention.
-
-    Args:
-        mask1 (jax.Array | None, optional): First mask array. Defaults to None.
-        mask2 (jax.Array | None, optional): Second mask array. Defaults to None.
-
-    Returns:
-        jax.Array | None: Combined attention mask.
-    """
     if mask1 is None:
         return None
 
@@ -481,15 +444,6 @@ class MLP(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        """
-        Apply unit-wise linear layers to the units.
-
-        Args:
-            x (jax.Array): Input array.
-
-        Returns:
-            jax.Array: Output array.
-        """
         layer_sizes = self.layer_sizes
         if layer_sizes is None:
             layer_sizes = x.shape[-1]
@@ -522,15 +476,6 @@ class FFWMLP(nn.Module):
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        """
-        Apply Feed-Forward Network (FFN) MLP to the inputs.
-
-        Args:
-            x (jax.Array): Input array.
-
-        Returns:
-            jax.Array: Output array.
-        """
         inp_size = x.shape[-1]
 
         gating_layer = nn.Dense(
@@ -551,26 +496,11 @@ class FFWMLP(nn.Module):
 
 class PretrainedEmbedding:
     def __init__(self, fpath: str, dtype: jnp.dtype = jnp.float32):
-        """
-        Initialize the PretrainedEmbedding with a specified file path.
-
-        Args:
-            fpath (str): File path to the pretrained embeddings.
-        """
         with open(fpath, "rb") as f:
             arr = np.load(f)
         self.embeddings = jnp.asarray(arr, dtype=dtype)
 
     def __call__(self, indices: jax.Array) -> jax.Array:
-        """
-        Get embeddings for the given indices.
-
-        Args:
-            indices (jax.Array): Indices array.
-
-        Returns:
-            jax.Array: Embeddings array.
-        """
         return jnp.take(self.embeddings, indices, axis=0)
 
 
@@ -579,30 +509,12 @@ class ZeroEmbedding:
         self.embeddings = jnp.zeros((5, 1), dtype=dtype)
 
     def __call__(self, indices: jax.Array) -> jax.Array:
-        """
-        Get embeddings for the given indices.
-
-        Args:
-            indices (jax.Array): Indices array.
-
-        Returns:
-            jax.Array: Embeddings array.
-        """
         return jnp.take(self.embeddings, indices, axis=0)
 
 
 def simple_sum_embeddings(
     *embeddings: list[jax.Array], divisor: int | None = None
 ) -> jax.Array:
-    """
-    Get the sum of the embeddings.
-
-    Args:
-        embeddings (list[jax.Array]): List of embedding arrays.
-
-    Returns:
-        jax.Array: Sum of the embeddings.
-    """
     if len(embeddings) == 0:
         raise ValueError("No embeddings provided")
     if divisor is None:
@@ -619,7 +531,6 @@ class SumEmbeddings(nn.Module):
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
-        """Sum embeddings."""
         num_embeddings = len(embeddings)
         if num_embeddings == 0:
             raise ValueError("No embeddings provided")
@@ -686,15 +597,6 @@ class PointerLogits(nn.Module):
 def one_hot_concat_jax(
     one_hot_encoded: list[tuple[int, int]], dtype: jnp.dtype = jnp.float32
 ) -> jax.Array:
-    """
-    Concatenate one-hot encoded arrays.
-
-    Args:
-        one_hot_encoded (list[tuple[int, int]]): List of tuples containing indices and offsets.
-
-    Returns:
-        jax.Array: Concatenated one-hot encoded array.
-    """
     sum_offsets = np.cumsum([0] + [offset for _, offset in one_hot_encoded])
     indices = jnp.stack(
         [idx + offset for (idx, _), offset in zip(one_hot_encoded, sum_offsets[:-1])]
