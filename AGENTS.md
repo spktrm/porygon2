@@ -293,6 +293,14 @@ wire enums: that experiment was reverted and is documented in `LESSONS.md`.
   the branches rather than assigning a default and immediately overwriting it.
 - No single-letter names in new code. If two quantities exist only to form a
   product, name the product the implementation actually uses.
+- Comments carry the why and nothing else: a non-obvious constraint, a
+  deliberate architectural deviation, a workaround. Default to no comment.
+  Do not narrate what the code does, restate a name, or re-verify a type the
+  annotation already states, and do not record change context ("fixed X",
+  "updated as requested") — that belongs in the commit message. When
+  refactoring a file, delete the redundant comments you pass over. Two audits
+  (2026-08-25, 2026-09-12) found ~135 comments that had become false;
+  narration is what dilutes the ones carrying paid-for knowledge.
 - Express one operation once, parameterised by real variation. Duplicated
   call sequences and comments saying “must mirror X” signal a missing shared
   implementation. Put identities and layout arithmetic beside their owner.

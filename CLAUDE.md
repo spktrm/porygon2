@@ -210,6 +210,13 @@ TypeScript game service speaking protobuf over websockets.
   reassign, which is more code than the ternary was.
 - No single-letter names. Where two exist only to form a product, define the
   product — that is what the code uses.
+- Comments carry the WHY only — a non-obvious constraint, a deliberate
+  deviation, a workaround. Default to NONE: never narrate the code, restate a
+  name, or re-verify a signature the declaration already gives, and never
+  record change context ("fixed X", "as requested") — that is the commit
+  message's job. Delete the redundant ones you pass over when refactoring a
+  file. The 2026-08-25 audit found ~40 comments that had gone false, and the
+  2026-09-12 sweep another ~95; narration is what dilutes the paid-for ones.
 - ALWAYS run `bash scripts/lint.sh` before committing (autoflake + isort +
   black over `rl/`, `tests/`, and prettier over `service/src`). It rewrites
   files in place, so running it after staging means committing unformatted
