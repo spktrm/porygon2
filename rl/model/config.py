@@ -56,21 +56,6 @@ def get_player_model_config(
     encoder_use_bias = True
     encoder_qk_layer_norm = True
 
-    # Perceiver-style latent input read (2026-08-21): K learned latents
-    # cross-attend ONE flat token set -- 12 public x 11 (10 attributes plus
-    # that slot's recurrent history state, folded in 2026-08-28) + 6 private
-    # x 8 + field 3 + prev-action 2 + history field 3 + info 1 = 189 keys --
-    # and become the trunk's state rows. It
-    # replaces the cross-entity pool + per-entity pooling + per-substream
-    # input MLPs on that path: the board no longer collapses to one
-    # vector per entity before the trunk sees it, and substream identity
-    # is carried by additive token-type / row / group / side biases on the
-    # tokens instead of by slice boundaries. Cost: probability matrix
-    # K x 186 at the trunk's head count (~9k) once per timestep vs the
-    # 168^2 x 2 heads (~56k) cross-entity mix it replaces, so this should
-    # land BELOW the pre-pool entity-local baseline (182.5MB at T=64);
-    # measure before merge. The read's residual starts at 1.0: token
-    # content reaches the latents only through it.
     cfg.encoder.history_pool = ConfigDict()
     cfg.encoder.history_pool.num_latents = 4
     cfg.encoder.history_pool.num_heads = num_heads
@@ -94,7 +79,7 @@ def get_player_model_config(
     # policy-readable ones, encoder.kept_rows) -- see rl/model/trunk.py.
     # Replaces the
     # four-round, three-stream, five-masked-attention RoundBlock on
-    # 2026-08-29: at 61 rows an all-pairs attention is 3.7k cells, so the
+    # 2026-08-29: at 80 rows an all-pairs attention is 6.4k cells, so the
     # block masks that encoded the routing were buying nothing but their own
     # complexity, and the 48 latents they fed were a bottleneck between rows
     # the trunk can now simply carry. Depth is the knob: a block costs ~1.05M
@@ -109,13 +94,6 @@ def get_player_model_config(
     cfg.encoder.trunk.hidden_size = encoder_hidden_size
     cfg.encoder.trunk.use_bias = encoder_use_bias
     cfg.encoder.trunk.qk_layer_norm = encoder_qk_layer_norm
-
-    # Within-modality (micro) readout: NO config block — the head is a
-    # parameter-less dot grid over the typed trunk streams (2026-08-17)
-    # plus three zero-init per-group scales. The modality depth the
-    # November experiments proved necessary lives in the round trunk
-    # (move/switch/target residual streams with per-type gates), not in
-    # per-modality head stacks.
 
     # The action readout (2026-08-29). Three small heads over named trunk
     # rows -- a scalar per sheet row for switching, ONE bilinear for
@@ -132,13 +110,6 @@ def get_player_model_config(
     cfg.action_head = ConfigDict()
     cfg.action_head.qk_size = entity_size
 
-    # Deep value readout (Aug 2026): the previous single linear layer made
-    # the value head the thinnest module in the model while the action
-    # decoder kept the depth the November experiments proved necessary —
-    # forcing the trunk itself to linearise win probability, in direct
-    # competition with policy features. Two hidden layers on the pooled
-    # 4*entity_size value embedding mirror the policy head's per-modality
-    # block depth.
     cfg.v_head = ConfigDict()
     cfg.v_head.mlp = ConfigDict()
     cfg.v_head.mlp.layer_sizes = (2 * entity_size, entity_size, len(CAT_VF_SUPPORT))
@@ -175,10 +146,6 @@ def get_player_model_config(
     cfg.pair_value_head.qk_size = entity_size
     cfg.pair_value_head.unary_hidden = entity_size
     if cfg.num_decision_slots != 1:
-        # The Q critic is structural and singles-only: the doubles path
-        # stacks per-stage log_policy/action_index, which the one-step
-        # target code does not yet consume. Fail loudly rather than train
-        # a silently-wrong Q.
         raise ValueError("q_head requires num_decision_slots == 1 (singles)")
 
     return cfg
@@ -207,8 +174,7 @@ def get_builder_model_config(
     qkv_size = int(qkv_scale * entity_size)
     use_bias = False
     qk_layer_norm = True
-    # 0.05 for the same reason as cfg.encoder.round.init_gate (dormant
-    # under randombattle; no live effect today).
+    # Dormant under randombattle; no live effect today.
     init_residual_scale = 0.05
 
     transformer_kwargs = dict(

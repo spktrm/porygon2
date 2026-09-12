@@ -18,8 +18,9 @@ import { availableParallelism } from "node:os";
 const WORKER_PATH = path.resolve(__dirname, "../server/worker.js");
 
 // Best-effort bridge to the learner's wandb log: the learner's own
-// _log_memory_diagnostics (main-only, main.py-side) reads this file and
-// folds it into the same periodic diag_* wandb row it already logs for
+// log_memory_diagnostics (main-only, in rl/online/training/diagnostics.py)
+// reads this file and folds it into the same periodic diag_* wandb row
+// it already logs for
 // the python process, so node RSS shows up next to diag_rss_mb without
 // giving this service a wandb dependency of its own.
 const MEMORY_STATS_DIR = path.resolve(__dirname, "../../../runtime");

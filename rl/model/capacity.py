@@ -70,10 +70,10 @@ def make_capacity_probe(network):
             packed_history=batch.player_packed_history,
             history=batch.player_history,
         )
-        # The flat-trunk encoder returns ONE (T, B, 61, D) sequence
-        # (2026-08-29); the "action" stream is the contiguous
-        # private|move|target row block the readout consumes, the "value"
-        # stream is the CLS row the critic reads.
+        # The flat-trunk encoder returns ONE (T, B, 80, D) sequence for the
+        # learner, (T, B, 73, D) for the actor (2026-08-29); the "action"
+        # stream is the contiguous private|move|target row block the readout
+        # consumes, the "value" stream is the CLS row the critic reads.
         from rl.model.constants import CLS_ROW, PRIVATE_ROWS, TARGET_ROWS
 
         sequence = encode(params, actor_input)

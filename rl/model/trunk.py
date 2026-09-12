@@ -4,8 +4,8 @@ Replaces `RoundBlock` (2026-08-29), which carried three separate residual
 streams -- 48 Perceiver latents, 41 action slots, 4 value queries -- wired
 together by five individually-gated, block-masked attentions per round, four
 rounds deep, at 3.69M parameters a round. Every route those masks encoded is
-a subset of one all-pairs attention over the 61 rows the sequence now has,
-and at 61 rows the trunk can simply carry them: 61 x 61 is 3.7k attention
+a subset of one all-pairs attention over the 80 rows the sequence now has,
+and at 80 rows the trunk can simply carry them: 80 x 80 is 6.4k attention
 cells against the 24k the old routing plus its two feeding cross-attention
 reads paid, so the masks were buying nothing but their own complexity.
 

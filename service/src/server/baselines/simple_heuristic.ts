@@ -11,8 +11,8 @@
  *     and a reserve has a better matchup, it switches out.
  *   - Forced switches and team-preview leads pick the best matchup / lead.
  *
- * Unlike max_dmg.ts / kaizo_plus.ts this uses only @pkmn/client + @pkmn/dex
- * (no @smogon/calc), so it runs without any extra dependency, and it emits
+ * It uses only @pkmn/client + @pkmn/dex (no @smogon/calc), so it runs
+ * without any extra dependency, and it emits
  * actions purely by scoring the legal block cells from the action mask
  * — so it is correct across singles / doubles / forceSwitch / teamPreview.
  * ------------------------------------------------------------------ */

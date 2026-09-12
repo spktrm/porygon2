@@ -4,8 +4,8 @@ Creates/refreshes two views:
   - pokemon-rl         -> "Signal health"  (training-run diagnostics)
   - pokemon-rl-offline -> "Critic health"  (offline critic / Phi ensemble)
 
-Panel keys mirror what rl/main.py and rl/offline/train.py log; when metrics
-are added or renamed, update the sections here and re-run. Each run without
+Panel keys mirror what rl/online/main.py and rl/offline/train.py log; when
+metrics are added or renamed, update the sections here and re-run. Each run without
 an --update-url SAVES A NEW VIEW (the API matches by internal id, not
 display name); superseded copies are then PRUNED automatically — after each
 save, every other view in the project with the SAME display name is
@@ -160,7 +160,7 @@ def rl_sections():
                     # player_update_skipped is the non-finite gate — a
                     # poisoned update is permanent and the next periodic
                     # save overwrites the last good checkpoint with it
-                    # (CLAUDE.md §8), so this is checkpoint protection, not
+                    # (LESSONS.md), so this is checkpoint protection, not
                     # just a numerics footnote. Never surfaced before this
                     # redesign.
                     "Loss & non-finite gate",
@@ -1010,7 +1010,8 @@ def rl_sections():
                 lp(
                     # Which (chunk_rows, history_rows) combo of
                     # player_shape_lattice a batch hit — relevant given the
-                    # shape-lattice OOM-guard history (CLAUDE.md §1): a
+                    # shape-lattice OOM-guard history (the first bullet
+                    # under CLAUDE.md's "Invariants"): a
                     # surprise top-bucket compile is what killed three runs
                     # before the lattice was enumerated up front.
                     "Shape lattice combo (T, H)",
@@ -1084,7 +1085,8 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # Fed by learner.py's _log_memory_diagnostics (main-only, every
+            # Fed by log_memory_diagnostics in
+            # rl/online/training/diagnostics.py (main-only, every
             # memory_diag_interval steps) plus the service's own 10s
             # process.memoryUsage() write — see index.ts:writeMemoryStats.
             # Process RSS is summarised in "0 · At a glance"; not repeated

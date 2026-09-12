@@ -854,11 +854,9 @@ def train_step(
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),
-            # Q-head learning readouts: the three-scalar micro gate, the
-            # drift-from-init of the zero-init out layers and the pointer
-            # kernels, and per-subtree grad norms (pre-clip). A micro
-            # kernel rms sitting at its lecun init (0.0625 at fan-in 256)
-            # with a flat gate = the within-modality route never trained.
+            # Head learning readouts: the rms of the pointer kernels
+            # against their known init, and per-subtree grad norms
+            # (pre-clip).
             **head_param_telemetry(prev_player_state.params, player_grads),
             **applied_delta_telemetry(prev_player_state.params, player_state.params),
             player_win_returns_sum=average(

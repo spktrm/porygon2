@@ -679,14 +679,10 @@ class ActionAxisMasks(NamedTuple):
     has_move: jax.Array
     has_both: jax.Array
     taken_switch: jax.Array
-    # Factorised-objective predicates (2026-08-27). taken_modality is the
-    # M-way modality index of the taken action; num_legal_modalities and
-    # taken_modality_count feed the per-level row masks: the macro bracket
-    # acts only where >= 2 modalities are live (a broader predicate than
-    # the strict has_both above — WILDCARD/OTHER count as real macro
-    # alternatives), the micro bracket only where the TAKEN modality has
-    # >= 2 legal cells (a singleton's conditional is deterministic: its
-    # ratio is exactly 1 and its entropy exactly 0).
+    # taken_modality is the M-way modality index of the taken action;
+    # num_legal_modalities and taken_modality_count gate the observer
+    # entropy averages only (train_step's macro_valid / micro_valid) —
+    # no loss reads them.
     taken_modality: jax.Array
     num_legal_modalities: jax.Array
     taken_modality_count: jax.Array

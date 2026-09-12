@@ -328,11 +328,6 @@ class Encoder(nn.Module):
         # every move is disabled mask alike.
         self.info_linear = nn.Dense(name="info_linear", use_bias=False, **dense_kwargs)
 
-        # Recurrent history encoder over history edges. Twelve GRU states
-        # (one per public slot) scanned along the history axis; per request we
-        # read the state as of that request and hand it to the latent
-        # input read as 13 raw key tokens (12 slots + field); the trunk
-        # rounds see it only through the state latents.
         self.history_encoder = PerSlotHistoryEncoder(self.cfg, name="history_encoder")
         self.history_pool = HistoryAttentionPool(self.cfg, name="history_pool")
         self.history_node_read = NodeHistoryRead(self.cfg, name="history_node_read")
@@ -343,7 +338,7 @@ class Encoder(nn.Module):
         # The trunk. One sequence, `num_blocks` standard pre-RMSNorm blocks,
         # no gates and no block masks -- see rl/model/trunk.py for why the
         # three gated streams and their two feeding cross-attention reads all
-        # collapse into this at 61 rows.
+        # collapse into this at 80 rows.
         # Every row's CONTENT enters the trunk at RMS 1, a fresh embedding
         # table's magnitude, normalised per row and rescaled per group, with
         # the additive group/row identity on top -- the registers the trunk
@@ -884,11 +879,13 @@ class Encoder(nn.Module):
     ):
         """One row per thing -> (sequence, row_valid), BEFORE the trunk.
 
-        61 rows: a CLS row, 12 public entities, my 6 sheet rows, my 16
+        80 rows: a CLS row, 12 public entities, my 6 sheet rows, my 16
         candidate move slots, the 17 target slots, the field triple, the
-        recurrent field triple, the two previous-action rows, and the request
-        info row. Every identity a row carries is additive, and the layout
-        itself lives in `rl/model/constants.py` so the offsets exist once.
+        recurrent field triple, the two previous-action rows, the request
+        info row, the learner-only partition's 6 opponent sheet rows and
+        VALUE_CLS row, and the 12 HISTORY_ENTITY rows. Every identity a row
+        carries is additive, and the layout itself lives in
+        `rl/model/constants.py` so the offsets exist once.
         """
         dtype = self.cfg.dtype
 

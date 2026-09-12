@@ -227,7 +227,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # switch axis it inits from). "head-reset" grafts a fresh-init
     # action_head onto the inherited trunk: uniform over legal cells at
     # step 0 (the flat readout's init contract), so the exploit axis has
-    # full supply while the world model carries. "shrink-perturb"
+    # full supply. "shrink-perturb"
     # interpolates every PLAYER param toward fresh init by
     # br_perturb_frac (Ash & Adams, arXiv:1910.08475 — the ~179k
     # perturbation is the one event observed to revive collapsed switch
@@ -246,8 +246,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # structural, e.g. LayerNorm scales ~1.0 in both nets).
     br_perturb_frac: float = 0.5
 
-    # RAM-attribution diagnostics (Learner._log_memory_diagnostics), logged
-    # through main's periodic wandb logs: process RSS + OS-vs-python thread
+    # RAM-attribution diagnostics (log_memory_diagnostics in
+    # rl/online/training/diagnostics.py), logged through main's periodic
+    # wandb logs: process RSS + OS-vs-python thread
     # census + exact replay-buffer/league-cache byte counts. Added after
     # session 1786537634's RSS climbed 5.9->17GB (threads 478->775) with
     # no way to attribute it from wandb alone. 0 disables. Cost per tick
@@ -373,7 +374,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # auto-corrected.
 
     # No ExploitabilityController anymore (removed 2026-08-14, the last
-    # adaptive hyperparameter loop — see rl/online/controllers.py's
+    # adaptive hyperparameter loop — see rl/online/training/controllers.py's
     # module docstring). The replay KL target is fixed at
     # player_replay_kl_target; the worst-matchup win-rate it sensed still
     # exists as _should_add_new_player's "dominant" gate, it just doesn't
@@ -426,9 +427,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # softmax weights over alive pairs, s = tanh(g_s(i,i') + g_s(i',i)).
     # Both heads read POST-trunk rows (the trunk routes whatever context a
     # row needs, no field context of the heads' own): the public head the
-    # PUBLIC rows, the private head my sheet rows and the opponent-truth
-    # rows (learner-only by the read mask). Both regress on `scalar_returns` (the v-trace scalar the two-hot label is
-    # built from) under this coefficient, gradient live into what they
+    # PUBLIC rows, the private head my sheet (PRIVATE) rows paired with the
+    # opponent's PUBLIC rows -- neither head reads opponent-private state.
+    # Both regress on `scalar_returns` (the v-trace scalar the two-hot label
+    # is built from) under this coefficient, gradient live into what they
     # read; the CLS critics stay the matched control and the value
     # bootstraps keep their route (player_privileged_targets). 0.0 builds
     # neither head -- today's model and loss exactly.

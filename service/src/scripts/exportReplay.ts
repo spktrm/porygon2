@@ -4,9 +4,8 @@
  *
  *     [uint32-LE length][EnvironmentBatch proto bytes]
  *
- * so rl/offline/dataset.py's record parser consumes it unchanged. Used by
- * the potential-function visualizer (rl/offline/visualize.py) and handy for
- * debugging individual replays.
+ * so rl/offline/dataset.py's record parser consumes it unchanged. Handy
+ * for debugging individual replays.
  *
  * Usage (from service/, after tsc):
  *   node dist/scripts/exportReplay.js <replay.json> <out.bin>
@@ -24,8 +23,7 @@ import { encodePerspective, ReplayFile } from "./offlineWorker";
 function main() {
     // Own output goes through bound originals: the sim/state encoder spams
     // console while replaying logs, so unless PORYGON_VERBOSE=1 the global
-    // console is silenced during encoding — stdout must stay parseable
-    // (rl/offline/visualise.py reads the final JSON stats line).
+    // console is silenced during encoding.
     const stdoutLog = console.log.bind(console);
     const stderrLog = console.error.bind(console);
     if (process.env.PORYGON_VERBOSE !== "1") {

@@ -8,9 +8,7 @@ ENTITY_EDGE_FEATURE__ENTITY_IDX, so a slot's state only advances when
 something happened to that Pokemon. Carry is O(12 * entity_size) regardless
 of history length.
 
-The per-request states are residual-injected into the encoder's public
-entity tokens; the per-request states are trained end-to-end by the
-task gradients alone.
+The per-request states are trained end-to-end by the task gradients alone.
 """
 
 import chex
@@ -188,10 +186,7 @@ class HistoryAttentionPool(nn.Module):
 
     A set of num_latents learned queries attends over the 15 history tokens
     (12 slot states + the 3 field states), yielding (num_latents, D) latents.
-    Shared module code, separately trained instances: the offline critic
-    reads the flattened latents through its linear probe; the RL trunk
-    reads its own instance's latents as extra history-context tokens,
-    trained from scratch by RL gradients.
+    The offline critic reads the flattened latents through its linear probe.
     """
 
     cfg: ConfigDict
@@ -235,11 +230,9 @@ class NodeHistoryRead(nn.Module):
     """Residual cross-read of the diaries by the photos.
 
     Each slot's current snapshot (node state) queries the recurrent slot
-    states + field state — the same current-obs-reads-history pattern as
-    the RL trunk's gated history_cross rounds. The residual gate is
-    zero-init, so at initialization the output IS the raw snapshots
-    (hand-rule parity is the floor) and history context blends in only as
-    training finds it useful.
+    states + field state. The residual gate is zero-init, so at
+    initialisation the output IS the raw snapshots (hand-rule parity is the
+    floor) and history context blends in only as training finds it useful.
     """
 
     cfg: ConfigDict

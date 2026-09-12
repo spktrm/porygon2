@@ -58,9 +58,10 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         entity_size=int(model_cfg.entity_size),
         num_decision_slots=int(model_cfg.num_decision_slots),
         # "flat_bilinear_readout" (2026-08-29) = FlatActionReadout over ONE
-        # 61-row sequence: a scalar per sheet row for switching, one bilinear
-        # for moves x targets, a scalar per target row for pass/default, and
-        # a flat pre-RMSNorm trunk behind it. Predecessors:
+        # flat sequence: one pair form for sheet rows x the ally row a switch
+        # replaces (2026-09-11) AND for moves x targets, a scalar per target
+        # row for the standalone actions, and a flat pre-RMSNorm trunk behind
+        # it. Predecessors:
         # "action_score_grouped_micro" (2026-08-25, ActionScoreHead with
         # per-slot-group micro and per-modality macro, Q composed in
         # heads.compose_q), "hierarchical_two_rung" (2026-08-20) and

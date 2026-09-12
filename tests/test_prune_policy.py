@@ -52,7 +52,8 @@ def test_above_the_line_is_untouched() -> None:
 
 
 def test_a_row_entirely_below_the_line_keeps_its_legal_set() -> None:
-    # rnad.py FineTuning._threshold's degenerate guard.
+    # The degenerate guard of DeepNash's FineTuning._threshold — see the
+    # reference note in rl/online/training/targets.py.
     probabilities = np.full(300, 1 / 300, np.float32)
     log_policy, legal = _row(probabilities)
     pruned = np.asarray(prune_log_policy(log_policy, legal, 0.005))

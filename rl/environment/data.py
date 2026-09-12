@@ -150,8 +150,6 @@ FIELD_MAX_VALUES = {
 # which every move is disabled mask alike), and NUM_ACTIVE is the doubles
 # handle; neither is a FieldFeature, so neither can ride _embed_field, which
 # is shared with history rows that have no info array.
-# The transition model's next-request-kind label reads the RAW enum value,
-# UNSPECIFIED included (the one-hot input above excludes it).
 NUM_REQUEST_TYPES = len(RequestType.keys())
 INFO_MAX_VALUES = {
     InfoFeature.INFO_FEATURE__REQUEST_TYPE: NUM_REQUEST_TYPES - 1,

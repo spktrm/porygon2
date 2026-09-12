@@ -51,7 +51,7 @@ class BuilderTrajectoryStore:
 
     def nbytes(self) -> int:
         """Total host bytes of stored trajectory arrays — RAM diagnostics
-        (Learner._log_memory_diagnostics)."""
+        (log_memory_diagnostics in rl/online/training/diagnostics.py)."""
         with self._sample_cv:
             return sum(
                 leaf.nbytes
@@ -200,7 +200,7 @@ class PlayerTrajectoryStore:
 
     def nbytes(self) -> int:
         """Total host bytes of stored trajectory arrays — RAM diagnostics
-        (Learner._log_memory_diagnostics)."""
+        (log_memory_diagnostics in rl/online/training/diagnostics.py)."""
         with self._sample_cv:
             return sum(
                 leaf.nbytes

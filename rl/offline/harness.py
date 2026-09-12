@@ -65,7 +65,8 @@ from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
 
-# rl/online/main.py's EVAL_BASELINE_NAMES: {0: random, 1: default, 2: simpleheuristic}.
+# rl/online/main.py's EVAL_BASELINE_NAMES: {0: random, 1: default,
+# 2: simpleheuristic, 3: potentialmcts}.
 SIMPLE_HEURISTIC_BASELINE_INDEX = 2
 
 # An offline intervention: rewrites the actor input the environment hands

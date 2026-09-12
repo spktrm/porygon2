@@ -190,8 +190,9 @@ class League:
 
     def cache_stats(self) -> tuple[int, int]:
         """(entries, total host bytes) of the materialized-opponent cache —
-        RAM diagnostics (Learner._log_memory_diagnostics). At ~112MB per
-        full player+builder container, a full 16-slot cache is one of the
+        RAM diagnostics (log_memory_diagnostics in
+        rl/online/training/diagnostics.py). At ~112MB per full
+        player+builder container, a full 16-slot cache is one of the
         largest single host-RAM consumers in the process."""
 
         def tree_nbytes(tree) -> int:

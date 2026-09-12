@@ -97,7 +97,7 @@ class SequenceGroup(IntEnum):
     ONE TOKEN PER THING (2026-08-29). Before this the board was unpacked into
     189 attribute tokens -- 10 or 11 per entity -- and a Perceiver read
     compressed them to 48 latents for a trunk that could not afford the rows.
-    With entities pooled to a vector each the whole board is 61 rows, the
+    With entities pooled to a vector each the whole board is 80 rows, the
     trunk carries them directly, and the read, the latents and the separate
     action stream all go.
 
@@ -187,7 +187,8 @@ assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 
 # ---- the leak partition (2026-09-01) ---------------------------------------
 # R[q, k]: query row q may attend to key row k. Three sets:
-#   POLICY_READABLE -- every pre-existing row (0..60): reads only itself.
+#   POLICY_READABLE -- rows 0..60 and 68..79 (the HISTORY_ENTITY block
+#     added 2026-09-01): reads only itself.
 #   SECRET (OPP_PRIVATE_ROWS) -- the opponent's request truth: readable ONLY
 #     by VALUE_CLS; may itself read the policy-readable rows and its
 #     siblings, because a row's READS leak nothing.
@@ -221,8 +222,8 @@ assert not SEQUENCE_READ_MASK[:, _is_value_cls][
 # The ACTOR's sequence (2026-09-04): the policy-readable rows alone. At act
 # time the learner-only partition is all-zero input that no policy output
 # reads -- the read mask gives the policy-readable rows no in-edge from it
-# at any block -- yet its rows still cost the private embedder, the code
-# softmax and seven rows of every trunk block. Under cfg.train=False the
+# at any block -- yet its rows still cost the private embedder and seven
+# rows of every trunk block. Under cfg.train=False the
 # encoder assembles only these rows and the trunk runs on them with the
 # partition's sub-mask (all True by construction), which computes the SAME
 # policy-readable rows the learner computes, up to GEMM shape numerics.

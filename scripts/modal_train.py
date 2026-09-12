@@ -250,7 +250,7 @@ def train_offline(cli: str = ""):
     os.chdir(REPO_REMOTE)
     args = shlex.split(cli)
 
-    generation = 9  # rl/offline/config.py default
+    generation = 9  # rl/config/common.py default
     if "--generation" in args:
         generation = int(args[args.index("--generation") + 1])
     _require_embeddings(generation)
@@ -288,9 +288,9 @@ def train_offline(cli: str = ""):
 )
 def train_rl(debug: bool = False, load_state_mode: str = "checkpoint"):
     """Starts the node game service, waits for ws://localhost:8080, then
-    runs rl/main.py. Resumes from the newest ckpts/gen{N}/ checkpoint on
-    the volume (load_state_mode="params" merges params only — use for the
-    first launch after an architecture change)."""
+    runs rl/online/main.py. Resumes from the newest ckpts/gen{N}/ checkpoint
+    on the volume (load_state_mode="params" merges params only — use for
+    the first launch after an architecture change)."""
     os.chdir(REPO_REMOTE)
 
     # The learner config decides generation/format — read it in a

@@ -256,8 +256,7 @@ def compute_player_targets(
     # step trains as row 0 of the NEXT chunk. Exception: a done row on the
     # final position is the game's own terminal row (no next chunk) and
     # keeps its value target (= the terminal reward). policy_mask below
-    # inherits this through value_mask; so does the Q-CE mask in
-    # train_step.
+    # inherits this through value_mask.
     is_final_row = jnp.arange(value_mask.shape[0])[:, None] == value_mask.shape[0] - 1
     value_mask = value_mask & (
         ~is_final_row | batch.player_transitions.env_output.done.astype(jnp.bool_)

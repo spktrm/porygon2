@@ -242,7 +242,7 @@ class MultiHeadAttention(nn.Module):
         # cudnn+seq_lengths): seq 64: 0.12/0.27/0.54/0.32; 128:
         # 0.16/0.42/0.46/0.53; 256: 0.68/0.70/0.73/0.58; 512:
         # 1.02/0.72/1.30/0.75; 1024: 1.42/1.53/2.33/1.71; 2048:
-        # 4.11/OOM/4.23/3.09. At the trunk's 61-64 rows the einsum is 2-4x
+        # 4.11/OOM/4.23/3.09. At the trunk's 73-80 rows the einsum is 2-4x
         # FASTER than every flash variant (kernel overhead dominates), and
         # the only variant that ever clearly wins (cudnn+seq_lengths, from
         # ~256 and decisively at 2048 where plain xla OOMs) cannot express

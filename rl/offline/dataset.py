@@ -609,7 +609,7 @@ def _drop_ratings(record: Sequence[OfflineExample], rng, dropout: float) -> None
 
 def _pad_env_to(env, length: int):
     """Pads the time axis by repeating the terminal step with done=0 — the
-    RL actor's padding convention (see rl/actor/player_actor.py): exactly
+    RL actor's padding convention (see rl/online/player_actor.py): exactly
     one done=1 per trajectory, so cumsum(done)-based masks zero everything
     after the terminal step."""
     t = env.done.shape[0]

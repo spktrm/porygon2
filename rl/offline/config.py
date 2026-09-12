@@ -132,8 +132,7 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # to K separate --ensemble-index runs, substantially faster on one
     # GPU, and shared-holdout evals log live gate metrics.
     train_ensemble: bool = False
-    # Gate scale used only for eval-time gate logging in --ensemble runs;
-    # mirror of the learner's potential_uncertainty_scale.
+    # Gate scale used only for eval-time gate logging in --ensemble runs.
     eval_gate_scale: float = 5.0
 
     log_interval_steps: int = 100
@@ -142,8 +141,8 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     save_interval_steps: int = 5_000
 
     # Artifacts land in {artifact_root}/{format_id}/ckpt_{step:08}/ using the
-    # same component layout as rl/learner/checkpoint.py, so the RL learner
-    # can merge them via load_from_params.
+    # same component layout as rl/checkpoint.py, so the RL learner can
+    # merge them via rl/online/artifact.py's load_from_params.
     artifact_root: str = "ckpts/offline"
 
     # Resume offline training from a previous offline artifact, if set.

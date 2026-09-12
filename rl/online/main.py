@@ -131,7 +131,7 @@ def run_training_actor_pair(
             for actor in (player, opponent):
                 actor.set_game_id(game_id)
 
-            # Grab the result from either self play or playing historical opponents
+            # Submit both sides' unrolls — self play or a historical opponent.
             future1 = executor.submit(player.unroll_and_push, player_params)
 
             future2 = executor.submit(
@@ -549,8 +549,7 @@ def main(args: argparse.Namespace):
     # actor (depth-1 expectimax, 2026-09-06) was deleted here 2026-09-09:
     # its measured influence at 01861967 was root KL .000026-.000101 with
     # both inspected bad actions still ranked first in 16/16 seeds
-    # (LESSONS.md "Removal ledger — 2026-09-09 search eval actor"); search
-    # stays for the offline readers (rl/offline/harness.py).
+    # (LESSONS.md "Removal ledger — 2026-09-09 search eval actor").
     eval_slate = (
         (make_agent(HeadParams(temp=1.0), HeadParams(temp=1.0)), "-plain-t1"),
         (
