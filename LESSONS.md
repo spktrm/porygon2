@@ -5619,3 +5619,20 @@ negation is exact at the HEAD (the test) but nominal through the trunk
 (my sheet rows never read theirs; theirs read mine). Each head 591,361
 params (was 722,433). The first launch of the context form ran minutes on
 fresh heads and was stopped; the relaunch is again from ckpt_00637000.
+
+### Amendment — 2026-09-12 pairwise sheet critic uses opponent public rows
+
+User-directed routing change: `pair_value_private` now reads post-trunk
+`PRIVATE_ROWS` × `OPP_PUBLIC_ROWS`, with opponent validity and alive flags
+from the public channel. Neither pairwise head reads opponent-private rows
+or their HP flags. Motivation: prevent the auxiliary critic from placing
+useful matchup computation exclusively in privileged representations absent
+at deployment. The privileged CLS critic and return estimator are unchanged.
+Head names and parameter shapes are preserved for checkpoint compatibility;
+the sheet head now pairs different representation groups, so algebraic
+head-side antisymmetry remains, but does not establish whole-network symmetry.
+Unrevealed public opponents remain masked; this adds no inferred hidden slots.
+The full-model partition test now requires both opened pairwise heads to be
+invariant to opponent-private perturbations. No strength result or training
+restart is claimed. Revert: restore the sheet head's opponent slice and
+validity to `OPP_PRIVATE_ROWS`, and its opponent alive flags to private HP.

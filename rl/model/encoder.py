@@ -155,8 +155,8 @@ class PairValueInputs(NamedTuple):
     """What the pairwise critics read beyond the trunk's rows (2026-09-12,
     learner-only, () on the actor): alive = the mon's hit-point ratio token
     is above 0, off the wire. `public_alive` (12,) for the public rows;
-    `sheet_alive` (12,) for my sheet rows then the opponent's, the order of
-    PRIVATE_ROWS then OPP_PRIVATE_ROWS the private head reads."""
+    `sheet_alive` (12,) for my sheet rows then the opponent's public rows,
+    the order of PRIVATE_ROWS then OPP_PUBLIC_ROWS the private head reads."""
 
     public_alive: jax.Array
     sheet_alive: jax.Array
@@ -1100,7 +1100,7 @@ class Encoder(nn.Module):
                 sheet_alive=jnp.concatenate(
                     (
                         env_step.private_team[:, hp_private] > 0,
-                        env_step.opp_private_team[:, hp_private] > 0,
+                        env_step.public_team[NUM_PUBLIC_SLOTS // 2 :, hp_public] > 0,
                     )
                 ),
             )

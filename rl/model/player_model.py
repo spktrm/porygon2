@@ -27,7 +27,7 @@ from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
     MOVE_ROWS,
-    OPP_PRIVATE_ROWS,
+    OPP_PUBLIC_ROWS,
     PRIVATE_ROWS,
     PUBLIC_ROWS,
     TARGET_ROWS,
@@ -94,8 +94,8 @@ class Porygon2PlayerModel(nn.Module):
             self.potential_head = RegressionValueLogitHead(self.cfg.potential_head)
         # The pairwise entity critics (2026-09-12, heads.PairValueHead):
         # learner-only, absent unless the learner's coefficient is > 0. One
-        # class, two inputs -- the post-trunk public rows, and both players'
-        # pre-trunk sheet latents (encoder.PairValueInputs).
+        # class, two inputs -- all public rows, or our private sheets paired
+        # with opponent public rows; both inputs are post-trunk.
         if self.cfg.pair_value_head.enabled:
             self.pair_value_public = PairValueHead(self.cfg.pair_value_head)
             self.pair_value_private = PairValueHead(self.cfg.pair_value_head)
@@ -427,8 +427,8 @@ class Porygon2PlayerModel(nn.Module):
                 # Both heads read POST-trunk rows (user call 2026-09-12: the
                 # trunk routes whatever context a row needs; no field
                 # context of the head's own). Public: the public rows, mine
-                # first by layout. Private: my sheet rows then the
-                # opponent-truth rows, learner-only by the read mask.
+                # first by layout. Private: my sheet rows then the opponent's
+                # public rows, so both operands are policy-readable.
                 # Gradient live into the trunk through every row each head
                 # reads (the CLS critics are the matched control).
                 learner_only["pair_value_public"] = self.pair_value_public(
@@ -438,10 +438,10 @@ class Porygon2PlayerModel(nn.Module):
                 )
                 learner_only["pair_value_private"] = self.pair_value_private(
                     jnp.concatenate(
-                        (sequence[PRIVATE_ROWS], sequence[OPP_PRIVATE_ROWS]), axis=0
+                        (sequence[PRIVATE_ROWS], sequence[OPP_PUBLIC_ROWS]), axis=0
                     ),
                     jnp.concatenate(
-                        (row_valid[PRIVATE_ROWS], row_valid[OPP_PRIVATE_ROWS])
+                        (row_valid[PRIVATE_ROWS], row_valid[OPP_PUBLIC_ROWS])
                     ),
                     pair_value_inputs.sheet_alive,
                 )

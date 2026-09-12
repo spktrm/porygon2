@@ -170,6 +170,7 @@ SEQUENCE_GROUP_IDS = np.concatenate(
 # The rows each head reads. Named so a head never carries an offset literal.
 CLS_ROW = int(_offsets[0])
 PUBLIC_ROWS = SEQUENCE_SLICES[SequenceGroup.PUBLIC_ENTITY]
+OPP_PUBLIC_ROWS = slice(PUBLIC_ROWS.start + NUM_PUBLIC_SLOTS // 2, PUBLIC_ROWS.stop)
 PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVATE_ENTITY]
 MOVE_ROWS = SEQUENCE_SLICES[SequenceGroup.MOVE_SLOT]
 TARGET_ROWS = SEQUENCE_SLICES[SequenceGroup.TARGET_SLOT]
