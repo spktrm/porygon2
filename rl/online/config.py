@@ -369,7 +369,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # -Psi under any policy, so a fitted head makes it inert: the head starts
     # at 0 and its lag IS the shaping. The win critics never see it. 0.0
     # builds neither the head nor the channel -- today's learning rule.
-    player_potential_strength: float = 0.05
+    player_potential_strength: float = 0.0
     # THE policy gradient: NashPG (arXiv:2510.18183, TMLR
     # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
     # pi/mu with a batch-normalised v-trace advantage from V, plus a
