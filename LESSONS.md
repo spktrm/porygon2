@@ -8305,3 +8305,141 @@ remain unavailable due to the driver; no learning or speed benefit measured.
 This changes checkpoint parameter structure; no migration or training restart
 was performed. Restore reference remains f2991ff with earlier session changes
 kept separately when reverting this recurrence only.
+
+### History identity routing audit — 2026-09-13
+
+Traced the current working-tree implementation after the type-specific GRU
+change. Event content and latest-node snapshots share the same untagged
+public embedding; the two cache arguments are now redundant in production.
+Event-time side/position tags are averaged over relevant records per stable
+entity slot. Untouched slots receive zero explicit semantic identity for that
+event, even though all 19 memory rows participate in attention. Field side
+tags, three recurrent group tags and four register tags are persistent.
+The learned (19,D) initial memory is an additional row-specific starting
+signal, not a persistent additive identity. Duplicate relevant records for
+one slot average their roles, so differing positions would mix there; this
+audit did not establish whether such records occur in live events.
+
+StepAttention projects queries, keys AND values from the same normalised
+memory-plus-event rows with all those tags added. Consequently the tags can
+be copied through values into GRU memory, as well as influence attention
+weights. The raw event and retained-memory paths have no direct tag addition.
+At trunk entry, request-aligned history memory receives current side/position
+and trunk group tags after normalisation. These current roles have different
+time semantics from the event roles already encoded inside memory.
+
+A candidate separation is Q/K from normalised content plus identity and V
+from normalised content alone. This removes direct tag-valued writes, but
+memory still depends on identity through attention weights. It is a numerical
+experiment, not an equivalent refactor or demonstrated improvement. Persistent
+entity roles would additionally require event-time role tracking through carry
+and rewrites; current request positions must not be broadcast into past events.
+No architecture change or bias removal was made by this audit.
+
+Validation: 42 focused tests passed across history_gru, history_encoder,
+history_registers and sequence_identity, including muted-attention isolation
+with live positive controls, carry/padding and current-role mappings. These
+tests establish routing contracts, not absence of learned conflation or playing
+strength. No full-model GPU test or training action was performed.
+
+### History identities address Q/K only — 2026-09-13 implementation
+
+User authorised the audit's Q/K versus V separation. HistorySequenceStep
+now retains normalised memory-plus-event content separately from the rows
+with event side/position, group and register identities added. StepAttention
+requires explicit value_rows: Q/K project the addressed rows, V projects
+the normalised content. GRUs still read raw memory and raw events plus
+attention output. Parameter paths, shapes and initialisers are unchanged;
+the forward is intentionally numerically different. Prior identity-dependent
+information in memory remains readable through V; this removes fresh direct
+tag-valued writes, not every identity dependency in memory.
+
+Validation: 22 focused fast tests passed across history_gru, history_encoder,
+history_registers and dtype_policy. The new regression fixes attention
+weights by zeroing Q while keeping V/output live: perturbing semantic, group
+and register tags then leaves outputs bit-identical. Live Q gives changed
+probabilities and memory; zeroing V changes the fixed-attention result,
+proving the isolation test has a live value path. Existing carry/padding,
+cross-group gradient and abstract bf16/f32 contracts pass. Focused Black,
+Ruff and whitespace checks pass. Slow full-model GPU tests were excluded;
+no playing-strength or runtime claim, training restart, commit or push.
+Restore baseline: a33eea3 for the model and affected tests.
+
+### The 19-row recurrence was chaotic at init — 2026-09-13 follow-up
+
+The unified history recurrence above shipped with a positive Lyapunov
+exponent. `test_suffix_carry_replays_the_game_within_bf16`,
+`test_untruncated_tail_window_forward_matches_within_bf16` and two others
+failed on the first GPU run of the slow suite (the driver was unavailable
+when the recurrence landed, so none of them had ever executed).
+
+The seed is bf16 GEMM shape noise, not a boundary bug. The actor's suffix is
+rounded to a small geometric bucket and the learner's window is 256 steps, so
+the batched precompute (`event_projection`, the node/edge/field embedders)
+runs one GEMM per path at different leading dimensions. Measured at request 0,
+where BOTH paths start from `initial_memory` and consume the same two steps
+and no carry exists: 0.0083 in slot memory. `clip_history_suffix`,
+`_last_step_index` and the edge-filter-free `step_valid` all agree — a
+boundary bug would show a large difference immediately, not a creeping one.
+
+Carry-vs-full-window slot memory over one archived game, by request:
+0.0083 (r0), 0.0182 (r6), 0.0396 (r12), 0.1279 (r18), 0.5352 (r24), 1.5938
+(r30), then flat 1.5-1.8 to r54. Roughly x1.2/step, saturating at the signal
+scale — bounded (RMSNorm on the read branch, tanh on the candidate) but fully
+decorrelated by mid-game. Worst log-policy divergence 1.10 against the test's
+0.05 bound, with the measured floor at 0.0: the 256-row tail clip is
+BIT-IDENTICAL, so there is no shape-noise budget to spend.
+
+Positive control, `attn_out` zeroed: flat 0.001-0.002 across the whole game,
+field and register EXACTLY 0.0000 (their event inputs are shape-invariant, so
+all of their drift arrived through attention). The memory -> RMSNorm ->
+19x19 attention -> GRU input -> memory loop is the amplifier. The per-slot
+minGRU it replaced could not do this: input-only gates and candidates, scanned
+in f32, so a per-step perturbation stayed one.
+
+`attn_out` scale sweep (worst slot memory over the game): 0.0 -> 0.0020,
+0.1 -> 0.0452, 0.25 -> 0.7500, 0.5 -> 1.3203, 1.0 -> 1.8672. A knife-edge
+between 0.1 and 0.25, so NO init scale is robust — `attn_out` grows in
+training and walks back across it. Declined on the repo's own rule that a
+coefficient cut which only delays onset is falsified. Zeroing it also makes
+the identity-routing contract vacuous (with a zero output projection the tags
+provably cannot reach memory, which is what those tests exist to deny).
+
+The fix is contraction, not injection: `HISTORY_RETAIN_BIAS = 4.0` on each
+GRU's `iz` bias, so memory retains sigmoid(4) ~ 0.982 per event. Retain-bias
+sweep at full lecun attention: 0.0 -> 1.8672, 1.0 -> 1.7656, 2.0 -> 0.4629,
+3.0 -> 0.0332, 4.0 -> 0.0215. The published forget-bias 1.0 (Gers et al. 2000;
+Jozefowicz et al. 2015) does NOTHING here — needing 3-4 is the measurement
+saying this loop carries more gain than a classic gated recurrence, which is
+what putting attention inside the recurrence buys. 3.0 is the first value
+under the bound; 4.0 is the margin. `HistoryGRUCell.retain_bias` defaults to
+0.0 so the Flax-reference equivalence test still compares against an
+unmodified `nn.GRUCell`; the deviation is set at the call site.
+
+The bias is LEARNED, so this is a safe start, not a guarantee — training can
+walk it back toward chaos. `player_history_slot_gate_rms` reads the write
+fraction 1-retain (~0.018 at init, was ~0.5), so the drift is observable.
+
+No fast unit test reproduces this. `HistorySequenceStep` in isolation is
+contractive at every width tried (32/64/128/256: ~0.19 at retain 0, ~0.31 at
+retain 4) — the chaos is emergent from the real operating point: event
+embeddings small against memory so attention reads mostly memory, live
+identities, and the carry chained across ~60 requests against a full-window
+run that restarts each time. A toy-width growth test would pass vacuously;
+the real contract test is the existing slow carry test.
+
+Two test defects surfaced alongside, both PRE-EXISTING at f2991ff (neither
+`interfaces.py`'s `priv_value_head` default nor `test_actor_sequence.py`
+changed): `assert getattr(actor_out, "priv_value_head", ()) == ()` compares a
+dataclass whose leaves are all () to a tuple and can never hold, and the
+`log_policy` half read a field that lives on `action_head`, so it returned the
+() default and passed whatever the actor emitted. Both now assert leaf
+emptiness on the right objects. The actor was never leaking either head.
+
+`test_server_mixed_group_matches_single_forwards`'s control was recalibrated
+from an absolute 1.0 to 3 * shape_noise. The plain-vs-carrying separation is a
+property of the architecture: ~2.0 under the per-slot minGRU, 0.70 before this
+fix and 0.72 after, so the retain bias did not cause the shrink — the rewrite
+did. Worth its own read: the carry moves the policy about a THIRD as much at
+init as it used to, which for a rewrite premised on memories reading each
+other is the opposite of the intended direction.

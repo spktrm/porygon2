@@ -126,11 +126,12 @@ def test_actor_forward_matches_the_learner_forward_on_the_kept_rows(
     assert diff(learner_out.value_head.logits, actor_out.value_head.logits) < 1e-3
     # The actor carries none of the learner-only outputs.
     assert isinstance(actor_out.history_carry.valid, jax.Array)
-    for name in (
-        "priv_value_head",
-        "log_policy",
-    ):
-        assert getattr(actor_out, name, ()) == ()
+    # Emptiness is LEAF emptiness: both fields default to a dataclass whose
+    # leaves are (), so comparing the container to () can never hold, and
+    # log_policy hangs off action_head -- read off the actor output itself it
+    # is always the () default and the check passes whatever the actor emits.
+    for empty in (actor_out.priv_value_head, actor_out.action_head.log_policy):
+        assert jax.tree.leaves(empty) == []
     assert actor_out.action_head.log_policy == ()
     # Control: the readout is live -- consecutive steps disagree, so the
     # equality above is not two uniform policies agreeing by construction.

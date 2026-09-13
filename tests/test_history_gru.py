@@ -167,3 +167,41 @@ def test_gru_weights_are_separate_by_type_and_shared_within_type():
         for other_type, other_rows in groups:
             if other_type != token_type:
                 np.testing.assert_array_equal(updated[other_rows], baseline[other_rows])
+
+
+def test_identity_changes_only_reach_memory_through_attention_weights():
+    """Queries and keys read content plus identity, values read content
+    alone, so an identity can steer WHERE a row attends but is never copied
+    into memory as a value. Control: with the attention output muted the same
+    identity change leaves memory bit-identical, which is what "only through
+    the weights" means and what makes the live assertions non-vacuous."""
+    cfg = ConfigDict(
+        dict(
+            entity_size=WIDTH,
+            dtype=jnp.float32,
+            history_step=dict(num_heads=2, qk_size=4),
+        )
+    )
+    module = HistorySequenceStep(cfg)
+    memory = jax.random.normal(jax.random.key(81), (NUM_HISTORY_STATE_ROWS, WIDTH))
+    events = jax.random.normal(jax.random.key(82), memory.shape)
+    inputs = (events, jnp.ones_like(events), jnp.asarray(True))
+    params = jax.jit(module.init)(jax.random.key(83), memory, inputs)
+    apply = jax.jit(module.apply)
+
+    def move_identities(tree):
+        changed = jax.tree.map(lambda leaf: leaf, tree)
+        changed["params"]["group_identity"] += 1.0
+        changed["params"]["register_identity"] += 1.0
+        return changed
+
+    baseline, (_, baseline_probs, _) = apply(params, memory, inputs)
+    moved, (_, moved_probs, _) = apply(move_identities(params), memory, inputs)
+    assert not np.allclose(baseline_probs, moved_probs)
+    assert not np.allclose(baseline, moved)
+
+    muted = jax.tree.map(lambda leaf: leaf, params)
+    muted["params"]["attention"]["attn_out"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
+    muted_baseline = apply(muted, memory, inputs)[0]
+    muted_moved = apply(move_identities(muted), memory, inputs)[0]
+    np.testing.assert_array_equal(muted_baseline, muted_moved)

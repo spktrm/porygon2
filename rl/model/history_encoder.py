@@ -25,6 +25,11 @@ from rl.model.constants import (
 )
 from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
 
+# Measured on the carry-vs-full-window divergence: 1.0 (the published LSTM
+# forget-bias) still decorrelates, 3.0 is the first value under the bound, and
+# this carries the margin. LESSONS 2026-09-13 has the sweep.
+HISTORY_RETAIN_BIAS = 4.0
+
 # The field history carries THREE states, mirroring the env-step field triple
 # that _embed_field already produces (2026-08-28). Hazards are side-differenced
 # — spikes on my side and spikes on theirs are opposite facts — and collapsing
@@ -279,25 +284,24 @@ class StepAttention(nn.Module):
 
     @nn.compact
     def __call__(
-        self, rows: jax.Array, row_mask: jax.Array
+        self, rows: jax.Array, row_mask: jax.Array, *, value_rows: jax.Array
     ) -> tuple[jax.Array, jax.Array]:
-        """rows (H, K, W), row_mask (H, K) bool -> (H, K, features) and
-        the (H, heads, K, K) probabilities."""
+        """Address rows include identities; value rows contain only content."""
         num_steps, num_rows = row_mask.shape
 
-        def project(name, width, init):
+        def project(inputs, name, width, init):
             return nn.Dense(
                 features=self.num_heads * width,
                 use_bias=False,
                 dtype=self.dtype,
                 kernel_init=init,
                 name=name,
-            )(rows).reshape(num_steps, num_rows, self.num_heads, width)
+            )(inputs).reshape(num_steps, num_rows, self.num_heads, width)
 
         lecun = nn.initializers.lecun_normal()
-        query = project("query", self.qk_size, lecun)
-        key = project("key", self.qk_size, lecun)
-        value = project("value", self.features // self.num_heads, lecun)
+        query = project(rows, "query", self.qk_size, lecun)
+        key = project(rows, "key", self.qk_size, lecun)
+        value = project(value_rows, "value", self.features // self.num_heads, lecun)
         logits = jnp.einsum("hiad,hjad->haij", query, key) / jnp.sqrt(
             jnp.asarray(self.qk_size, self.dtype)
         )
@@ -323,6 +327,15 @@ class HistoryGRUCell(nn.Module):
 
     features: int
     dtype: jnp.dtype
+    # sigmoid(retain_bias) is how much memory survives one event. 0 is Flax's
+    # init and leaves the recurrence CHAOTIC once attention feeds memory back:
+    # the loop expands, so the actor's carry and the learner's full window
+    # separate from a rounding difference into different policies within one
+    # game. Contraction is what bounds that, and it has to beat the attention
+    # branch's gain -- the published forget-bias 1.0 does not (LESSONS
+    # 2026-09-13). Deviates from HistoryGRUCell's Flax-reference default,
+    # which is why it is set here and not in the cell.
+    retain_bias: float = 0.0
 
     @nn.compact
     def __call__(
@@ -347,7 +360,9 @@ class HistoryGRUCell(nn.Module):
             + recurrent_dense(name="hr")(memory).astype(jnp.float32)
         )
         retain_gate = nn.sigmoid(
-            input_dense(name="iz")(inputs).astype(jnp.float32)
+            input_dense(
+                name="iz", bias_init=nn.initializers.constant(self.retain_bias)
+            )(inputs).astype(jnp.float32)
             + recurrent_dense(name="hz")(memory).astype(jnp.float32)
         )
         candidate = nn.tanh(
@@ -370,7 +385,7 @@ class HistorySequenceStep(nn.Module):
         inputs: tuple[jax.Array, jax.Array, jax.Array],
     ) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
         event_rows, attention_identities, valid = inputs
-        rows = nn.RMSNorm(dtype=self.cfg.dtype, name="input_norm")(
+        content = nn.RMSNorm(dtype=self.cfg.dtype, name="input_norm")(
             memory.astype(self.cfg.dtype) + event_rows
         )
         group_identity = self.param(
@@ -382,7 +397,7 @@ class HistorySequenceStep(nn.Module):
             (NUM_HISTORY_REGISTERS, self.cfg.entity_size),
         )
         rows = (
-            rows
+            content
             + attention_identities
             + group_identity.astype(self.cfg.dtype)[
                 jnp.asarray(HISTORY_STATE_GROUP_IDS)
@@ -398,7 +413,11 @@ class HistorySequenceStep(nn.Module):
             dtype=self.cfg.dtype,
             output_init=nn.initializers.lecun_normal(),
             name="attention",
-        )(rows[None], jnp.ones((1, NUM_HISTORY_STATE_ROWS), jnp.bool_))
+        )(
+            rows[None],
+            jnp.ones((1, NUM_HISTORY_STATE_ROWS), jnp.bool_),
+            value_rows=content[None],
+        )
         # Normalisation and row identities address attention; the GRU also
         # reads raw event features and its own unnormalised previous memory.
         gru_inputs = event_rows + attended[0]
@@ -412,6 +431,7 @@ class HistorySequenceStep(nn.Module):
             updated_group, group_gate = HistoryGRUCell(
                 self.cfg.entity_size,
                 dtype=self.cfg.dtype,
+                retain_bias=HISTORY_RETAIN_BIAS,
                 name=f"{token_type}_gru",
             )(memory[state_rows], gru_inputs[state_rows])
             updated_groups.append(updated_group)

@@ -453,15 +453,20 @@ def test_server_mixed_group_matches_single_forwards(
     # it makes is content-dependent, so the read is structural:
     # each grouped output sits within the shape-noise class
     # of ITS OWN single forward and far from the other's -- a dropped or
-    # misrouted carry lands ~2.0 from its single (the plain/carrying
-    # separation) and would fail both halves.
+    # misrouted carry lands at the plain/carrying separation from its single
+    # and would fail both halves. That separation is a property of the
+    # architecture, not a constant: it was ~2.0 under the per-slot minGRU and
+    # is ~0.7 under the 19-row recurrence, so the control reads as a multiple
+    # of the noise band rather than as an absolute that goes stale on the next
+    # architecture change (LESSONS 2026-09-13).
     shape_noise = 0.15
+    separation = 3 * shape_noise
     for single, other, mixed in (
         (single_carrying, single_plain, mixed_carrying),
         (single_plain, single_carrying, mixed_plain),
     ):
         assert _max_diff(single, mixed) <= shape_noise, _max_diff(single, mixed)
-        assert _max_diff(other, mixed) > 1.0, _max_diff(other, mixed)
+        assert _max_diff(other, mixed) > separation, _max_diff(other, mixed)
     # The fill is the from-scratch forward: the plain request equals the
     # same window sent with an explicit invalid carry ...
     (explicit_invalid,) = run(

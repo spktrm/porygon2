@@ -37,11 +37,13 @@ def step_attention() -> tuple[Callable, dict, dict, jax.Array, jax.Array]:
     rows = jax.random.normal(key_rows, (NUM_STEPS, NUM_ROWS, ROW_WIDTH))
     # steps with 1, 2 and 4 live rows
     row_mask = jnp.arange(NUM_ROWS)[None] < jnp.asarray([1, 2, 4])[:, None]
-    params = module.init(key_params, rows, row_mask)
+    params = jax.jit(module.init)(key_params, rows, row_mask, value_rows=rows)
     live_out = jax.random.normal(key_out, (ENTITY_SIZE, ENTITY_SIZE)) * 0.1
     live_params = jax.tree_util.tree_map(lambda leaf: leaf, params)
     live_params["params"]["attn_out"]["kernel"] = live_out
-    apply = jax.jit(module.apply)
+    apply = jax.jit(
+        lambda tree, inputs, mask: module.apply(tree, inputs, mask, value_rows=inputs)
+    )
     return apply, params, live_params, rows, row_mask
 
 
