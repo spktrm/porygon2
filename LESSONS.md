@@ -19,6 +19,38 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Per-history-step register assessment — 2026-09-13
+
+User requested stopping learning and inspecting the event-step attention for
+register-token suitability. Ctrl-C stopped the learner, but the synchronous
+interrupt checkpoint hit a donated/deleted buffer; the final main-process
+"saved" message is misleading. Periodic `ckpt_00960000` remains available and
+its raw learner parameters loaded successfully for this probe. Training stayed
+stopped; no model change or register experiment was launched.
+
+GPU-jitted production history path on first chunks of 100 historical tactical
+cohort perspectives: 7,027 valid events (3,448 one-row, 3,567 two-row, 12
+three-row). On 3,271 two-row/one-source events, head1 source→non-source mass
+80.4%, non-source→source 51.1%; head2 self mass 99.8% for source and 97.8% for
+non-source. Multirow normalised entropy head1/head2 .313/.0187; top weight
+>95% on 59.9%/97.9% of queries. Head1's average is not uniform per event.
+Attention-output/direct-message norm ratio median1.37, p99 2.84 (branch
+magnitude, not causal playing value). Input row norms median5.42, p99 9.43,
+max13.38; within-event largest/smallest ratio p99 2.06, max2.65. Padded-key mass
+exactly zero. No extreme input-norm sink signature found in this cohort.
+
+Declined adding registers on this evidence: StepAttention is ONE attention
+layer, so fresh learned register keys/values offer a static fallback; discarded
+register outputs cannot relay current-event information back to real rows.
+Workspace needs a second layer or a new recurrent path. Distinct cross-row and
+self routes are not evidence of pathology. Reference: ViT registers,
+arXiv:2309.16588 (deep-network high-norm background-token mechanism). No training
+A/B or causal policy intervention: benefit is unestablished, not falsified.
+Historical perspectives are not independent games or current-policy samples;
+no doubles conclusion. Local reproducible probe, raw arrays, connection plot,
+and full report: `runtime/history-step-attention/`. No removal/revert handle
+because production code is unchanged.
+
 ## Removal ledger — 2026-08-21 cleanup pass
 
 Everything below existed at tag **`pre-cleanup-2026-08-21`** (commit `e882474`).
@@ -8053,3 +8085,223 @@ Reproduced line for line so that no removed line is unaccounted for.
     runtime/priority-audit-01861967 recipe). Point PS_SERVICE_URI at a
     service started with BATTLE_LOG_DIR set so the simulator's own `-immune`
     lines confirm the taken-move events.
+
+
+## Shared side and active/bench identities — 2026-09-13
+
+User-directed numerical change, replacing separate representation-specific
+side tags with a common mine/theirs table. Revert baseline: `f2991ff`.
+The audit found four independent side parameter banks (public, own sheet,
+opponent sheet, field), plus ally/enemy target tags. Removed six width-D
+vectors in total: private_side_bias, opp_private_side_bias, field_side_bias,
+ally_target_bias and enemy_target_bias. The existing side_bias and pos_bias
+tables remain; this is semantic consolidation, not a measured performance
+ablation of those vectors.
+
+`rl/model/identity.py` owns the mapping. Encoder content is normalised before
+adding shared side/position identities, target-slot identity and group bias;
+invalid rows are zeroed afterwards. Public and private entities get side plus
+position (0 bench, 2 first active, 1 second active). Private positions join the
+one-based ENTITY_IDX to PUBLIC_ORDER with a side check; unmatched/unrevealed
+entries use bench. Entity history gets only the shared side tag. Current and
+remembered side conditions both get the corresponding common side vector;
+global field rows get neither side nor position.
+
+All 17 target categories have explicit semantics, independent of whether
+Pokémon content is present: ally categories get mine, foe categories get
+opponent, ALL/ALL_ADJACENT get their sum once per side, AUTO/DEFAULT/UNSPECIFIED
+get neither. Named active targets and slot-specific passes get the active
+position. Target-category embeddings remain. Previous-action rows gather the
+same semantic identity as their named source/target.
+
+History event processing retains event-time side/position tags, while the
+latest snapshot stream and carry now store untagged content. This prevents
+a snapshot from adding an old active-position vector directly to a history
+trunk row. The existing recurrent-state + latest-snapshot addition remains;
+its older late-game motivation is recorded above, but this pass did not find
+an isolated ablation demonstrating its benefit in the current architecture.
+
+Validation: 36 focused fast checks passed for semantic mappings, all target
+categories, private alignment, shared gradients, abstract full-model dtype/
+shape tracing, history recurrence and the privileged trunk mask. A further
+small history test passed for untagged snapshots, live event-identity effects
+on recurrent states and snapshot carry. Updated real-model assembly tests
+cover post-normalisation side additions and private position joins; these
+were not run because the NVIDIA driver is unavailable. No training restart
+or checkpoint migration was performed. This change is not bit-identical.
+
+
+### RL history rows use recurrent memory alone — 2026-09-13 follow-up
+
+Explicit user-directed removal of the latest-node addition to RL history
+rows. The public entity rows already carry current observable state; the
+latest event snapshot is overlapping content and can be older. No isolated
+current-architecture benefit was established for the bypass. This is a
+numerical architecture choice, not a claim of measured learning improvement.
+
+RL history content is now only the aligned recurrent row state, normalised
+before adding shared side and HISTORY_ENTITY group identity. Removed the
+snapshot argument from `_assemble_sequence` and `_batched_forward`, and the
+snapshot gather from `_history_inputs`: 12 width-D snapshot vectors per
+request no longer contribute directly to the trunk's history rows. The
+existing public event inputs and recurrent update are untouched, as are the
+side/position identities from the preceding change. No learned parameters
+were removed in this follow-up.
+
+The standalone offline critic still reads latest-node snapshots via
+`encode_history` and `read_history_into_nodes`, so its snapshot computation
+and the shared carry API remain. They are not a dependency of RL history-row
+content. The offline assembly harness now unpacks the current three-result
+assembly API. Restore baseline: `f2991ff`; to restore only this bypass on top
+of the shared-identity change, gather `encode_history`'s third result through
+PUBLIC_ORDER and add it to the aligned recurrent state before input norm.
+
+Validation: 25 focused fast checks passed, including snapshot-independent
+history input alignment with a live-memory positive control, semantic
+identity contracts and abstract full-network shape/dtype tracing. The new
+real-model test compares history rows with normalised memory plus shared
+side/group embeddings and checks invalid-row zeroing; GPU execution remains
+unavailable because the NVIDIA driver cannot be reached. No restart, commit
+or checkpoint migration performed.
+
+### Entity-history current position identity — 2026-09-13 follow-up
+
+User revised the earlier side-only choice: entity-history rows now receive
+exactly the same side + current active-slot/bench identity as their aligned
+public rows. `sequence_identities` computes that identity once and assigns
+it to both groups, after content normalisation in the encoder. Position is
+read from the current public ACTIVE column, not from an event snapshot.
+History content remains recurrent memory alone. All bench entries share the
+bench vector; this is a role association, not a unique entity identifier.
+
+Validation: all 24 focused identity tests passed, including current-role
+changes affecting the corresponding history rows, shared public/history
+identity, field position-independence and privileged identity isolation.
+Ruff and diff whitespace checks passed. The GPU assembly expectation was
+updated to include position; GPU execution remains unverified. No parameters
+added, commit made or training restarted. To revert this follow-up only,
+assign side_embeddings[public_sides] to HISTORY_ENTITY_ROWS again.
+
+### Observed relevant-record counts — 2026-09-13 audit
+
+Read four archived singles cohorts: runtime/lineage_games_ckpt182000.pkl,
+runtime/discrim_sides_ckpt224773.pkl, runtime/sep_games_ckpt238825.pkl and
+runtime/transition_games_01220000.pkl. All stored NUM_ACTIVE values were 1.
+Across 360 stored game-perspectives, deduplicating overlapping history
+windows within each perspective by (TURN_VALUE, TURN_ORDER_VALUE), there
+were 27,706 observed events: 13,076 with one relevant record, 14,554 with two,
+76 with three, none with four or more. Maximum consecutive packed-start
+index difference was also 3 in every cohort, providing a check beyond the
+already capped NUM_RELEVANT field. This is a sample of archived windows,
+not proof of a universal bound, exhaustive complete-game coverage, or a
+measurement of doubles. No runtime evidence here justifies increasing the
+8-entry capacity to 12. Three newer cohorts (mcts-readiness-01861967-games,
+tactical-cohort/games, priority-audit-01861967/control-games) could not be
+loaded directly because their pickles reference the removed SearchOutput
+class; they were excluded rather than interpreted as empty data.
+
+## Unified 19-row recurrent history and four trunk memories — 2026-09-13
+
+User requested four global history registers, then clarified that entity,
+field and register memories must read each other across time through one
+12 + 3 + 4 attention sequence. Final implementation replaces the independent
+slot/field recurrences with one shared HistorySequenceStep over 19 rows.
+The initially drafted separate register read/recurrence was superseded before
+any run or commit. This explicitly changes the former no-cross-slot/no-field-
+from-slot contracts; their tests are replaced by positive tests of all three
+source groups reaching all three destination groups through prior memory.
+
+At each valid event, packed records are projected and scattered to their
+12 stable entity slots; three field embeddings and four zero event-input
+register rows complete the sequence. All 19 memories participate, including
+untouched entities; field-only valid events also advance memory. The shared
+step RMS-normalises previous memory + event input, adds group identity and
+four persistent register identities, then performs live-initialised 19x19
+self-attention. One shared sigmoid gate and linear candidate update every
+row: h = (1-z)*h_previous + z*candidate. No GRU reset gate or tanh candidate.
+The f32 retained-memory path bypasses RMSNorm; invalid steps preserve it
+exactly. Initial memory is one learned (19,D) bank. No modality-specific
+recurrence, field-message sum or pooled-field-to-slot path remains.
+
+Unlike the previous input-only minGRU, gates/candidates now depend on prior
+cross-row memory, so the recurrence is a chronological Flax scan with shared
+parameters and per-step rematerialisation. The former associative scan and
+its separation tests were removed at the user's direction; the recorded
+~26us/step serial-GRU latency motivation is still relevant, and no runtime
+speedup or playing-strength improvement is claimed. RMSNorm here is a
+pre-attention/read-branch scale choice, not an experimentally established
+requirement. A shared standard GRU driven by attention context is a possible
+reference comparison now that parallel-scan eligibility is lost; it was not
+implemented in this pass.
+
+Four request-aligned register states enter the trunk as HISTORY_REGISTER,
+with normalised content + group identity, no side/active position tag.
+Sequence layout is 84 learner /77 actor rows, preserving previous row indices;
+existing four internal trunk workspace registers remain (88/81 internal rows).
+The information mask keeps the history registers policy-observable only.
+Actor carry includes their four f32 memories; request-count alignment, invalid
+carry reset, no-future-input dependence and suffix/full-history equivalence
+are tested. Raw snapshots remain available to the standalone offline critic,
+with its encode_history unpack updated; RL entity-history content remains
+memory-only with current side/position identities.
+
+History parameter telemetry follows sequence_step/attention and the shared
+sequence_step/cell/gate; the existing slot_gate_rms name now reads the shared
+cell. Attention statistics now cover 19 queries/keys rather than up to eight
+event records, so historical entropy/source-mass curves are not directly
+comparable. Register-group norm telemetry derives from SequenceGroup.
+
+Validation: 62 distinct focused fast tests passed across history attention,
+19-row recurrence/carry/gradients, abstract full-model dtype/shape and telemetry
+paths, actor carry batching, row layout/readout, semantic identity and privileged
+mask tests. GPU real-model tests were updated and collected, but cannot run
+here because the NVIDIA driver is unavailable. No checkpoint migration,
+training restart, commit or push. Baseline restore handle: f2991ff for the
+pre-session network; the earlier side/position edits are a separate semantic
+change to retain if reverting only this recurrence.
+
+The relevant-record cap stays eight. In this final architecture, reducing it
+to four would only shrink gather/projection/scatter work, not the now-fixed
+19x19 attention matrix. The archived singles maximum of three is evidence
+about those samples, not permission to silently truncate larger events.
+
+### Type-specific GRUs and attention-only identities — 2026-09-13 follow-up
+
+The user superseded the shared linear-candidate update above: retain the
+joint 19-row attention but use a GRU with separate weights for entity,
+field and register tokens, shared within each type and across history time.
+The local installed Flax GRUCell is the reference: reset and retention
+sigmoids, reset-after recurrent candidate projection, tanh candidate, and
+h_next = (1-retain)*candidate + retain*h_previous. Input projections use
+LeCun normal initialisation and recurrent projections use orthogonal
+initialisation, with the reference bias placement. The deliberate precision
+difference is f32 gate/candidate activations and memory mixing while dense
+projections respect cfg.dtype. Telemetry's slot gate remains the WRITE
+fraction (1-retain); its weight RMS now reads entity_gru/iz and entity_gru/hz.
+
+The user also required side/position identities only in step attention.
+Packed entity content and field content now reach the raw event path without
+additive identities; the redundant explicit side one-hot in event_projection
+is removed. Event side/position embeddings are separately gathered and
+averaged per touched stable slot; field rows receive their shared side tags.
+These tags, group identities and register identities are added AFTER the
+attention branch RMSNorm. They are not directly added to the GRU's event
+input or memory. Each type's GRU reads raw previous memory and raw event
+features plus the shared attention output. Identities can therefore influence
+what attention writes into memory, but repeated identity addition and
+normalisation do not directly modify the retained-memory path. Trunk
+side/position identity assembly is unchanged by this follow-up.
+
+Validation: 21 focused tests passed across history_gru, history_registers,
+history_encoder and dtype_policy. Tests match Flax f32 initial parameters,
+outputs and gradients, exercise both gates and bf16 small-update retention,
+prove separate type weights and shared within-type behaviour, and verify
+live gradients through all six projections for all three GRUs. Muting
+attention makes changed side/position tags inert for every memory type;
+with attention live they affect memory. Carry/padding and cross-type reads
+also pass, as do full-network abstract dtype/parameter/telemetry checks.
+Focused Black/isort/Ruff and git diff --check passed. GPU numerical tests
+remain unavailable due to the driver; no learning or speed benefit measured.
+This changes checkpoint parameter structure; no migration or training restart
+was performed. Restore reference remains f2991ff with earlier session changes
+kept separately when reverting this recurrence only.

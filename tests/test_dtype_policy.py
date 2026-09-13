@@ -120,3 +120,16 @@ def test_forward_computes_in_bf16_except_where_precision_is_paid_for(
     ), "allowlisted as f32 but no longer f32 — delete the entry:\n  " + "\n  ".join(
         stale
     )
+
+
+def test_history_telemetry_paths_match_shared_sequence(abstract_forward):
+    from rl.online.training.telemetry import _GRAD_SUBTREES, _HISTORY_LEAVES
+
+    params, _ = abstract_forward
+    paths = [path for entries in _HISTORY_LEAVES.values() for path in entries]
+    paths.append(_GRAD_SUBTREES["player_history_step_attn_grad_norm"])
+    for path in paths:
+        node = params["params"]
+        for key in path:
+            node = node[key]
+        assert jax.tree.leaves(node)

@@ -1,0 +1,169 @@
+"""Shared semantic identities added to normalised trunk content."""
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from rl.environment.data import TARGET_SLOT_INDICES
+from rl.environment.interfaces import PlayerEnvOutput
+from rl.environment.protos.features_pb2 import (
+    EntityPrivateNodeFeature,
+    EntityPublicNodeFeature,
+    InfoFeature,
+)
+from rl.environment.protos.service_pb2 import TargetSlot
+from rl.model.constants import (
+    HISTORY_ENTITY_ROWS,
+    MOVE_ROWS,
+    NUM_SEQUENCE_ROWS,
+    OPP_PRIVATE_ROWS,
+    PRIVATE_ROWS,
+    PUBLIC_ROWS,
+    SEQUENCE_SLICES,
+    TARGET_ROWS,
+    SequenceGroup,
+)
+from rl.model.heads import chosen_bank_rows
+
+SIDE_OPPONENT = 0
+SIDE_MINE = 1
+BENCH_POSITION = 0
+FIRST_ACTIVE_POSITION = 2
+SECOND_ACTIVE_POSITION = 1
+
+_TARGET_SIDES = {
+    TargetSlot.TARGET_SLOT___UNSPECIFIED: (),
+    TargetSlot.TARGET_SLOT__DEFAULT: (),
+    TargetSlot.TARGET_SLOT__ALLY_1: (SIDE_MINE,),
+    TargetSlot.TARGET_SLOT__ALLY_1_PASS: (SIDE_MINE,),
+    TargetSlot.TARGET_SLOT__ALLY_2: (SIDE_MINE,),
+    TargetSlot.TARGET_SLOT__ALLY_2_PASS: (SIDE_MINE,),
+    TargetSlot.TARGET_SLOT__ENEMY_1: (SIDE_OPPONENT,),
+    TargetSlot.TARGET_SLOT__ENEMY_2: (SIDE_OPPONENT,),
+    TargetSlot.TARGET_SLOT__AUTO: (),
+    TargetSlot.TARGET_SLOT__ALL: (SIDE_MINE, SIDE_OPPONENT),
+    TargetSlot.TARGET_SLOT__ALLY_SIDE: (SIDE_MINE,),
+    TargetSlot.TARGET_SLOT__FOE_SIDE: (SIDE_OPPONENT,),
+    TargetSlot.TARGET_SLOT__ALLY_TEAM: (SIDE_MINE,),
+    TargetSlot.TARGET_SLOT__RANDOM_NORMAL: (SIDE_OPPONENT,),
+    TargetSlot.TARGET_SLOT__ALL_ADJACENT: (SIDE_MINE, SIDE_OPPONENT),
+    TargetSlot.TARGET_SLOT__ALL_ADJACENT_FOES: (SIDE_OPPONENT,),
+    TargetSlot.TARGET_SLOT__ALLIES: (SIDE_MINE,),
+}
+_TARGET_POSITIONS = {
+    TargetSlot.TARGET_SLOT__ALLY_1: FIRST_ACTIVE_POSITION,
+    TargetSlot.TARGET_SLOT__ALLY_1_PASS: FIRST_ACTIVE_POSITION,
+    TargetSlot.TARGET_SLOT__ALLY_2: SECOND_ACTIVE_POSITION,
+    TargetSlot.TARGET_SLOT__ALLY_2_PASS: SECOND_ACTIVE_POSITION,
+    TargetSlot.TARGET_SLOT__ENEMY_1: FIRST_ACTIVE_POSITION,
+    TargetSlot.TARGET_SLOT__ENEMY_2: SECOND_ACTIVE_POSITION,
+}
+TARGET_SIDE_WEIGHTS = np.asarray(
+    [
+        [side in _TARGET_SIDES[slot] for side in range(2)]
+        for slot in TARGET_SLOT_INDICES
+    ],
+    dtype=np.float32,
+)
+TARGET_POSITION_WEIGHTS = np.asarray(
+    [
+        [_TARGET_POSITIONS.get(slot, -1) == position for position in range(3)]
+        for slot in TARGET_SLOT_INDICES
+    ],
+    dtype=np.float32,
+)
+
+
+def field_identities(side_embeddings: jax.Array) -> jax.Array:
+    return jnp.stack(
+        (
+            jnp.zeros_like(side_embeddings[0]),
+            side_embeddings[SIDE_MINE],
+            side_embeddings[SIDE_OPPONENT],
+        )
+    )
+
+
+def private_positions(
+    env_step: PlayerEnvOutput, private_team: jax.Array, side: int
+) -> jax.Array:
+    private_keys = private_team[
+        :, EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+    ]
+    public_order = env_step.info[
+        InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0 : InfoFeature.INFO_FEATURE__PUBLIC_ORDER_11
+        + 1
+    ]
+    public_sides = env_step.public_team[
+        :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+    ]
+    public_positions = env_step.public_team[
+        :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+    ]
+    matches = (
+        (private_keys[:, None] > 0)
+        & (public_order[None, :] >= 0)
+        & (private_keys[:, None] == public_order[None, :] + 1)
+        & (public_sides[None, :] == side)
+    )
+    # Unrevealed sheet entries have no public key and are on the bench.
+    return jnp.max(
+        jnp.where(matches, public_positions[None, :], BENCH_POSITION), axis=-1
+    )
+
+
+def sequence_identities(
+    env_step: PlayerEnvOutput,
+    side_embeddings: jax.Array,
+    position_embeddings: jax.Array,
+    target_embeddings: jax.Array,
+    *,
+    include_opponent: bool,
+) -> jax.Array:
+    identities = jnp.zeros(
+        (NUM_SEQUENCE_ROWS, side_embeddings.shape[-1]), side_embeddings.dtype
+    )
+    public_sides = env_step.public_team[
+        :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+    ]
+    public_positions = env_step.public_team[
+        :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+    ]
+    public_identities = (
+        side_embeddings[public_sides] + position_embeddings[public_positions]
+    )
+    identities = identities.at[PUBLIC_ROWS].set(public_identities)
+    identities = identities.at[HISTORY_ENTITY_ROWS].set(public_identities)
+    identities = identities.at[PRIVATE_ROWS].set(
+        side_embeddings[SIDE_MINE]
+        + position_embeddings[
+            private_positions(env_step, env_step.private_team, SIDE_MINE)
+        ]
+    )
+    if include_opponent:
+        identities = identities.at[OPP_PRIVATE_ROWS].set(
+            side_embeddings[SIDE_OPPONENT]
+            + position_embeddings[
+                private_positions(env_step, env_step.opp_private_team, SIDE_OPPONENT)
+            ]
+        )
+    targets = (
+        target_embeddings
+        + jnp.asarray(TARGET_SIDE_WEIGHTS, side_embeddings.dtype) @ side_embeddings
+        + jnp.asarray(TARGET_POSITION_WEIGHTS, position_embeddings.dtype)
+        @ position_embeddings
+    )
+    identities = identities.at[TARGET_ROWS].set(targets)
+    for group in (SequenceGroup.FIELD, SequenceGroup.HISTORY_FIELD):
+        identities = identities.at[SEQUENCE_SLICES[group]].set(
+            field_identities(side_embeddings)
+        )
+    previous_source, previous_target = chosen_bank_rows(
+        identities[PRIVATE_ROWS],
+        identities[MOVE_ROWS],
+        targets,
+        env_step.info[InfoFeature.INFO_FEATURE__PREV_ACTION_CELL],
+    )
+    return identities.at[SEQUENCE_SLICES[SequenceGroup.PREV_ACTION]].set(
+        jnp.stack((previous_source, previous_target))
+    )

@@ -47,12 +47,13 @@ class HistoryCarry:
     sending a full window never build one); with leaves present, `valid`
     selects between the carried state and h0 per call, so a False carry is
     also the from-scratch function. slot_states (12, D) and field_states
-    (3, D) are f32 -- the scan's own recursion state, taken before the
+    (3, D), plus register_states (4, D), are f32 -- the scan's own recursion state, taken before the
     compute-dtype cast; node_snapshots (12, D) is the compute dtype.
     """
 
     slot_states: ArrayLike = ()
     field_states: ArrayLike = ()
+    register_states: ArrayLike = ()
     node_snapshots: ArrayLike = ()
     valid: ArrayLike = ()
 

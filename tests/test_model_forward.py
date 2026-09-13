@@ -25,6 +25,7 @@ from rl.environment.protos.features_pb2 import InfoFeature
 from rl.model.constants import (
     MOVE_ROWS,
     NUM_FIELD_ROWS,
+    NUM_HISTORY_REGISTERS,
     NUM_PUBLIC_SLOTS,
     PRIVATE_ROWS,
     SEQUENCE_SLICES,
@@ -110,12 +111,12 @@ def _assembled_step_rows(
         encoder = module.encoder
         width = encoder.cfg.entity_size
         zero_slots = jnp.zeros((NUM_PUBLIC_SLOTS, width), env_step.field.dtype)
-        sequence, _, _, _, _ = encoder._assemble_sequence(
+        sequence, _, _ = encoder._assemble_sequence(
             env_step,
             zero_slots.astype(encoder.cfg.dtype),
             jnp.zeros(NUM_PUBLIC_SLOTS, jnp.bool_),
             jnp.zeros((NUM_FIELD_ROWS, width), encoder.cfg.dtype),
-            zero_slots.astype(encoder.cfg.dtype),
+            jnp.zeros((NUM_HISTORY_REGISTERS, width), encoder.cfg.dtype),
         )
         return sequence
 
@@ -189,42 +190,20 @@ def test_prev_action_rows_are_the_rows_the_cell_names(
     )
 
 
-def test_private_sheet_is_not_tagged_with_the_opponents_side(
-    real_model_and_trajectory: tuple[
-        nn.Module, dict, PlayerActorInput, PlayerActorOutput
-    ],
+@pytest.mark.parametrize("side", [0, 1])
+def test_private_sheet_uses_shared_side_after_normalisation(
+    real_model_and_trajectory, side: int
 ) -> None:
-    """My private sheet must not carry the tag that marks OPPONENT rows.
-
-    The service writes ENTITY_PUBLIC_NODE_FEATURE__SIDE = isMySide(...), so
-    side_bias row 1 is mine and row 0 is theirs. Until 2026-08-28 the sheet
-    was tagged side_bias(0) -- the opponent's row -- which put my six sheet
-    rows under the wrong side. The sheet owns private_side_bias instead, and
-    side_bias must not reach it at all.
-    """
     network, params, actor_input, _ = real_model_and_trajectory
     base = _assembled_rows(network, params, actor_input)[PRIVATE_ROWS]
-
-    moved_side = _assembled_rows(
-        network, _perturbed(params, ("side_bias", "embedding")), actor_input
-    )[PRIVATE_ROWS]
-    np.testing.assert_allclose(base, moved_side, atol=0)
-
-
-def test_private_side_bias_is_the_live_route(
-    real_model_and_trajectory: tuple[
-        nn.Module, dict, PlayerActorInput, PlayerActorOutput
-    ],
-) -> None:
-    """The positive control for the test above: perturbing the sheet's OWN
-    tag does move its rows, so that test is not passing merely because
-    nothing reaches them."""
-    network, params, actor_input, _ = real_model_and_trajectory
-    base = _assembled_rows(network, params, actor_input)[PRIVATE_ROWS]
-    moved = _assembled_rows(
-        network, _perturbed(params, ("private_side_bias",)), actor_input
-    )[PRIVATE_ROWS]
-    assert not np.allclose(base, moved)
+    changed = jax.tree.map(lambda value: value, params)
+    side_table = changed["params"]["encoder"]["side_bias"]["embedding"]
+    changed["params"]["encoder"]["side_bias"]["embedding"] = side_table.at[side].add(1)
+    moved = _assembled_rows(network, changed, actor_input)[PRIVATE_ROWS]
+    valid = np.any(base != 0, axis=-1)
+    assert valid.any()
+    np.testing.assert_allclose(moved[valid] - base[valid], side, atol=0.03)
+    np.testing.assert_array_equal(moved[~valid], 0)
 
 
 def _with_group_bias(params: dict, value: float) -> dict:
@@ -250,8 +229,19 @@ def test_row_identity_is_added_after_the_input_norm(
     content are the discriminator, which is why the test requires some (the
     harness's zero history and field rows are bias-only either way)."""
     network, params, actor_input, _ = real_model_and_trajectory
-    base = _assembled_rows(network, _with_group_bias(params, 0.0), actor_input)
-    biased = _assembled_rows(network, _with_group_bias(params, 1.0), actor_input)
+    content_params = jax.tree.map(lambda value: value, params)
+    encoder_params = content_params["params"]["encoder"]
+    for name in ("side_bias", "pos_bias"):
+        encoder_params[name]["embedding"] = jnp.zeros_like(
+            encoder_params[name]["embedding"]
+        )
+    encoder_params["target_slot_embeddings"] = jnp.zeros_like(
+        encoder_params["target_slot_embeddings"]
+    )
+    base = _assembled_rows(network, _with_group_bias(content_params, 0.0), actor_input)
+    biased = _assembled_rows(
+        network, _with_group_bias(content_params, 1.0), actor_input
+    )
     valid = np.any(biased != 0, axis=-1)
     with_content = np.any(base != 0, axis=-1)
     assert with_content.sum() > 1
@@ -318,18 +308,6 @@ def test_every_row_leaves_the_trunk_at_unit_rms(
     np.testing.assert_allclose(row_rms(rescaled_in)[valid], 1, atol=0.03)
 
 
-def _field_tokens(
-    network: nn.Module, params: dict, actor_input: PlayerActorInput
-) -> jax.Array:
-    """The (global, my-side, opp-side) field token triple for one timestep."""
-
-    def call(module: nn.Module, field: jax.Array) -> jax.Array:
-        return module.encoder._embed_field(field)[0]
-
-    field = jax.tree.map(lambda x: x[0], actor_input.env.field)
-    return jax.jit(lambda p, f: network.apply(p, f, method=call))(params, field)
-
-
 def _perturbed(params: dict, path: tuple[str, ...], delta: float = 1.0) -> dict:
     tree = jax.tree.map(lambda x: x, params)
     node = tree["params"]["encoder"]
@@ -339,36 +317,22 @@ def _perturbed(params: dict, path: tuple[str, ...], delta: float = 1.0) -> dict:
     return tree
 
 
-def test_field_side_tokens_do_not_read_the_active_status_table(
-    real_model_and_trajectory: tuple[
-        nn.Module, dict, PlayerActorInput, PlayerActorOutput
-    ],
+def test_current_and_remembered_field_share_side_only(
+    real_model_and_trajectory,
 ) -> None:
-    """The my/opp side-condition tokens must not borrow pos_bias.
-
-    pos_bias is indexed by ENTITY_PUBLIC_NODE_FEATURE__ACTIVE (= scoreOrder,
-    {0, 2} in singles), so before 2026-08-28 its row 0 meant both "benched
-    pokemon" and "opponent side conditions" — and that bias was the only
-    thing separating my hazards from theirs, since both sides share
-    side_condition_linear.
-    """
     network, params, actor_input, _ = real_model_and_trajectory
-    base = _field_tokens(network, params, actor_input)
-
-    moved_pos = _field_tokens(
+    base = _assembled_rows(network, params, actor_input)
+    moved_pos = _assembled_rows(
         network, _perturbed(params, ("pos_bias", "embedding")), actor_input
     )
-    np.testing.assert_allclose(np.asarray(base), np.asarray(moved_pos), atol=0)
-
-    # Positive control: the replacement IS on the path, so the test above is
-    # not passing merely because nothing reaches these tokens.
-    moved_side = _field_tokens(
-        network, _perturbed(params, ("field_side_bias",)), actor_input
+    moved_side = _assembled_rows(
+        network, _perturbed(params, ("side_bias", "embedding")), actor_input
     )
-    assert not np.allclose(np.asarray(base[1]), np.asarray(moved_side[1]))
-    assert not np.allclose(np.asarray(base[2]), np.asarray(moved_side[2]))
-    # The global field token carries no side, so it must be untouched.
-    np.testing.assert_allclose(np.asarray(base[0]), np.asarray(moved_side[0]), atol=0)
+    for group in (SequenceGroup.FIELD, SequenceGroup.HISTORY_FIELD):
+        rows = SEQUENCE_SLICES[group]
+        np.testing.assert_array_equal(base[rows], moved_pos[rows])
+        np.testing.assert_allclose((moved_side - base)[rows][1:], 1, atol=0.03)
+        np.testing.assert_array_equal(base[rows][0], moved_side[rows][0])
 
 
 def _with_private_column(
@@ -412,24 +376,103 @@ def test_private_condition_reaches_only_its_own_sheet_row(
     ].any(), "condition must be entity-local at assembly time"
 
 
-def test_entity_idx_is_not_row_content(
-    real_model_and_trajectory: tuple[
-        nn.Module, dict, PlayerActorInput, PlayerActorOutput
-    ],
-) -> None:
-    """The wire's ENTITY_IDX enters no row: since the entity_index_tag was
-    deleted (2026-09-02) nothing reads it into the sequence, so rekeying
-    a private row leaves every assembled row bit-identical. The positive
-    control that the same column-set mechanism DOES move a row is the hp
-    test directly above."""
-    from rl.environment.protos.features_pb2 import EntityPrivateNodeFeature
+def test_private_position_follows_public_key(real_model_and_trajectory) -> None:
+    from rl.environment.protos.features_pb2 import (
+        EntityPrivateNodeFeature,
+        EntityPublicNodeFeature,
+    )
+    from rl.model.constants import PUBLIC_ROWS
 
     network, params, actor_input, _ = real_model_and_trajectory
-    base = _assembled_rows(network, params, actor_input)
-    rekeyed_input = _with_private_column(
-        actor_input,
-        1,
-        EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX,
-        12,
+    env_step = jax.tree.map(lambda value: value[0], actor_input.env)
+    public = jnp.asarray(env_step.public_team)
+    public = public.at[
+        0, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+    ].set(2)
+    public = public.at[0, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE].set(
+        1
     )
-    assert np.array_equal(base, _assembled_rows(network, params, rekeyed_input))
+    info = (
+        jnp.asarray(env_step.info).at[InfoFeature.INFO_FEATURE__PUBLIC_ORDER_0].set(0)
+    )
+    private_column = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__ENTITY_IDX
+    private = jnp.asarray(env_step.private_team).at[:, private_column].set(0)
+    benched = dataclasses.replace(
+        env_step, public_team=public, info=info, private_team=private
+    )
+    active = dataclasses.replace(
+        benched, private_team=private.at[0, private_column].set(1)
+    )
+    base = _assembled_step_rows(network, params, benched)
+    moved = _assembled_step_rows(network, params, active)
+    position_table = np.asarray(
+        params["params"]["encoder"]["pos_bias"]["embedding"], np.float32
+    )
+    assert np.any(base[PRIVATE_ROWS][0])
+    expected = position_table[2] - position_table[0]
+    assert np.max(np.abs(expected)) > 0.01
+    np.testing.assert_allclose((moved - base)[PRIVATE_ROWS][0], expected, atol=0.03)
+    np.testing.assert_array_equal(base[PRIVATE_ROWS][1:], moved[PRIVATE_ROWS][1:])
+    np.testing.assert_array_equal(base[PUBLIC_ROWS], moved[PUBLIC_ROWS])
+
+
+def test_history_rows_are_normalised_memory_plus_side_position_and_group(
+    real_model_and_trajectory,
+):
+    from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
+    from rl.model.constants import HISTORY_ENTITY_ROWS
+
+    network, params, actor_input, _ = real_model_and_trajectory
+    env_step = jax.tree.map(lambda value: value[0], actor_input.env)
+    width = params["params"]["encoder"]["sequence_group_bias"].shape[-1]
+    memory = (
+        jnp.arange(NUM_PUBLIC_SLOTS * width, dtype=jnp.float32).reshape(
+            NUM_PUBLIC_SLOTS, width
+        )
+        + 1
+    )
+    valid = jnp.ones(NUM_PUBLIC_SLOTS, jnp.bool_).at[-1].set(False)
+
+    def assemble(module, env, row_states):
+        encoder = module.encoder
+        return encoder._assemble_sequence(
+            env,
+            row_states.astype(encoder.cfg.dtype),
+            valid,
+            jnp.zeros((NUM_FIELD_ROWS, width), encoder.cfg.dtype),
+            jnp.zeros((NUM_HISTORY_REGISTERS, width), encoder.cfg.dtype),
+        )[0]
+
+    rows = np.asarray(
+        jax.jit(
+            lambda tree, env, states: network.apply(tree, env, states, method=assemble)
+        )(params, env_step, memory),
+        np.float32,
+    )[HISTORY_ENTITY_ROWS]
+    encoder_params = params["params"]["encoder"]
+    # Match the forward's input rounding before comparing its normalisation.
+    compute_dtype = network.cfg.encoder.dtype
+    content = np.asarray(memory.astype(compute_dtype), np.float32)
+    normalised = content / np.sqrt(np.square(content).mean(-1, keepdims=True) + 1e-6)
+    sides = np.asarray(
+        env_step.public_team[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ]
+    )
+    expected = (
+        normalised
+        + np.asarray(encoder_params["side_bias"]["embedding"], np.float32)[sides]
+    )
+    positions = np.asarray(
+        env_step.public_team[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ]
+    )
+    expected += np.asarray(encoder_params["pos_bias"]["embedding"], np.float32)[
+        positions
+    ]
+    expected += np.asarray(encoder_params["sequence_group_bias"], np.float32)[
+        SequenceGroup.HISTORY_ENTITY
+    ]
+    np.testing.assert_allclose(rows[:-1], expected[:-1], atol=0.03)
+    np.testing.assert_array_equal(rows[-1], 0)

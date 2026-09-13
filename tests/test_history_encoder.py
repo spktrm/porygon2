@@ -1,14 +1,4 @@
-"""`PerSlotHistoryEncoder` structural pins, at the recurrence and step-GAT
-level so they run without the shared model fixture.
-
-The recurrence (2026-09-02): two gated linear scans, field first. Slot k's
-state must read its OWN input, its own past and the field states -- never
-another slot's (the gestalt mean was deleted the same day), and the field
-never reads a slot. The controls prove each pin can fail: the field input
-moves every slot, and a slot's own input moves itself. The scan itself is
-pinned against a serial lax.scan of the same recurrence, and a unit no
-step writes holds its initial state bit-exactly.
-"""
+"""History attention primitives and the standalone snapshot stream."""
 
 from collections.abc import Callable
 
@@ -18,13 +8,10 @@ import numpy as np
 import pytest
 from ml_collections import ConfigDict
 
-from rl.environment.interfaces import HistoryCarry
-from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.model.history_encoder import (
     NUM_FIELD_ROWS,
     PerSlotHistoryEncoder,
     StepAttention,
-    gated_linear_scan,
 )
 
 ENTITY_SIZE = 32
@@ -32,144 +19,6 @@ NUM_HEADS = 2
 QK_SIZE = 8
 HISTORY = 6
 
-
-@pytest.fixture(scope="module")
-def recur() -> tuple[Callable, jax.Array, jax.Array]:
-    cfg = ConfigDict(
-        dict(
-            entity_size=ENTITY_SIZE,
-            dtype=jnp.float32,
-            history_step=dict(num_heads=NUM_HEADS, qk_size=QK_SIZE),
-        )
-    )
-    module = PerSlotHistoryEncoder(cfg)
-    key_params, key_slots, key_field = jax.random.split(jax.random.key(0), 3)
-    slot_inputs = jax.random.normal(
-        key_slots, (HISTORY, NUM_PUBLIC_SLOTS, 2 * ENTITY_SIZE)
-    )
-    field_inputs = jax.random.normal(
-        key_field, (HISTORY, NUM_FIELD_ROWS, 2 * ENTITY_SIZE)
-    )
-    touched = jnp.ones((HISTORY, NUM_PUBLIC_SLOTS), bool)
-    step_valid = jnp.ones((HISTORY,), bool)
-    params = module.init(
-        key_params, HistoryCarry(), method=PerSlotHistoryEncoder.resolve_initial
-    )
-    h0_slots, h0_field, _ = module.apply(
-        params, HistoryCarry(), method=PerSlotHistoryEncoder.resolve_initial
-    )
-    params = module.init(
-        key_params,
-        slot_inputs,
-        field_inputs,
-        touched,
-        step_valid,
-        h0_slots,
-        h0_field,
-        method=PerSlotHistoryEncoder._recur,
-    )
-
-    @jax.jit
-    def run(
-        slot_inputs: jax.Array,
-        field_inputs: jax.Array,
-        touched: jax.Array = touched,
-        step_valid: jax.Array = step_valid,
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
-        return module.apply(
-            params,
-            slot_inputs,
-            field_inputs,
-            touched,
-            step_valid,
-            h0_slots,
-            h0_field,
-            method=PerSlotHistoryEncoder._recur,
-        )
-
-    return run, slot_inputs, field_inputs
-
-
-def test_slot_never_reads_another_slot(
-    recur: tuple[Callable, jax.Array, jax.Array],
-) -> None:
-    run, slot_inputs, field_inputs = recur
-    base_slots, *_ = run(slot_inputs, field_inputs)
-    moved_slots, *_ = run(slot_inputs.at[:, 3].add(1.0), field_inputs)
-    others = np.arange(NUM_PUBLIC_SLOTS) != 3
-    np.testing.assert_array_equal(
-        np.asarray(base_slots)[:, others], np.asarray(moved_slots)[:, others]
-    )
-    # Positive control 1: the perturbed slot itself moves, at every step.
-    per_step = np.abs(np.asarray(moved_slots - base_slots)[:, 3]).max(axis=-1)
-    assert (per_step > 1e-3).all()
-
-
-def test_field_state_reaches_every_slot(
-    recur: tuple[Callable, jax.Array, jax.Array],
-) -> None:
-    """Positive control 2: the shared state the slots DO read. The field
-    state after step 0 is an input of every slot from step 1 on."""
-    run, slot_inputs, field_inputs = recur
-    base_slots, *_ = run(slot_inputs, field_inputs)
-    moved_slots, *_ = run(slot_inputs, field_inputs.at[0, 0].add(1.0))
-    per_slot = np.abs(np.asarray(moved_slots - base_slots)[1:]).max(axis=-1)
-    assert (per_slot > 1e-3).all()
-    np.testing.assert_array_equal(np.asarray(base_slots)[0], np.asarray(moved_slots)[0])
-
-
-def test_field_never_reads_slot_states(
-    recur: tuple[Callable, jax.Array, jax.Array],
-) -> None:
-    run, slot_inputs, field_inputs = recur
-    _, base_field, *_ = run(slot_inputs, field_inputs)
-    _, moved_field, *_ = run(slot_inputs + 1.0, field_inputs)
-    np.testing.assert_array_equal(np.asarray(base_field), np.asarray(moved_field))
-
-
-def test_gated_linear_scan_matches_serial_recurrence() -> None:
-    key_gate, key_cand, key_write, key_init = jax.random.split(jax.random.key(3), 4)
-    shape = (37, 5, 8)
-    gate = jax.nn.sigmoid(jax.random.normal(key_gate, shape))
-    candidate = jax.random.normal(key_cand, shape)
-    write = jax.random.bernoulli(key_write, 0.6, shape[:2])
-    initial = jax.random.normal(key_init, shape[1:])
-
-    def serial_step(
-        state: jax.Array, inputs: tuple[jax.Array, jax.Array, jax.Array]
-    ) -> tuple[jax.Array, jax.Array]:
-        step_gate, step_candidate, step_write = inputs
-        effective = step_write[:, None] * step_gate
-        state = (1.0 - effective) * state + effective * step_candidate
-        return state, state
-
-    _, expected = jax.lax.scan(
-        serial_step, initial, (gate, candidate, write.astype(jnp.float32))
-    )
-    actual = jax.jit(gated_linear_scan)(gate, candidate, write, initial)
-    assert actual.dtype == jnp.float32
-    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5)
-
-
-def test_unwritten_units_hold_initial_exactly() -> None:
-    key_gate, key_cand, key_init = jax.random.split(jax.random.key(4), 3)
-    shape = (16, 4, 8)
-    gate = jax.nn.sigmoid(jax.random.normal(key_gate, shape))
-    candidate = jax.random.normal(key_cand, shape)
-    initial = jax.random.normal(key_init, shape[1:])
-    write = jnp.ones(shape[:2], bool).at[:, 2].set(False).at[5:, :].set(False)
-    states = np.asarray(jax.jit(gated_linear_scan)(gate, candidate, write, initial))
-    np.testing.assert_array_equal(states[:, 2], np.broadcast_to(initial[2], (16, 8)))
-    # from step 5 on nothing writes: every unit holds its step-4 state
-    np.testing.assert_array_equal(states[5:], np.broadcast_to(states[4], (11, 4, 8)))
-    # control: a written unit does leave its initial state
-    assert np.abs(states[0, 0] - np.asarray(initial[0])).max() > 1e-3
-
-
-# One attention layer over the rows of a history step (2026-09-02, replacing
-# the masked source mean). Pins: the zeros-init output projection makes it
-# exactly silent at init yet trainable; a padded row places and receives no
-# mass; a 1-row step is exactly its own value.
 
 NUM_STEPS = 3
 NUM_ROWS = 4
@@ -247,3 +96,63 @@ def test_one_row_step_is_its_own_value(
     _, probs = apply(live_params, rows, row_mask)
     assert jnp.all(probs[0, :, 0, 0] == 1.0)
     assert jnp.all(probs[0, :, 0, 1:] == 0.0)
+
+
+def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
+    from rl.environment.protos.features_pb2 import FieldFeature
+    from rl.model.history_encoder import history_carry_from
+
+    cfg = ConfigDict(
+        dict(
+            entity_size=ENTITY_SIZE,
+            dtype=jnp.float32,
+            history_step=dict(num_heads=NUM_HEADS, qk_size=QK_SIZE),
+        )
+    )
+    module = PerSlotHistoryEncoder(cfg)
+    field = jnp.zeros((1, len(FieldFeature.keys())), jnp.int32)
+    field = field.at[0, FieldFeature.FIELD_FEATURE__NUM_RELEVANT].set(1)
+    content = jnp.arange(ENTITY_SIZE, dtype=jnp.float32)[None] / ENTITY_SIZE
+    inputs = dict(
+        history_field=field,
+        node_embedding_cache=content,
+        node_identity_cache=jnp.ones_like(content),
+        field_identities=jnp.ones((NUM_FIELD_ROWS, ENTITY_SIZE)),
+        node_content_cache=content,
+        edge_embedding_cache=jnp.zeros_like(content),
+        edge_slot_ids=jnp.zeros(1, jnp.int32),
+        edge_major_args=jnp.zeros(1, jnp.int32),
+        field_row_embeddings=jnp.zeros((1, NUM_FIELD_ROWS, ENTITY_SIZE)),
+        step_request_count=jnp.ones(1, jnp.int32),
+        step_valid=jnp.ones(1, jnp.bool_),
+    )
+    params = jax.jit(module.init)(jax.random.key(19), **inputs)
+    apply = jax.jit(module.apply)
+    base = apply(params, **inputs)
+    changed_identities = dict(
+        inputs,
+        node_identity_cache=inputs["node_identity_cache"] + 10,
+        field_identities=inputs["field_identities"] + 20,
+    )
+    moved = apply(params, **changed_identities)
+    muted = jax.tree.map(lambda leaf: leaf, params)
+    muted["params"]["sequence_step"]["attention"]["attn_out"]["kernel"] = jnp.zeros(
+        (ENTITY_SIZE, ENTITY_SIZE)
+    )
+    muted_base = apply(muted, **inputs)
+    muted_moved = apply(muted, **changed_identities)
+    for state_name in ("slot_snapshots", "field_snapshots", "register_snapshots"):
+        np.testing.assert_array_equal(
+            getattr(muted_base, state_name), getattr(muted_moved, state_name)
+        )
+    np.testing.assert_array_equal(base.node_snapshots[0, 0], content[0])
+    np.testing.assert_array_equal(base.node_snapshots, moved.node_snapshots)
+    assert not np.allclose(base.slot_snapshots, moved.slot_snapshots)
+    changed_content = apply(params, **dict(inputs, node_content_cache=content + 2))
+    np.testing.assert_allclose(changed_content.node_snapshots[0, 0], content[0] + 2)
+    carried = apply(
+        params,
+        **dict(inputs, step_valid=jnp.zeros(1, jnp.bool_)),
+        carry=history_carry_from(base)
+    )
+    np.testing.assert_array_equal(carried.node_snapshots[0], base.node_snapshots[-1])

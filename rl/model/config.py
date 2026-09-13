@@ -62,20 +62,12 @@ def get_player_model_config(
     cfg.encoder.history_pool.qk_size = encoder_qkv_size
     cfg.encoder.history_pool.use_bias = encoder_use_bias
 
-    # The step GAT (2026-09-02): one attention layer over the rows of a
-    # single history step (up to 8 mons touched by one major log line, self
-    # included), replacing the masked mean over the step's source rows
-    # that every message used to carry. Each row's message now reads WHO
-    # else was in the step and what happened to them, weighted by content
-    # rather than averaged -- a tidy-up in singles (2-source steps are
-    # 2-row steps, so the mean was invertible), load-bearing for doubles
-    # spread moves. Zero-init output projection: identity at step 0.
     cfg.encoder.history_step = ConfigDict()
     cfg.encoder.history_step.num_heads = 2
     cfg.encoder.history_step.qk_size = encoder_qkv_size // 2
 
     # The trunk: `num_blocks` standard pre-RMSNorm blocks over ONE sequence
-    # of NUM_SEQUENCE_ROWS rows (80; the actor assembles the 73
+    # of NUM_SEQUENCE_ROWS rows (84; the actor assembles the 77
     # policy-readable ones, encoder.kept_rows) -- see rl/model/trunk.py.
     # Depth is the knob: at this sequence length a block is almost all
     # feed-forward parameters and almost no attention.

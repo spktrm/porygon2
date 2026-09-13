@@ -1,15 +1,7 @@
-"""Recurrent per-Pokemon history encoder over battle history edges.
+"""One recurrent attention sequence over entity, field and register memories."""
 
-Replaces the (disabled) transformer-over-history path. Instead of attending
-over up to NUM_HISTORY timesteps, a bank of 12 recurrent states -- one per
-public Pokemon slot -- is scanned once along the history axis. Each history
-step scatters its edge embeddings into the slots named by
-ENTITY_EDGE_FEATURE__ENTITY_IDX, so a slot's state only advances when
-something happened to that Pokemon. Carry is O(12 * entity_size) regardless
-of history length.
-
-The per-request states are trained end-to-end by the task gradients alone.
-"""
+import functools
+from collections.abc import Callable
 
 import chex
 import flax.linen as nn
@@ -22,7 +14,15 @@ from ml_collections import ConfigDict
 from rl.environment.interfaces import HistoryCarry
 from rl.environment.protos.enums_pb2 import BattlemajorargsEnum
 from rl.environment.protos.features_pb2 import EntityEdgeFeature, FieldFeature
-from rl.model.constants import NUM_PUBLIC_SLOTS
+from rl.model.constants import (
+    HISTORY_FIELD_STATE_ROWS,
+    HISTORY_REGISTER_STATE_ROWS,
+    HISTORY_SLOT_STATE_ROWS,
+    HISTORY_STATE_GROUP_IDS,
+    NUM_HISTORY_REGISTERS,
+    NUM_HISTORY_STATE_ROWS,
+    NUM_PUBLIC_SLOTS,
+)
 from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
 
 # The field history carries THREE states, mirroring the env-step field triple
@@ -85,17 +85,15 @@ def major_arg_step_mask(history_field: jax.Array, edge_cache: jax.Array) -> jax.
 class PerSlotHistoryOutput:
     slot_snapshots: ArrayLike = ()
     field_snapshots: ArrayLike = ()
+    register_snapshots: ArrayLike = ()
     # Latest raw node embedding per slot as of each step (H, 12, D): the
     # entity's current snapshot, unmixed by GRU gating — what a hand
     # evaluator reads. Parameter-free carry.
     node_snapshots: ArrayLike = ()
-    # The two recursions' states after the window's last step, in f32
-    # (before the compute-dtype cast the snapshots go through): (12, D)
-    # and (3, D). Padding is trailing and invalid steps compose as the
-    # identity, so these ARE the state after the last valid step -- the
-    # actor's carry (`history_carry_from`).
+    # Carry stores f32 recurrence outputs, before the snapshot casts.
     final_slot_state: ArrayLike = ()
     final_field_state: ArrayLike = ()
+    final_register_state: ArrayLike = ()
     step_valid: ArrayLike = ()
     step_request_count: ArrayLike = ()
     # The step GAT's read, for telemetry: (H, heads, K, K) attention
@@ -104,8 +102,6 @@ class PerSlotHistoryOutput:
     step_attention_probs: ArrayLike = ()
     step_row_mask: ArrayLike = ()
     step_source_rows: ArrayLike = ()
-    # The backbone's write gate, mean over units: (H, 12), read against
-    # the (H, 12) touched mask -- only a touched slot's gate is applied.
     step_slot_gate: ArrayLike = ()
     step_touched: ArrayLike = ()
 
@@ -117,6 +113,7 @@ def invalid_history_carry(width: int) -> HistoryCarry:
     return HistoryCarry(
         slot_states=np.zeros((NUM_PUBLIC_SLOTS, width), np.float32),
         field_states=np.zeros((NUM_FIELD_ROWS, width), np.float32),
+        register_states=np.zeros((NUM_HISTORY_REGISTERS, width), np.float32),
         node_snapshots=np.zeros((NUM_PUBLIC_SLOTS, width), np.float32),
         valid=np.zeros((), np.bool_),
     )
@@ -131,6 +128,7 @@ def history_carry_from(output: PerSlotHistoryOutput) -> HistoryCarry:
     return HistoryCarry(
         slot_states=output.final_slot_state,
         field_states=output.final_field_state,
+        register_states=output.final_register_state,
         node_snapshots=output.node_snapshots[-1],
         valid=jnp.ones((), dtype=jnp.bool_),
     )
@@ -153,7 +151,7 @@ def history_step_stats(output: PerSlotHistoryOutput) -> dict[str, jax.Array]:
     rows, over steps carrying both; beside step_attn_to_src_uniform (the
     source rows' share of live rows -- what uniform attention would
     place). Above uniform = "who did this to me" is being read.
-    gate_mean: the slot write gate over touched, valid (step, slot) pairs;
+    gate_mean: the slot write gate over all valid (step, slot) pairs;
     pinned at 0 (nothing written) or 1 (memory overwritten every step) is
     the collapse shape.
     """
@@ -168,7 +166,9 @@ def history_step_stats(output: PerSlotHistoryOutput) -> dict[str, jax.Array]:
     to_src = (probs * source[:, None, None, :]).sum(-1)  # (H, heads, K)
     src_weight = (row_mask & ~source & source.any(-1)[:, None])[:, None, :]
     src_share = source.sum(-1) / num_live.clip(min=1)  # (H,)
-    gate_weight = output.step_touched & output.step_valid[:, None]  # (H, 12)
+    gate_weight = (
+        output.step_row_mask[:, HISTORY_SLOT_STATE_ROWS] & output.step_valid[:, None]
+    )  # (H, 12)
     return {
         "step_attn_entropy": _masked_mean(normalised_entropy, entropy_weight),
         "step_attn_to_src": _masked_mean(to_src, src_weight),
@@ -269,31 +269,13 @@ class NodeHistoryRead(nn.Module):
 
 
 class StepAttention(nn.Module):
-    """One GAT-style attention layer over the rows of a single history
-    step -- every live row attends to every live row, itself included.
-
-    A step is one major log line and the minor lines until the next: up to
-    K = 8 rows, one per mon touched, each carrying its own node snapshot,
-    its own edge (what happened to it), its side and whether it was the
-    MOVER (a self-targeting move is one row on both counts). The relation
-    "X did N to Y" lives across two of those rows, and this is the layer
-    where they meet, weighted by content: the source mean it replaces was
-    invertible in singles (2-source steps are 2-row steps) and lossy in
-    doubles (a spread move: 2 movers, 3 targets, one average for all).
-
-    Not modules.MultiHeadAttention: that carries trunk-sized plumbing (qk
-    layer norm, rope, a query-side validity mask) for a 61-row sequence;
-    this is 8 rows. Padded rows get a -1e9 floor AND their probabilities
-    re-masked, so a 1-row step is exactly its own value. The output
-    projection is zeros-init -- one zero factor over live inputs, the
-    FlatActionReadout argument -- so the messages are identity at step 0
-    and the projection moves at step 1.
-    """
+    """Masked self-attention over the rows of each history step."""
 
     num_heads: int
     qk_size: int
     features: int
     dtype: jnp.dtype
+    output_init: Callable = nn.initializers.zeros_init()
 
     @nn.compact
     def __call__(
@@ -330,389 +312,304 @@ class StepAttention(nn.Module):
             features=self.features,
             use_bias=False,
             dtype=self.dtype,
-            kernel_init=nn.initializers.zeros_init(),
+            kernel_init=self.output_init,
             name="attn_out",
         )(attended)
         return out, probs
 
 
-class GatedLinearCell(nn.Module):
-    """The minGRU recurrence (Feng et al. 2024): h_t = (1 - z_t) * h_{t-1}
-    + z_t * c_t with z_t = sigmoid(W_z x_t + b_z) and c_t = W_c x_t + b_c.
-
-    Gate and candidate read the INPUT only -- never h_{t-1} -- so each
-    step is a per-channel affine map of the carry and the whole sequence
-    is an associative scan (gated_linear_scan) of depth O(log H) instead
-    of a serial chain of H dependent kernels -- which is what the GRU it
-    replaces (2026-09-02) could not offer, its scan sitting on a
-    dependency-latency floor that neither hoisting nor unrolling could
-    move. The price is the candidate's blindness to the carry,
-    accepted for windows of 256-512 steps; the RG-LRU form (a learned
-    per-channel decay in place of 1 - z_t) is the recorded fallback.
-    Selectivity is kept: z_t is input-dependent, so a slot writes what
-    its own message says to write. Coefficients are emitted in the
-    compute dtype and the scan runs them in f32.
-    """
+class HistoryGRUCell(nn.Module):
+    """Flax's reset-after GRU equations with f32 activations and memory mixing."""
 
     features: int
     dtype: jnp.dtype
 
     @nn.compact
-    def __call__(self, xs: jax.Array) -> tuple[jax.Array, jax.Array]:
-        """xs (..., W) -> (write gate z, candidate c), each (..., features)."""
-        gate = nn.sigmoid(
-            nn.Dense(features=self.features, dtype=self.dtype, name="gate")(xs)
+    def __call__(
+        self, memory: jax.Array, inputs: jax.Array
+    ) -> tuple[jax.Array, jax.Array]:
+        input_dense = functools.partial(
+            nn.Dense,
+            features=self.features,
+            use_bias=True,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.lecun_normal(),
         )
-        candidate = nn.Dense(
-            features=self.features, dtype=self.dtype, name="candidate"
-        )(xs)
-        return gate, candidate
+        recurrent_dense = functools.partial(
+            nn.Dense,
+            features=self.features,
+            use_bias=False,
+            dtype=self.dtype,
+            kernel_init=nn.initializers.orthogonal(),
+        )
+        reset_gate = nn.sigmoid(
+            input_dense(name="ir")(inputs).astype(jnp.float32)
+            + recurrent_dense(name="hr")(memory).astype(jnp.float32)
+        )
+        retain_gate = nn.sigmoid(
+            input_dense(name="iz")(inputs).astype(jnp.float32)
+            + recurrent_dense(name="hz")(memory).astype(jnp.float32)
+        )
+        candidate = nn.tanh(
+            input_dense(name="in")(inputs).astype(jnp.float32)
+            + reset_gate
+            * recurrent_dense(name="hn", use_bias=True)(memory).astype(jnp.float32)
+        )
+        write_gate = 1 - retain_gate
+        updated = write_gate * candidate + retain_gate * memory.astype(jnp.float32)
+        return updated, write_gate
 
 
-def gated_linear_scan(
-    gate: jax.Array, candidate: jax.Array, write: jax.Array, initial: jax.Array
-) -> jax.Array:
-    """States after each step of h_t = a_t * h_{t-1} + b_t, in parallel.
+class HistorySequenceStep(nn.Module):
+    cfg: ConfigDict
 
-    gate/candidate (H, N, D) from GatedLinearCell; write (H, N) -- 1 where
-    step t writes unit n, 0 where it leaves it (an untouched slot, an
-    invalid step), which folds in as the identity map (a, b) = (1, 0) so a
-    never-written unit holds `initial` EXACTLY; initial (N, D). Two
-    steps compose as ((a1, b1), (a2, b2)) -> (a1 * a2, a2 * b1 + b2), which
-    is associative, so jax.lax.associative_scan gives every prefix
-    (A_t, B_t) and h_t = A_t * h_0 + B_t. Runs in f32: the coefficient
-    products compound bf16 reassociation across log2(H) levels (the
-    precision ledger's value-recursion rule); returns f32 (H, N, D).
-    """
-    write = write.astype(jnp.float32)[..., None]
-    decay = 1.0 - write * gate.astype(jnp.float32)
-    drive = write * gate.astype(jnp.float32) * candidate.astype(jnp.float32)
-
-    def compose(earlier, later):
-        decay_earlier, drive_earlier = earlier
-        decay_later, drive_later = later
-        return decay_earlier * decay_later, decay_later * drive_earlier + drive_later
-
-    cum_decay, cum_drive = jax.lax.associative_scan(compose, (decay, drive), axis=0)
-    return cum_decay * initial.astype(jnp.float32)[None] + cum_drive
+    @nn.compact
+    def __call__(
+        self,
+        memory: jax.Array,
+        inputs: tuple[jax.Array, jax.Array, jax.Array],
+    ) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+        event_rows, attention_identities, valid = inputs
+        rows = nn.RMSNorm(dtype=self.cfg.dtype, name="input_norm")(
+            memory.astype(self.cfg.dtype) + event_rows
+        )
+        group_identity = self.param(
+            "group_identity", nn.initializers.normal(0.02), (3, self.cfg.entity_size)
+        )
+        register_identity = self.param(
+            "register_identity",
+            nn.initializers.normal(0.02),
+            (NUM_HISTORY_REGISTERS, self.cfg.entity_size),
+        )
+        rows = (
+            rows
+            + attention_identities
+            + group_identity.astype(self.cfg.dtype)[
+                jnp.asarray(HISTORY_STATE_GROUP_IDS)
+            ]
+        )
+        rows = rows.at[HISTORY_REGISTER_STATE_ROWS].add(
+            register_identity.astype(self.cfg.dtype)
+        )
+        attended, probabilities = StepAttention(
+            num_heads=self.cfg.history_step.num_heads,
+            qk_size=self.cfg.history_step.qk_size,
+            features=self.cfg.entity_size,
+            dtype=self.cfg.dtype,
+            output_init=nn.initializers.lecun_normal(),
+            name="attention",
+        )(rows[None], jnp.ones((1, NUM_HISTORY_STATE_ROWS), jnp.bool_))
+        # Normalisation and row identities address attention; the GRU also
+        # reads raw event features and its own unnormalised previous memory.
+        gru_inputs = event_rows + attended[0]
+        updated_groups = []
+        gate_groups = []
+        for token_type, state_rows in (
+            ("entity", HISTORY_SLOT_STATE_ROWS),
+            ("field", HISTORY_FIELD_STATE_ROWS),
+            ("register", HISTORY_REGISTER_STATE_ROWS),
+        ):
+            updated_group, group_gate = HistoryGRUCell(
+                self.cfg.entity_size,
+                dtype=self.cfg.dtype,
+                name=f"{token_type}_gru",
+            )(memory[state_rows], gru_inputs[state_rows])
+            updated_groups.append(updated_group)
+            gate_groups.append(group_gate)
+        updated = jnp.concatenate(updated_groups, axis=0)
+        write_gate = jnp.concatenate(gate_groups, axis=0)
+        memory = jnp.where(valid, updated, memory)
+        return memory, (
+            memory.astype(self.cfg.dtype),
+            probabilities[0],
+            write_gate.mean(-1),
+        )
 
 
 class PerSlotHistoryEncoder(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
-        entity_size = self.cfg.entity_size
-        init = nn.initializers.normal(0.02)
-        # Slots are keyed by revelation order across BOTH sides, so a slot's
-        # side is dynamic — one shared initial state; side information enters
-        # through the node snapshots in the messages.
-        self.initial_slot_state = self.param(
-            "initial_slot_state", init, (1, entity_size)
+        self.initial_memory = self.param(
+            "initial_memory",
+            nn.initializers.normal(0.02),
+            (NUM_HISTORY_STATE_ROWS, self.cfg.entity_size),
         )
-        self.initial_field_state = self.param(
-            "initial_field_state", init, (NUM_FIELD_ROWS, entity_size)
-        )
-        # Projects [node ; edge ; side ; is_src ; field] into a slot message;
-        # the step GAT below adds what the OTHER rows of the step carry.
-        self.message_projection = nn.Dense(
-            features=entity_size,
+        self.event_projection = nn.Dense(
+            self.cfg.entity_size,
             use_bias=False,
             dtype=self.cfg.dtype,
-            name="message_projection",
+            name="event_projection",
         )
-        step_cfg = self.cfg.history_step
-        self.step_attention = StepAttention(
-            num_heads=step_cfg.num_heads,
-            qk_size=step_cfg.qk_size,
-            features=entity_size,
-            dtype=self.cfg.dtype,
-            name="step_attention",
+        # Cross-row reads of previous memory require a chronological scan.
+        step = nn.remat(
+            HistorySequenceStep, policy=jax.checkpoint_policies.nothing_saveable
         )
-        # Two gated linear cells, two parallel scans, zero serial work
-        # (2026-09-02; see _recur). The slot input is [messages ;
-        # field_vec ; flat_field_{t-1}] = 5D wide -- the three field states
-        # after the PREVIOUS step, exactly the carry the GRU read, now an
-        # input column because the field scan runs first. No mean over the
-        # other slots' states rides here: flat_field is fed the SUM of every
-        # message, and the trunk attends over the HISTORY_ENTITY rows at
-        # read time.
-        self.slot_cell = GatedLinearCell(
-            entity_size, dtype=self.cfg.dtype, name="slot_cell"
-        )
-        self.field_cell = GatedLinearCell(
-            entity_size, dtype=self.cfg.dtype, name="field_cell"
-        )
+        self.sequence_step = nn.scan(
+            step,
+            variable_broadcast="params",
+            split_rngs={"params": False},
+            in_axes=0,
+            out_axes=0,
+        )(self.cfg, name="sequence_step")
 
-    def initial_state(self) -> tuple[jax.Array, jax.Array]:
-        h_slots = jnp.repeat(self.initial_slot_state, NUM_PUBLIC_SLOTS, axis=0).astype(
-            self.cfg.dtype
-        )
-        h_field = self.initial_field_state.astype(self.cfg.dtype)
-        return h_slots, h_field
-
-    def resolve_initial(
-        self, carry: HistoryCarry
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        """What the window starts from: ((12, D) f32 slot states, (3, D)
-        f32 field states, (12, D) node snapshots in the compute dtype).
-
-        With no carry leaves (the default everywhere but the actor) this is
-        the learned h0 and an all-zero snapshot, with no select in the
-        trace -- the from-scratch function, bit for bit. With leaves
-        present, `valid` selects per call between the carried state and
-        that same h0, so the actor's full-window recompute is the same
-        function too.
-        """
-        h0_slots, h0_field = self.initial_state()
-        h0_slots = h0_slots.astype(jnp.float32)
-        h0_field = h0_field.astype(jnp.float32)
-        node0 = jnp.zeros(h0_slots.shape, self.cfg.dtype)
+    def resolve_initial(self, carry: HistoryCarry) -> tuple[jax.Array, jax.Array]:
+        node0 = jnp.zeros((NUM_PUBLIC_SLOTS, self.cfg.entity_size), self.cfg.dtype)
         if isinstance(carry.valid, tuple):
-            return h0_slots, h0_field, node0
+            return self.initial_memory, node0
+        if isinstance(carry.register_states, tuple):
+            registers = self.initial_memory[HISTORY_REGISTER_STATE_ROWS]
+        else:
+            registers = carry.register_states
+        carried = jnp.concatenate(
+            (carry.slot_states, carry.field_states, registers), axis=0
+        ).astype(jnp.float32)
         return (
-            jnp.where(carry.valid, carry.slot_states.astype(jnp.float32), h0_slots),
-            jnp.where(carry.valid, carry.field_states.astype(jnp.float32), h0_field),
+            jnp.where(carry.valid, carried, self.initial_memory),
             jnp.where(carry.valid, carry.node_snapshots.astype(self.cfg.dtype), node0),
         )
 
     def _recur(
         self,
-        slot_inputs: jax.Array,
-        field_inputs: jax.Array,
-        touched: jax.Array,
+        event_rows: jax.Array,
         step_valid: jax.Array,
-        h0_slots: jax.Array,
-        h0_field: jax.Array,
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
-        """The recurrent half: (H, 12, 2D) precomputed slot inputs
-        [messages ; field_vec], (H, 3, 2D) field inputs, (H, 12) bool
-        touched, (H,) bool step_valid, the f32 (12, D) / (3, D) states the
-        window starts from -> ((H, 12, D), (H, 3, D)) states after each
-        step, in the compute dtype, the (H, 12) mean slot write gate
-        (telemetry: pinned at 0 or 1 is the collapse shape), and the two
-        post-window states in f32 (the carry).
-
-        Field scan first -- its inputs are all precomputed -- then its
-        states, shifted one step back (the state BEFORE step t, i.e. the
-        GRU's carry), become the trailing 3D columns of the slot input,
-        and the slot scan follows. A slot reads its own state, its own
-        input and the field states, never another slot's: the scan is a
-        per-unit affine map, so that is by construction, and the tests
-        pin it with controls. Invalid steps and untouched slots write
-        nothing (the identity coefficient).
-        """
-        field_gate, field_candidate = self.field_cell(field_inputs)
-        field_write = jnp.broadcast_to(step_valid[:, None], field_gate.shape[:2])
-        field_states = gated_linear_scan(
-            field_gate, field_candidate, field_write, h0_field
-        )  # (H, 3, D) f32
-        # (H, 3D): the field states BEFORE each step -- the GRU's carry.
-        previous_field = jnp.concatenate(
-            (h0_field[None], field_states[:-1]), axis=0
-        ).reshape(field_states.shape[0], -1)
-        slot_gate, slot_candidate = self.slot_cell(
-            jnp.concatenate(
-                (
-                    slot_inputs,
-                    jnp.broadcast_to(
-                        previous_field.astype(slot_inputs.dtype)[:, None],
-                        slot_inputs.shape[:2] + previous_field.shape[-1:],
-                    ),
-                ),
-                axis=-1,
-            )
+        initial_memory: jax.Array,
+        attention_identities: jax.Array | None = None,
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+        if attention_identities is None:
+            attention_identities = jnp.zeros_like(event_rows)
+        final_memory, (states, probabilities, gates) = self.sequence_step(
+            initial_memory.astype(jnp.float32),
+            (event_rows, attention_identities, step_valid),
         )
-        slot_states = gated_linear_scan(
-            slot_gate, slot_candidate, touched & step_valid[:, None], h0_slots
-        )  # (H, 12, D) f32
-        return (
-            slot_states.astype(self.cfg.dtype),
-            field_states.astype(self.cfg.dtype),
-            slot_gate.mean(-1),
-            slot_states[-1],
-            field_states[-1],
-        )
+        return states, probabilities, gates, final_memory
 
     def __call__(
         self,
         history_field: jax.Array,
         node_embedding_cache: jax.Array,
+        node_content_cache: jax.Array,
         edge_embedding_cache: jax.Array,
         edge_slot_ids: jax.Array,
         edge_major_args: jax.Array,
-        node_sides: jax.Array,
-        field_step_embeddings: jax.Array,
         field_row_embeddings: jax.Array,
         step_request_count: jax.Array,
         step_valid: jax.Array,
         carry: HistoryCarry = HistoryCarry(),
+        node_identity_cache: jax.Array | None = None,
+        field_identities: jax.Array | None = None,
     ) -> PerSlotHistoryOutput:
-        """Scan the slot bank along the history axis.
-
-        Args:
-            history_field: (H, NUM_FIELD_FEATURES) raw int history rows.
-            node_embedding_cache: (P, D) embedded public-entity cache rows.
-            edge_embedding_cache: (P, D) embedded edge cache rows.
-            edge_slot_ids: (P,) ENTITY_EDGE_FEATURE__ENTITY_IDX per cache row.
-            edge_major_args: (P,) ENTITY_EDGE_FEATURE__MAJOR_ARG per cache
-                row -- what identifies a step's SOURCE rows (the mover).
-            node_sides: (P,) relative side (1 = mine) per cache row.
-            field_step_embeddings: (H, D) pooled field embedding per step —
-                the message/slot-input view.
-            field_row_embeddings: (H, 3, D) the (global, mine, theirs) field
-                token triple per step, one input per field state.
-            step_request_count: (H,) request count of each history step.
-            step_valid: (H,) bool.
-            carry: the state the window starts from (`resolve_initial`);
-                the default is the learned h0.
-        """
-        h0_slots, h0_field, node0 = self.resolve_initial(carry)
-        relevant, edge_mask = relevant_edges(history_field)  # (H, K)
-        step_valid = step_valid & edge_mask.any(axis=-1)
-
-        node_embeddings = jnp.take(node_embedding_cache, relevant, axis=0)  # (H, K, D)
-        edge_embeddings = jnp.take(edge_embedding_cache, relevant, axis=0)  # (H, K, D)
+        initial_memory, node0 = self.resolve_initial(carry)
+        relevant, edge_mask = relevant_edges(history_field)
+        node_embeddings = jnp.take(node_embedding_cache, relevant, axis=0)
+        edge_embeddings = jnp.take(edge_embedding_cache, relevant, axis=0)
         slot_ids = jnp.take(edge_slot_ids, relevant, axis=0).clip(
             0, NUM_PUBLIC_SLOTS - 1
-        )  # (H, K)
-
-        # Perspective is otherwise a whisper in these inputs (a single
-        # additive bias inside the node embeddings — edges and most field
-        # rows are perspective-blind). The outcome is inherently a
-        # side-differenced quantity, so hand each message an explicit
-        # "mine / theirs" tag instead of making the model excavate it.
-        edge_sides = jnp.take(node_sides, relevant, axis=0)  # (H, K)
-        side_onehot = jax.nn.one_hot(
-            edge_sides, 2, dtype=node_embeddings.dtype
-        )  # (H, K, 2)
-        edge_is_mine = edge_sides == SIDE_MINE
-
-        # ---- the directed message (TGN, 2026-09-01; step GAT 2026-09-02) --
-        # A step's SOURCE rows are the ones carrying a real major arg (the
-        # mover of a move/switch/faint/cant). Each row's message is its own
-        # [node ; edge ; side ; is_src] plus what the step GAT reads off the
-        # OTHER rows of the step -- so mover and target coexist in one
-        # vector, the relation "move X did N to Y" the per-slot scatter
-        # used to destroy, without the masked source mean that conflated
-        # a doubles spread move's two movers. TGN proper would use the
-        # source's MEMORY here; that is carry-dependent and hence serial,
-        # so the rows' raw cache embeddings (their revealed state at event
-        # time) stand in, keeping the whole message batch precomputable.
-        edge_majors = jnp.take(edge_major_args, relevant, axis=0)  # (H, K)
-        is_src = source_rows(edge_majors, edge_mask)
+        )
+        is_source = source_rows(jnp.take(edge_major_args, relevant, axis=0), edge_mask)
         row_inputs = jnp.concatenate(
             (
                 node_embeddings,
                 edge_embeddings,
-                side_onehot,
-                is_src.astype(node_embeddings.dtype)[..., None],
+                is_source.astype(self.cfg.dtype)[..., None],
             ),
             axis=-1,
-        )  # (H, K, 2D + 3)
-        attended, step_attention_probs = self.step_attention(row_inputs, edge_mask)
-        messages = (
-            self.message_projection(
-                jnp.concatenate(
-                    (
-                        row_inputs,
-                        jnp.broadcast_to(
-                            field_step_embeddings[:, None], node_embeddings.shape
-                        ),
-                    ),
-                    axis=-1,
-                )
-            )
-            + attended
+        )
+        messages = self.event_projection(row_inputs)
+        segments = jnp.where(
+            edge_mask & step_valid[:, None], slot_ids, NUM_PUBLIC_SLOTS
         )
 
-        # ---- batched precompute (2026-09-01) -----------------------------
-        # Everything that does not read a carry, done once over the whole
-        # history as batched ops: the edge scatter (vmapped segment_sums)
-        # and the latest-node stream (a last-touched-value recurrence,
-        # solved in parallel by a cummax over touched step indices + one
-        # gather). The recurrences themselves are parallel scans (_recur).
-        seg = jnp.where(edge_mask & step_valid[:, None], slot_ids, NUM_PUBLIC_SLOTS)
-
-        def scatter_step(step_messages, step_nodes, step_seg):
-            slot_sum = jax.ops.segment_sum(
-                step_messages, step_seg, num_segments=NUM_PUBLIC_SLOTS + 1
-            )[:-1]
+        def scatter_step(step_messages, step_nodes, step_source, step_segments):
             counts = jax.ops.segment_sum(
-                jnp.ones(step_seg.shape, jnp.int32),
-                step_seg,
+                jnp.ones(step_segments.shape, jnp.int32),
+                step_segments,
                 num_segments=NUM_PUBLIC_SLOTS + 1,
             )[:-1]
+            summed = jax.ops.segment_sum(
+                step_messages, step_segments, num_segments=NUM_PUBLIC_SLOTS + 1
+            )[:-1]
             node_means = jax.ops.segment_sum(
-                step_nodes, step_seg, num_segments=NUM_PUBLIC_SLOTS + 1
+                step_nodes, step_segments, num_segments=NUM_PUBLIC_SLOTS + 1
             )[:-1] / counts.clip(min=1)[..., None].astype(step_nodes.dtype)
-            return slot_sum, counts, node_means
+            sources = (
+                jax.ops.segment_sum(
+                    step_source.astype(jnp.int32),
+                    step_segments,
+                    num_segments=NUM_PUBLIC_SLOTS + 1,
+                )[:-1]
+                > 0
+            )
+            return summed, counts, node_means, sources
 
-        slot_messages, counts, node_means = jax.vmap(scatter_step)(
-            messages, node_embeddings, seg
+        slot_messages, counts, node_means, slot_sources = jax.vmap(scatter_step)(
+            messages,
+            jnp.take(node_content_cache, relevant, axis=0),
+            is_source,
+            segments,
         )
-        touched = counts > 0  # (H, 12)
-
-        # Latest-node stream: node_means at the last touched step <= t, or
-        # the window's starting snapshot (0 from scratch, the carried one
-        # on a suffix) before any touch -- exactly the old scan's
-        # latest_nodes carry, without the carry.
+        touched = counts > 0
+        # Snapshot support remains solely for the standalone offline critic.
         step_index = jnp.arange(touched.shape[0])[:, None]
-        last_touched = jax.lax.cummax(
-            jnp.where(touched, step_index, -1), axis=0
-        )  # (H, 12)
+        last_touched = jax.lax.cummax(jnp.where(touched, step_index, -1), axis=0)
         gathered = jnp.take_along_axis(
             node_means, last_touched.clip(min=0)[..., None], axis=0
         )
         node_snapshots = jnp.where(
             (last_touched >= 0)[..., None], gathered, node0[None]
         ).astype(self.cfg.dtype)
-
-        # (all, mine, theirs) message sums for the three field states.
-        live = (edge_mask & step_valid[:, None]).astype(messages.dtype)[..., None]
-        mine = live * edge_is_mine.astype(messages.dtype)[..., None]
-        side_messages = jnp.stack(
-            (
-                (messages * live).sum(axis=-2),
-                (messages * mine).sum(axis=-2),
-                (messages * (live - mine)).sum(axis=-2),
-            ),
-            axis=-2,
-        )  # (H, 3, D)
-
-        slot_inputs = jnp.concatenate(
+        event_rows = jnp.concatenate(
             (
                 slot_messages,
-                jnp.broadcast_to(
-                    field_step_embeddings[:, None, :], slot_messages.shape
+                field_row_embeddings.astype(self.cfg.dtype),
+                jnp.zeros(
+                    (step_valid.shape[0], NUM_HISTORY_REGISTERS, self.cfg.entity_size),
+                    self.cfg.dtype,
                 ),
             ),
-            axis=-1,
-        )  # (H, 12, 2D)
-        field_inputs = jnp.concatenate(
-            (field_row_embeddings.astype(self.cfg.dtype), side_messages), axis=-1
-        )  # (H, 3, 2D)
-        (
-            slot_snapshots,
-            field_snapshots,
-            step_slot_gate,
-            final_slot_state,
-            final_field_state,
-        ) = self._recur(
-            slot_inputs, field_inputs, touched, step_valid, h0_slots, h0_field
+            axis=1,
         )
-
+        if node_identity_cache is None:
+            slot_identities = jnp.zeros_like(slot_messages)
+        else:
+            _, _, slot_identities, _ = jax.vmap(scatter_step)(
+                messages,
+                jnp.take(node_identity_cache, relevant, axis=0),
+                is_source,
+                segments,
+            )
+        attention_identities = jnp.zeros_like(event_rows)
+        attention_identities = attention_identities.at[:, HISTORY_SLOT_STATE_ROWS].set(
+            slot_identities
+        )
+        if field_identities is not None:
+            attention_identities = attention_identities.at[
+                :, HISTORY_FIELD_STATE_ROWS
+            ].set(field_identities)
+        states, probabilities, gates, final_memory = self._recur(
+            event_rows, step_valid, initial_memory, attention_identities
+        )
+        source_mask = (
+            jnp.zeros((step_valid.shape[0], NUM_HISTORY_STATE_ROWS), jnp.bool_)
+            .at[:, HISTORY_SLOT_STATE_ROWS]
+            .set(slot_sources)
+        )
         return PerSlotHistoryOutput(
-            slot_snapshots=slot_snapshots,
-            field_snapshots=field_snapshots,
+            slot_snapshots=states[:, HISTORY_SLOT_STATE_ROWS],
+            field_snapshots=states[:, HISTORY_FIELD_STATE_ROWS],
+            register_snapshots=states[:, HISTORY_REGISTER_STATE_ROWS],
             node_snapshots=node_snapshots,
-            final_slot_state=final_slot_state,
-            final_field_state=final_field_state,
+            final_slot_state=final_memory[HISTORY_SLOT_STATE_ROWS],
+            final_field_state=final_memory[HISTORY_FIELD_STATE_ROWS],
+            final_register_state=final_memory[HISTORY_REGISTER_STATE_ROWS],
             step_valid=step_valid,
             step_request_count=step_request_count,
-            step_attention_probs=step_attention_probs,
-            step_row_mask=edge_mask,
-            step_source_rows=is_src,
-            step_slot_gate=step_slot_gate,
+            step_attention_probs=probabilities,
+            step_row_mask=jnp.ones(
+                (step_valid.shape[0], NUM_HISTORY_STATE_ROWS), jnp.bool_
+            ),
+            step_source_rows=source_mask,
+            step_slot_gate=gates[:, HISTORY_SLOT_STATE_ROWS],
             step_touched=touched,
         )
 
@@ -721,16 +618,18 @@ class PerSlotHistoryEncoder(nn.Module):
         history_output: PerSlotHistoryOutput,
         request_counts: jax.Array,
         carry: HistoryCarry = HistoryCarry(),
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
         """For each request, gather the state after the last history step whose
         request_count <= the request's; with no such step, what the window
         started from (`resolve_initial` of the same carry the scan ran on --
         a zero-new-steps suffix returns the carry itself).
         (T,) -> ((T, 12, D) slot states, (T, 3, D) field states,
-        (T, 12, D) latest node snapshots)."""
-        h0_slots, h0_field, node0 = self.resolve_initial(carry)
-        h0_slots = h0_slots.astype(self.cfg.dtype)
-        h0_field = h0_field.astype(self.cfg.dtype)
+        (T, 12, D) latest node snapshots, (T, 4, D) global registers)."""
+        initial_memory, node0 = self.resolve_initial(carry)
+        initial_memory = initial_memory.astype(self.cfg.dtype)
+        h0_slots = initial_memory[HISTORY_SLOT_STATE_ROWS]
+        h0_field = initial_memory[HISTORY_FIELD_STATE_ROWS]
+        h0_registers = initial_memory[HISTORY_REGISTER_STATE_ROWS]
         step_indices = jnp.arange(history_output.step_valid.shape[0])
 
         def gather_one(request_count: jax.Array):
@@ -749,6 +648,9 @@ class PerSlotHistoryEncoder(nn.Module):
             nodes = jnp.where(
                 has_history, history_output.node_snapshots[safe_idx], node0
             )
-            return slots, field, nodes
+            registers = jnp.where(
+                has_history, history_output.register_snapshots[safe_idx], h0_registers
+            )
+            return slots, field, nodes, registers
 
         return jax.vmap(gather_one)(request_counts)

@@ -37,6 +37,17 @@ NUM_PUBLIC_SLOTS = 12
 NUM_PRIVATE_SLOTS = 6
 # The field triple, mirrored by the history field triple: global, mine, theirs.
 NUM_FIELD_ROWS = 3
+NUM_HISTORY_REGISTERS = 4
+HISTORY_SLOT_STATE_ROWS = slice(0, NUM_PUBLIC_SLOTS)
+HISTORY_FIELD_STATE_ROWS = slice(NUM_PUBLIC_SLOTS, NUM_PUBLIC_SLOTS + NUM_FIELD_ROWS)
+HISTORY_REGISTER_STATE_ROWS = slice(
+    HISTORY_FIELD_STATE_ROWS.stop, HISTORY_FIELD_STATE_ROWS.stop + NUM_HISTORY_REGISTERS
+)
+NUM_HISTORY_STATE_ROWS = HISTORY_REGISTER_STATE_ROWS.stop
+HISTORY_STATE_GROUP_IDS = np.repeat(
+    np.arange(3, dtype=np.int32),
+    [NUM_PUBLIC_SLOTS, NUM_FIELD_ROWS, NUM_HISTORY_REGISTERS],
+)
 
 
 class TokenType(IntEnum):
@@ -91,9 +102,8 @@ PRIVATE_TOKEN_TYPES = np.array(
 class SequenceGroup(IntEnum):
     """Rows of the trunk's one sequence, one group per kind of thing.
 
-    ONE TOKEN PER THING. With entities pooled to a vector each the whole
-    board is 80 rows and the trunk carries them directly: there is no
-    Perceiver read, no latents and no separate action stream.
+    Entity content is pooled to one vector per Pokémon; recurrent history
+    registers provide additional global memory rows.
 
     What that trades away is on the record: with one token per mon, THEIR
     individual revealed moves no longer coexist with anything as separate
@@ -121,11 +131,8 @@ class SequenceGroup(IntEnum):
     # readout pins -- survives unchanged.
     OPP_PRIVATE_ENTITY = 9
     VALUE_CLS = 10
-    # History as its own rows (2026-09-01): entity i's GRU diary + latest
-    # raw snapshot, freed from being an additive attribute on the public
-    # row so attention routes board-now vs memory instead of one vector
-    # carrying their sum. Policy-readable.
     HISTORY_ENTITY = 11
+    HISTORY_REGISTER = 12
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -147,6 +154,7 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.OPP_PRIVATE_ENTITY, NUM_PRIVATE_SLOTS),
     (SequenceGroup.VALUE_CLS, 1),
     (SequenceGroup.HISTORY_ENTITY, NUM_PUBLIC_SLOTS),
+    (SequenceGroup.HISTORY_REGISTER, NUM_HISTORY_REGISTERS),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -170,10 +178,11 @@ MOVE_ROWS = SEQUENCE_SLICES[SequenceGroup.MOVE_SLOT]
 TARGET_ROWS = SEQUENCE_SLICES[SequenceGroup.TARGET_SLOT]
 OPP_PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.OPP_PRIVATE_ENTITY]
 HISTORY_ENTITY_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ENTITY]
+HISTORY_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_REGISTER]
 VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
 FIELD_ROWS = SEQUENCE_SLICES[SequenceGroup.FIELD]
 
-assert NUM_SEQUENCE_ROWS == 80, NUM_SEQUENCE_ROWS
+assert NUM_SEQUENCE_ROWS == 80 + NUM_HISTORY_REGISTERS, NUM_SEQUENCE_ROWS
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
 assert MOVE_ROWS.stop - MOVE_ROWS.start == len(MOVE_INDICES)
 assert TARGET_ROWS.stop - TARGET_ROWS.start == len(TARGET_SLOT_INDICES)

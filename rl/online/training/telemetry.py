@@ -460,24 +460,24 @@ def norm_scale_telemetry(param_tree) -> dict[str, jax.Array]:
     return logs
 
 
-# The 2026-09-02 history-encoder leaves. step_attention/attn_out is
-# ZERO-init (the FlatActionReadout argument: one zero factor over live
-# inputs, so its gradient is live at step 1) -- still 0.0 past ~200 steps
-# is the stall, and the pre-registered fallback is a lecun attn_out behind
-# a zero-init scalar gate. query/key are lecun over the (2D+3)-wide row
-# input: ~0.0440 at fan-in 515. The backbone's gate/candidate Denses read
-# beside them: the slot cell's input is [messages ; field ; previous
-# field] (5D = 1280), lecun ~0.0279.
 _HISTORY_LEAVES = {
     "player_history_step_attn_out_rms": (
-        ("encoder", "history_encoder", "step_attention", "attn_out", "kernel"),
+        (
+            "encoder",
+            "history_encoder",
+            "sequence_step",
+            "attention",
+            "attn_out",
+            "kernel",
+        ),
     ),
     "player_history_step_attn_qk_rms": (
-        ("encoder", "history_encoder", "step_attention", "query", "kernel"),
-        ("encoder", "history_encoder", "step_attention", "key", "kernel"),
+        ("encoder", "history_encoder", "sequence_step", "attention", "query", "kernel"),
+        ("encoder", "history_encoder", "sequence_step", "attention", "key", "kernel"),
     ),
     "player_history_slot_gate_rms": (
-        ("encoder", "history_encoder", "slot_cell", "gate", "kernel"),
+        ("encoder", "history_encoder", "sequence_step", "entity_gru", "iz", "kernel"),
+        ("encoder", "history_encoder", "sequence_step", "entity_gru", "hz", "kernel"),
     ),
 }
 _GRAD_SUBTREES = {
@@ -489,7 +489,8 @@ _GRAD_SUBTREES = {
     "player_history_step_attn_grad_norm": (
         "encoder",
         "history_encoder",
-        "step_attention",
+        "sequence_step",
+        "attention",
     ),
 }
 

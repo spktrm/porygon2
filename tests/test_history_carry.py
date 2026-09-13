@@ -21,7 +21,12 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
 )
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.model.constants import NUM_PUBLIC_SLOTS
+from rl.model.constants import (
+    HISTORY_REGISTER_STATE_ROWS,
+    HISTORY_SLOT_STATE_ROWS,
+    NUM_HISTORY_REGISTERS,
+    NUM_PUBLIC_SLOTS,
+)
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import PerSlotHistoryOutput
 from rl.model.utils import open_zero_init_paths
@@ -32,11 +37,16 @@ NUM_FIELD_ROWS = 3
 
 
 def _garbage_carry(width: int, valid: bool) -> HistoryCarry:
-    key_slots, key_field, key_nodes = jax.random.split(jax.random.key(7), 3)
+    key_slots, key_field, key_nodes, key_registers = jax.random.split(
+        jax.random.key(7), 4
+    )
     return HistoryCarry(
         slot_states=jax.random.normal(key_slots, (NUM_PUBLIC_SLOTS, width)),
         field_states=jax.random.normal(key_field, (NUM_FIELD_ROWS, width)),
         node_snapshots=jax.random.normal(key_nodes, (NUM_PUBLIC_SLOTS, width)),
+        register_states=jax.random.normal(
+            key_registers, (NUM_HISTORY_REGISTERS, width)
+        ),
         valid=jnp.asarray(valid),
     )
 
@@ -55,9 +65,9 @@ def carry_params(
 
 
 def _width(params: dict) -> int:
-    return params["params"]["encoder"]["history_encoder"]["initial_slot_state"].shape[
-        -1
-    ]
+    return params["params"]["encoder"]["history_encoder"]["initial_memory"][
+        HISTORY_SLOT_STATE_ROWS
+    ].shape[-1]
 
 
 def test_invalid_carry_is_the_from_scratch_forward_bit_for_bit(
@@ -122,7 +132,7 @@ def test_zero_new_steps_returns_the_carry_itself(
     @jax.jit
     def encode(
         carry: HistoryCarry,
-    ) -> tuple[jax.Array, jax.Array, jax.Array, PerSlotHistoryOutput]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, PerSlotHistoryOutput]:
         return network.apply(
             params,
             actor_input.env,
@@ -133,7 +143,7 @@ def test_zero_new_steps_returns_the_carry_itself(
         )
 
     carry = _garbage_carry(width, valid=True)
-    slots, field_states, nodes, _ = encode(carry)
+    slots, field_states, nodes, registers, _ = encode(carry)
     compute_dtype = slots.dtype
     for request_index in range(slots.shape[0]):
         np.testing.assert_array_equal(
@@ -149,13 +159,26 @@ def test_zero_new_steps_returns_the_carry_itself(
             np.asarray(carry.node_snapshots.astype(compute_dtype)),
         )
 
-    h0_slots = params["params"]["encoder"]["history_encoder"]["initial_slot_state"]
-    slots, _, nodes, _ = encode(_garbage_carry(width, valid=False))
+        np.testing.assert_array_equal(
+            np.asarray(registers[request_index]),
+            np.asarray(carry.register_states.astype(compute_dtype)),
+        )
+
+    h0_slots = params["params"]["encoder"]["history_encoder"]["initial_memory"][
+        HISTORY_SLOT_STATE_ROWS
+    ]
+    slots, _, nodes, registers, _ = encode(_garbage_carry(width, valid=False))
     np.testing.assert_array_equal(
         np.asarray(slots[0]),
-        np.asarray(jnp.repeat(h0_slots, NUM_PUBLIC_SLOTS, axis=0).astype(slots.dtype)),
+        np.asarray(h0_slots.astype(slots.dtype)),
     )
     assert not np.asarray(nodes).any()
+    initial_registers = params["params"]["encoder"]["history_encoder"][
+        "initial_memory"
+    ][HISTORY_REGISTER_STATE_ROWS]
+    np.testing.assert_array_equal(
+        np.asarray(registers[0]), np.asarray(initial_registers.astype(compute_dtype))
+    )
 
 
 def _window_at(full_window: PlayerActorInput, request_count: int) -> PlayerActorInput:
@@ -326,6 +349,12 @@ def test_suffix_carry_replays_the_game_within_bf16(
     np.testing.assert_allclose(
         np.asarray(carry.node_snapshots, np.float32),
         np.asarray(final_full.history_carry.node_snapshots, np.float32),
+        atol=0.05,
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(carry.register_states),
+        np.asarray(final_full.history_carry.register_states),
         atol=0.05,
     )
 
