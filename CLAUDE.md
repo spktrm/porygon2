@@ -210,6 +210,35 @@ TypeScript game service speaking protobuf over websockets.
   reassign, which is more code than the ternary was.
 - No single-letter names. Where two exist only to form a product, define the
   product — that is what the code uses.
+- JAX code is written for XLA, not for the Python reader. Inside anything
+  jitted, NO Python `for` loop over a DATA axis — time, batch, entities,
+  history slots, league members. Vectorise it (`jax.vmap`) or sequence it
+  (`nn.scan` / `lax.scan`). A Python loop is unrolled into the HLO: N copies
+  of every op, N times the trace and compile, a longer program to schedule.
+  The trunk's N unshared blocks go through `nn.scan` over a stacked param
+  axis (`rl/model/trunk.py`) exactly so depth costs one compiled block; the
+  history encoder scans its per-slot recurrence the same way.
+  A Python loop IS right over static heterogeneous structure — the named
+  slices of `SEQUENCE_LAYOUT`, a fixed list of distinct feature embedders.
+  The test is whether every iteration emits the SAME ops on a different
+  slice: if it does, it is a `vmap`/`scan` written out longhand.
+- Branchless on traced values: `jnp.where`, masks, `lax.select`. A Python
+  `if`/ternary on a tracer either raises or silently bakes in one branch.
+  `lax.cond`/`lax.switch` only where the point is that a branch must NOT be
+  evaluated (its cost, not its value) — otherwise `where` is cheaper than a
+  control-flow region XLA cannot fuse across.
+- Shapes stay static and few (the `train_step` lattice invariant is the same
+  rule): no `jnp.nonzero`, no boolean indexing, no data-derived lengths —
+  fixed-size buffers plus a validity mask. Build an array ONCE (`jnp.stack`,
+  one scatter with an index array); never `.at[i].set()` in a loop. Prefer
+  one `einsum`/segment-sum to a chain of reshape/transpose/gather.
+- Compile and memory are part of the design: one jitted entry point per job,
+  `static_argnames` only for genuinely static config, donate the big buffers,
+  `jax.checkpoint`/`nn.remat` where activation memory rather than flops is
+  the bound. Vectorising is not automatically faster — a `vmap` that
+  materialises a huge intermediate can lose to a `scan`, so when it matters
+  read `.lower().compile()` cost and wall-clock and put the number in
+  `LESSONS.md` rather than asserting XLA behaviour.
 - Comments carry the WHY only — a non-obvious constraint, a deliberate
   deviation, a workaround. Default to NONE: never narrate the code, restate a
   name, or re-verify a signature the declaration already gives, and never

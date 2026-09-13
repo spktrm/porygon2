@@ -293,6 +293,36 @@ wire enums: that experiment was reverted and is documented in `LESSONS.md`.
   the branches rather than assigning a default and immediately overwriting it.
 - No single-letter names in new code. If two quantities exist only to form a
   product, name the product the implementation actually uses.
+- Write JAX for XLA. Inside jitted code, do not use a Python `for` loop over a
+  data axis — time, batch, entities, history slots, league members. Vectorise
+  with `jax.vmap` or sequence with `nn.scan`/`jax.lax.scan`. A Python loop is
+  unrolled into the emitted program: N copies of every operation, N times the
+  tracing and compilation, and a longer schedule. The trunk scans its unshared
+  blocks over a stacked parameter axis (`rl/model/trunk.py`) so that depth
+  costs one compiled block, and the history encoder scans its per-slot
+  recurrence for the same reason. A Python loop is correct over static
+  heterogeneous structure, such as the named slices of `SEQUENCE_LAYOUT` or a
+  fixed list of distinct feature embedders. The test is whether each iteration
+  emits the same operations on a different slice; if it does, it is a `vmap` or
+  `scan` written out longhand.
+- Stay branchless on traced values: `jnp.where`, masks, and `lax.select`. A
+  Python `if` or ternary on a tracer either raises or silently freezes one
+  branch. Use `lax.cond`/`lax.switch` only when the purpose is that a branch
+  must not be evaluated at all, since a control-flow region blocks fusion.
+- Keep shapes static and few, which is the same rule as the `train_step` shape
+  lattice: no `jnp.nonzero`, boolean indexing, or data-derived lengths. Use
+  fixed-size buffers with validity masks. Construct an array once with
+  `jnp.stack` or a single indexed scatter rather than `.at[i].set()` in a loop,
+  and prefer one `einsum` or segment operation to a chain of reshapes,
+  transposes, and gathers.
+- Treat compilation and device memory as part of the design: one jitted entry
+  point per job, `static_argnames` only for genuinely static configuration,
+  donated buffers for large arrays, and `jax.checkpoint`/`nn.remat` where
+  activation memory rather than arithmetic is the bound. Vectorisation is not
+  automatically faster; a `vmap` that materialises a large intermediate can be
+  slower than a `scan`. When the choice matters, measure lowering/compilation
+  cost and wall-clock time and record the number in `LESSONS.md` instead of
+  asserting how XLA will behave.
 - Comments carry the why and nothing else: a non-obvious constraint, a
   deliberate architectural deviation, a workaround. Default to no comment.
   Do not narrate what the code does, restate a name, or re-verify a type the
