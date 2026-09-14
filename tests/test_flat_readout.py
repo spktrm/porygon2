@@ -62,7 +62,7 @@ def _init() -> tuple[FlatActionReadout, dict, tuple[jax.Array, jax.Array, jax.Ar
 
 
 def test_sequence_layout_is_derived_and_contiguous() -> None:
-    assert NUM_SEQUENCE_ROWS == 85
+    assert NUM_SEQUENCE_ROWS == 91
     assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
     covered = []
     for group, sl in SEQUENCE_SLICES.items():

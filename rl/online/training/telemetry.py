@@ -349,14 +349,12 @@ _TRUNK_LEAVES = {
     "player_trunk_mlp_out_rms": (
         ("encoder", "trunk", "blocks", "ffw", "Dense_1", "kernel"),
     ),
-    # The four registers (2026-09-10): normal .02 at init, then RMS-normalised
-    # on the way in, so only their DIRECTION reaches the trunk -- rms drift
-    # says they train, not what they carry. Their one-group norm scale
-    # starts at 0 like the sequence bank's.
-    "player_trunk_register_rms": (("encoder", "trunk", "register_embeddings"),),
-    "player_trunk_register_norm_scale_rms": (
-        ("encoder", "trunk", "register_norm", "group_scale"),
-    ),
+    # The trunk registers, two per tier: RMS-normalised on the way in like
+    # every row, so only their DIRECTION reaches the trunk -- rms drift says
+    # they train, not what they carry.
+    "player_public_register_rms": (("encoder", "public_register_embeddings"),),
+    "player_private_register_rms": (("encoder", "private_register_embeddings"),),
+    "player_privileged_register_rms": (("encoder", "privileged_register_embeddings"),),
 }
 _NORM_ENDS = ("input", "output")
 

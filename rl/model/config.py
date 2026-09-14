@@ -73,7 +73,6 @@ def get_player_model_config(
     # feed-forward parameters and almost no attention.
     cfg.encoder.trunk = ConfigDict()
     cfg.encoder.trunk.num_blocks = 6
-    cfg.encoder.trunk.num_registers = 4
     cfg.encoder.trunk.num_heads = num_heads
     cfg.encoder.trunk.qk_size = encoder_qkv_size
     cfg.encoder.trunk.v_size = encoder_qkv_size

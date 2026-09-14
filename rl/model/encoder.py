@@ -49,6 +49,7 @@ from rl.model.constants import (
     NUM_SEQUENCE_GROUPS,
     NUM_SEQUENCE_ROWS,
     NUM_TOKEN_TYPES,
+    NUM_TRUNK_REGISTERS_PER_TIER,
     OPP_ACTIVE_PUBLIC_ROWS,
     POLICY_READABLE_ROWS,
     PRIVATE_TOKEN_TYPES,
@@ -188,6 +189,16 @@ class Encoder(nn.Module):
         )
         self.public_cls_embedding = self.param(
             "public_cls_embedding", embedding_init, (1, entity_size)
+        )
+        register_shape = (NUM_TRUNK_REGISTERS_PER_TIER, entity_size)
+        self.public_register_embeddings = self.param(
+            "public_register_embeddings", embedding_init, register_shape
+        )
+        self.private_register_embeddings = self.param(
+            "private_register_embeddings", embedding_init, register_shape
+        )
+        self.privileged_register_embeddings = self.param(
+            "privileged_register_embeddings", embedding_init, register_shape
         )
         self.prev_action_src_bias = self.param(
             "prev_action_src_bias", embedding_init, (1, entity_size)
@@ -800,8 +811,9 @@ class Encoder(nn.Module):
         candidate move slots, the 17 target slots, the field triple, the
         recurrent field triple, the two previous-action rows, the request
         info row, the learner-only partition's 6 opponent sheet rows and
-        VALUE_CLS row, 12 HISTORY_ENTITY rows, four recurrent registers and
-        the learner-only PUBLIC_CLS row.
+        VALUE_CLS row, 12 HISTORY_ENTITY rows, four recurrent registers, the
+        learner-only PUBLIC_CLS row, and two trunk registers per tier (the
+        privileged pair learner-only).
         Every identity a row
         carries is additive, and the layout itself lives in
         `rl/model/constants.py` so the offsets exist once.
@@ -909,9 +921,16 @@ class Encoder(nn.Module):
                 jnp.ones(NUM_HISTORY_REGISTERS, jnp.bool_),
             ),
         ]
+        register_valid = jnp.ones(NUM_TRUNK_REGISTERS_PER_TIER, dtype=jnp.bool_)
         if self.cfg.train:
             parts.append(
                 (self.public_cls_embedding.astype(dtype), jnp.ones(1, dtype=jnp.bool_))
+            )
+        parts.append((self.public_register_embeddings.astype(dtype), register_valid))
+        parts.append((self.private_register_embeddings.astype(dtype), register_valid))
+        if self.cfg.train:
+            parts.append(
+                (self.privileged_register_embeddings.astype(dtype), register_valid)
             )
         sequence = jnp.concatenate([rows for rows, _ in parts], axis=0)
         row_valid = jnp.concatenate([valid for _, valid in parts])

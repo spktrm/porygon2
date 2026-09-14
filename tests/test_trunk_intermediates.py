@@ -107,9 +107,7 @@ def test_trunk_sows_are_captured_per_block() -> None:
     from rl.model.constants import NUM_SEQUENCE_ROWS
 
     cfg = get_player_model_config(generation=9, train=True)
-    # The sows see the trunk's INTERNAL sequence: the layout rows plus the
-    # registers it appends and discards (2026-09-10).
-    internal_rows = NUM_SEQUENCE_ROWS + cfg.encoder.trunk.num_registers
+    internal_rows = NUM_SEQUENCE_ROWS
     report = _run(collect=True)
     assert report["has_intermediates"]
     time, blocks, heads, n_q, n_k = report["attn_shape"]

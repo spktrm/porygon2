@@ -322,8 +322,9 @@ def rl_sections():
                     [
                         "player_trunk_attn_out_rms",
                         "player_trunk_mlp_out_rms",
-                        "player_trunk_register_rms",
-                        "player_trunk_register_norm_scale_rms",
+                        "player_public_register_rms",
+                        "player_private_register_rms",
+                        "player_privileged_register_rms",
                     ],
                 ),
                 lp(

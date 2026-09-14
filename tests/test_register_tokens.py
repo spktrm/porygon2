@@ -1,20 +1,27 @@
-"""Internal register workspace must preserve output layout and information sets."""
+"""The trunk registers are layout rows, two per tier (2026-09-15): the read
+mask governs them like every other row, and the trunk appends nothing.
+Each invariance carries its positive control."""
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from ml_collections import ConfigDict
 
 from rl.model.constants import (
     NUM_SEQUENCE_ROWS,
     POLICY_READABLE_ROWS,
+    PRIVATE_REGISTER_ROWS,
+    PRIVATE_TIER_ROWS,
+    PRIVILEGED_REGISTER_ROWS,
+    PUBLIC_REGISTER_ROWS,
+    PUBLIC_TIER_ROWS,
     SEQUENCE_READ_MASK,
+    VALUE_CLS_ROW,
 )
 from rl.model.trunk import Trunk
 
 
-def config(num_registers: int) -> ConfigDict:
+def config() -> ConfigDict:
     return ConfigDict(
         dict(
             num_blocks=3,
@@ -25,76 +32,75 @@ def config(num_registers: int) -> ConfigDict:
             hidden_size=32,
             use_bias=False,
             qk_layer_norm=True,
-            num_registers=num_registers,
         )
     )
 
 
-def inputs(dtype: jax.typing.DTypeLike) -> tuple[jax.Array, jax.Array, jax.Array]:
+def inputs() -> tuple[jax.Array, jax.Array, jax.Array]:
     sequence = jnp.asarray(
-        np.random.default_rng(910).normal(size=(NUM_SEQUENCE_ROWS, 16)), dtype
+        np.random.default_rng(910).normal(size=(NUM_SEQUENCE_ROWS, 16)), jnp.float32
     )
     valid = jnp.ones(NUM_SEQUENCE_ROWS, dtype=jnp.bool_).at[3].set(False)
     return sequence.at[3].set(0), valid, jnp.asarray(SEQUENCE_READ_MASK)
 
 
-@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_registers_are_internal_finite_and_trainable(
-    dtype: jax.typing.DTypeLike,
-) -> None:
-    sequence, valid, mask = inputs(dtype)
-    trunk = Trunk(config(4))
+def _rows(rows: slice) -> np.ndarray:
+    return np.arange(*rows.indices(NUM_SEQUENCE_ROWS))
+
+
+def test_trunk_adds_no_rows_and_registers_sit_in_their_tiers() -> None:
+    sequence, valid, mask = inputs()
+    trunk = Trunk(config())
     variables = jax.jit(trunk.init)(jax.random.key(0), sequence, valid, mask)
+    assert "register_embeddings" not in variables["params"]
     output = jax.jit(trunk.apply)(variables, sequence, valid, mask)
     assert output.shape == sequence.shape
-    assert output.dtype == dtype
-    assert np.isfinite(np.asarray(output, np.float32)).all()
     np.testing.assert_array_equal(output[3], 0)
-    registers = variables["params"]["register_embeddings"]
-    assert registers.shape == (4, 16)
-    assert registers.dtype == jnp.float32
-    assert np.unique(np.asarray(registers), axis=0).shape[0] == 4
-
-    def objective(weights: dict) -> jax.Array:
-        result = trunk.apply(weights, sequence, valid, mask)
-        return jnp.sum(result[POLICY_READABLE_ROWS].astype(jnp.float32) ** 2)
-
-    gradients = jax.jit(jax.grad(objective))(variables)
-    assert np.all(
-        np.linalg.norm(gradients["params"]["register_embeddings"], axis=-1) > 0
-    )
-    changed = jax.tree.map(lambda value: value, variables)
-    changed["params"]["register_embeddings"] = registers.at[:, 0].add(3)
-    altered = jax.jit(trunk.apply)(changed, sequence, valid, mask)
-    assert float(jnp.max(jnp.abs(altered - output))) > 0
+    assert np.isin(_rows(PUBLIC_REGISTER_ROWS), PUBLIC_TIER_ROWS).all()
+    assert np.isin(_rows(PRIVATE_REGISTER_ROWS), PRIVATE_TIER_ROWS).all()
+    assert not np.isin(_rows(PRIVILEGED_REGISTER_ROWS), POLICY_READABLE_ROWS).any()
 
 
-def test_registers_cannot_relay_privileged_inputs_and_match_actor() -> None:
+def test_registers_relay_only_within_their_tier_and_match_actor() -> None:
     # Remove TF32 shape-dependent rounding from the actor/learner comparison.
     with jax.default_matmul_precision("highest"):
-        sequence, valid, mask = inputs(jnp.float32)
-        trunk = Trunk(config(4))
+        sequence, valid, mask = inputs()
+        trunk = Trunk(config())
         variables = jax.jit(trunk.init)(jax.random.key(1), sequence, valid, mask)
         apply = jax.jit(trunk.apply)
         original = apply(variables, sequence, valid, mask)
-        secret = np.setdiff1d(np.arange(NUM_SEQUENCE_ROWS), POLICY_READABLE_ROWS)
-        changed = apply(variables, sequence.at[secret, 0].add(100), valid, mask)
+        # A privileged register carrying secret content reaches VALUE_CLS
+        # and nothing policy-readable.
+        changed = apply(
+            variables,
+            sequence.at[_rows(PRIVILEGED_REGISTER_ROWS), 0].add(100),
+            valid,
+            mask,
+        )
         np.testing.assert_array_equal(
             changed[POLICY_READABLE_ROWS], original[POLICY_READABLE_ROWS]
         )
-        assert float(jnp.max(jnp.abs(changed[secret] - original[secret]))) > 0
-        public_changed = apply(variables, sequence.at[1, 0].add(100), valid, mask)
-        assert (
-            float(
-                jnp.max(
-                    jnp.abs(
-                        public_changed[POLICY_READABLE_ROWS]
-                        - original[POLICY_READABLE_ROWS]
-                    )
-                )
-            )
-            > 0
+        assert not np.allclose(changed[VALUE_CLS_ROW], original[VALUE_CLS_ROW])
+        # A private register reaches the private tier and no public row.
+        changed = apply(
+            variables,
+            sequence.at[_rows(PRIVATE_REGISTER_ROWS), 0].add(100),
+            valid,
+            mask,
         )
+        np.testing.assert_array_equal(
+            changed[PUBLIC_TIER_ROWS], original[PUBLIC_TIER_ROWS]
+        )
+        assert not np.allclose(changed[PRIVATE_TIER_ROWS], original[PRIVATE_TIER_ROWS])
+        # A public register reaches everything: the control that the
+        # registers are live rows, not dead ones.
+        changed = apply(
+            variables, sequence.at[_rows(PUBLIC_REGISTER_ROWS), 0].add(100), valid, mask
+        )
+        assert not np.allclose(changed[PUBLIC_TIER_ROWS], original[PUBLIC_TIER_ROWS])
+        assert not np.allclose(changed[PRIVATE_TIER_ROWS], original[PRIVATE_TIER_ROWS])
+        # The actor's shorter sequence keeps the public and private
+        # registers and computes the same rows.
         actor = apply(
             variables,
             sequence[POLICY_READABLE_ROWS],
@@ -104,39 +110,3 @@ def test_registers_cannot_relay_privileged_inputs_and_match_actor() -> None:
         np.testing.assert_allclose(
             actor, original[POLICY_READABLE_ROWS], atol=2e-5, rtol=2e-5
         )
-
-
-def test_zero_registers_is_exact_legacy_path() -> None:
-    sequence, valid, mask = inputs(jnp.bfloat16)
-    control = Trunk(config(0))
-    legacy_config = config(0)
-    del legacy_config.num_registers
-    legacy = Trunk(legacy_config)
-    variables = jax.jit(control.init)(jax.random.key(2), sequence, valid, mask)
-    assert "register_embeddings" not in variables["params"]
-    actual = jax.jit(control.apply)(variables, sequence, valid, mask)
-    expected = jax.jit(legacy.apply)(variables, sequence, valid, mask)
-    np.testing.assert_array_equal(actual, expected)
-
-
-def test_checkpoint_merge_preserves_blocks_and_seeds_registers() -> None:
-    from rl.online.artifact import merge_params
-
-    sequence, valid, mask = inputs(jnp.float32)
-    old_trunk = Trunk(config(0))
-    new_trunk = Trunk(config(4))
-    old = jax.jit(old_trunk.init)(jax.random.key(3), sequence, valid, mask)
-    fresh = jax.jit(new_trunk.init)(jax.random.key(4), sequence, valid, mask)
-    merged, kept_fresh, dropped = merge_params(fresh, old)
-    assert not dropped
-    assert set(kept_fresh) == {"/params/register_embeddings", "/params/register_norm"}
-    for actual, expected in zip(
-        jax.tree.leaves(merged["params"]["blocks"]),
-        jax.tree.leaves(old["params"]["blocks"]),
-    ):
-        np.testing.assert_array_equal(actual, expected)
-    np.testing.assert_array_equal(
-        merged["params"]["register_embeddings"], fresh["params"]["register_embeddings"]
-    )
-    output = jax.jit(new_trunk.apply)(merged, sequence, valid, mask)
-    assert np.isfinite(np.asarray(output)).all()

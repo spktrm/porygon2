@@ -23,8 +23,11 @@ from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.constants import (
     NUM_SEQUENCE_ROWS,
     OPP_PRIVATE_ROWS,
+    PRIVATE_REGISTER_ROWS,
     PRIVATE_TIER_ROWS,
+    PRIVILEGED_REGISTER_ROWS,
     PUBLIC_CLS_ROW,
+    PUBLIC_REGISTER_ROWS,
     PUBLIC_TIER_ROWS,
     SEQUENCE_READ_MASK,
     VALUE_CLS_ROW,
@@ -39,9 +42,6 @@ WIDTH = 32
 def _trunk_cfg(num_blocks: int = 3) -> ConfigDict:
     cfg = ConfigDict()
     cfg.num_blocks = num_blocks
-    # Registers on: they are the one path every row reads, so a mask hole
-    # would compound through them first.
-    cfg.num_registers = 4
     cfg.num_heads = 2
     cfg.qk_size = 16
     cfg.v_size = 16
@@ -55,6 +55,8 @@ def _trunk_cfg(num_blocks: int = 3) -> ConfigDict:
 _POLICY_READABLE = np.array(
     [
         row not in range(OPP_PRIVATE_ROWS.start, OPP_PRIVATE_ROWS.stop)
+        and row
+        not in range(PRIVILEGED_REGISTER_ROWS.start, PRIVILEGED_REGISTER_ROWS.stop)
         and row not in (VALUE_CLS_ROW, PUBLIC_CLS_ROW)
         for row in range(NUM_SEQUENCE_ROWS)
     ]
@@ -81,15 +83,22 @@ def test_read_mask_partition_is_leak_free_by_construction() -> None:
     )
     others = np.arange(NUM_SEQUENCE_ROWS) != PUBLIC_CLS_ROW
     assert not SEQUENCE_READ_MASK[others, PUBLIC_CLS_ROW].any()
-    # The trunk's shared registers read the keys EVERY query may read
-    # (rl/model/trunk.py): under the nesting that is exactly the public
-    # tier, on the learner's full mask and on the actor's sub-mask alike.
-    np.testing.assert_array_equal(
-        np.flatnonzero(SEQUENCE_READ_MASK.all(axis=0)), PUBLIC_TIER_ROWS
-    )
-    kept = np.flatnonzero(_POLICY_READABLE)
-    sub_mask = SEQUENCE_READ_MASK[np.ix_(kept, kept)]
-    np.testing.assert_array_equal(kept[sub_mask.all(axis=0)], PUBLIC_TIER_ROWS)
+    # The registers are ordinary rows of their tier: public ones read the
+    # public tier, private ones the policy-readable set, privileged ones
+    # the secret partition too -- and the privileged pair is read by
+    # VALUE_CLS and its secret siblings only.
+    public_reg = np.arange(*PUBLIC_REGISTER_ROWS.indices(NUM_SEQUENCE_ROWS))
+    private_reg = np.arange(*PRIVATE_REGISTER_ROWS.indices(NUM_SEQUENCE_ROWS))
+    privileged_reg = np.arange(*PRIVILEGED_REGISTER_ROWS.indices(NUM_SEQUENCE_ROWS))
+    assert np.isin(public_reg, PUBLIC_TIER_ROWS).all()
+    assert np.isin(private_reg, PRIVATE_TIER_ROWS).all()
+    assert not _POLICY_READABLE[privileged_reg].any()
+    assert SEQUENCE_READ_MASK[np.ix_(privileged_reg, _POLICY_READABLE)].all()
+    assert SEQUENCE_READ_MASK[
+        np.ix_(privileged_reg, np.arange(*OPP_PRIVATE_ROWS.indices(NUM_SEQUENCE_ROWS)))
+    ].all()
+    assert not SEQUENCE_READ_MASK[np.ix_(_POLICY_READABLE, privileged_reg)].any()
+    assert SEQUENCE_READ_MASK[VALUE_CLS_ROW, privileged_reg].all()
 
 
 def test_private_rows_are_invisible_to_public_rows_at_depth() -> None:
@@ -126,6 +135,7 @@ def test_secret_rows_are_invisible_to_policy_readable_rows_at_depth() -> None:
     params = trunk.init(jax.random.key(1), sequence, valid, READ_MASK)
 
     perturbed = sequence.at[OPP_PRIVATE_ROWS].add(10.0)
+    perturbed = perturbed.at[PRIVILEGED_REGISTER_ROWS].add(10.0)
     base = np.asarray(trunk.apply(params, sequence, valid, READ_MASK), dtype=np.float32)
     moved = np.asarray(
         trunk.apply(params, perturbed, valid, READ_MASK), dtype=np.float32

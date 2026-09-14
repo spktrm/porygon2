@@ -19,6 +19,39 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Trunk registers are layout rows, two per tier; channel-scaled row cosine — 2026-09-15
+
+User decision after the register-highway question. The trunk no longer
+appends registers: `num_registers`, `register_embeddings`, `register_norm`
+and the derived read set (`all(read_mask, axis=q)`) are gone from
+`rl/model/trunk.py`, and the trunk adds no rows of its own. Three layout
+groups replace them, at the END so no offset moves: `PUBLIC_REGISTER`
+(public tier), `PRIVATE_REGISTER` (private tier), `PRIVILEGED_REGISTER`
+(secret tier: reads policy-readable | secret, read by VALUE_CLS and the
+secret rows only, dropped from the actor with the rest of the learner-only
+partition), `NUM_TRUNK_REGISTERS_PER_TIER = 2`. Sequence 85 → 91 rows,
+groups 14 → 17, actor sequence 77 → 81. The registers are learned
+embeddings in the encoder (`{public,private,privileged}_register_embeddings`)
+and pass through the input norm with their own group scale and group bias
+like every row; panels `player_{public,private,privileged}_register_rms`
+replace the trunk register panels. Why: the old registers' information set
+was a theorem about the mask (they read the keys every query may read,
+which under the nesting happened to be the public tier) and only a test
+kept it true; now it is a declaration in `SEQUENCE_LAYOUT` and the
+privileged critic gets workspace of its own for the first time.
+`tests/test_register_tokens.py` re-pinned: privileged registers reach
+VALUE_CLS and nothing policy-readable, private ones reach the private tier
+and no public row, public ones reach everything (the live-rows control),
+and the actor's 81-row sub-sequence matches the learner's rows.
+Same launch: `row_homogeneity` scales every channel to unit RMS over the
+valid rows before the uncentred cosine and the centred participation. A
+shared 30.0 in one channel over an orthonormal 8-row spread read cosine
+> .99 raw and reads 1/9 scaled; eight rows sharing one direction at
+magnitudes .5–4 still read 1.0. `player_trunk_row_cosine` is NOT
+comparable across this commit; participation is unchanged on every closed
+form the tests carry. Param paths moved (trunk → encoder), group count 17:
+fresh lineage.
+
 ## Public tier in the read mask, and a public critic — 2026-09-15
 
 User decision on the diagnostic read of yhnfmjc7 (voluntary switching 0.36

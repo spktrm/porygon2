@@ -137,6 +137,12 @@ class SequenceGroup(IntEnum):
     # attends over the PUBLIC tier alone and is read by nothing, and sits
     # at the END of the layout so every existing offset survives.
     PUBLIC_CLS = 13
+    # Trunk registers (2026-09-15): learned workspace rows, two per tier,
+    # declared here so the read mask governs them like every other row
+    # rather than the trunk deriving a read set for rows it appends itself.
+    PUBLIC_REGISTER = 14
+    PRIVATE_REGISTER = 15
+    PRIVILEGED_REGISTER = 16
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -145,6 +151,8 @@ assert max(SequenceGroup) == NUM_SEQUENCE_GROUPS - 1, "SequenceGroup must be con
 # (group, row count), in sequence order. The single source of the layout: the
 # offsets, the slices and the per-row group vector are all derived from it, so
 # the arithmetic exists once rather than as a comment beside three literals.
+NUM_TRUNK_REGISTERS_PER_TIER = 2
+
 SEQUENCE_LAYOUT = (
     (SequenceGroup.CLS, 1),
     (SequenceGroup.PUBLIC_ENTITY, NUM_PUBLIC_SLOTS),
@@ -160,6 +168,9 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.HISTORY_ENTITY, NUM_PUBLIC_SLOTS),
     (SequenceGroup.HISTORY_REGISTER, NUM_HISTORY_REGISTERS),
     (SequenceGroup.PUBLIC_CLS, 1),
+    (SequenceGroup.PUBLIC_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
+    (SequenceGroup.PRIVATE_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
+    (SequenceGroup.PRIVILEGED_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -186,9 +197,14 @@ HISTORY_ENTITY_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ENTITY]
 HISTORY_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_REGISTER]
 VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
 PUBLIC_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.PUBLIC_CLS].start
+PUBLIC_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PUBLIC_REGISTER]
+PRIVATE_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVATE_REGISTER]
+PRIVILEGED_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVILEGED_REGISTER]
 FIELD_ROWS = SEQUENCE_SLICES[SequenceGroup.FIELD]
 
-assert NUM_SEQUENCE_ROWS == 81 + NUM_HISTORY_REGISTERS, NUM_SEQUENCE_ROWS
+assert (
+    NUM_SEQUENCE_ROWS == 81 + NUM_HISTORY_REGISTERS + 3 * NUM_TRUNK_REGISTERS_PER_TIER
+), NUM_SEQUENCE_ROWS
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
 assert MOVE_ROWS.stop - MOVE_ROWS.start == len(MOVE_INDICES)
 assert TARGET_ROWS.stop - TARGET_ROWS.start == len(TARGET_SLOT_INDICES)
@@ -205,9 +221,13 @@ assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 #     PREV_ACTION rows the doubles actor's second slot reads for the first
 #     slot's choice this turn): reads PUBLIC and itself. PUBLIC | PRIVATE is the policy's
 #     information set, the POLICY_READABLE partition.
-#   SECRET (OPP_PRIVATE_ROWS) -- the opponent's request truth: readable
-#     ONLY by VALUE_CLS; may itself read the policy-readable rows and its
-#     siblings, because a row's READS leak nothing.
+#   SECRET (OPP_PRIVATE_ROWS, PRIVILEGED_REGISTER_ROWS) -- the opponent's
+#     request truth and the privileged workspace: readable ONLY by
+#     VALUE_CLS; may itself read the policy-readable rows and its siblings,
+#     because a row's READS leak nothing.
+#   Each tier carries two learned register rows (PUBLIC_REGISTER,
+#     PRIVATE_REGISTER, PRIVILEGED_REGISTER): workspace with no input of
+#     its own, governed by its tier's rule and nothing else.
 #   VALUE_CLS -- reads everything but PUBLIC_CLS, read by NOTHING
 #     (out-degree 0). Reading the policy-readable rows (history included)
 #     AS WELL AS the secret partition is what makes the privileged V the
@@ -222,9 +242,8 @@ assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 # residual), and a row's in-edges never rise above its own tier at any
 # block, so no higher-tier content can enter a tier at any depth; and
 # VALUE_CLS, with no out-edge, aggregates without re-broadcasting. The trunk
-# ANDs this matrix into its validity mask every block. The trunk's shared
-# registers read only keys EVERY query may read, which under this nesting
-# is exactly the PUBLIC tier, so they are public-tier memory by construction.
+# ANDs this matrix into its validity mask every block and adds no rows of
+# its own.
 PUBLIC_TIER_GROUPS = frozenset(
     {
         SequenceGroup.PUBLIC_ENTITY,
@@ -234,11 +253,13 @@ PUBLIC_TIER_GROUPS = frozenset(
         SequenceGroup.INFO,
         SequenceGroup.HISTORY_ENTITY,
         SequenceGroup.HISTORY_REGISTER,
+        SequenceGroup.PUBLIC_REGISTER,
     }
 )
 _is_public = np.isin(SEQUENCE_GROUP_IDS, [int(group) for group in PUBLIC_TIER_GROUPS])
 _is_secret = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_secret[OPP_PRIVATE_ROWS] = True
+_is_secret[PRIVILEGED_REGISTER_ROWS] = True
 _is_value_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_value_cls[VALUE_CLS_ROW] = True
 _is_public_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
@@ -282,6 +303,7 @@ LEARNER_ONLY_GROUPS = frozenset(
         SequenceGroup.OPP_PRIVATE_ENTITY,
         SequenceGroup.VALUE_CLS,
         SequenceGroup.PUBLIC_CLS,
+        SequenceGroup.PRIVILEGED_REGISTER,
     }
 )
 POLICY_READABLE_ROWS = np.flatnonzero(_policy_readable)

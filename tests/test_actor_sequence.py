@@ -25,6 +25,7 @@ from rl.model.constants import (
     OPP_PRIVATE_ROWS,
     POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
+    PRIVILEGED_REGISTER_ROWS,
     PUBLIC_CLS_ROW,
     PUBLIC_ROWS,
     PUBLIC_TIER_ROWS,
@@ -45,6 +46,7 @@ def test_actor_rows_are_the_policy_readable_prefix_plus_history() -> None:
             (
                 np.arange(*OPP_PRIVATE_ROWS.indices(NUM_SEQUENCE_ROWS)),
                 [VALUE_CLS_ROW, PUBLIC_CLS_ROW],
+                np.arange(*PRIVILEGED_REGISTER_ROWS.indices(NUM_SEQUENCE_ROWS)),
             )
         ),
     )
