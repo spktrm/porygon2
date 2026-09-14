@@ -38,9 +38,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # are split with a one-row overlap (each chunk's final row is
     # bootstrap-only — trained as row 0 of the next chunk), so train_step
     # sees ONE shape forever. Targets bootstrap at the cut from the
-    # critic — with player_lambda 0.8 the direct reward horizon is ~5
-    # steps, so a 64-step window
-    # changes targets only within a few steps of the boundary.
+    # critic — with player_lambda 0.95 the direct reward horizon is ~20
+    # steps, so a 64-step window changes targets only in its last third.
     player_chunk_length: int = 64
     # Fixed trailing history window stored per chunk (field-history rows;
     # the packed caches store 2x this, matching process_state's
@@ -136,20 +135,20 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # thrash. Staleness cost: at 50 the actors act on params up to ~30s
     # old, and the replay-KL controller cuts reuse if the actor KL climbs.
     main_player_update_steps: int = 50
-    add_player_min_frames: int = int(2e5)
+    add_player_min_frames: int = int(4e5)
     # Backstop ("overdue") add interval. The healthy path — "dominant" adds
     # when main beats every member >0.7 — is ungated above min_frames, so
     # this clock only paces snapshots while the agent is NOT visibly
     # improving. Too short and the league fills with near-copies of main
     # (mirror play with extra staleness) and the stagnation clock goes
-    # hair-trigger; 1.8e7 is ~88k steps at the live batch shape.
-    add_player_max_frames: int = int(1.8e7)
+    # hair-trigger; 3.6e7 is ~176k steps at the live batch shape.
+    add_player_max_frames: int = int(3.6e7)
     # Learner steps before the first historical snapshot joins the league.
-    # Kept low enough that a short (~200k step) run still trains against a
+    # Kept low enough that a ~400k step run still trains against a
     # populated league rather than pure mirror self-play, which produces
     # self-exploiting policies that don't transfer to stylistically alien
-    # opponents.
-    minimum_historical_player_steps: int = int(5e4)
+    # opponents. Setting it above num_steps is the off switch.
+    minimum_historical_player_steps: int = int(1e5)
     league_size: int = 16
     # Once an add pushes the roster past league_size, the lowest-retention
     # snapshots (main's win-rate against them, less a UCB under-sampling
@@ -279,7 +278,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # Value-target lambda. AlphaStar's own choice: TD(lambda=0.8), a
     # short (~5-step) bootstrap horizon. Lower = more bootstrapping and
     # less Monte-Carlo variance.
-    player_lambda: float = 0.8
+    player_lambda: float = 0.95
 
     # The replay KL target is fixed at player_replay_kl_target; the
     # worst-matchup win-rate lives on in _should_add_new_player's
