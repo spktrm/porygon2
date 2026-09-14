@@ -19,63 +19,40 @@ from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.constants import (
     CLS_ROW,
     HISTORY_ENTITY_ROWS,
+    LEARNER_ONLY_GROUPS,
     MOVE_ROWS,
     NUM_POLICY_READABLE_ROWS,
     NUM_SEQUENCE_ROWS,
-    OPP_PRIVATE_ROWS,
     POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
-    PRIVILEGED_REGISTER_ROWS,
-    PUBLIC_CLS_ROW,
     PUBLIC_ROWS,
     PUBLIC_TIER_ROWS,
     SEQUENCE_GROUP_IDS,
     SEQUENCE_READ_MASK,
     TARGET_ROWS,
-    VALUE_CLS_ROW,
-    SequenceGroup,
 )
 from rl.model.heads import HeadParams
 
 
-def test_actor_rows_are_the_policy_readable_prefix_plus_history() -> None:
-    dropped = np.setdiff1d(np.arange(NUM_SEQUENCE_ROWS), POLICY_READABLE_ROWS)
+def test_actor_rows_are_the_policy_readable_prefix() -> None:
+    # The layout lists the learner-only partition last, so the actor's rows
+    # are the identity prefix and nothing shifts between the two paths.
     np.testing.assert_array_equal(
-        dropped,
-        np.concatenate(
-            (
-                np.arange(*OPP_PRIVATE_ROWS.indices(NUM_SEQUENCE_ROWS)),
-                [VALUE_CLS_ROW, PUBLIC_CLS_ROW],
-                np.arange(*PRIVILEGED_REGISTER_ROWS.indices(NUM_SEQUENCE_ROWS)),
-            )
-        ),
+        POLICY_READABLE_ROWS, np.arange(NUM_POLICY_READABLE_ROWS)
     )
-    assert NUM_POLICY_READABLE_ROWS == NUM_SEQUENCE_ROWS - len(dropped)
-    # Every head-read row keeps its absolute index: they all sit below the
-    # first dropped row, and the kept rows are the identity up to there.
-    first_dropped = int(dropped.min())
-    np.testing.assert_array_equal(
-        POLICY_READABLE_ROWS[:first_dropped], np.arange(first_dropped)
-    )
+    dropped = np.arange(NUM_POLICY_READABLE_ROWS, NUM_SEQUENCE_ROWS)
+    learner_only = {int(group) for group in LEARNER_ONLY_GROUPS}
+    assert set(SEQUENCE_GROUP_IDS[dropped].tolist()) == learner_only
+    assert not set(SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS].tolist()) & learner_only
     for row in (
         CLS_ROW,
         PUBLIC_ROWS.stop - 1,
         PRIVATE_ROWS.stop - 1,
         MOVE_ROWS.stop - 1,
         TARGET_ROWS.stop - 1,
+        HISTORY_ENTITY_ROWS.stop - 1,
     ):
-        assert row < first_dropped
-    # The history rows are the ones that move, and nothing indexes them
-    # absolutely on the actor path: they shift down by the number of
-    # dropped rows below them (PUBLIC_CLS is dropped from above).
-    kept_history = np.flatnonzero(
-        SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS] == SequenceGroup.HISTORY_ENTITY
-    )
-    dropped_below = int((dropped < HISTORY_ENTITY_ROWS.start).sum())
-    np.testing.assert_array_equal(
-        kept_history,
-        np.arange(*HISTORY_ENTITY_ROWS.indices(NUM_SEQUENCE_ROWS)) - dropped_below,
-    )
+        assert row < NUM_POLICY_READABLE_ROWS
     # The sub-mask the actor's trunk runs under is the public/private
     # nesting and nothing else: no dropped row took part in it, so the
     # actor's kept rows read exactly what they read in the learner.

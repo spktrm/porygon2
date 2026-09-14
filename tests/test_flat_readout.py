@@ -71,9 +71,14 @@ def test_sequence_layout_is_derived_and_contiguous() -> None:
     assert covered == list(range(NUM_SEQUENCE_ROWS))
     assert SEQUENCE_SLICES[SequenceGroup.CLS].start == CLS_ROW
     # The three slices the readout owns are disjoint -- an off-by-one would
-    # hand a head someone else's rows and nothing else would notice.
-    assert PRIVATE_ROWS.stop == MOVE_ROWS.start
-    assert MOVE_ROWS.stop == TARGET_ROWS.start
+    # hand a head someone else's rows and nothing else would notice. They
+    # are no longer adjacent (TARGET_SLOT sits in the public tier), so the
+    # check is disjointness itself.
+    owned = [
+        set(range(*sl.indices(NUM_SEQUENCE_ROWS)))
+        for sl in (PRIVATE_ROWS, MOVE_ROWS, TARGET_ROWS)
+    ]
+    assert sum(len(rows) for rows in owned) == len(set().union(*owned))
 
 
 def test_every_logit_is_exactly_zero_at_init() -> None:

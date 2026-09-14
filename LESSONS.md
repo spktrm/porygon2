@@ -19,6 +19,24 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Layout ordered by tier — 2026-09-15
+
+Same relaunch, user request: `SEQUENCE_LAYOUT` (and the `SequenceGroup`
+ids) now list the public tier (PUBLIC_ENTITY, TARGET_SLOT, FIELD,
+HISTORY_FIELD, INFO, HISTORY_ENTITY, HISTORY_REGISTER, PUBLIC_REGISTER),
+then the private tier (CLS, PRIVATE_ENTITY, MOVE_SLOT, PREV_ACTION,
+PRIVATE_REGISTER), then the learner-only partition (OPP_PRIVATE_ENTITY,
+PRIVILEGED_REGISTER, PUBLIC_CLS, VALUE_CLS). CLS is row 54, VALUE_CLS 90.
+Consequence: the actor's rows are the identity prefix
+`arange(NUM_POLICY_READABLE_ROWS)` (81), asserted in constants, so the
+HISTORY_ENTITY shift on the actor path and the `_first_dropped_row` / "a
+head reads past the actor's prefix" machinery are gone. The encoder now
+assembles the sequence from a dict keyed by group, in `SEQUENCE_LAYOUT`
+order, checked against the kept rows' group ids -- the order exists once.
+No offset is stable across this commit: anything that cached a row index
+(offline dumps, probes with literal rows) is stale. Numbers move only via
+the group-bias/scale bank index order; fresh lineage anyway.
+
 ## Trunk registers are layout rows, two per tier; channel-scaled row cosine — 2026-09-15
 
 User decision after the register-highway question. The trunk no longer

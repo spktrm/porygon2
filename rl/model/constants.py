@@ -115,34 +115,35 @@ class SequenceGroup(IntEnum):
     deficit the fix is explicit matchup rows, not re-unpacking attributes.
     """
 
-    CLS = 0
-    PUBLIC_ENTITY = 1
-    PRIVATE_ENTITY = 2
-    MOVE_SLOT = 3
-    TARGET_SLOT = 4
-    FIELD = 5
-    HISTORY_FIELD = 6
-    PREV_ACTION = 7
-    INFO = 8
+    # Ordered by tier, which is also the layout order: the public tier (what
+    # both players can see), then the private tier (my request truth), then
+    # the learner-only partition -- so the actor's sequence is the layout's
+    # policy-readable PREFIX and every head index means the same row on
+    # either path.
+    PUBLIC_ENTITY = 0
+    TARGET_SLOT = 1
+    FIELD = 2
+    HISTORY_FIELD = 3
+    INFO = 4
+    HISTORY_ENTITY = 5
+    HISTORY_REGISTER = 6
+    PUBLIC_REGISTER = 7
+    CLS = 8
+    PRIVATE_ENTITY = 9
+    MOVE_SLOT = 10
+    PREV_ACTION = 11
+    PRIVATE_REGISTER = 12
     # The learner-only partition (2026-09-01). OPP_PRIVATE_ENTITY rows carry
-    # the opponent's request truth (their sheet latent); VALUE_CLS
-    # is the one row the privileged value head reads. Both sit at the END of
-    # the layout so every pre-existing offset -- and the adjacency the flat
-    # readout pins -- survives unchanged.
-    OPP_PRIVATE_ENTITY = 9
-    VALUE_CLS = 10
-    HISTORY_ENTITY = 11
-    HISTORY_REGISTER = 12
-    # Learner-only (2026-09-15): the one row the public critic reads. It
-    # attends over the PUBLIC tier alone and is read by nothing, and sits
-    # at the END of the layout so every existing offset survives.
-    PUBLIC_CLS = 13
-    # Trunk registers (2026-09-15): learned workspace rows, two per tier,
-    # declared here so the read mask governs them like every other row
-    # rather than the trunk deriving a read set for rows it appends itself.
-    PUBLIC_REGISTER = 14
-    PRIVATE_REGISTER = 15
-    PRIVILEGED_REGISTER = 16
+    # the opponent's request truth (their sheet latent), PRIVILEGED_REGISTER
+    # the privileged critic's workspace, PUBLIC_CLS and VALUE_CLS the rows
+    # the public and privileged value heads read. The three register groups
+    # (2026-09-15) are learned workspace rows declared here so the read mask
+    # governs them like every other row rather than the trunk deriving a
+    # read set for rows it appends itself.
+    OPP_PRIVATE_ENTITY = 13
+    PRIVILEGED_REGISTER = 14
+    PUBLIC_CLS = 15
+    VALUE_CLS = 16
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -154,23 +155,23 @@ assert max(SequenceGroup) == NUM_SEQUENCE_GROUPS - 1, "SequenceGroup must be con
 NUM_TRUNK_REGISTERS_PER_TIER = 2
 
 SEQUENCE_LAYOUT = (
-    (SequenceGroup.CLS, 1),
     (SequenceGroup.PUBLIC_ENTITY, NUM_PUBLIC_SLOTS),
-    (SequenceGroup.PRIVATE_ENTITY, NUM_PRIVATE_SLOTS),
-    (SequenceGroup.MOVE_SLOT, len(MOVE_INDICES)),
     (SequenceGroup.TARGET_SLOT, len(TARGET_SLOT_INDICES)),
     (SequenceGroup.FIELD, NUM_FIELD_ROWS),
     (SequenceGroup.HISTORY_FIELD, NUM_FIELD_ROWS),
-    (SequenceGroup.PREV_ACTION, 2),
     (SequenceGroup.INFO, 1),
-    (SequenceGroup.OPP_PRIVATE_ENTITY, NUM_PRIVATE_SLOTS),
-    (SequenceGroup.VALUE_CLS, 1),
     (SequenceGroup.HISTORY_ENTITY, NUM_PUBLIC_SLOTS),
     (SequenceGroup.HISTORY_REGISTER, NUM_HISTORY_REGISTERS),
-    (SequenceGroup.PUBLIC_CLS, 1),
     (SequenceGroup.PUBLIC_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
+    (SequenceGroup.CLS, 1),
+    (SequenceGroup.PRIVATE_ENTITY, NUM_PRIVATE_SLOTS),
+    (SequenceGroup.MOVE_SLOT, len(MOVE_INDICES)),
+    (SequenceGroup.PREV_ACTION, 2),
     (SequenceGroup.PRIVATE_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
+    (SequenceGroup.OPP_PRIVATE_ENTITY, NUM_PRIVATE_SLOTS),
     (SequenceGroup.PRIVILEGED_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
+    (SequenceGroup.PUBLIC_CLS, 1),
+    (SequenceGroup.VALUE_CLS, 1),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -186,7 +187,7 @@ SEQUENCE_GROUP_IDS = np.concatenate(
 )
 
 # The rows each head reads. Named so a head never carries an offset literal.
-CLS_ROW = int(_offsets[0])
+CLS_ROW = SEQUENCE_SLICES[SequenceGroup.CLS].start
 PUBLIC_ROWS = SEQUENCE_SLICES[SequenceGroup.PUBLIC_ENTITY]
 OPP_PUBLIC_ROWS = slice(PUBLIC_ROWS.start + NUM_PUBLIC_SLOTS // 2, PUBLIC_ROWS.stop)
 PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVATE_ENTITY]
@@ -287,23 +288,24 @@ assert not SEQUENCE_READ_MASK[:, _is_public_cls][
 PUBLIC_TIER_ROWS = np.flatnonzero(_is_public)
 PRIVATE_TIER_ROWS = np.flatnonzero(_is_private)
 
-# The ACTOR's sequence (2026-09-04): the policy-readable rows alone. At act
-# time the learner-only partition is all-zero input that no policy output
-# reads -- the read mask gives the policy-readable rows no in-edge from it
-# at any block -- yet its rows still cost the private embedder and seven
-# rows of every trunk block. Under cfg.train=False the
-# encoder assembles only these rows and the trunk runs on them with the
-# partition's sub-mask (the PUBLIC/PRIVATE nesting restricted to these
-# rows, which no dropped row took part in), which computes the SAME
-# policy-readable rows the learner computes, up to GEMM shape numerics.
-# Every head reads rows BELOW the first dropped one, so a head's absolute
-# index means the same row in either sequence -- asserted, not assumed.
+# The ACTOR's sequence (2026-09-04; tier-ordered layout 2026-09-15): the
+# policy-readable rows alone. At act time the learner-only partition is
+# all-zero input that no policy output reads -- the read mask gives the
+# policy-readable rows no in-edge from it at any block -- yet its rows
+# would still cost the private embedder and ten rows of every trunk block.
+# Under cfg.train=False the encoder assembles only the policy-readable
+# rows and the trunk runs on them with the mask's leading sub-block, which
+# computes the SAME rows the learner computes, up to GEMM shape numerics.
+# Because the layout lists the learner-only partition LAST, those rows are
+# the prefix arange(NUM_POLICY_READABLE_ROWS): every absolute row index a
+# head carries names the same row in either sequence -- asserted, not
+# assumed.
 LEARNER_ONLY_GROUPS = frozenset(
     {
         SequenceGroup.OPP_PRIVATE_ENTITY,
-        SequenceGroup.VALUE_CLS,
-        SequenceGroup.PUBLIC_CLS,
         SequenceGroup.PRIVILEGED_REGISTER,
+        SequenceGroup.PUBLIC_CLS,
+        SequenceGroup.VALUE_CLS,
     }
 )
 POLICY_READABLE_ROWS = np.flatnonzero(_policy_readable)
@@ -314,20 +316,11 @@ assert (
         ~np.isin(SEQUENCE_GROUP_IDS, [int(group) for group in LEARNER_ONLY_GROUPS])
     )
 ).all(), "the leak partition and the actor's dropped groups disagree"
+assert (
+    POLICY_READABLE_ROWS == np.arange(NUM_POLICY_READABLE_ROWS)
+).all(), "the learner-only partition must be the layout's suffix"
 assert SEQUENCE_READ_MASK[np.ix_(PRIVATE_TIER_ROWS, POLICY_READABLE_ROWS)].all()
 assert SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, PUBLIC_TIER_ROWS)].all()
-_first_dropped_row = min(OPP_PRIVATE_ROWS.start, VALUE_CLS_ROW)
-assert (
-    POLICY_READABLE_ROWS[:_first_dropped_row] == np.arange(_first_dropped_row)
-).all()
-for _head_row in (
-    CLS_ROW,
-    PUBLIC_ROWS.stop - 1,
-    PRIVATE_ROWS.stop - 1,
-    MOVE_ROWS.stop - 1,
-    TARGET_ROWS.stop - 1,
-):
-    assert _head_row < _first_dropped_row, "a head reads past the actor's prefix"
 
 # Public rows 0-5 are mine and 6-11 theirs, actives first, so my active i is
 # public row i and theirs is row NUM_PUBLIC_SLOTS // 2 + i. The four

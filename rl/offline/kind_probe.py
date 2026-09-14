@@ -46,7 +46,8 @@ from rl.environment.protos.features_pb2 import (  # noqa: E402
     MovesetFeature,
 )
 from rl.model.config import get_player_model_config  # noqa: E402
-from rl.model.constants import (  # noqa: E402
+from rl.model.constants import CLS_ROW  # noqa: E402
+from rl.model.constants import (
     ENEMY_TARGET_ROWS,
     HISTORY_ENTITY_ROWS,
     MOVE_ROWS,
@@ -132,7 +133,7 @@ def collect(net, variables, tables, chunks, batch_size, steps_per_chunk, rng):
             steps = rng.choice(steps, min(steps_per_chunk, len(steps)), replace=False)
             for time_index in steps:
                 sequence = stack[time_index, batch_index]
-                live = np.linalg.norm(sequence[0], axis=-1) > 0
+                live = np.linalg.norm(sequence[CLS_ROW], axis=-1) > 0
                 # Public rows + their history rows: species types, hp, active.
                 for slot, row in enumerate(
                     range(*PUBLIC_ROWS.indices(sequence.shape[1]))

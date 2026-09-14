@@ -55,7 +55,9 @@ from rl.model.constants import (
     PRIVATE_TOKEN_TYPES,
     PUBLIC_TOKEN_TYPES,
     SEQUENCE_GROUP_IDS,
+    SEQUENCE_LAYOUT,
     SEQUENCE_READ_MASK,
+    SequenceGroup,
 )
 from rl.model.features import (
     binary_scale_encoding,
@@ -828,16 +830,6 @@ class Encoder(nn.Module):
         )
         history_entity_rows = history_row_states.astype(dtype)
 
-        learner_only_parts = []
-        if self.cfg.train:
-            opp_private_rows, opp_private_valid = self._embed_private_entities(
-                env_step.opp_private_team
-            )
-            learner_only_parts = [
-                (opp_private_rows.astype(dtype), opp_private_valid),
-                (self.value_cls_embedding.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
-            ]
-
         move_rows, move_revealed = self._embed_moves(env_step.my_moveset)
         move_rows = move_rows + jnp.where(
             jnp.asarray(IS_WILDCARD_MOVE_SLOT)[:, None],
@@ -904,37 +896,79 @@ class Encoder(nn.Module):
             target_slot_valid[ally_rows] | (switch_legal & ally_slot_active)
         )
 
-        parts = [
-            (self.cls_embedding.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
-            (public_rows.astype(dtype), public_valid),
-            (private_rows.astype(dtype), private_valid),
-            (move_rows.astype(dtype), move_revealed & move_slot_valid),
-            (target_rows, target_slot_valid),
-            (field_rows.astype(dtype), jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_)),
-            (history_field_rows, jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_)),
-            (prev_action_rows, jnp.full(2, has_prev_action)),
-            (info_row.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
-            *learner_only_parts,
-            (history_entity_rows, history_row_valid),
-            (
+        register_valid = jnp.ones(NUM_TRUNK_REGISTERS_PER_TIER, dtype=jnp.bool_)
+        parts = {
+            SequenceGroup.PUBLIC_ENTITY: (public_rows.astype(dtype), public_valid),
+            SequenceGroup.TARGET_SLOT: (target_rows, target_slot_valid),
+            SequenceGroup.FIELD: (
+                field_rows.astype(dtype),
+                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
+            ),
+            SequenceGroup.HISTORY_FIELD: (
+                history_field_rows,
+                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
+            ),
+            SequenceGroup.INFO: (info_row.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
+            SequenceGroup.HISTORY_ENTITY: (history_entity_rows, history_row_valid),
+            SequenceGroup.HISTORY_REGISTER: (
                 history_register_states.astype(dtype),
                 jnp.ones(NUM_HISTORY_REGISTERS, jnp.bool_),
             ),
-        ]
-        register_valid = jnp.ones(NUM_TRUNK_REGISTERS_PER_TIER, dtype=jnp.bool_)
+            SequenceGroup.PUBLIC_REGISTER: (
+                self.public_register_embeddings.astype(dtype),
+                register_valid,
+            ),
+            SequenceGroup.CLS: (
+                self.cls_embedding.astype(dtype),
+                jnp.ones(1, dtype=jnp.bool_),
+            ),
+            SequenceGroup.PRIVATE_ENTITY: (private_rows.astype(dtype), private_valid),
+            SequenceGroup.MOVE_SLOT: (
+                move_rows.astype(dtype),
+                move_revealed & move_slot_valid,
+            ),
+            SequenceGroup.PREV_ACTION: (prev_action_rows, jnp.full(2, has_prev_action)),
+            SequenceGroup.PRIVATE_REGISTER: (
+                self.private_register_embeddings.astype(dtype),
+                register_valid,
+            ),
+        }
         if self.cfg.train:
-            parts.append(
-                (self.public_cls_embedding.astype(dtype), jnp.ones(1, dtype=jnp.bool_))
+            opp_private_rows, opp_private_valid = self._embed_private_entities(
+                env_step.opp_private_team
             )
-        parts.append((self.public_register_embeddings.astype(dtype), register_valid))
-        parts.append((self.private_register_embeddings.astype(dtype), register_valid))
-        if self.cfg.train:
-            parts.append(
-                (self.privileged_register_embeddings.astype(dtype), register_valid)
+            parts.update(
+                {
+                    SequenceGroup.OPP_PRIVATE_ENTITY: (
+                        opp_private_rows.astype(dtype),
+                        opp_private_valid,
+                    ),
+                    SequenceGroup.PRIVILEGED_REGISTER: (
+                        self.privileged_register_embeddings.astype(dtype),
+                        register_valid,
+                    ),
+                    SequenceGroup.PUBLIC_CLS: (
+                        self.public_cls_embedding.astype(dtype),
+                        jnp.ones(1, dtype=jnp.bool_),
+                    ),
+                    SequenceGroup.VALUE_CLS: (
+                        self.value_cls_embedding.astype(dtype),
+                        jnp.ones(1, dtype=jnp.bool_),
+                    ),
+                }
             )
-        sequence = jnp.concatenate([rows for rows, _ in parts], axis=0)
-        row_valid = jnp.concatenate([valid for _, valid in parts])
+        # Assembled in LAYOUT order from a dict keyed by group, so the order
+        # exists once, in constants.py; the check is against the kept rows'
+        # group ids, not just their count.
         kept_rows = self.kept_rows()
+        kept_groups = [group for group, _ in SEQUENCE_LAYOUT if group in parts]
+        assert [int(group) for group in kept_groups] == sorted(
+            set(SEQUENCE_GROUP_IDS[kept_rows].tolist()),
+            key=[int(group) for group, _ in SEQUENCE_LAYOUT].index,
+        ), kept_groups
+        sequence = jnp.concatenate([parts[group][0] for group in kept_groups], axis=0)
+        row_valid = jnp.concatenate([parts[group][1] for group in kept_groups])
+        assert sequence.shape[0] == len(kept_rows), sequence.shape
         assert sequence.shape[0] == len(kept_rows), sequence.shape
 
         # Content RMS must not rescale the shared semantic identities.
