@@ -201,8 +201,9 @@ assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 #     targets built from them, the field, the request info, the history):
 #     reads only itself, so its content is a function of public state alone
 #     -- the common-knowledge representation a human replay also contains.
-#   PRIVATE -- my request truth (CLS, my sheet, my move slots, my previous
-#     choice): reads PUBLIC and itself. PUBLIC | PRIVATE is the policy's
+#   PRIVATE -- my request truth (CLS, my sheet, my move slots, and the
+#     PREV_ACTION rows the doubles actor's second slot reads for the first
+#     slot's choice this turn): reads PUBLIC and itself. PUBLIC | PRIVATE is the policy's
 #     information set, the POLICY_READABLE partition.
 #   SECRET (OPP_PRIVATE_ROWS) -- the opponent's request truth: readable
 #     ONLY by VALUE_CLS; may itself read the policy-readable rows and its

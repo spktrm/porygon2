@@ -27,12 +27,13 @@ since 4a9e69c). Structure, numbers move:
 - `SEQUENCE_READ_MASK` is now four nested tiers. PUBLIC (the 12 public
   entity views, the target slots, field, recurrent field, request info,
   history entities and registers: 52 rows) reads only itself; PRIVATE (CLS,
-  my sheet, my move slots, my previous choice: 25 rows) reads PUBLIC and
+  my sheet, my move slots, PREV_ACTION: 25 rows) reads PUBLIC and
   itself; SECRET and VALUE_CLS as before. The trunk's shared registers read
   the keys every query may read, which under the nesting is exactly the
   PUBLIC tier -- they are public-tier memory now, not policy-readable
-  memory. PREV_ACTION is private because a chosen move that never executed
-  is not in the log; INFO (request type, active count) and the targets are
+  memory. PREV_ACTION is private because it is my own slot's choice this
+  turn, read by the doubles actor's second decision slot (HAS_PREV_ACTION
+  is 0 on every singles request); INFO (request type, active count) and the targets are
   public because they are.
 - `PUBLIC_CLS` (group 13, row 84, at the END of the layout so no offset
   moved) reads PUBLIC and itself, out-degree 0, learner-only, dropped from
