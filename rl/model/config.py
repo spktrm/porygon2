@@ -109,6 +109,16 @@ def get_player_model_config(
         len(CAT_VF_SUPPORT),
     )
     cfg.priv_v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The public critic (2026-09-15): same shape again, reading PUBLIC_CLS,
+    # the row that attends over the public tier alone. Learner-only.
+    cfg.public_v_head = ConfigDict()
+    cfg.public_v_head.mlp = ConfigDict()
+    cfg.public_v_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        len(CAT_VF_SUPPORT),
+    )
+    cfg.public_v_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
     # The PBRS potential channel's value head (2026-09-11): learner-only and
     # built only when the learner's player_potential_strength > 0 (main.py
     # sets `enabled`). One scalar in unit potential units, zero at init so a

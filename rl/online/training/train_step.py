@@ -431,6 +431,17 @@ def train_step(
             ),
             value_mask,
         )
+        # The public critic: the same labels and mask a third time, over
+        # the public tier alone -- what the common-knowledge state is worth
+        # under the current policies, with nothing private in reach.
+        learner_public_value_head = learner_player_pred.public_value_head
+        loss_v_win_public = average(
+            optax.softmax_cross_entropy(
+                logits=learner_public_value_head.logits.astype(jnp.float32),
+                labels=player_targets.win_returns.astype(jnp.float32),
+            ),
+            value_mask,
+        )
         # The PBRS potential channel's head (2026-09-11): regressed on its
         # own channel returns over live nonterminal rows (its value is forced
         # 0 on done rows, so their label carries nothing). Coefficient 1:
@@ -590,6 +601,7 @@ def train_step(
             # v: one critic, on the deploy-time information set.
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
+            + config.player_public_value_head_loss_coef * loss_v_win_public
             # The potential channel's head, unscaled (see above).
             + loss_potential
         )
@@ -598,6 +610,7 @@ def train_step(
             **pg_logs,
             player_loss_v_win=loss_v_win,
             player_loss_v_win_priv=loss_v_win_priv,
+            player_loss_v_win_public=loss_v_win_public,
             # Trunk over-smoothing (cosine up / participation down = rows
             # converging); the offline per-block twin is
             # rl/offline/trunk_homogeneity.py.
@@ -672,6 +685,11 @@ def train_step(
             # pre-registered abort.
             player_priv_value_head_r2=calculate_r2(
                 value_prediction=learner_priv_value_head.expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
+            player_public_value_head_r2=calculate_r2(
+                value_prediction=learner_public_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=value_mask,
             ),

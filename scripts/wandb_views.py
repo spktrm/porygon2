@@ -179,6 +179,7 @@ def rl_sections():
                         # sustained past 30k is the abort.
                         "player_value_head_r2",
                         "player_priv_value_head_r2",
+                        "player_public_value_head_r2",
                     ],
                     range_y=(-1, 1),
                 ),
@@ -503,7 +504,11 @@ def rl_sections():
                     # (deployable = matched control, privileged = the
                     # estimator under player_privileged_targets).
                     "Value loss (deploy vs privileged)",
-                    ["player_loss_v_win", "player_loss_v_win_priv"],
+                    [
+                        "player_loss_v_win",
+                        "player_loss_v_win_priv",
+                        "player_loss_v_win_public",
+                    ],
                 ),
                 lp(
                     # Mean |priv - deploy| expectation, re-measured live.

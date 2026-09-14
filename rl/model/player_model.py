@@ -28,6 +28,7 @@ from rl.model.constants import (
     CLS_ROW,
     MOVE_ROWS,
     PRIVATE_ROWS,
+    PUBLIC_CLS_ROW,
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
@@ -78,6 +79,9 @@ class Porygon2PlayerModel(nn.Module):
         # params exist in the learner-initialised tree and an actor apply
         # never visits them; nothing at deploy consumes its output.
         self.priv_v_head = CategoricalValueLogitHead(self.cfg.priv_v_head)
+        # The public critic (2026-09-15): the same head over PUBLIC_CLS, a
+        # value of the common-knowledge state alone. Learner-only likewise.
+        self.public_v_head = CategoricalValueLogitHead(self.cfg.public_v_head)
         # The PBRS potential channel's value (2026-09-11): learner-only, and
         # absent unless the channel runs, so strength 0 keeps today's tree.
         if self.cfg.potential_head.enabled:
@@ -384,6 +388,7 @@ class Porygon2PlayerModel(nn.Module):
             learner_only = {
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
+                "public_value_head": self.public_v_head(sequence[PUBLIC_CLS_ROW]),
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
                 "trunk_out_group_l2_sum": group_l2_sum,

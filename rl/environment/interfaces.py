@@ -111,6 +111,10 @@ class PlayerActorOutput:
     priv_value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
+    # Learner-only (2026-09-15): the public critic over the PUBLIC_CLS row.
+    public_value_head: CategoricalValueHeadOutput = field(
+        default_factory=CategoricalValueHeadOutput
+    )
     # Learner-only (2026-09-11): the potential channel's value, in unit
     # potential units (targets.compute_player_targets). Built only when
     # player_potential_strength > 0.

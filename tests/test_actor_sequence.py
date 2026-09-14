@@ -25,7 +25,9 @@ from rl.model.constants import (
     OPP_PRIVATE_ROWS,
     POLICY_READABLE_ROWS,
     PRIVATE_ROWS,
+    PUBLIC_CLS_ROW,
     PUBLIC_ROWS,
+    PUBLIC_TIER_ROWS,
     SEQUENCE_GROUP_IDS,
     SEQUENCE_READ_MASK,
     TARGET_ROWS,
@@ -40,7 +42,10 @@ def test_actor_rows_are_the_policy_readable_prefix_plus_history() -> None:
     np.testing.assert_array_equal(
         dropped,
         np.concatenate(
-            (np.arange(*OPP_PRIVATE_ROWS.indices(NUM_SEQUENCE_ROWS)), [VALUE_CLS_ROW])
+            (
+                np.arange(*OPP_PRIVATE_ROWS.indices(NUM_SEQUENCE_ROWS)),
+                [VALUE_CLS_ROW, PUBLIC_CLS_ROW],
+            )
         ),
     )
     assert NUM_POLICY_READABLE_ROWS == NUM_SEQUENCE_ROWS - len(dropped)
@@ -59,17 +64,24 @@ def test_actor_rows_are_the_policy_readable_prefix_plus_history() -> None:
     ):
         assert row < first_dropped
     # The history rows are the ones that move, and nothing indexes them
-    # absolutely on the actor path: they shift down by the dropped count.
+    # absolutely on the actor path: they shift down by the number of
+    # dropped rows below them (PUBLIC_CLS is dropped from above).
     kept_history = np.flatnonzero(
         SEQUENCE_GROUP_IDS[POLICY_READABLE_ROWS] == SequenceGroup.HISTORY_ENTITY
     )
+    dropped_below = int((dropped < HISTORY_ENTITY_ROWS.start).sum())
     np.testing.assert_array_equal(
         kept_history,
-        np.arange(*HISTORY_ENTITY_ROWS.indices(NUM_SEQUENCE_ROWS)) - len(dropped),
+        np.arange(*HISTORY_ENTITY_ROWS.indices(NUM_SEQUENCE_ROWS)) - dropped_below,
     )
-    # The sub-mask the actor's trunk runs under is all-True: the kept rows
-    # read each other freely, so no mask is being dropped with the rows.
-    assert SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, POLICY_READABLE_ROWS)].all()
+    # The sub-mask the actor's trunk runs under is the public/private
+    # nesting and nothing else: no dropped row took part in it, so the
+    # actor's kept rows read exactly what they read in the learner.
+    sub_mask = SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, POLICY_READABLE_ROWS)]
+    kept_public = np.isin(POLICY_READABLE_ROWS, PUBLIC_TIER_ROWS)
+    assert sub_mask[~kept_public].all()
+    assert sub_mask[np.ix_(kept_public, kept_public)].all()
+    assert not sub_mask[np.ix_(kept_public, ~kept_public)].any()
 
 
 @pytest.mark.gpu

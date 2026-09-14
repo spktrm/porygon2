@@ -19,6 +19,49 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Public tier in the read mask, and a public critic — 2026-09-15
+
+User decision on the diagnostic read of yhnfmjc7 (voluntary switching 0.36
+→ 0.009 by 197k, switch mass 0.11 → 0.005, no mass-independent term live
+since 4a9e69c). Structure, numbers move:
+- `SEQUENCE_READ_MASK` is now four nested tiers. PUBLIC (the 12 public
+  entity views, the target slots, field, recurrent field, request info,
+  history entities and registers: 52 rows) reads only itself; PRIVATE (CLS,
+  my sheet, my move slots, my previous choice: 25 rows) reads PUBLIC and
+  itself; SECRET and VALUE_CLS as before. The trunk's shared registers read
+  the keys every query may read, which under the nesting is exactly the
+  PUBLIC tier -- they are public-tier memory now, not policy-readable
+  memory. PREV_ACTION is private because a chosen move that never executed
+  is not in the log; INFO (request type, active count) and the targets are
+  public because they are.
+- `PUBLIC_CLS` (group 13, row 84, at the END of the layout so no offset
+  moved) reads PUBLIC and itself, out-degree 0, learner-only, dropped from
+  the actor's sequence like VALUE_CLS. `public_v_head` reads it, trained on
+  the same win_returns and mask as the deployable and privileged critics at
+  coefficient 1 (`player_public_value_head_loss_coef`); panels
+  `player_public_value_head_r2`, `player_loss_v_win_public` beside their
+  twins. It feeds no target. Its point: a value of the common-knowledge
+  state that a human replay could also label with the SAME rows -- the
+  precondition for training it off replays inside the no-human-signal rule
+  (potential channel only) rather than with a separate offline model.
+- Group count 13 → 14 changes the per-group norm scale/bias shapes: a
+  strict resume from any earlier checkpoint fails; params-mode falls back
+  to fresh init for those leaves. Launched as a fresh lineage.
+- Same launch, separate commit: `player_lambda` 0.8 → 0.95 (credit
+  horizon ~5 → ~20 requests, so the switch row's own trace reaches the
+  realised outcome after it rather than V five steps out; the trace is
+  still cut at the switch row by rho = pi_old/mu for the rows BEFORE it);
+  league pacing doubled -- `add_player_min_frames` 2e5 → 4e5,
+  `add_player_max_frames` 1.8e7 → 3.6e7, `minimum_historical_player_steps`
+  5e4 → 1e5. There is no league off switch; `minimum_historical_player_steps`
+  above `num_steps` is the off.
+- Tests: `test_private_rows_are_invisible_to_public_rows_at_depth` (trunk,
+  3 blocks, controls: private rows move, a public perturbation reaches
+  public peers), PUBLIC_CLS in/out-degree pinned, slow
+  `test_own_private_team_cannot_reach_the_public_critic` (deployable V
+  moves as the control). Reference numbers to read at the relaunch:
+  public R2 vs deployable 0.81 / privileged 0.83 at 197k on yhnfmjc7.
+
 ## APPO actor: old-policy snapshot and clipped surrogate — 2026-09-14
 
 User-directed completion of the FootsiesGym alignment below, whose ledger

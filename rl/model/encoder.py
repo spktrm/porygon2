@@ -186,6 +186,9 @@ class Encoder(nn.Module):
         self.value_cls_embedding = self.param(
             "value_cls_embedding", embedding_init, (1, entity_size)
         )
+        self.public_cls_embedding = self.param(
+            "public_cls_embedding", embedding_init, (1, entity_size)
+        )
         self.prev_action_src_bias = self.param(
             "prev_action_src_bias", embedding_init, (1, entity_size)
         )
@@ -797,7 +800,8 @@ class Encoder(nn.Module):
         candidate move slots, the 17 target slots, the field triple, the
         recurrent field triple, the two previous-action rows, the request
         info row, the learner-only partition's 6 opponent sheet rows and
-        VALUE_CLS row, 12 HISTORY_ENTITY rows and four recurrent registers.
+        VALUE_CLS row, 12 HISTORY_ENTITY rows, four recurrent registers and
+        the learner-only PUBLIC_CLS row.
         Every identity a row
         carries is additive, and the layout itself lives in
         `rl/model/constants.py` so the offsets exist once.
@@ -905,6 +909,10 @@ class Encoder(nn.Module):
                 jnp.ones(NUM_HISTORY_REGISTERS, jnp.bool_),
             ),
         ]
+        if self.cfg.train:
+            parts.append(
+                (self.public_cls_embedding.astype(dtype), jnp.ones(1, dtype=jnp.bool_))
+            )
         sequence = jnp.concatenate([rows for rows, _ in parts], axis=0)
         row_valid = jnp.concatenate([valid for _, valid in parts])
         kept_rows = self.kept_rows()

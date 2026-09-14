@@ -133,6 +133,10 @@ class SequenceGroup(IntEnum):
     VALUE_CLS = 10
     HISTORY_ENTITY = 11
     HISTORY_REGISTER = 12
+    # Learner-only (2026-09-15): the one row the public critic reads. It
+    # attends over the PUBLIC tier alone and is read by nothing, and sits
+    # at the END of the layout so every existing offset survives.
+    PUBLIC_CLS = 13
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -155,6 +159,7 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.VALUE_CLS, 1),
     (SequenceGroup.HISTORY_ENTITY, NUM_PUBLIC_SLOTS),
     (SequenceGroup.HISTORY_REGISTER, NUM_HISTORY_REGISTERS),
+    (SequenceGroup.PUBLIC_CLS, 1),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -180,47 +185,85 @@ OPP_PRIVATE_ROWS = SEQUENCE_SLICES[SequenceGroup.OPP_PRIVATE_ENTITY]
 HISTORY_ENTITY_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ENTITY]
 HISTORY_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_REGISTER]
 VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
+PUBLIC_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.PUBLIC_CLS].start
 FIELD_ROWS = SEQUENCE_SLICES[SequenceGroup.FIELD]
 
-assert NUM_SEQUENCE_ROWS == 80 + NUM_HISTORY_REGISTERS, NUM_SEQUENCE_ROWS
+assert NUM_SEQUENCE_ROWS == 81 + NUM_HISTORY_REGISTERS, NUM_SEQUENCE_ROWS
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
 assert MOVE_ROWS.stop - MOVE_ROWS.start == len(MOVE_INDICES)
 assert TARGET_ROWS.stop - TARGET_ROWS.start == len(TARGET_SLOT_INDICES)
 assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 
-# ---- the leak partition (2026-09-01) ---------------------------------------
-# R[q, k]: query row q may attend to key row k. Three sets:
-#   POLICY_READABLE -- rows 0..60 and 68..79 (the HISTORY_ENTITY block
-#     added 2026-09-01): reads only itself.
-#   SECRET (OPP_PRIVATE_ROWS) -- the opponent's request truth: readable ONLY
-#     by VALUE_CLS; may itself read the policy-readable rows and its
+# ---- the leak partition (2026-09-01; public tier 2026-09-15) --------------
+# R[q, k]: query row q may attend to key row k. Four nested sets, each
+# reading itself and everything below it:
+#   PUBLIC -- the rows both players can see (the public entity views, the
+#     targets built from them, the field, the request info, the history):
+#     reads only itself, so its content is a function of public state alone
+#     -- the common-knowledge representation a human replay also contains.
+#   PRIVATE -- my request truth (CLS, my sheet, my move slots, my previous
+#     choice): reads PUBLIC and itself. PUBLIC | PRIVATE is the policy's
+#     information set, the POLICY_READABLE partition.
+#   SECRET (OPP_PRIVATE_ROWS) -- the opponent's request truth: readable
+#     ONLY by VALUE_CLS; may itself read the policy-readable rows and its
 #     siblings, because a row's READS leak nothing.
-#   VALUE_CLS -- reads everything, read by NOTHING (out-degree 0). Reading
-#     the policy-readable rows (history included) AS WELL AS the secret
-#     partition is what makes the privileged V the (history, state)-
-#     conditioned asymmetric critic -- unbiased for the policy's returns
-#     (Baisero & Amato 2022); a state-only critic is the biased form.
+#   VALUE_CLS -- reads everything but PUBLIC_CLS, read by NOTHING
+#     (out-degree 0). Reading the policy-readable rows (history included)
+#     AS WELL AS the secret partition is what makes the privileged V the
+#     (history, state)-conditioned asymmetric critic -- unbiased for the
+#     policy's returns (Baisero & Amato 2022); a state-only critic is the
+#     biased form.
+#   PUBLIC_CLS -- reads the PUBLIC tier and itself, read by NOTHING: the
+#     public critic's row, a value of the common-knowledge state that a
+#     human replay could also label.
 # Leak-freedom is transitive by induction over blocks: a row's content after
 # block b is a function of its in-edges' contents at block b-1 (plus its own
-# residual), and a policy-readable row's in-edges are policy-readable at
-# every block, so no secret content can enter the set at any depth; and
+# residual), and a row's in-edges never rise above its own tier at any
+# block, so no higher-tier content can enter a tier at any depth; and
 # VALUE_CLS, with no out-edge, aggregates without re-broadcasting. The trunk
-# ANDs this matrix into its validity mask every block.
+# ANDs this matrix into its validity mask every block. The trunk's shared
+# registers read only keys EVERY query may read, which under this nesting
+# is exactly the PUBLIC tier, so they are public-tier memory by construction.
+PUBLIC_TIER_GROUPS = frozenset(
+    {
+        SequenceGroup.PUBLIC_ENTITY,
+        SequenceGroup.TARGET_SLOT,
+        SequenceGroup.FIELD,
+        SequenceGroup.HISTORY_FIELD,
+        SequenceGroup.INFO,
+        SequenceGroup.HISTORY_ENTITY,
+        SequenceGroup.HISTORY_REGISTER,
+    }
+)
+_is_public = np.isin(SEQUENCE_GROUP_IDS, [int(group) for group in PUBLIC_TIER_GROUPS])
 _is_secret = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_secret[OPP_PRIVATE_ROWS] = True
 _is_value_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_value_cls[VALUE_CLS_ROW] = True
-_policy_readable = ~(_is_secret | _is_value_cls)
+_is_public_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
+_is_public_cls[PUBLIC_CLS_ROW] = True
+_policy_readable = ~(_is_secret | _is_value_cls | _is_public_cls)
+_is_private = _policy_readable & ~_is_public
 SEQUENCE_READ_MASK = np.zeros((NUM_SEQUENCE_ROWS, NUM_SEQUENCE_ROWS), dtype=bool)
-SEQUENCE_READ_MASK[np.ix_(_policy_readable, _policy_readable)] = True
+SEQUENCE_READ_MASK[np.ix_(_is_public, _is_public)] = True
+SEQUENCE_READ_MASK[np.ix_(_is_private, _policy_readable)] = True
 SEQUENCE_READ_MASK[np.ix_(_is_secret, _policy_readable | _is_secret)] = True
-SEQUENCE_READ_MASK[_is_value_cls, :] = True
+SEQUENCE_READ_MASK[np.ix_(_is_public_cls, _is_public | _is_public_cls)] = True
+SEQUENCE_READ_MASK[np.ix_(_is_value_cls, ~_is_public_cls)] = True
+assert not SEQUENCE_READ_MASK[
+    np.ix_(_is_public, ~_is_public)
+].any(), "leak: a public row may attend outside the public tier"
 assert not SEQUENCE_READ_MASK[
     np.ix_(_policy_readable, ~_policy_readable)
 ].any(), "leak: a policy-readable row may attend to the learner-only partition"
 assert not SEQUENCE_READ_MASK[:, _is_value_cls][
     ~_is_value_cls
 ].any(), "leak: VALUE_CLS must have out-degree 0"
+assert not SEQUENCE_READ_MASK[:, _is_public_cls][
+    ~_is_public_cls
+].any(), "leak: PUBLIC_CLS must have out-degree 0"
+PUBLIC_TIER_ROWS = np.flatnonzero(_is_public)
+PRIVATE_TIER_ROWS = np.flatnonzero(_is_private)
 
 # The ACTOR's sequence (2026-09-04): the policy-readable rows alone. At act
 # time the learner-only partition is all-zero input that no policy output
@@ -228,12 +271,17 @@ assert not SEQUENCE_READ_MASK[:, _is_value_cls][
 # at any block -- yet its rows still cost the private embedder and seven
 # rows of every trunk block. Under cfg.train=False the
 # encoder assembles only these rows and the trunk runs on them with the
-# partition's sub-mask (all True by construction), which computes the SAME
+# partition's sub-mask (the PUBLIC/PRIVATE nesting restricted to these
+# rows, which no dropped row took part in), which computes the SAME
 # policy-readable rows the learner computes, up to GEMM shape numerics.
 # Every head reads rows BELOW the first dropped one, so a head's absolute
 # index means the same row in either sequence -- asserted, not assumed.
 LEARNER_ONLY_GROUPS = frozenset(
-    {SequenceGroup.OPP_PRIVATE_ENTITY, SequenceGroup.VALUE_CLS}
+    {
+        SequenceGroup.OPP_PRIVATE_ENTITY,
+        SequenceGroup.VALUE_CLS,
+        SequenceGroup.PUBLIC_CLS,
+    }
 )
 POLICY_READABLE_ROWS = np.flatnonzero(_policy_readable)
 NUM_POLICY_READABLE_ROWS = len(POLICY_READABLE_ROWS)
@@ -243,7 +291,8 @@ assert (
         ~np.isin(SEQUENCE_GROUP_IDS, [int(group) for group in LEARNER_ONLY_GROUPS])
     )
 ).all(), "the leak partition and the actor's dropped groups disagree"
-assert SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, POLICY_READABLE_ROWS)].all()
+assert SEQUENCE_READ_MASK[np.ix_(PRIVATE_TIER_ROWS, POLICY_READABLE_ROWS)].all()
+assert SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, PUBLIC_TIER_ROWS)].all()
 _first_dropped_row = min(OPP_PRIVATE_ROWS.start, VALUE_CLS_ROW)
 assert (
     POLICY_READABLE_ROWS[:_first_dropped_row] == np.arange(_first_dropped_row)

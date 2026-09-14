@@ -308,6 +308,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # The privileged critic: trained beside the deployable head
     # on the SAME win_returns; its CE carries this coefficient.
     player_priv_value_head_loss_coef: float = 1.0
+    # The public critic: the same labels again, over the public tier only.
+    player_public_value_head_loss_coef: float = 1.0
     # True routes the v-trace value bootstraps -- and therefore
     # pg_advantages -- through the privileged head. False is the exact
     # deployable-head estimator, the live fallback: the

@@ -16,6 +16,8 @@ from rl.model.constants import (
     NUM_HISTORY_STATE_ROWS,
     OPP_PRIVATE_ROWS,
     POLICY_READABLE_ROWS,
+    PRIVATE_TIER_ROWS,
+    PUBLIC_TIER_ROWS,
     SEQUENCE_READ_MASK,
     VALUE_CLS_ROW,
 )
@@ -224,5 +226,6 @@ def test_history_registers_are_policy_readable_and_cannot_read_private_rows():
         np.arange(OPP_PRIVATE_ROWS.start, OPP_PRIVATE_ROWS.stop), VALUE_CLS_ROW
     ]
     assert not SEQUENCE_READ_MASK[np.ix_(register_rows, secret_rows)].any()
+    assert not SEQUENCE_READ_MASK[np.ix_(register_rows, PRIVATE_TIER_ROWS)].any()
     assert SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, register_rows)].all()
-    assert SEQUENCE_READ_MASK[np.ix_(register_rows, POLICY_READABLE_ROWS)].all()
+    assert SEQUENCE_READ_MASK[np.ix_(register_rows, PUBLIC_TIER_ROWS)].all()
