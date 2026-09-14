@@ -410,6 +410,7 @@ class TestResolveRunSetup:
             debug=False,
             load_mode=None,
             init_ckpt=None,
+            ckpt_subdir=None,
             num_steps=None,
             br_target=None,
             run_tag=None,
@@ -429,6 +430,112 @@ class TestResolveRunSetup:
         )
         assert (mode, init_ckpt, job_name) == ("checkpoint", None, "main")
         assert config.br_target_ckpt is None and config.ckpt_subdir is None
+
+    @pytest.mark.parametrize("mode", ["params", "scratch"])
+    @pytest.mark.parametrize("existing_empty", [False, True])
+    def test_new_main_lineage_uses_own_root(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mode: str,
+        existing_empty: bool,
+    ) -> None:
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        generation_root = tmp_path / "ckpts" / "gen9"
+        generation_root.mkdir(parents=True)
+        prior_identity = generation_root / "wandb_runs.json"
+        prior_identity.write_text("old lineage")
+        destination = generation_root / "lineages" / "fresh"
+        if existing_empty:
+            destination.mkdir(parents=True)
+        if mode == "params":
+            source = write_target_ckpt(tmp_path, step=123)
+        else:
+            source = None
+
+        config, resolved_mode, init_ckpt, job_name = resolve_run_setup(
+            make_config(),
+            self._args(load_mode=mode, init_ckpt=source, ckpt_subdir="lineages/fresh"),
+        )
+
+        assert (resolved_mode, init_ckpt, job_name) == (mode, source, "main")
+        assert Path(ckpt_root(config)).resolve() == destination
+        assert config.br_target_ckpt is None
+        assert prior_identity.read_text() == "old lineage"
+
+    @pytest.mark.parametrize("mode", ["params", "scratch"])
+    def test_new_main_lineage_rejects_occupied_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    ) -> None:
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        destination = tmp_path / "ckpts" / "gen9" / "lineages" / "prior"
+        destination.mkdir(parents=True)
+        (destination / "wandb_runs.json").write_text("prior identity")
+
+        with pytest.raises(SystemExit, match="empty destination"):
+            resolve_run_setup(
+                make_config(),
+                self._args(load_mode=mode, ckpt_subdir="lineages/prior"),
+            )
+
+        config, mode, init_ckpt, job_name = resolve_run_setup(
+            make_config(),
+            self._args(load_mode="checkpoint", ckpt_subdir="lineages/prior"),
+        )
+        assert (mode, init_ckpt, job_name) == ("checkpoint", None, "main")
+        assert Path(ckpt_root(config)).resolve() == destination
+
+    @pytest.mark.parametrize("subdir", ["", ".", "../outside", "nested/../../outside"])
+    def test_main_subdir_cannot_escape_generation_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subdir: str
+    ) -> None:
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit, match="within the generation root"):
+            resolve_run_setup(make_config(), self._args(ckpt_subdir=subdir))
+
+    def test_main_subdir_rejects_absolute_path_and_symlink_escape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        generation_root = tmp_path / "ckpts" / "gen9"
+        generation_root.mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (generation_root / "escape").symlink_to(outside, target_is_directory=True)
+
+        for subdir in (str(generation_root / "absolute"), "escape/nested"):
+            with pytest.raises(SystemExit, match="within the generation root"):
+                resolve_run_setup(make_config(), self._args(ckpt_subdir=subdir))
+
+    def test_main_subdir_rejects_file_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from rl.online.main import resolve_run_setup
+
+        monkeypatch.chdir(tmp_path)
+        generation_root = tmp_path / "ckpts" / "gen9"
+        generation_root.mkdir(parents=True)
+        (generation_root / "occupied").write_text("file")
+
+        with pytest.raises(SystemExit, match="not a directory"):
+            resolve_run_setup(make_config(), self._args(ckpt_subdir="occupied"))
+
+    def test_main_subdir_cannot_be_combined_with_br_target(self) -> None:
+        from rl.online.main import resolve_run_setup
+
+        with pytest.raises(SystemExit, match="cannot be combined"):
+            resolve_run_setup(
+                make_config(),
+                self._args(ckpt_subdir="lineages/main", br_target="target"),
+            )
 
     def test_fresh_br_derives_params_mode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

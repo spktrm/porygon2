@@ -85,28 +85,6 @@ class CategoricalValueHeadOutput:
 
 
 @dataclass
-class PairValueHeadOutput:
-    """The pairwise entity critic (2026-09-12, rl/model/heads.py
-    PairValueHead): a generalised additive model over 12 entity rows, my
-    side first. `value` is the scalar; `unary` (12,) the per-mon terms;
-    `cross` (6, 6) the antisymmetric my-vs-their pair term m_ij, centred
-    over the alive pairs (zero-mean, in [-2, 2]), and `cross_weight` its
-    softmax weights over alive pairs; `synergy` (2, 6, 6) the symmetric
-    same-side term per side, centred over each side's alive pairs, and
-    `synergy_weight` its weights; `partials` (5,) the signed parts (unary mine, unary
-    theirs, cross, synergy mine, synergy theirs) that sum to `value`. All
-    float32; every leaf () on the actor."""
-
-    value: ArrayLike = ()
-    unary: ArrayLike = ()
-    cross: ArrayLike = ()
-    cross_weight: ArrayLike = ()
-    synergy: ArrayLike = ()
-    synergy_weight: ArrayLike = ()
-    partials: ArrayLike = ()
-
-
-@dataclass
 class PolicyHeadOutput:
     action_index: ArrayLike = ()
     log_prob: ArrayLike = ()
@@ -139,12 +117,6 @@ class PlayerActorOutput:
     potential_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    # Learner-only (2026-09-12): the pairwise entity critics -- over the
-    # post-trunk public rows, and over the post-trunk PRIVATE_ROWS x
-    # OPP_PUBLIC_ROWS pairing (neither head reads the opponent's private
-    # rows). Built only when the learner's player_pair_value_loss_coef > 0.
-    pair_value_public: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
-    pair_value_private: PairValueHeadOutput = field(default_factory=PairValueHeadOutput)
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows
     # of the trunk's output. The over-smoothing instrument; learner-only.
@@ -265,10 +237,6 @@ class BuilderTransition:
 @dataclass
 class PlayerTargets:
     win_returns: ArrayLike = ()
-    # The scalar the two-hot `win_returns` is built from, clipped to the
-    # support range (so it equals win_returns @ support exactly on-mask) --
-    # the pairwise critics' regression label (2026-09-12). () off-mask.
-    scalar_returns: ArrayLike = ()
     pg_advantages: ArrayLike = ()
     policy_mask: ArrayLike = ()
     value_mask: ArrayLike = ()

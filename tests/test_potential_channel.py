@@ -1,9 +1,4 @@
-"""The PBRS potential channel (2026-09-11) on hand-built chunks, against a
-numpy mirror of the recursion: the inert contract, the closed form, the
-uncentred equivalence and the done row -- each beside the control that
-proves it could fail. Threshold-discarded rows (rho 0, raw c 1), padding and
-a non-terminal chunk are in the fixtures because the 2026-09-11 review found
-claims that held only on the idealised rho == c estimator."""
+"""Potential-channel invariance with current-policy V-trace and chunk boundaries."""
 
 import jax.numpy as jnp
 import numpy as np
@@ -53,39 +48,37 @@ def make_chunk(length, done_row, seed):
     )
 
 
-def ratios(length, discarded):
-    raw = np.ones((length, 1), np.float32)
-    cut = raw.copy()
-    cut[list(discarded)] = 0.0
-    return jnp.asarray(cut), jnp.asarray(raw)
+def ratios(length, zero_rows):
+    ratio = np.ones((length, 1), np.float32)
+    ratio[list(zero_rows)] = 0.0
+    return jnp.asarray(ratio)
 
 
-def mirror(reward, value, done, rho, c):
+def mirror(reward, value, done, rho, continuation):
     """targets.scalar_vtrace in numpy, over compute_player_targets' masks."""
     mask = 1.0 - (np.cumsum(done) - done)
     discount = (1.0 - done) * CONFIG.player_gamma * mask
+    mask[-1] = float(done[-1])
+    rho = np.where(done, 1.0, rho)
     value_next = np.concatenate([value[1:], value[-1:]])
     td = rho * mask * (reward + discount * value_next - value)
     errors = np.zeros_like(td)
     carry = 0.0
     for row in reversed(range(len(td))):
-        carry = td[row] + discount[row] * c[row] * LAMBDA * carry
+        carry = td[row] + discount[row] * continuation[row] * LAMBDA * carry
         errors[row] = carry
     trace = errors + value
-    bootstrap = np.concatenate(
-        [LAMBDA * trace[1:] + (1 - LAMBDA) * value[1:], value[-1:]]
-    )
+    bootstrap = np.concatenate([trace[1:], value[-1:]])
     advantages = rho * (reward + discount * bootstrap - value) * mask
     return trace * mask, advantages
 
 
-def run(batch, value_log_probs, cut, raw, head):
+def run(batch, value_log_probs, ratio, head):
     targets, _ = compute_player_targets(
         batch,
         value_log_probs,
-        cut,
+        ratio,
         CONFIG,
-        isr_raw=raw,
         potential_values=jnp.asarray(np.asarray(head, np.float32)[:, None]),
     )
     return (
@@ -103,46 +96,48 @@ def live_rows(done):
 def test_an_exact_head_makes_the_channel_inert(done_row) -> None:
     length = 13
     batch, value_log_probs, unit, done = make_chunk(length, done_row, seed=1)
-    cut, raw = ratios(length, discarded=(3, 6))
+    ratio = ratios(length, zero_rows=(3, 6))
     rng = np.random.default_rng(2)
     # Exact on live rows; arbitrary elsewhere, which the forcing must ignore.
     exact = np.where(live_rows(done), -unit, rng.uniform(-3, 3, length))
-    advantages, _, total = run(batch, value_log_probs, cut, raw, exact)
+    advantages, _, total = run(batch, value_log_probs, ratio, exact)
     np.testing.assert_allclose(advantages, 0.0, atol=1e-7)
-    plain, _ = compute_player_targets(batch, value_log_probs, cut, CONFIG, isr_raw=raw)
+    plain, _ = compute_player_targets(batch, value_log_probs, ratio, CONFIG)
     np.testing.assert_allclose(total, np.asarray(plain.pg_advantages)[:, 0], atol=1e-7)
     # Control: an unfitted head leaves a real force.
-    idle, _, _ = run(batch, value_log_probs, cut, raw, np.zeros(length))
+    idle, _, _ = run(batch, value_log_probs, ratio, np.zeros(length))
     assert np.abs(idle).max() > 1e-3
 
 
 def test_an_unfitted_head_gives_the_closed_form_on_policy() -> None:
     length, done_row = 11, 10
     batch, value_log_probs, unit, done = make_chunk(length, done_row, seed=3)
-    cut, raw = ratios(length, discarded=())
-    advantages, _, _ = run(batch, value_log_probs, cut, raw, np.zeros(length))
+    ratio = ratios(length, zero_rows=())
+    advantages, _, _ = run(batch, value_log_probs, ratio, np.zeros(length))
     psi = STRENGTH * unit * live_rows(done)
     for row in range(done_row):
         future = sum(
-            LAMBDA ** (k - 1) * psi[row + k] for k in range(1, done_row - row + 1)
+            LAMBDA ** (offset - 2) * psi[row + offset]
+            for offset in range(2, done_row - row + 1)
         )
         np.testing.assert_allclose(
             advantages[row], -psi[row] + (1 - LAMBDA) * future, atol=1e-6
         )
 
 
-def test_the_closed_form_breaks_across_a_discarded_row() -> None:
-    """Control for the test above: why the inert contract, not the closed
-    form, is what the threshold-discard fixtures check."""
+def test_the_closed_form_breaks_across_a_zero_importance_row() -> None:
     length, done_row = 11, 10
     batch, value_log_probs, unit, done = make_chunk(length, done_row, seed=3)
-    cut, raw = ratios(length, discarded=(6,))
-    advantages, _, _ = run(batch, value_log_probs, cut, raw, np.zeros(length))
+    ratio = ratios(length, zero_rows=(6,))
+    advantages, _, _ = run(batch, value_log_probs, ratio, np.zeros(length))
     psi = STRENGTH * unit * live_rows(done)
     closed = [
         -psi[row]
         + (1 - LAMBDA)
-        * sum(LAMBDA ** (k - 1) * psi[row + k] for k in range(1, done_row - row + 1))
+        * sum(
+            LAMBDA ** (offset - 2) * psi[row + offset]
+            for offset in range(2, done_row - row + 1)
+        )
         for row in range(6)
     ]
     assert np.abs(advantages[:6] - np.asarray(closed)).max() > 1e-4
@@ -151,11 +146,12 @@ def test_the_closed_form_breaks_across_a_discarded_row() -> None:
 def test_uncentred_equals_centred_with_the_offset_on_the_value() -> None:
     length, done_row = 12, 9
     batch, value_log_probs, unit, done = make_chunk(length, done_row, seed=4)
-    cut, raw = ratios(length, discarded=(2, 5))
-    rho, c = np.minimum(1, np.asarray(cut)[:, 0]), np.minimum(1, np.asarray(raw)[:, 0])
+    ratio = ratios(length, zero_rows=(2, 5))
+    rho = np.minimum(1, np.asarray(ratio)[:, 0])
+    continuation = rho
     live = live_rows(done)
     head = np.random.default_rng(5).uniform(-1, 1, length)
-    advantages, returns, _ = run(batch, value_log_probs, cut, raw, head)
+    advantages, returns, _ = run(batch, value_log_probs, ratio, head)
 
     mask = 1.0 - (np.cumsum(done) - done)
     discount = (1.0 - done) * mask
@@ -166,7 +162,7 @@ def test_uncentred_equals_centred_with_the_offset_on_the_value() -> None:
     )
     assert abs(shaping.sum()) < 1e-12  # centred rewards sum to zero
     centred_returns, centred_advantages = mirror(
-        shaping, STRENGTH * head * live + offset, done, rho, c
+        shaping, STRENGTH * head * live + offset, done, rho, continuation
     )
     np.testing.assert_allclose(advantages, centred_advantages, atol=1e-6)
     np.testing.assert_allclose(
@@ -177,40 +173,41 @@ def test_uncentred_equals_centred_with_the_offset_on_the_value() -> None:
     uncentred = discount * np.concatenate([psi[1:], psi[-1:]]) - psi
     np.testing.assert_allclose(uncentred.sum(), -STRENGTH * unit[0], atol=1e-12)
     # Control: centred rewards with the plain head are NOT the same learner.
-    _, plain_head = mirror(shaping, STRENGTH * head * live, done, rho, c)
+    _, plain_head = mirror(shaping, STRENGTH * head * live, done, rho, continuation)
     assert np.abs(plain_head - advantages).max() > 1e-4
 
 
 def test_the_done_row_channel_label_is_exactly_zero() -> None:
     length, done_row = 10, 7
     batch, value_log_probs, unit, done = make_chunk(length, done_row, seed=6)
-    cut, raw = ratios(length, discarded=())
-    cut = cut.at[done_row].set(0.5)  # a sampled ratio on a no-decision row
+    ratio = ratios(length, zero_rows=())
+    ratio = ratio.at[done_row].set(0.5)  # a sampled ratio on a no-decision row
     head = np.random.default_rng(7).uniform(-1, 1, length)  # nonzero on done
-    _, returns, _ = run(batch, value_log_probs, cut, raw, head)
+    _, returns, _ = run(batch, value_log_probs, ratio, head)
     assert returns[done_row] == 0.0
-    # Control: an unforced value on the done row would leak into its label.
+    # A nonzero terminal potential value contaminates earlier trace residuals.
     live = live_rows(done)
     psi = STRENGTH * unit * live
     mask = 1.0 - (np.cumsum(done) - done)
     shaping = (1.0 - done) * mask * np.concatenate([psi[1:], psi[-1:]]) - psi
-    rho = np.minimum(1, np.asarray(cut)[:, 0])
+    rho = np.minimum(1, np.asarray(ratio)[:, 0])
     unforced = STRENGTH * head * mask
     unforced_returns, _ = mirror(shaping, unforced, done, rho, np.ones(length))
-    assert abs(unforced_returns[done_row]) > 1e-4
+    assert abs(unforced_returns[done_row]) < 1e-7
+    assert (
+        np.max(np.abs(unforced_returns[:done_row] / STRENGTH - returns[:done_row]))
+        > 1e-4
+    )
 
 
 def test_potential_values_need_a_positive_strength() -> None:
     batch, value_log_probs, _, _ = make_chunk(6, 4, seed=8)
-    cut, raw = ratios(6, discarded=())
+    ratio = ratios(6, zero_rows=())
     with pytest.raises(ValueError):
         compute_player_targets(
             batch,
             value_log_probs,
-            cut,
-            # Strength 0 explicitly: the default became .05 at the PBRS
-            # launch (a14092b), which is exactly what the guard must refuse.
+            ratio,
             Porygon2LearnerConfig().replace(player_potential_strength=0.0),
-            isr_raw=raw,
             potential_values=jnp.zeros((6, 1)),
         )

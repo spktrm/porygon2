@@ -145,7 +145,7 @@ def collect(arguments):
         json.dumps(
             dict(
                 checkpoint=arguments.checkpoint,
-                parameters="target_params",
+                parameters="params",
                 games=len(sides),
                 requested=arguments.games,
                 temperature=0.5,

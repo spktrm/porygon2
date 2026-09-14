@@ -5,26 +5,21 @@ from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from rl.environment.data import MOVE_CELL_OFFSET, NUM_ACTION_CELLS, NUM_SWITCH_CELLS
 from rl.online.training.action_telemetry import switch_loss_telemetry
-from rl.online.training.loss import policy_gradient_loss, support_hinge_loss
+from rl.online.training.loss import appo_policy_loss
 from rl.online.training.targets import reference_kl
 from rl.utils import average
 
 
-@pytest.mark.parametrize("objective", ["spo", "ppo"])
-def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
+def test_switch_direction_matches_full_logit_derivative() -> None:
     config = SimpleNamespace(
-        player_pg_objective=objective,
-        player_ppo_clip=0.2,
         player_pg_coef=0.8,
         player_ent_coef=0.01,
         player_mag_coef=0.2,
-        player_support_tau=0.01,
-        player_support_temperature=0.1,
-        player_support_hinge_coef=0.0025,
+        player_ppo_clip=0.2,
+        player_behaviour_ratio_clip=2.0,
     )
     legal = jnp.zeros((4, NUM_ACTION_CELLS), dtype=bool)
     legal = legal.at[:, [0, 1, MOVE_CELL_OFFSET, MOVE_CELL_OFFSET + 1]].set(True)
@@ -35,6 +30,11 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
     valid = jnp.array([True, True, True, False])
     choice = jnp.array([True, True, False, False])
     advantages = jnp.array([1.2, -0.4, 0.7, 1000.0])
+    # Behaviour and old-policy log-probs of the taken action: row 0 sits
+    # inside the PPO band, row 1 is pushed past it (its clip zeroes the
+    # JVP there), row 2 has its mu/pi_old capped at 2.
+    behaviour_log_prob = jnp.log(jnp.array([0.30, 0.10, 0.50, 0.25]))
+    old_policy_log_prob = jnp.log(jnp.array([0.28, 0.40, 0.20, 0.25]))
     logits = jnp.broadcast_to(jnp.linspace(-1.5, 1.1, NUM_ACTION_CELLS), legal.shape)
 
     def distribution(shift: float | jax.Array) -> jax.Array:
@@ -43,22 +43,21 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
         )
 
     reference = distribution(0.3)
-    behaviour_taken = jnp.take_along_axis(distribution(-0.1), taken[:, None], -1)[:, 0]
 
     def terms(shift: float | jax.Array) -> jax.Array:
         log_policy = distribution(shift)
-        log_ratio = jnp.take_along_axis(log_policy, taken[:, None], -1)[:, 0]
-        log_ratio -= behaviour_taken
-        ratio = jnp.exp(log_ratio)
+        taken_log_prob = jnp.take_along_axis(log_policy, taken[:, None], -1)[:, 0]
         return jnp.stack(
             [
                 config.player_pg_coef
-                * policy_gradient_loss(
-                    policy_ratios=ratio,
+                * appo_policy_loss(
+                    learner_log_prob=taken_log_prob,
+                    behaviour_log_prob=behaviour_log_prob,
+                    old_policy_log_prob=old_policy_log_prob,
                     advantages=advantages,
                     valid=valid,
-                    threshold=config.player_ppo_clip,
-                    objective=objective,
+                    clip_ppo=config.player_ppo_clip,
+                    behaviour_ratio_clip=config.player_behaviour_ratio_clip,
                 ),
                 config.player_pg_coef
                 * config.player_ent_coef
@@ -68,24 +67,11 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
                 config.player_pg_coef
                 * config.player_mag_coef
                 * average(reference_kl(log_policy, reference, legal), valid),
-                config.player_pg_coef
-                * config.player_support_hinge_coef
-                * average(
-                    support_hinge_loss(
-                        log_policy,
-                        legal,
-                        config.player_support_tau,
-                        temperature=config.player_support_temperature,
-                    )[0],
-                    valid,
-                ),
             ]
         )
 
     log_policy = distribution(0.0)
-    log_ratio = (
-        jnp.take_along_axis(log_policy, taken[:, None], -1)[:, 0] - behaviour_taken
-    )
+    taken_log_prob = jnp.take_along_axis(log_policy, taken[:, None], -1)[:, 0]
     logs = jax.jit(
         lambda: switch_loss_telemetry(
             log_policy,
@@ -95,9 +81,10 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
             taken_switch,
             valid,
             choice,
-            jnp.exp(log_ratio),
+            taken_log_prob,
+            behaviour_log_prob,
+            old_policy_log_prob,
             advantages,
-            advantages * 2,
             config,
         )
     )()
@@ -105,14 +92,10 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
     actual = jnp.stack(
         [
             logs[f"player_switch_logit_grad_{name}"]
-            for name in ("pg", "entropy", "magnet", "support")
+            for name in ("pg", "entropy", "magnet")
         ]
     )
     np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-5)
-    # Every legal cell here sits ~25x above tau: the hard hinge would be
-    # exactly silent, the smooth one (T = .1) is silent to ~1e-14 of its
-    # activation (the active cases are tests/test_support_hinge.py's).
-    assert abs(float(logs["player_switch_logit_grad_support"])) < 1e-9
     assert logs["player_switch_logit_grad_pg_taken_switch"] < 0
     assert abs(float(logs["player_switch_logit_grad_actor_total"])) > 0.01
     np.testing.assert_allclose(
@@ -120,4 +103,4 @@ def test_switch_direction_matches_full_logit_derivative(objective: str) -> None:
     )
     assert logs["player_choice_switch_count"] == 1
     assert logs["player_choice_stay_count"] == 1
-    np.testing.assert_allclose(logs["player_choice_switch_adv_raw"], 2.4)
+    np.testing.assert_allclose(logs["player_choice_switch_adv_raw"], 1.2)

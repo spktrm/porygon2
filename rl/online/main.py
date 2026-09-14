@@ -243,9 +243,6 @@ def run_eval_heuristic(
     session_id = threading.current_thread().name
 
     games = 0
-    # Bias-corrected exponential smoothing over the EMA-params series: the
-    # raw per-game values are 0/1 (win) and -6..6 (margin), far too noisy
-    # to read per checkpoint.
     smooth_decay = 0.5 ** (1.0 / max(learner_config.eval_smoothing_halflife, 1))
     smooth_wr = 0.0
     smooth_margin = 0.0
@@ -255,27 +252,11 @@ def run_eval_heuristic(
         if not main_run_state.run_gate.wait(timeout=1.0):
             continue
         try:
-            # Host snapshots published by the learner thread
-            # (league_ops.publish_live_params) — this thread never reads
-            # device state, so nothing here can observe a buffer the train
-            # step donated. EMA target params by default — the
-            # deployment/league params — with an occasional main-params
-            # game as a divergence check (the two lag by only ~1/ema_rate
-            # steps).
             snapshot = main_run_state.eval_snapshot
             if snapshot.step_count > step_count:
                 step_count = snapshot.step_count
                 games += 1
-                use_main = (
-                    learner_config.eval_main_params_every > 0
-                    and games % learner_config.eval_main_params_every == 0
-                )
-                if use_main:
-                    prefix = "main"
-                    player = snapshot.main
-                else:
-                    prefix = "ema"
-                    player = snapshot.ema
+                player = snapshot.main
 
                 unroll_started = time.perf_counter()
                 future1 = executor.submit(actor.unroll_and_push, player)
@@ -302,22 +283,19 @@ def run_eval_heuristic(
 
                 logs = {
                     "training_step": step_count,
-                    f"{prefix}-payoff-{session_id}": float(payoff),
+                    f"main-payoff-{session_id}": float(payoff),
                     # float, not bool: the wandb UI renders boolean series
                     # as NaN in line plots.
-                    f"{prefix}-wr-{session_id}": float(payoff > 0),
-                    f"{prefix}-margin-{session_id}": margin,
+                    f"main-wr-{session_id}": float(payoff > 0),
+                    f"main-margin-{session_id}": margin,
                     f"games-{session_id}": games,
                     **eval_game_logs(eval_trajectory, unroll_seconds, session_id),
                 }
-                if not use_main:
-                    smooth_wr = smooth_decay * smooth_wr + float(payoff > 0)
-                    smooth_margin = smooth_decay * smooth_margin + margin
-                    smooth_weight = smooth_decay * smooth_weight + 1.0
-                    logs[f"smoothed-wr-{session_id}"] = smooth_wr / smooth_weight
-                    logs[f"smoothed-margin-{session_id}"] = (
-                        smooth_margin / smooth_weight
-                    )
+                smooth_wr = smooth_decay * smooth_wr + float(payoff > 0)
+                smooth_margin = smooth_decay * smooth_margin + margin
+                smooth_weight = smooth_decay * smooth_weight + 1.0
+                logs[f"smoothed-wr-{session_id}"] = smooth_wr / smooth_weight
+                logs[f"smoothed-margin-{session_id}"] = smooth_margin / smooth_weight
                 wandb_run.log(logs)
 
         except ActorStopped:
@@ -414,8 +392,36 @@ def resolve_run_setup(
                 "--br-init/--br-perturb-frac only apply to a --br-target run"
             )
         mode = args.load_mode or os.environ.get("LOAD_STATE_MODE", "checkpoint")
+        if args.ckpt_subdir is not None:
+            generation_root = os.path.realpath(
+                ckpt_root(learner_config.replace(ckpt_subdir=None))
+            )
+            destination = os.path.realpath(
+                os.path.join(generation_root, args.ckpt_subdir)
+            )
+            if (
+                os.path.isabs(args.ckpt_subdir)
+                or destination == generation_root
+                or os.path.commonpath((generation_root, destination)) != generation_root
+            ):
+                raise SystemExit(
+                    "--ckpt-subdir must name a subdirectory within the generation root"
+                )
+            if os.path.exists(destination):
+                if not os.path.isdir(destination):
+                    raise SystemExit("--ckpt-subdir destination is not a directory")
+                if mode in ("params", "scratch") and os.listdir(destination):
+                    raise SystemExit(
+                        "--ckpt-subdir requires an empty destination for params/scratch "
+                        "mode; use checkpoint mode to resume an existing lineage"
+                    )
+            learner_config = learner_config.replace(
+                ckpt_subdir=os.path.relpath(destination, generation_root)
+            )
         return learner_config, mode, args.init_ckpt, "main"
 
+    if args.ckpt_subdir is not None:
+        raise SystemExit("--ckpt-subdir cannot be combined with --br-target")
     if args.load_mode or args.init_ckpt:
         raise SystemExit(
             "--br-target derives its own load mode and init source; "
@@ -947,6 +953,13 @@ if __name__ == "__main__":
         help="Explicit source checkpoint for checkpoint/params mode "
         "(default: most recent under this run's root). A missing explicit "
         "path fails loudly instead of falling back to scratch.",
+    )
+    parser.add_argument(
+        "--ckpt-subdir",
+        default=None,
+        help="Checkpoint, league and W&B identity subdirectory under ckpts/genN. "
+        "Params/scratch mode requires an empty destination; use the same "
+        "subdirectory with checkpoint mode to resume. Cannot combine with --br-target.",
     )
     parser.add_argument(
         "--reset-league",

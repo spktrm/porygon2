@@ -157,20 +157,3 @@ def test_opp_private_team_cannot_reach_the_policy(
         np.asarray(base.priv_value_head.expectation, dtype=np.float32),
         np.asarray(moved.priv_value_head.expectation, dtype=np.float32),
     )
-    # Open the zero-init heads so invariance cannot pass through inert outputs.
-    # Both pair critics now read only policy-visible rows and alive flags.
-    from tests.conftest import open_zero_init_paths
-
-    opened = open_zero_init_paths(params, ["pair_value_public", "pair_value_private"])
-    base_opened = real_model_apply(opened, actor_input, actor_output, HeadParams())
-    moved_opened = real_model_apply(opened, perturbed_input, actor_output, HeadParams())
-    for head_name in ("pair_value_public", "pair_value_private"):
-        base_head = getattr(base_opened, head_name)
-        moved_head = getattr(moved_opened, head_name)
-        for leaf in ("value", "unary", "cross", "cross_weight", "partials"):
-            np.testing.assert_array_equal(
-                np.asarray(getattr(base_head, leaf), dtype=np.float32),
-                np.asarray(getattr(moved_head, leaf), dtype=np.float32),
-                err_msg=f"{head_name}.{leaf}",
-            )
-        assert np.abs(np.asarray(base_head.value)).max() > 0

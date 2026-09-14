@@ -6,11 +6,10 @@ component is stored as its own file:
     ckpt_00012345/
         meta                      # {format_version, learner_config}
         player/params
-        player/target_params      # ema params — loadable without opt_state
+        player/reg_params         # EMA regularisation reference (the magnet)
+        player/old_policy_params  # IMPACT target: periodic hard copy of params
         player/opt_state
-        player/scalars            # step_count, frame_count, entropy-floor
-                                  # dual temperatures (see
-                                  # artifact.player_scalar_components)
+        player/scalars            # step_count, frame_count
         builder/params
         builder/target_params
         builder/opt_state
@@ -19,7 +18,7 @@ component is stored as its own file:
         controllers               # host-side controller state
 
 Storing components separately means an opponent can be materialised by reading
-only ``player/target_params`` (+ ``builder/target_params``) — the large
+only ``player/params`` (+ ``builder/target_params``) — the large
 optimiser state is never touched. This is the foundation the disk-backed
 league builds on.
 """
@@ -29,6 +28,8 @@ from __future__ import annotations
 import os
 import re
 import threading
+from collections.abc import Collection, Mapping
+from pickle import Unpickler
 from typing import Any
 
 import cloudpickle as pickle
@@ -37,6 +38,23 @@ import jax
 FORMAT_VERSION = 1
 
 _CKPT_DIR_RE = re.compile(r"ckpt_(\d+)$")
+
+
+class _RetiredCheckpointTuple(tuple):
+    def __new__(cls, *values):
+        return super().__new__(cls, values)
+
+
+class _CheckpointUnpickler(Unpickler):
+    def find_class(self, module: str, name: str):
+        # Retired scalar records must decode before apply_player_scalars can
+        # discard them; keep their implementation out of the live model.
+        if module == "rl.environment.interfaces" and name in (
+            "PairFeatureMeans",
+            "PairPopulationState",
+        ):
+            return _RetiredCheckpointTuple
+        return super().find_class(module, name)
 
 
 def _dump(path: str, obj: Any) -> None:
@@ -58,7 +76,7 @@ def _dump(path: str, obj: Any) -> None:
 
 def _load(path: str) -> Any:
     with open(path, "rb") as f:
-        return pickle.load(f)
+        return _CheckpointUnpickler(f).load()
 
 
 def _component_names(d: str) -> list[str]:
@@ -133,7 +151,7 @@ def save_param_snapshot(
 
 
 def load_component(ckpt_dir: str, who: str, name: str) -> Any:
-    """Load a single component, e.g. ``load_component(d, "player", "target_params")``.
+    """Load a single component, e.g. ``load_component(d, "player", "params")``.
 
     Reads exactly one file — the optimiser state is never deserialised unless
     explicitly requested.
@@ -161,12 +179,24 @@ def load_controller_bytes(ckpt_dir: str) -> bytes | None:
     return _load(path)
 
 
-def load_full(ckpt_dir: str) -> dict[str, Any]:
-    """Rebuild the legacy ``ckpt_data`` shape for full-restore code paths."""
+def load_full(
+    ckpt_dir: str,
+    *,
+    excluded_components: Mapping[str, Collection[str]] | None = None,
+) -> dict[str, Any]:
+    """Rebuild the full-restore shape, without decoding excluded components."""
 
     def _read_dir(who: str) -> dict[str, Any]:
-        d = os.path.join(ckpt_dir, who)
-        return {n: _load(os.path.join(d, n)) for n in _component_names(d)}
+        component_dir = os.path.join(ckpt_dir, who)
+        if excluded_components is None:
+            excluded = ()
+        else:
+            excluded = excluded_components.get(who, ())
+        return {
+            name: _load(os.path.join(component_dir, name))
+            for name in _component_names(component_dir)
+            if name not in excluded
+        }
 
     try:
         meta = _load(os.path.join(ckpt_dir, "meta"))

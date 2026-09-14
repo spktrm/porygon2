@@ -1,5 +1,4 @@
 import functools
-from typing import NamedTuple
 
 import flax.linen as nn
 import jax
@@ -33,7 +32,6 @@ from rl.environment.protos.enums_pb2 import (
 )
 from rl.environment.protos.features_pb2 import (
     EntityEdgeFeature,
-    EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
     FieldFeature,
@@ -150,17 +148,6 @@ def _lifted_entity_vmap(method):
             split_rngs={"params": False},
         )
     )
-
-
-class PairValueInputs(NamedTuple):
-    """What the pairwise critics read beyond the trunk's rows (2026-09-12,
-    learner-only, () on the actor): alive = the mon's hit-point ratio token
-    is above 0, off the wire. `public_alive` (12,) for the public rows;
-    `sheet_alive` (12,) for my sheet rows then the opponent's public rows,
-    the order of PRIVATE_ROWS then OPP_PUBLIC_ROWS the private head reads."""
-
-    public_alive: jax.Array
-    sheet_alive: jax.Array
 
 
 class Encoder(nn.Module):
@@ -923,20 +910,6 @@ class Encoder(nn.Module):
         kept_rows = self.kept_rows()
         assert sequence.shape[0] == len(kept_rows), sequence.shape
 
-        pair_value_inputs = ()
-        if self.cfg.train:
-            hp_public = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO
-            hp_private = EntityPrivateNodeFeature.ENTITY_PRIVATE_NODE_FEATURE__HP_RATIO
-            pair_value_inputs = PairValueInputs(
-                public_alive=env_step.public_team[:, hp_public] > 0,
-                sheet_alive=jnp.concatenate(
-                    (
-                        env_step.private_team[:, hp_private] > 0,
-                        env_step.public_team[NUM_PUBLIC_SLOTS // 2 :, hp_public] > 0,
-                    )
-                ),
-            )
-
         # Content RMS must not rescale the shared semantic identities.
         group_ids = self.group_ids()
         sequence = self.input_normalisation(sequence, row_valid, group_ids)
@@ -950,7 +923,7 @@ class Encoder(nn.Module):
         sequence = sequence + identities[kept_rows]
         sequence = sequence + self.sequence_group_bias.astype(dtype)[group_ids]
         sequence = jnp.where(row_valid[:, None], sequence, 0)
-        return sequence, row_valid, pair_value_inputs
+        return sequence, row_valid
 
     def _batched_forward(
         self,
@@ -968,7 +941,7 @@ class Encoder(nn.Module):
         has mixed with every other and the reading is behavioural rather than
         structural.
         """
-        sequence, row_valid, pair_value_inputs = self._assemble_sequence(
+        sequence, row_valid = self._assemble_sequence(
             env_step,
             history_row_states,
             history_row_valid,
@@ -987,12 +960,7 @@ class Encoder(nn.Module):
         else:
             trunk_out_group_l2 = None
         sequence = self.output_normalisation(trunk_out, row_valid, self.group_ids())
-        return (
-            sequence,
-            row_valid,
-            trunk_out_group_l2,
-            pair_value_inputs,
-        )
+        return sequence, row_valid, trunk_out_group_l2
 
     def kept_rows(self) -> np.ndarray:
         """Which rows of SEQUENCE_LAYOUT this forward assembles: all of them
@@ -1201,7 +1169,7 @@ class Encoder(nn.Module):
         *history_inputs, _ = self._history_inputs(
             env_step, packed_history_step, history_step
         )
-        sequence, row_valid, _ = assemble(self, env_step, *history_inputs)
+        sequence, row_valid = assemble(self, env_step, *history_inputs)
         return sequence, row_valid
 
     def __call__(
@@ -1211,32 +1179,16 @@ class Encoder(nn.Module):
         history_step: PlayerHistoryOutput,
         carry: HistoryCarry = HistoryCarry(),
     ):
-        # ((T, rows, entity_size), (T, rows) bool, trunk group l2,
-        # pair-value inputs, history stats, history carry); rows =
-        # NUM_SEQUENCE_ROWS for the learner, NUM_POLICY_READABLE_ROWS for
-        # the actor (kept_rows). The heads slice the rows they own by name
-        # (rl/model/constants.py), so no offset is ever written twice. The
-        # second is the trunk's row validity. The history-panel scalars
-        # (history_step_stats) are per trajectory; the actor path drops
-        # them, and XLA drops the computation with them. The post-window
-        # history state (history_carry_from) is the actor's next carry; the
-        # learner drops that one the same way.
         *history_inputs, history_output = self._history_inputs(
             env_step, packed_history_step, history_step, carry
         )
-        (
-            sequence,
-            row_valid,
-            trunk_out_group_l2,
-            pair_value_inputs,
-        ) = _forward_vmap()(self, env_step, *history_inputs)
-        # The pairwise critics' inputs (2026-09-12, PairValueInputs) are
-        # learner-only, () on the actor.
+        sequence, row_valid, trunk_out_group_l2 = _forward_vmap()(
+            self, env_step, *history_inputs
+        )
         return (
             sequence,
             row_valid,
             trunk_out_group_l2,
-            pair_value_inputs,
             history_step_stats(history_output),
             history_carry_from(history_output),
         )

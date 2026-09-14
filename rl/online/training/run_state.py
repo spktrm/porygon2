@@ -23,13 +23,10 @@ AddReason = Literal["initial", "dominant", "overdue"]
 
 
 class EvalSnapshot(NamedTuple):
-    """Host copies of the main and EMA-target params at one train step,
-    published by the learner thread (league_ops.publish_live_params) for
-    the eval thread, which must never read device state itself."""
+    """Host snapshot for evaluation, independent of donated learner buffers."""
 
     step_count: int
     main: ParamsContainer
-    ema: ParamsContainer
 
 
 @dataclasses.dataclass

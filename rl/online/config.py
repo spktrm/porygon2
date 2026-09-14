@@ -19,16 +19,9 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # travels in the env username suffix and the name in the metric key.
     # SimpleHeuristic is the established harder control; potential MCTS is
     # experimental.
-    # The slate itself is fixed at two slots (rl/online/main.py):
-    # `plain-t1`, the EMA params sampled exactly as the training actors
-    # sample them, and `thresholded`, the same params sampled with
-    # player_prune_threshold applied -- their gap prices the threshold in
-    # play.
+    # Both evaluation slots use the same live snapshot; thresholding only
+    # changes the evaluation policy, never replay targets or training actors.
     eval_baseline: int = 2
-    # Every Nth eval game per thread uses the live (main) params instead of
-    # the EMA target as a divergence sanity check. The target lags the live
-    # params by only ~1/player_ema_update_rate steps. 0 = EMA params only.
-    eval_main_params_every: int = 16
     # Half-life, in games, of the bias-corrected smoothed winrate/margin
     # series logged alongside the raw per-game values.
     eval_smoothing_halflife: int = 200
@@ -81,10 +74,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     batch_size: int = 4
 
-    # Kept small on purpose: steady-state throughput is set entirely by
-    # replay_ratio (samples per trajectory), so capacity only controls how
-    # stale a trajectory is when sampled. 256 keeps mean sample age well
-    # inside one EMA-target time constant (1/player_ema_update_rate steps).
+    # Capacity limits replay age; reuse and first-use scheduling are separate.
     player_replay_buffer_capacity: int = 256
     player_replay_ratio: int = 8
     # The fresh stream: the share of each batch's
@@ -272,29 +262,14 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     oom_guard_min_available_fraction: float = 0.15
     oom_guard_check_interval: int = 1_000
 
-    # Learning params. The player runs the same trust-regioned PPO
-    # surrogate as the builder, and NashPG's own optimiser is AdamW with
-    # default moments, so b1 stays at 0.9.
-    # Player eps 1e-5 follows the NashPG reference, which explicitly
-    # overrides optax's 1e-8 (`optax.adamw(lr, eps=1e-5)`): Adam is
-    # scale-invariant, so a param whose gradient has gone tiny (a starved
-    # switch cell's) still steps at ~full lr along a noise-dominated
-    # direction, and eps is the ONLY damper.
-    # Builder keeps 1e-8: the divergence concerned the player bracket.
+    # Retain the established Adam moments and epsilon while changing the
+    # actor estimator; small-gradient behaviour depends on epsilon too.
     player_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-05, weight_decay=0)
     builder_adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-08, weight_decay=0)
-    # KL headroom is NOT evidence the LR can rise: the trust region bounds
-    # per-update policy movement, not representation damage.
     player_learning_rate: float = 3e-5
     builder_learning_rate: float = 3e-5
     player_clip_gradient: float = 10.0
     builder_clip_gradient: float = 10.0
-    # Fast EMA target (IMPACT-style): supplies the clipped-target ratio in
-    # the surrogate, the v-trace reference policy, and the value bootstraps,
-    # so it must track the learner closely for stability under replay reuse.
-    # (Reference systems likewise keep a fast target purely for v-trace
-    # stability, separate from their slow regularisation anchors.)
-    player_ema_update_rate: float = 1e-3
     builder_ema_update_rate: float = 1e-3
 
     # Terminal-only reward, so gamma=1: every step of a game shares the
@@ -326,9 +301,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     builder_lambda: float = 0.99
 
-    # Builder policy objective: ratio-based surrogate with a trust region
-    # (SPO's smooth quadratic; the player runs the PPO clip — see
-    # player_pg_objective).
+    # The builder retains its SPO surrogate and EMA estimator.
     builder_ppo_clip_threshold: float = 0.3
 
     player_value_head_loss_coef: float = 1.0
@@ -341,25 +314,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # run continues on the deployable estimator without a lineage break and
     # the privileged head stays an observer.
     player_privileged_targets: bool = True
-    # The pairwise entity critics (2026-09-12, heads.PairValueHead): two
-    # learner-only value heads beside the CLS critics, each a generalised
-    # additive model over 12 entity rows --
-    #   V = sum_mine u_i - sum_theirs u_j
-    #       + sum_{i mine, j theirs} alpha_ij tanh(g(i,j) - g(j,i))
-    #       + sum_{mine pairs} beta s - sum_{their pairs} beta s,
-    # u a per-mon MLP, g / g_s ONE bilinear each shared across sides (the
-    # sharing is what makes a side swap negate V exactly), alpha / beta
-    # softmax weights over alive pairs, s = tanh(g_s(i,i') + g_s(i',i)).
-    # Both heads read POST-trunk rows (the trunk routes whatever context a
-    # row needs, no field context of the heads' own): the public head the
-    # PUBLIC rows, the private head my sheet (PRIVATE) rows paired with the
-    # opponent's PUBLIC rows -- neither head reads opponent-private state.
-    # Both regress on `scalar_returns` (the v-trace scalar the two-hot label
-    # is built from) under this coefficient, gradient live into what they
-    # read; the CLS critics stay the matched control and the value
-    # bootstraps keep their route (player_privileged_targets). 0.0 builds
-    # neither head -- today's model and loss exactly.
-    player_pair_value_loss_coef: float = 1.0
     # PBRS as a potential channel: eta, the scale on the
     # service's unit position potential Phi (INFO_FEATURE__STATE_POTENTIAL,
     # the human-replay outcome fit). > 0 runs a second v-trace channel beside
@@ -370,105 +324,33 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # at 0 and its lag IS the shaping. The win critics never see it. 0.0
     # builds neither the head nor the channel -- today's learning rule.
     player_potential_strength: float = 0.0
-    # THE policy gradient: NashPG (arXiv:2510.18183, TMLR
-    # 8/2026) — a PPO-clipped surrogate on the taken action's ratio
-    # pi/mu with a batch-normalised v-trace advantage from V, plus a
-    # DIFFERENTIATED reverse KL(pi || pi_reg) magnet and an entropy
-    # bonus, the reference hard-snapped from the target params every
-    # player_reg_snap_steps.
-    # The whole bracket shares this coefficient; 1.0 is the reference's
-    # implicit value (the advantage is unit-std by construction).
+    # APPO actor (RLlib appo_torch_policy.loss, FootsiesGym's parent class):
+    # V-trace advantages against pi_old = old_policy_params, then the PPO
+    # clipped surrogate on clip(mu/pi_old, 0, player_behaviour_ratio_clip)
+    # * pi_live/mu, with entropy and FootsiesGym's KL(live || reference).
+    # No batch normalisation of the advantage.
     player_pg_coef: float = 1.0
-    # PPO clip epsilon (NashPG/paper Table 4). The clip is the trust
-    # region: the surrogate's gradient is exactly zero once the ratio
-    # leaves the band in the push direction, so no force persists at a
-    # stiff equilibrium.
-    player_ppo_clip: float = 0.2
-    # Which surrogate policy_gradient_loss runs for the player: "spo"
-    # (the smooth quadratic the builder also runs) or "ppo"
-    # (NashPG's own rule) for an A/B. Static config: switching costs one
-    # recompile at launch.
-    player_pg_objective: str = "spo"
-    # Differentiated REVERSE KL(pi || pi_reg) magnet, NashPG's mag_coef —
-    # their Algorithm 4 line 8 / eq. 12 verbatim, D_KL(pi_theta(.|o) ||
-    # rho(.|o)) under E_{o~pi}, i.e. the OPTIMISED policy is the first
-    # argument. Reverse = mode-seeking, which is exactly why it cannot
-    # refill a dropped modality.
-    # alpha = 0.2 is their U-shaped sensitivity optimum (fig. 1) and
-    # DeepNash's eta; never anneal it (their Appendix C: annealing alpha
-    # diverges). Own-side only, as NashPG's objective also is. The
-    # gradient is pi-prefactored, so it cannot by itself restore an
-    # abandoned action. switch_ratio through the 13k wire is the acceptance
-    # gate; the analytic-shift form is in git history if it fails.
-    player_mag_coef: float = 0.2
-    # Entropy bonus, differentiated — NashPG's ent_coef verbatim: the
-    # plain JOINT entropy over legal cells, one static coefficient. Up to
-    # a constant this is the reverse KL to uniform. The per-level
-    # entropies are OBSERVER panels only (loss.factorised_entropies).
+    # RLlib clip_param (APPOConfig default; FootsiesGym does not override).
+    player_ppo_clip: float = 0.4
+    # RLlib target_worker_clipping: the cap on mu/pi_old, IMPACT's pull-back
+    # of a stale worker's ratio before the PPO clip sees it.
+    player_behaviour_ratio_clip: float = 2.0
+    # IMPACT Algorithm 1 line 11: pi_old <- live every t_target accepted
+    # updates, a hard copy, t_target = N*K = 4*2 = 8 for its discrete tasks
+    # (RLlib new-stack APPO carries the same 4 x 2 circular buffer). Also
+    # our replay cap, so a chunk mostly sees one pi_old across its reuses.
+    # 1 makes pi_old the pre-update live params: the clip never engages.
+    player_old_policy_snap_steps: int = 8
+    # FootsiesGym's fixed EMAgnet example; these are numerical defaults, not
+    # a reward-scale conversion to our game (see the 2026-09-14 source audit).
+    player_mag_coef: float = 0.05
     player_ent_coef: float = 0.01
-    # DeepNash's FineTuning threshold (rnad.py FineTuning._threshold, its
-    # reference value .03): a legal action whose probability is below it is
-    # REMOVED and the rest renormalised (rl/model/utils.py prune_log_policy,
-    # with the reference's guard that a row entirely below the line keeps
-    # its legal set). Where it applies, and nowhere else: (1) the
-    # `thresholded` eval slot samples the thresholded policy
-    # (HeadParams.prune_threshold); (2) the learner thresholds the TARGET
-    # policy entering v-trace (targets.thresholded_target_ratio), so a
-    # taken action the target has dropped below the line gets rho 0 and
-    # its row is discarded -- variance control on the target estimator,
-    # the reference's own placement (rnad.py:798 post-processes pi for
-    # v_trace only; acting_policy and the policy loss's pi stay raw). rho
-    # only: the trace ratio c stays raw, the pre-registered restriction
-    # (targets.compute_player_targets). The
-    # learner ratio, the surrogate, the magnet, the entropy term and the
-    # support hinge read the raw policies; the training actors never
-    # threshold -- mu stays the policy as trained. 0.0 is bit-identical to
-    # no threshold everywhere.
-    #
-    # Three deliberate divergences from the reference, owned: always on
-    # from the restart (rnad gates it on from_learner_steps, off by
-    # default, as a late strength fix for a converged policy); .005 not
-    # .03, so it bites on far fewer actions; no 1/32 discretisation. The
-    # support hinge below holds every legal cell at twice this line, so in
-    # equilibrium the discard zone is empty -- player_discard_taken_frac
-    # above 1% sustained is the hinge failing and this hiding it, the
-    # whole-set revert trigger.
+    # Evaluation only: prune low-probability actions in the thresholded slot.
+    # Training actors and V-trace always use the full legal distribution.
     player_prune_threshold: float = 0.005
-    # tau (.01) is twice player_prune_threshold: an action must lose half
-    # its supported mass before the v-trace threshold discards it, and that
-    # factor of two is the hysteresis band. The floor it induces must stay
-    # low enough that evidence, not the floor, sets the resting switch
-    # mass. Confirm against player_switch_mass_choice in the
-    # first 250k fresh decisions.
-    player_support_tau: float = 2 * player_prune_threshold
-    # The hinge's smoothing width, in LOG-PROBABILITY space: each legal cell
-    # scores T * softplus(log(tau_row / pi) / T). At T = .1 a cell at tau/2
-    # takes .999 of the lift, at tau .5, at 1.25 tau ~.1 and at 2 tau ~.001,
-    # so the term is no longer exactly silent above the line and a cell the
-    # critic is indifferent to rests near 1.2-1.5 tau rather than at tau.
-    # 0.0 is exactly the hard hinge (loss.support_hinge_loss, no softplus).
-    player_support_temperature: float = 0.1
-    # The FLAT SUPPORT HINGE (loss.support_hinge_loss): over a
-    # row's legal cells as flat complete actions, (1/N) sum_a max(0,
-    # log(tau / pi_a)) -- every legal action held at tau, the term exactly
-    # silent once all clear it. Its per-logit derivative
-    # active_fraction * pi_b - below_b / N is bounded, zero-sum over the
-    # row and carries no pi prefactor on the cell it lifts, so it is the
-    # one force still acting on an abandoned action; above tau it says
-    # nothing and the critic ranks. The flat form imposes no hierarchy at
-    # all: it holds every legal complete action at tau and says nothing
-    # about how mass is split between modalities.
-    #
-    # Never swept in a live learner -- config is a jit
-    # static argname and a host-varied coefficient compiles one
-    # executable per value. 0.0 is exactly off (no term at all).
-    player_support_hinge_coef: float = 0.05
-    # Snap period of the reference: reg_params <- target_params, in
-    # place, every N steps (NashPG's K inner updates; their paper runs
-    # re-clone every 10k for 25 outer rounds). Frozen between snaps.
-    # A shorter period approaches an EMA magnet, which chases the policy
-    # and degenerates into a short-horizon trust region.
-    player_reg_snap_steps: int = 10_000
+    # Weight on pre-update live parameters per accepted optimiser update.
+    # FootsiesGym's fixed example uses 6e-4 / 16; 0 freezes the magnet.
+    player_reg_ema_rate: float = 3.75e-5
     builder_value_loss_coef: float = 0.5
     builder_policy_loss_coef: float = 1.0
     builder_kl_loss_coef: float = 0.1

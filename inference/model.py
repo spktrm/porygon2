@@ -24,10 +24,18 @@ np.set_printoptions(precision=2, suppress=True)
 jnp.set_printoptions(precision=2, suppress=True)
 
 
+def load_checkpoint_params(path: str) -> ParamsContainer:
+    return ParamsContainer(
+        step_count=0,
+        player_frame_count=0,
+        builder_frame_count=0,
+        player_params=checkpoint.load_component(path, "player", "params"),
+        builder_params=checkpoint.load_component(path, "builder", "target_params"),
+    )
+
+
 class InferenceModel:
-    """One checkpoint behind the HTTP eval server: the EMA `target_params`
-    (what the actors and the league play) through the same actor networks
-    and Agent main.py builds, on config.player_actor_device."""
+    """HTTP inference using live player parameters and the builder EMA."""
 
     def __init__(
         self,
@@ -67,13 +75,7 @@ class InferenceModel:
         print(f"loading checkpoint from {fpath}")
         # The Agent keys its device cache by container identity, so ONE
         # container for the process: both heads' params are committed once.
-        self._params = ParamsContainer(
-            step_count=0,
-            player_frame_count=0,
-            builder_frame_count=0,
-            player_params=checkpoint.load_component(fpath, "player", "target_params"),
-            builder_params=checkpoint.load_component(fpath, "builder", "target_params"),
-        )
+        self._params = load_checkpoint_params(fpath)
 
         print("initializing...")
         self._builder_env = TeamBuilderEnvironment(

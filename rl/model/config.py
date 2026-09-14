@@ -118,17 +118,6 @@ def get_player_model_config(
     cfg.potential_head.zero_init_output = True
     cfg.potential_head.mlp = ConfigDict()
     cfg.potential_head.mlp.layer_sizes = (2 * entity_size, entity_size, 1)
-    # The pairwise entity critics (2026-09-12, heads.PairValueHead): two
-    # generalised additive models over 12 entity rows -- unary terms, an
-    # antisymmetric cross-side pair term, a symmetric same-side term, softmax
-    # pair weights. Learner-only and built only when the learner's
-    # player_pair_value_loss_coef > 0 (artifact.player_model_config_for sets
-    # `enabled`). qk_size is every pair function's bilinear width;
-    # unary_hidden the unary MLP's one hidden layer.
-    cfg.pair_value_head = ConfigDict()
-    cfg.pair_value_head.enabled = False
-    cfg.pair_value_head.qk_size = entity_size
-    cfg.pair_value_head.unary_hidden = entity_size
     if cfg.num_decision_slots != 1:
         raise ValueError("q_head requires num_decision_slots == 1 (singles)")
 

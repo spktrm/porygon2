@@ -48,69 +48,17 @@ def factorised_entropies(
     return h_macro, h_micro_taken
 
 
-# The support hinge's feasibility clamp: per row tau_row = min(tau,
-# SUPPORT_TAU_MAX_MASS / N), so N * tau_row can never exceed this and make
-# the loss unsatisfiable (doubles, or a move with many legal target cells).
-# Panelled as player_support_n_tau_row / player_support_saturated_frac.
-SUPPORT_TAU_MAX_MASS = 0.5
+def uniform_kl_rows(log_policy: jax.Array, legal_mask: jax.Array) -> jax.Array:
+    """KL(uniform over legal actions || policy), per row in f32.
 
-
-def support_hinge_loss(
-    log_policy: jax.Array,
-    legal_mask: jax.Array,
-    tau: float,
-    tau_max_mass: float = SUPPORT_TAU_MAX_MASS,
-    temperature: float = 0.0,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """The FLAT SUPPORT HINGE: per row, over the legal cells
-    read as flat complete actions (a move x target or a switch is one
-    cell, no hierarchy),
-
-        loss = (1/N) * sum_a max(0, log(tau_row / pi_a)),   N = legal cells
-
-    the one restoring force in the policy bracket. Its derivative w.r.t.
-    flat logit z_b is `active_fraction * pi_b - below_b / N` (below_b the
-    indicator that cell b is under the line): bounded by 1, zero-sum over
-    the legal cells, and with NO pi prefactor on the term that lifts an
-    abandoned cell -- the three properties LESSONS requires of a
-    mass-restoring mechanism. Exactly silent once every legal cell clears
-    tau_row (the zero subgradient at the hinge), so above the line the
-    critic alone ranks the actions; forced and singleton rows are silent
-    without a mask. Replaces the modality-marginal uniform KL, which kept
-    pulling toward uniform modality mass at every probability.
-
-    The feasibility guard: N * tau can exceed 1 (doubles, or a move with
-    many legal target cells), which would make the loss unsatisfiable and
-    the pressure permanent, so per row `tau_row = min(tau, tau_max_mass /
-    N)`, returned so the caller can panel N * tau_row.
-
-    `temperature` T smooths the hinge in LOG-PROBABILITY space
-    (2026-09-11, docs/porygon2_support_loss_recommendations.md): each legal
-    cell scores T * softplus(deficit / T), deficit = log(tau_row / pi_a),
-    which tends to the hinge as T -> 0 and exceeds it by at most T * log 2
-    per cell; T = 0 IS the hinge, with no softplus at all. The derivative
-    becomes `mean(s) * pi_b - s_b / N`, s_a = sigmoid(deficit_a / T): still
-    bounded by 1, zero-sum and pi-free on a starved cell (s -> 1), but no
-    longer silent above the line -- at T = .1 a cell at 1.25 tau takes ~10%
-    of the lift and one at 2 tau ~0.1%.
-
-    Returns (loss per row, fraction of legal cells under the line per row --
-    a HARD count at any temperature -- and tau_row), all f32.
+    The logit gradient pi - 1/N stays bounded and zero-sum even when an
+    action's probability vanishes. Empty and singleton rows carry no loss.
     """
-    log_policy32 = log_policy.astype(jnp.float32)
-    legal_count = jnp.maximum(legal_mask.sum(axis=-1), 1)
-    tau_row = jnp.minimum(tau, tau_max_mass / legal_count)
-    deficit = jnp.log(tau_row)[..., None] - log_policy32
-    below = legal_mask & (deficit > 0)
-    if temperature > 0:
-        # Masked BEFORE the softplus: an illegal cell's deficit can be +inf.
-        legal_deficit = jnp.where(legal_mask, deficit, -jnp.inf)
-        cell_loss = temperature * jax.nn.softplus(legal_deficit / temperature)
-    else:
-        cell_loss = jnp.where(below, deficit, 0.0)
-    loss = cell_loss.sum(axis=-1) / legal_count
-    below_fraction = below.sum(axis=-1) / legal_count
-    return loss, below_fraction, tau_row
+    legal_count = legal_mask.sum(axis=-1)
+    denominator = jnp.maximum(legal_count, 1).astype(jnp.float32)
+    legal_log_policy = jnp.where(legal_mask, log_policy.astype(jnp.float32), 0.0)
+    divergence = -legal_log_policy.sum(axis=-1) / denominator - jnp.log(denominator)
+    return jnp.where(legal_count > 1, divergence, 0.0)
 
 
 def spo_objective(
@@ -149,9 +97,7 @@ def policy_gradient_loss(
     threshold: float,
     objective: str = "spo",
 ):
-    """Ratio-surrogate PG loss, one selector over the two objectives:
-    both the player and the builder run SPO's smooth quadratic penalty
-    (config.player_pg_objective — "ppo" is the A/B alternative)."""
+    """Ratio-surrogate loss: the builder's SPO and the player's APPO share it."""
     objective_fn = {"spo": spo_objective, "ppo": ppo_objective}[objective]
     pg_loss = objective_fn(
         policy_ratios=policy_ratios,
@@ -159,6 +105,61 @@ def policy_gradient_loss(
         clip_ppo=threshold,
     )
     return -average(pg_loss, valid)
+
+
+def clipped_target_ratio(
+    *,
+    learner_log_prob: jax.Array,
+    behaviour_log_prob: jax.Array,
+    old_policy_log_prob: jax.Array,
+    behaviour_ratio_clip: float,
+) -> jax.Array:
+    """IMPACT's surrogate ratio (RLlib appo_torch_policy.loss `logp_ratio`):
+    clip(mu/pi_old, 0, c) * pi_live/mu, in f32. Inside the cap the mu
+    cancels and this is pi_live/pi_old, so the PPO band is a trust region
+    around the target snapshot rather than around each row's own stale
+    behaviour policy; past the cap a row whose behaviour policy was more
+    than c times likelier than pi_old is scaled down by exactly c*pi_old/mu.
+    Only the learner term carries gradient: the other two are batch data
+    and a stopped forward."""
+    learner_log_prob = learner_log_prob.astype(jnp.float32)
+    behaviour_log_prob = jax.lax.stop_gradient(behaviour_log_prob.astype(jnp.float32))
+    old_policy_log_prob = jax.lax.stop_gradient(old_policy_log_prob.astype(jnp.float32))
+    behaviour_old_ratio = jnp.clip(
+        jnp.exp(behaviour_log_prob - old_policy_log_prob), 0.0, behaviour_ratio_clip
+    )
+    return behaviour_old_ratio * jnp.exp(learner_log_prob - behaviour_log_prob)
+
+
+def appo_policy_loss(
+    *,
+    learner_log_prob: jax.Array,
+    behaviour_log_prob: jax.Array,
+    old_policy_log_prob: jax.Array,
+    advantages: jax.Array,
+    valid: jax.Array,
+    clip_ppo: float,
+    behaviour_ratio_clip: float,
+) -> jax.Array:
+    """The APPO actor loss: PPO's clipped surrogate on the clipped target
+    ratio, over stopped V-trace advantages that already carry their own
+    truncated rho = min(1, pi_old/mu). Invalid rows are zeroed before the
+    ratio is formed so non-finite padding cannot leak through the clip."""
+    ratio = clipped_target_ratio(
+        learner_log_prob=jnp.where(valid, learner_log_prob, 0.0),
+        behaviour_log_prob=jnp.where(valid, behaviour_log_prob, 0.0),
+        old_policy_log_prob=jnp.where(valid, old_policy_log_prob, 0.0),
+        behaviour_ratio_clip=behaviour_ratio_clip,
+    )
+    advantages = jax.lax.stop_gradient(advantages.astype(jnp.float32))
+    advantages = jnp.where(valid, advantages, 0.0)
+    return policy_gradient_loss(
+        policy_ratios=ratio,
+        advantages=advantages,
+        valid=valid,
+        threshold=clip_ppo,
+        objective="ppo",
+    )
 
 
 def clip_fraction(

@@ -116,10 +116,8 @@ class OfflineContext:
     run_state: _RunState = field(default_factory=_RunState)
 
 
-def load_params(ckpt_dir: str, which: str = "target_params"):
-    """`target_params` (EMA — what actors and the league play) by default;
-    `params` for the raw learner leaf, `reg_params` for the NashPG
-    reference."""
+def load_params(ckpt_dir: str, which: str = "params"):
+    """Load the live player parameters or the EMA `reg_params` reference."""
     return checkpoint.load_component(ckpt_dir, "player", which)
 
 
@@ -287,7 +285,7 @@ def encode_policy_rows(module, actor_input, actor_output):
         in_axes=0,
         out_axes=0,
     )
-    sequence, row_valid, _ = assemble(encoder, env, *history_inputs)
+    sequence, row_valid = assemble(encoder, env, *history_inputs)
     kept = encoder.kept_rows()
     read_mask = SEQUENCE_READ_MASK[np.ix_(kept, kept)]
 

@@ -9,7 +9,6 @@ from ml_collections import ConfigDict
 from rl.environment.data import NUM_ACTION_CELLS
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
-    PairValueHeadOutput,
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
@@ -220,23 +219,19 @@ def bilinear_pair(
     key_name: str,
     src_name: str | None = None,
     tgt_name: str | None = None,
-    query_init: nn.initializers.Initializer = nn.initializers.zeros_init(),
 ) -> jax.Array:
-    """THE pair form, written once (hoisted from FlatActionReadout
-    2026-09-12 so the pairwise critic is a call to it, not a copy): a
-    bilinear between every source row and every target row, (..., S, T) in
-    the rows' dtype, plus -- when named -- a scalar on each side. The
-    source-side `query` is the zero factor: the product is exactly 0 at
-    init, d/d query is a rank-1 outer product of LIVE inputs so it moves at
-    step 1, and `key` (gradient proportional to query) unfreezes at step 2
-    (FlatActionReadout's docstring carries the argument). Submodules
-    register on the calling compact module under the given names, so the
-    parameter tree is the caller's. `query_init` is the zero factor's init;
-    a caller whose product ALREADY multiplies a zero-init term passes a
-    live one, or the two zero factors stall each other."""
+    """A zero query over live keys avoids the two-factor gradient stall.
+
+    Names register each projection on the calling compact module, preserving
+    the action readout's checkpoint parameter tree.
+    """
     dtype = src_rows.dtype
     query = nn.Dense(
-        qk_size, kernel_init=query_init, use_bias=False, dtype=dtype, name=query_name
+        qk_size,
+        kernel_init=nn.initializers.zeros_init(),
+        use_bias=False,
+        dtype=dtype,
+        name=query_name,
     )(src_rows)
     key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=key_name)(tgt_rows)
     logits = jnp.einsum("...sq,...tq->...st", query, key) / math.sqrt(qk_size)
@@ -397,176 +392,3 @@ class RegressionValueLogitHead(nn.Module):
         if getattr(self.cfg, "output_activation", None) is not None:
             x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))
-
-
-# The signed parts of a PairValueHead's value, in `partials` order.
-PAIR_VALUE_PARTIALS = (
-    "unary_mine",
-    "unary_theirs",
-    "cross",
-    "synergy_mine",
-    "synergy_theirs",
-)
-
-
-def masked_softmax(scores: jax.Array, mask: jax.Array) -> jax.Array:
-    """Softmax over the last two axes restricted to `mask`: exact zeros off
-    the mask, exact 1/n at equal scores, and all zeros (not NaN) when the
-    mask is empty. f32 in, f32 out."""
-    scores = jnp.where(mask, scores, -1e9)
-    scores = scores - jnp.max(scores, axis=(-2, -1), keepdims=True)
-    weights = jnp.where(mask, jnp.exp(scores), 0.0)
-    return weights / jnp.maximum(weights.sum(axis=(-2, -1), keepdims=True), 1e-9)
-
-
-def centred_over(values: jax.Array, mask: jax.Array) -> jax.Array:
-    """`values` minus their mean over `mask` (the last two axes), exact zeros
-    off the mask. A pair term this passes through is zero-mean over the
-    live pairs of a state by construction: a state-wide offset cannot
-    live in it, only in the unary, so whatever it carries differs across
-    pairs -- which is also the only gradient its softmax weights can
-    receive (d/d alpha_ij is the pair's deviation from the weighted mean)."""
-    count = jnp.maximum(mask.sum(axis=(-2, -1), keepdims=True), 1)
-    mean = jnp.where(mask, values, 0.0).sum(axis=(-2, -1), keepdims=True) / count
-    return jnp.where(mask, values - mean, 0.0)
-
-
-class PairValueHead(nn.Module):
-    """The pairwise entity critic (2026-09-12): a generalised additive model
-    over 12 entity rows, my side A = rows[:6], theirs B = rows[6:].
-
-        V = sum_A v_i u_i - sum_B v_j u_j
-            + sum_{i in A, j in B} alpha_ij m_ij
-            + sum_{i,i' in A} beta_ii' s_ii' - sum_{j,j' in B} beta_jj' s_jj'
-
-    u_i = u(x_i): the unary term, single-mon strength, so the pair terms
-        are interactions and not main effects in disguise. The rows are
-        post-trunk (both heads, 2026-09-12 user call), so whatever field,
-        history or request context a term needs has already been routed
-        into its row by the trunk -- the head carries no context of its own.
-    m_ij = tanh(g(i, j) - g(j, i)), centred over the alive cross pairs of
-        the state (`centred_over`): the cross-side pair, antisymmetric by
-        construction. Strength of i over j and pressure of j on i are this
-        one number. g is ONE bilinear (`cross_query` x `cross_key`) over
-        all 12 rows, read in both orientations. The centring is a
-        structural restriction, not a penalty (2026-09-13): the label is
-        one scalar per state, so a pair term competing with a contextual
-        unary for the same residual found the state-wide offset first and
-        repeated it across all 36 pairs, and its weights, whose only
-        gradient is a pair's deviation from the weighted mean, never left
-        uniform. Zero-mean pairs cannot carry that offset.
-    alpha = softmax over ALIVE cross pairs of h(i, j) + h(j, i), a second
-        bilinear symmetrised; a fainted or absent mon's pairs weigh exactly
-        0. Concentrating on the decisive matchup is the intended reading.
-    s_ii' = tanh(g_s(i, i') + g_s(i', i)): the same-side pair (synergy),
-        symmetric by construction, one bilinear shared by both sides, with
-        its own symmetric softmax weights beta per side; centred over each
-        side's alive pairs for the same reason as m.
-
-    Because u, g, h, g_s are each ONE function shared across sides, swapping
-    the two sides (rows and flags) negates the HEAD exactly
-    (tests/test_pair_value_head.py); whether the trunk rows themselves are
-    mirror-consistent is a property of the trunk, not of this head. At init
-    V == 0 (the unary's last kernel and the pair queries are zero, tanh 0 =
-    0); the weight queries are LIVE at init, a contrast over the rows,
-    because a centred term under uniform weights is two zero factors.
-    The pair queries and the unary's last layer move at step 1, keys and
-    the weight scores from step 2 (their gradients are proportional to the
-    pair terms, which are 0 for one step). The pair parts
-    are convex combinations of centred numbers in [-2, 2], so each is
-    bounded by two units and the unary terms carry the scale. bf16 through the
-    projections, one f32 cast before the tanh / softmax / sums.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(
-        self,
-        rows: jax.Array,
-        valid: jax.Array,
-        alive: jax.Array,
-    ) -> PairValueHeadOutput:
-        per_side = rows.shape[0] // 2
-        zeros = nn.initializers.zeros_init()
-        qk_size = self.cfg.qk_size
-
-        unary = MLP(
-            layer_sizes=(self.cfg.unary_hidden, 1),
-            final_kernel_init=zeros,
-            name="unary",
-        )(rows)[..., 0].astype(jnp.float32)
-        unary = jnp.where(valid, unary, 0.0)
-
-        def pair(name: str, query_init=zeros) -> jax.Array:
-            return bilinear_pair(
-                rows,
-                rows,
-                qk_size=qk_size,
-                query_name=f"{name}_query",
-                key_name=f"{name}_key",
-                query_init=query_init,
-            ).astype(jnp.float32)
-
-        # The weight scores multiply a centred, zero-init pair term, so they
-        # are the live factor: uniform weights over a centred term give the
-        # term no gradient (d/dm_ij = alpha_ij - 1/n = 0) and vice versa.
-        live = nn.initializers.lecun_normal()
-
-        mine = slice(0, per_side)
-        theirs = slice(per_side, 2 * per_side)
-        present = valid & alive
-        cross_mask = present[mine][:, None] & present[theirs][None, :]
-        off_diagonal = ~jnp.eye(per_side, dtype=jnp.bool_)
-        synergy_mask = (
-            jnp.stack(
-                (
-                    present[mine][:, None] & present[mine][None, :],
-                    present[theirs][:, None] & present[theirs][None, :],
-                )
-            )
-            & off_diagonal
-        )
-
-        cross_scores = pair("cross")
-        cross = jnp.tanh(cross_scores[mine, theirs] - cross_scores[theirs, mine].T)
-        cross = centred_over(cross, cross_mask)
-        weight_scores = pair("cross_weight", live)
-        cross_weight = masked_softmax(
-            weight_scores[mine, theirs] + weight_scores[theirs, mine].T, cross_mask
-        )
-
-        synergy_scores = pair("synergy")
-        synergy_blocks = jnp.stack(
-            (synergy_scores[mine, mine], synergy_scores[theirs, theirs])
-        )
-        synergy = jnp.tanh(synergy_blocks + jnp.swapaxes(synergy_blocks, -2, -1))
-        synergy = centred_over(synergy, synergy_mask)
-        synergy_weight_scores = pair("synergy_weight", live)
-        synergy_weight_blocks = jnp.stack(
-            (synergy_weight_scores[mine, mine], synergy_weight_scores[theirs, theirs])
-        )
-        synergy_weight = masked_softmax(
-            synergy_weight_blocks + jnp.swapaxes(synergy_weight_blocks, -2, -1),
-            synergy_mask,
-        )
-
-        synergy_sums = jnp.sum(synergy_weight * synergy, axis=(-2, -1))
-        partials = jnp.stack(
-            (
-                jnp.sum(unary[mine]),
-                -jnp.sum(unary[theirs]),
-                jnp.sum(cross_weight * cross),
-                synergy_sums[0],
-                -synergy_sums[1],
-            )
-        )
-        return PairValueHeadOutput(
-            value=jnp.sum(partials),
-            unary=unary,
-            cross=cross,
-            cross_weight=cross_weight,
-            synergy=synergy,
-            synergy_weight=synergy_weight,
-            partials=partials,
-        )

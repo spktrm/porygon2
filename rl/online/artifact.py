@@ -15,7 +15,6 @@ import json
 import logging
 import os
 from collections.abc import Callable, Mapping
-from pprint import pformat
 from typing import Any, Literal
 
 import flax.linen as nn
@@ -83,9 +82,7 @@ def read_manifest(ckpt_path: str) -> dict | None:
 def check_manifest(ckpt_path: str, learner_config, strict: bool) -> None:
     """Compares a checkpoint manifest against the current architecture.
 
-    strict (checkpoint-mode resume): any mismatch raises — a full state
-    restore requires an identical architecture. Non-strict (params-mode):
-    mismatches print, since merge_params handles them field by field.
+    Strict mismatches raise; params-mode reports them before merging.
     Pre-manifest checkpoints pass silently either way."""
     manifest = read_manifest(ckpt_path)
     if manifest is None:
@@ -116,13 +113,12 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     ] = struct.field(pytree_node=False)
     init_fn: Callable[[jax.Array], Params] = struct.field(pytree_node=False)
 
-    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    # NashPG reference policy pi_reg: a periodic hard SNAP of
-    # target_params, in place, every config.player_reg_snap_steps, frozen
-    # between snaps. The magnet KL(pi || pi_reg) in the policy objective is
-    # measured against it; the snap bounds the log-ratio gap structurally.
-    # One param set: a hard reset needs no crossfade pair, no 4th net.
     reg_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    # IMPACT's target: a hard copy of the live parameters taken every
+    # player_old_policy_snap_steps accepted updates. It is pi_old in the
+    # surrogate -- the V-trace target policy and the clip's reference --
+    # and is never optimised, published or used by actors.
+    old_policy_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
     step_count: jax.Array = struct.field(
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
@@ -152,9 +148,6 @@ def player_model_config_for(learner_config: Porygon2LearnerConfig):
 
     model_config = get_player_model_config(learner_config.generation, train=True)
     model_config.potential_head.enabled = learner_config.player_potential_strength > 0
-    model_config.pair_value_head.enabled = (
-        learner_config.player_pair_value_loss_coef > 0
-    )
     return model_config
 
 
@@ -200,11 +193,9 @@ def create_train_state(
         ),
         init_fn=player_params_init_fn,
         params=initial_player_params,
-        # Deep-copied: params and target_params must not share buffers, or
-        # donating the train state to the jitted train step fails with a
-        # duplicate-donation error on the first step.
-        target_params=jax.tree.map(jnp.copy, initial_player_params),
+        # Neither copy can alias the donated live parameters.
         reg_params=jax.tree.map(jnp.copy, initial_player_params),
+        old_policy_params=jax.tree.map(jnp.copy, initial_player_params),
         tx=player_optimizer,
     )
 
@@ -293,6 +284,34 @@ def player_scalar_components(
     )
 
 
+def player_checkpoint_components(
+    player_state: Porygon2PlayerTrainState,
+) -> dict[str, Any]:
+    """Every player component a full checkpoint carries, assembled ONCE
+    for the same reason as `player_scalar_components`: both writers (the
+    synchronous save_state and the learner's background payload) call
+    this, so a parameter tree added to the TrainState is persisted by both
+    or by neither."""
+    return dict(
+        params=player_state.params,
+        reg_params=player_state.reg_params,
+        old_policy_params=player_state.old_policy_params,
+        opt_state=player_state.opt_state,
+        scalars=player_scalar_components(player_state),
+    )
+
+
+def builder_checkpoint_components(
+    builder_state: Porygon2BuilderTrainState,
+) -> dict[str, Any]:
+    return dict(
+        params=builder_state.params,
+        target_params=builder_state.target_params,
+        opt_state=builder_state.opt_state,
+        scalars=builder_scalar_components(builder_state),
+    )
+
+
 def builder_scalar_components(
     builder_state: Porygon2BuilderTrainState,
 ) -> dict[str, Any]:
@@ -327,24 +346,11 @@ def save_state(
     league: League,
     controller_bytes: bytes | None = None,
 ):
-    player_components = dict(
-        params=player_state.params,
-        target_params=player_state.target_params,
-        reg_params=player_state.reg_params,
-        opt_state=player_state.opt_state,
-        scalars=player_scalar_components(player_state),
-    )
-    builder_components = dict(
-        params=builder_state.params,
-        target_params=builder_state.target_params,
-        opt_state=builder_state.opt_state,
-        scalars=builder_scalar_components(builder_state),
-    )
     return write_checkpoint_components(
         save_path,
         learner_config,
-        player_components,
-        builder_components,
+        player_checkpoint_components(player_state),
+        builder_checkpoint_components(builder_state),
         league.serialize(),
         controller_bytes,
         step_count=int(np.asarray(player_state.step_count)),
@@ -456,8 +462,8 @@ def _init_league(
             # an already-on-device tree is a no-op, so handing out live
             # buffers has actors running inference on memory the donated
             # train step deletes.
-            player_params=jax.device_get(player_state.target_params),
-            builder_params=jax.device_get(builder_state.target_params),
+            player_params=jax.device_get(player_state.params),
+            builder_params=jax.device_get(builder_state.params),
         ),
         players=[],
         league_size=learner_config.league_size,
@@ -502,7 +508,8 @@ def load_from_checkpoint(
     host-side controller state.
 
     reset_league drops the serialised roster and starts main-only, keeping
-    everything else (optimiser, counts, EMA, magnet reference, wandb run).
+    everything else (optimiser, counts, magnet reference, old-policy
+    snapshot, wandb run).
     The one-shot for an architecture change carried through the by-path
     merge: the snapshots on disk are the OLD tree, and League.materialize
     loads them raw, so under the new tree they are not the policies the
@@ -511,7 +518,13 @@ def load_from_checkpoint(
     """
     tqdm.write(f"Loading checkpoint from {ckpt_path}")
     check_manifest(ckpt_path, learner_config, strict=True)
-    ckpt_data = checkpoint.load_full(ckpt_path)
+    if checkpoint.has_component(ckpt_path, "player", "target_params"):
+        tqdm.write(
+            "Ignoring retired player/target_params; restoring live and reference parameters."
+        )
+    ckpt_data = checkpoint.load_full(
+        ckpt_path, excluded_components={"player": ("target_params",)}
+    )
 
     tqdm.write("Checkpoint data:")
     ckpt_player_state = ckpt_data["player_state"]
@@ -520,9 +533,18 @@ def load_from_checkpoint(
     player_scalars = ckpt_player_state["scalars"]
     builder_scalars = ckpt_builder_state["scalars"]
 
-    # Debug prints (scalars only — heavy arrays excluded)
-    tqdm.write(pformat(player_scalars))
-    tqdm.write(pformat(builder_scalars))
+    for label, scalars in (("player", player_scalars), ("builder", builder_scalars)):
+        tqdm.write(
+            f"{label}: step_count={int(np.asarray(scalars['step_count']))}, "
+            f"frame_count={int(np.asarray(scalars['frame_count']))}"
+        )
+    player_state = apply_player_scalars(player_state, player_scalars)
+    if (
+        not reset_league
+        and ckpt_league_bytes is None
+        and int(np.asarray(player_state.step_count)) > 0
+    ):
+        raise ValueError(f"Checkpoint at {ckpt_path} is missing league state")
 
     if reset_league:
         logger.warning(
@@ -549,31 +571,39 @@ def load_from_checkpoint(
     # checkpoint after. The manifest check above still refuses a genuinely
     # different architecture; this handles the one-leaf deltas that used to
     # force params mode -- and with it a fresh league and a fresh Adam.
+    # The two derived parameter trees seed from the live checkpoint params
+    # when their component is absent (a checkpoint older than the tree),
+    # never from each other: the magnet and the target are separate clocks.
+    derived_params = {}
+    for component in ("reg_params", "old_policy_params"):
+        if component in ckpt_player_state:
+            derived_params[component] = ckpt_player_state[component]
+        else:
+            tqdm.write(
+                f"Checkpoint predates player/{component}; "
+                "seeding an independent live-parameter copy."
+            )
+            derived_params[component] = jax.tree.map(
+                jnp.copy, ckpt_player_state["params"]
+            )
     player_state = player_state.replace(
         params=_merged(
             "player params", player_state.params, ckpt_player_state["params"]
         ),
-        target_params=_merged(
-            "player target_params",
-            player_state.target_params,
-            ckpt_player_state["target_params"],
-        ),
-        # Checkpoints from before the reference policy existed seed it
-        # from the target (KL 0 at resume; the next snap takes over from there).
         reg_params=_merged(
             "player reg_params",
             player_state.reg_params,
-            ckpt_player_state.get(
-                "reg_params",
-                jax.tree.map(jnp.copy, ckpt_player_state["target_params"]),
-            ),
+            derived_params["reg_params"],
+        ),
+        old_policy_params=_merged(
+            "player old_policy_params",
+            player_state.old_policy_params,
+            derived_params["old_policy_params"],
         ),
         opt_state=merge_opt_state(
             player_state.opt_state, ckpt_player_state["opt_state"]
         ),
     )
-    player_state = apply_player_scalars(player_state, player_scalars)
-
     builder_state = builder_state.replace(
         params=_merged(
             "builder params", builder_state.params, ckpt_builder_state["params"]
@@ -597,8 +627,8 @@ def load_from_checkpoint(
             step_count=MAIN_KEY,
             player_frame_count=int(player_scalars["frame_count"]),
             builder_frame_count=int(builder_scalars["frame_count"]),
-            player_params=jax.device_get(player_state.target_params),
-            builder_params=jax.device_get(builder_state.target_params),
+            player_params=jax.device_get(player_state.params),
+            builder_params=jax.device_get(builder_state.params),
         )
     )
 
@@ -719,8 +749,9 @@ def apply_br_init(
     its default) is the identity and never pays the init call.
     "scratch" never reaches here: it takes the scratch load path — and
     note scratch itself inits from the lineage seed, i.e. the target's
-    ancestor. The returned tree is what params/target_params/reg_params
-    are all set to, so the magnet anchors to the TRANSFORMED policy —
+    ancestor. The returned tree seeds params, reg_params and
+    old_policy_params, so the
+    magnet anchors to the TRANSFORMED policy —
     post-reset the anchor is near-uniform, not the inherited collapse.
     """
     if learner_config.br_init == "target":
@@ -768,8 +799,9 @@ def load_from_params(
     """
     Params only: merges ckpt params into the freshly initialized trees, so
     modules added since the checkpoint keep their fresh init and everything
-    else keeps its trained weights. Sets BOTH params and target_params to
-    the merged tree. Resets opt_state and counts (by keeping the input
+    else keeps its trained weights. Seeds the player reference, the player
+    old-policy snapshot and the builder
+    target from independent copies. Resets opt_state and counts (keeping the input
     state's version of those) and starts a fresh league.
     """
     tqdm.write(f"Loading (merging) params only from {ckpt_path}")
@@ -782,14 +814,11 @@ def load_from_params(
 
     player_params = apply_br_init(player_params, player_state.init_fn, learner_config)
 
-    # target_params gets the same merged tree: leaving it at fresh init
-    # would hand v-trace a garbage reference policy for ~1/ema_rate steps.
-    # Deep-copied so params/target_params share no buffers — required for
-    # donating the train state to the jitted train step.
+    # Independent copies keep each train-state leaf safe to donate.
     player_state = player_state.replace(
         params=player_params,
-        target_params=jax.tree.map(jnp.copy, player_params),
         reg_params=jax.tree.map(jnp.copy, player_params),
+        old_policy_params=jax.tree.map(jnp.copy, player_params),
     )
     builder_state = builder_state.replace(
         params=builder_params,

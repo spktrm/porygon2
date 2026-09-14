@@ -69,9 +69,9 @@ def should_add_new_player(
 
 
 def create_params_container(
-    run_state: RunState, target: bool = False, step_count: int = MAIN_KEY
+    run_state: RunState, step_count: int = MAIN_KEY
 ) -> ParamsContainer:
-    """Host copy of the live params (``target`` = the EMA target params).
+    """Host copy of the live player and builder parameters.
 
     Called on the learner thread only: it is the one place device state
     is read into host memory, so every other consumer — actors, the
@@ -79,34 +79,28 @@ def create_params_container(
     can donate away."""
     player_state = run_state.player_state
     builder_state = run_state.builder_state
-    if target:
-        player_params = player_state.target_params
-        builder_params = builder_state.target_params
-    else:
-        player_params = player_state.params
-        builder_params = builder_state.params
     return ParamsContainer(
-        player_frame_count=jax.device_get(player_state.frame_count).item(),
-        builder_frame_count=jax.device_get(builder_state.frame_count).item(),
+        player_frame_count=int(np.asarray(jax.device_get(player_state.frame_count))),
+        builder_frame_count=int(np.asarray(jax.device_get(builder_state.frame_count))),
         step_count=step_count,
-        player_params=jax.device_get(player_params),
-        builder_params=jax.device_get(builder_params),
+        player_params=jax.device_get(player_state.params),
+        builder_params=jax.device_get(builder_state.params),
     )
 
 
 def publish_live_params(run_state: RunState, league: League) -> None:
     """Refresh what the actors and the eval thread play from: the league's
     live main entry (``PlayerActor.pull_own_player``) and the eval
-    snapshot — main AND EMA target params, stamped with the train step, so
+    snapshot stamped with the train step, so
     the eval thread never touches device state (the train step donates
     its buffers; a live device reference held across an unroll would read
     deleted arrays — the reason the gpu_lock used to exist)."""
-    league.update_live(MAIN_KEY, create_params_container(run_state))
-    step_count = jax.device_get(run_state.player_state.step_count).item()
+    step_count = int(np.asarray(jax.device_get(run_state.player_state.step_count)))
+    main = create_params_container(run_state, step_count=step_count)
+    league.update_live(MAIN_KEY, main._replace(step_count=MAIN_KEY))
     run_state.eval_snapshot = EvalSnapshot(
         step_count=step_count,
-        main=create_params_container(run_state, step_count=step_count),
-        ema=create_params_container(run_state, target=True, step_count=step_count),
+        main=main,
     )
 
 
@@ -128,7 +122,6 @@ def add_player_to_league(
         snapshot_dir,
         player_components=dict(
             params=jax.device_get(run_state.player_state.params),
-            target_params=jax.device_get(run_state.player_state.target_params),
         ),
         builder_components=dict(
             params=jax.device_get(run_state.builder_state.params),
@@ -242,7 +235,6 @@ def publish_br_snapshot(run_state: RunState, config: Porygon2LearnerConfig) -> s
         snapshot_dir,
         player_components=dict(
             params=jax.device_get(run_state.player_state.params),
-            target_params=jax.device_get(run_state.player_state.target_params),
         ),
         builder_components=dict(
             params=jax.device_get(run_state.builder_state.params),

@@ -6,9 +6,8 @@ compiled train step, on a stopped run's checkpoint.
 From the SAME checkpoint, restored once at strength 0 and once at --strength
 (the potential head fresh and therefore exactly 0 -- the launch state), on
 every recorded batch:
-- the policy-logit gradient of the learner's own surrogate (policy_gradient_
-  loss over normalise_advantages of compute_player_targets) with params, EMA
-  target, ratios, thresholding and masks held fixed: absolute norms, the RMS
+- the policy-logit gradient of the learner's V-trace score-function loss,
+  with its live-network estimates, ratios and masks held fixed: absolute norms, the RMS
   perturbation ||g_eta - g_0|| / ||g_0||, the cosine, and the voluntary-
   switch / stay split with row counts. The gradient is taken w.r.t. each
   row's legal log-policy, equal to the logit gradient on legal cells
@@ -50,27 +49,20 @@ import numpy as np
 from rl.environment.interfaces import PlayerActorInput
 from rl.model.heads import HeadParams
 from rl.model.utils import legal_log_policy
-from rl.offline.support_screen import record_chunks, restored_states
+from rl.offline.uniform_kl_screen import record_chunks, restored_states
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.batching import stack_batch
-from rl.online.training.loss import policy_gradient_loss
-from rl.online.training.targets import (
-    compute_player_targets,
-    thresholded_target_ratio,
-    unit_potential,
-)
+from rl.online.training.loss import vtrace_policy_loss
+from rl.online.training.targets import compute_player_targets, unit_potential
 from rl.online.training.telemetry import action_axis_masks
-from rl.online.training.train_step import TRAIN_STEP_JIT, normalise_advantages
+from rl.online.training.train_step import TRAIN_STEP_JIT
 
 logger = logging.getLogger(__name__)
 LOGIT_BUDGET = 0.10
 
 
 def policy_logit_gradient(player_state, batch, config: Porygon2LearnerConfig):
-    """The surrogate's gradient w.r.t. each row's legal log-policy, from the
-    learner's own targets, normalisation and loss built as train_step builds
-    them (the forwards, the thresholded target ratio, the privileged or
-    deployable bootstrap, the potential channel at config's strength)."""
+    """Differentiate the player's score-function loss with its labels fixed."""
     transitions = batch.player_transitions
     actor_input = PlayerActorInput(
         env=transitions.env_output,
@@ -78,48 +70,39 @@ def policy_logit_gradient(player_state, batch, config: Porygon2LearnerConfig):
         history=batch.player_history,
     )
     actor_output = transitions.agent_output.actor_output
-    target = player_state.apply_fn(
-        player_state.target_params, actor_input, actor_output, HeadParams()
-    )
     learner = player_state.apply_fn(
         player_state.params, actor_input, actor_output, HeadParams()
     )
     behaviour_log_prob = actor_output.action_head.log_prob
     action_index = actor_output.action_head.action_index
     legal = transitions.env_output.action_mask
-    ratio, ratio_raw, _, _ = thresholded_target_ratio(
-        target.action_head.log_policy,
-        behaviour_log_prob,
-        action_index,
-        legal,
-        config.player_prune_threshold,
+    ratio = jnp.exp(
+        learner.action_head.log_prob.astype(jnp.float32)
+        - behaviour_log_prob.astype(jnp.float32)
     )
-    value_log_probs = target.value_head.log_probs
     if config.player_privileged_targets:
-        value_log_probs = target.priv_value_head.log_probs
+        value_log_probs = learner.priv_value_head.log_probs
+    else:
+        value_log_probs = learner.value_head.log_probs
     potential_values = None
     if config.player_potential_strength > 0:
-        potential_values = target.potential_head.logits
+        potential_values = learner.potential_head.logits
     targets, _ = compute_player_targets(
         batch,
         value_log_probs,
         ratio,
         config,
-        isr_raw=ratio_raw,
         potential_values=potential_values,
     )
-    advantages, _, _ = normalise_advantages(targets.pg_advantages, targets.policy_mask)
 
     def surrogate(log_policy: jax.Array) -> jax.Array:
         taken = jnp.take_along_axis(
             legal_log_policy(log_policy, legal), action_index[..., None], axis=-1
         )[..., 0]
-        return policy_gradient_loss(
-            policy_ratios=jnp.exp(taken - behaviour_log_prob),
-            advantages=advantages,
+        return vtrace_policy_loss(
+            log_prob=taken,
+            advantages=targets.pg_advantages,
             valid=targets.policy_mask,
-            threshold=config.player_ppo_clip,
-            objective=config.player_pg_objective,
         )
 
     gradient = jax.grad(surrogate)(learner.action_head.log_policy.astype(jnp.float32))
@@ -172,7 +155,7 @@ def main(argv=None):
     host_on = restored_states(arguments.checkpoint, on)
     chunks = record_chunks(
         off,
-        host_off[0].target_params,
+        host_off[0].params,
         arguments.games,
         arguments.seed,
         arguments.device,

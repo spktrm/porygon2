@@ -94,13 +94,8 @@ def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
     return wr.LinePlot(**{k: v for k, v in kwargs.items() if v is not None})
 
 
-# The eval slate (rl/online/main.py): two slots against the simple
-# heuristic, both the EMA params at T=1. `plain-t1` samples the policy
-# exactly as the training actors do; `thresholded` samples it with every
-# legal cell below player_prune_threshold removed and the rest renormalised
-# (HeadParams.prune_threshold) -- the distribution the learner's v-trace
-# ratios are built on. Their gap prices the threshold in play. Series are
-# keyed by the eval thread's name.
+# Both eval slots use the live player's published parameters at T=1.
+# Thresholding is an evaluation intervention; V-trace uses the full policy.
 SH = "EvalActor-simpleheuristic"
 PLAIN_T1_ACTOR = f"{SH}-plain-t1-0"
 THRESHOLDED_ACTOR = f"{SH}-thresholded-1"
@@ -113,7 +108,7 @@ def threshold_winrate_panel():
     thresholded at sampling. Actor-side averages (200-game half-life,
     reset on restart), no additional UI smoothing."""
     return lp(
-        "EMA win rate · T=1 plain vs thresholded (200-game half-life)",
+        "Smoothed win rate · T=1 plain vs thresholded (200-game half-life)",
         [f"smoothed-wr-{actor}" for actor in EVAL_ACTORS],
         x="lifetime_step",
         smooth=0,
@@ -134,7 +129,7 @@ def rl_sections():
             panels=[
                 threshold_winrate_panel(),
                 lp(
-                    "EMA alive-mon margin · T=1 plain vs thresholded (200-game half-life)",
+                    "Smoothed alive-mon margin · T=1 plain vs thresholded (200-game half-life)",
                     [f"smoothed-margin-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
@@ -184,10 +179,6 @@ def rl_sections():
                         # sustained past 30k is the abort.
                         "player_value_head_r2",
                         "player_priv_value_head_r2",
-                        # The pairwise critics (2026-09-12), same target and
-                        # mask: the decomposed instrument for the same premise.
-                        "player_pair_value_public_r2",
-                        "player_pair_value_private_r2",
                     ],
                     range_y=(-1, 1),
                 ),
@@ -199,39 +190,48 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # THE policy gradient since 2026-08-26: NashPG
-            # (arXiv:2510.18183) — a PPO-clipped surrogate on the taken
-            # action's pi/mu ratio over the batch-normalised v-trace
-            # advantage, plus a differentiated forward KL magnet to the
-            # periodically snapped reference and an entropy bonus inside
-            # the same bracket. The entropy/switch-rate abort watch lives
-            # in "0 · At a glance" now — not repeated here.
-            name="1 · Policy loss (NashPG)",
+            name="1 · Policy loss (APPO + EMAgnet)",
             is_open=True,
             panels=[
                 lp(
-                    # The surrogate's value and how often the trust region
-                    # is active. clip_frac pinned near 0 = the policy
-                    # barely moves (look at lr/coef before blaming the
-                    # critic); climbing toward 1 = replayed data has
-                    # outrun the band (staleness / replay controller).
-                    "PPO surrogate & clip occupancy",
-                    ["player_loss_pg", "player_ppo_clip_frac"],
+                    "APPO clipped surrogate loss",
+                    ["player_loss_pg"],
                 ),
                 lp(
-                    # Batch advantage statistics BEFORE normalisation —
-                    # the scale the unit-std surrogate advantage divides
-                    # out. std collapsing toward 0 = the value function
-                    # sees no return differences to steer by.
-                    "v-trace advantage scale (pre-normalisation)",
+                    "V-trace advantage scale",
                     ["player_pg_adv_mean", "player_pg_adv_std"],
                 ),
                 lp(
-                    # The ABORT instrument for the flat support hinge, on
-                    # its own panel: the hinge is silent above tau, so this
-                    # should hold its ~.49; rising toward .93 with
-                    # ineffective_confident_mass unmoved is the whole-set
-                    # revert.
+                    # The trust region at work: rows outside the PPO band
+                    # around pi_old, and how often the mu/pi_old cap bit.
+                    # Both near 0 means the snapshot is doing nothing the
+                    # live ratio would not; clip_frac climbing between
+                    # snaps is the reuse the band is holding back.
+                    "Trust region: PPO clip and behaviour-cap fractions",
+                    [
+                        "player_ppo_clip_frac",
+                        "player_behaviour_old_ratio_clip_frac",
+                    ],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    "Surrogate ratio and capped mu/pi_old (means)",
+                    [
+                        "player_surrogate_ratio_mean",
+                        "player_behaviour_old_ratio_mean",
+                    ],
+                ),
+                lp(
+                    "Old-policy snapshot age (updates since copy)",
+                    ["player_old_policy_age"],
+                    smooth=0,
+                ),
+                lp(
+                    "EMA reference weight applied per update (0 on rejection)",
+                    ["player_reg_ema_rate"],
+                    smooth=0,
+                ),
+                lp(
                     "Within-taken-modality normalised entropy (abort instrument)",
                     ["player_entropy_micro_taken"],
                     range_y=(0, 1),
@@ -262,21 +262,15 @@ def rl_sections():
                     log_y=True,
                 ),
                 lp(
-                    # The flat support hinge (2026-09-09, replacing the
-                    # modality-marginal KL): the one restoring force, silent
-                    # above tau. Read against switch mass -- falling as mass
-                    # returns is the term relaxing; pinned with mass unmoved
-                    # is paying and buying nothing. Detail in section 11.
-                    "Support hinge & switch mass",
-                    ["player_loss_support", "player_switch_mass_choice"],
+                    "Switch probability on choice rows",
+                    ["player_switch_mass_choice"],
                 ),
                 lp(
-                    "Loss components",
+                    "Unweighted loss components",
                     [
                         "player_loss_pg",
                         "player_loss_entropy",
-                        "player_loss_support",
-                        "player_loss_kl",
+                        "player_ref_kl",
                         "player_loss_v_win",
                     ],
                 ),
@@ -454,14 +448,7 @@ def rl_sections():
                     ["player_chunk_vol_switch_frac"],
                 ),
                 lp(
-                    # THE DEADLINE PANEL. Voluntary-switch rows per batch is
-                    # N*pi_switch, and a starved modality becomes absorbing
-                    # once it falls below 1.0 — below one expected sample per
-                    # batch the path stops being visited at all and no
-                    # gradient can restore it (APO, arXiv:2602.05717). Log-y
-                    # so the decay reads as a straight line and the approach
-                    # to the 1.0 floor is legible.
-                    "Voluntary-switch rows per batch (absorbing floor = 1.0)",
+                    "Voluntary and forced switch rows per batch",
                     [
                         "player_vol_switch_rows",
                         "player_forced_switch_rows",
@@ -469,25 +456,15 @@ def rl_sections():
                     log_y=True,
                 ),
                 lp(
-                    # The magnet/reference cycle against the switch support
-                    # it must hold: KL(pi || pi_reg) sawtooths up against
-                    # the FROZEN reference, ~0 at each snap (a level
-                    # climbing ACROSS snaps is a policy outrunning the snap
-                    # period); voluntary-switch target fraction >= 0.2 is
-                    # the wire every collapsed lineage tripped.
-                    "Reference cycle & switch support",
+                    "EMA magnet KL (live || reference) & switch support",
                     [
                         "player_ref_kl",
                         "player_taken_voluntary_switch_frac",
-                        "player_reg_snapped",
                     ],
                 ),
             ],
         ),
         ws.Section(
-            # The eval slate: the policy as the training actors sample it
-            # against the same policy thresholded at sampling, both EMA at
-            # T=1.
             name="3c · Eval slate · T=1 plain vs thresholded",
             is_open=True,
             panels=[
@@ -623,92 +600,6 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="4b · Pair value heads",
-            is_open=True,
-            panels=[
-                lp(
-                    "Pair value R2 vs CLS critics",
-                    [
-                        "player_pair_value_public_r2",
-                        "player_pair_value_private_r2",
-                        "player_value_head_r2",
-                        "player_priv_value_head_r2",
-                    ],
-                    range_y=(-1, 1),
-                ),
-                lp(
-                    "Pair value: gradient norms",
-                    [
-                        "player_pair_value_public_gradient_norm",
-                        "player_pair_value_private_gradient_norm",
-                    ],
-                ),
-                # The pairwise entity critics (2026-09-12): two generalised
-                # additive models over 12 entity rows (unary + antisymmetric
-                # cross pair + symmetric same-side pair, softmax weights),
-                # both over POST-trunk rows (public rows; my sheet rows and
-                # the opponent-truth rows). Their R2 also sits on "Value R2
-                # (main head)" beside the CLS critics.
-                lp(
-                    # MSE against the same scalar v-trace return the CLS
-                    # critics' two-hot is built from.
-                    "Pair value loss",
-                    ["player_loss_pair_value_public", "player_loss_pair_value_private"],
-                ),
-                lp(
-                    # Variance of each part over the variance of V (need not
-                    # sum to 1). Pre-registered: the cross share leaves the
-                    # floor while R2 rises, else the value lives in the
-                    # unary terms and the pre-trunk pair term is the fallback.
-                    "Pair value: part shares",
-                    None,
-                    regex="^player_pair_value_(public|private)_share_",
-                ),
-                lp(
-                    # Signed means of the five parts (unary mine/theirs,
-                    # cross, synergy mine/theirs): where the value sits.
-                    "Pair value: partials",
-                    None,
-                    regex="^player_pair_value_(public|private)_partial_",
-                ),
-                lp(
-                    # Normalised entropy of the softmax pair weights (1 =
-                    # uniform over alive pairs, 0 = one pair) -- concentrating
-                    # on the decisive matchup is the intended reading, so
-                    # this is descriptive.
-                    "Pair value: weight entropy",
-                    None,
-                    regex="^player_pair_value_(public|private)_("
-                    "cross_weight_entropy_norm|synergy_weight_entropy_norm)$",
-                    range_y=(0, 1),
-                ),
-                lp(
-                    "Pair value: unary cancellation",
-                    None,
-                    regex="^player_pair_value_(public|private)_unary_cancellation$",
-                ),
-                lp(
-                    # Mean |m| / |s| over alive pairs: the pair terms'
-                    # magnitude in [0, 1].
-                    "Pair value: pair magnitudes",
-                    None,
-                    regex="^player_pair_value_(public|private)_(cross|synergy)_abs_mean$",
-                ),
-                lp(
-                    # The four-questions drift panels: each pair function's
-                    # query (0 at init) and key (0.0625 at init) rms.
-                    "Pair value: kernel rms",
-                    None,
-                    regex="^player_pair_value_(public|private)_.*_(query|key)_rms$",
-                ),
-                lp(
-                    "Pair value: applied delta rms",
-                    None,
-                    regex="^player_applied_delta_rms_pair_value_",
-                ),
-            ],
-        ),
-        ws.Section(
             # Does the switch modality's signal actually reach the
             # learner, and is the trust region behaving. Both readouts
             # exist because the global staleness instruments are
@@ -731,12 +622,6 @@ def rl_sections():
                     log_y=True,
                 ),
                 lp(
-                    # isr = pi_target/mu_actor, the factor v-trace and
-                    # Retrace multiply TD errors by. Explore rows record
-                    # the TEMPERED log_prob, so mu carries more switch
-                    # mass than pi — switch-taken rows sit below 1 and
-                    # get heard more faintly as the collapse deepens.
-                    # Correct weighting, but a self-reinforcing loop.
                     "Importance ratio by taken modality",
                     [
                         "player_isr_switch_voluntary",
@@ -767,27 +652,12 @@ def rl_sections():
                     ["player_replay_realised_ratio", "player_replay_max_reuses"],
                 ),
                 lp(
-                    # rho_clip_frac reads the THRESHOLDED target/behaviour
-                    # ratio since 2026-09-09; its _raw twin is the series
-                    # comparable to before the restart.
-                    "Clip fractions",
-                    [
-                        "player_impact_clip_frac",
-                        "player_rho_clip_frac",
-                        "player_rho_clip_frac_raw",
-                    ],
+                    "V-trace importance-ratio clip fraction",
+                    ["player_rho_clip_frac"],
                 ),
                 lp(
-                    # Target/behaviour ratio ESS, thresholded vs raw twin.
-                    "ISR ESS · v-trace ratio (thresholded vs raw)",
-                    ["player_isr_ess", "player_isr_ess_raw"],
-                    range_y=(0, 1),
-                ),
-                lp(
-                    # The LEARNER/behaviour ratio -- a different population
-                    # from the v-trace ratio above; never one axis.
-                    "Learner/behaviour ratio ESS",
-                    ["player_learner_actor_ess"],
+                    "Learner/behaviour importance-ratio ESS",
+                    ["player_isr_ess"],
                     range_y=(0, 1),
                 ),
                 lp(
@@ -796,15 +666,8 @@ def rl_sections():
                     range_y=(0, 1),
                 ),
                 lp(
-                    "Ratios",
-                    ["player_learner_actor_ratio", "player_learner_target_ratio"],
-                ),
-                lp(
-                    "Target KLs",
-                    [
-                        "player_learner_target_backward_kl",
-                        "player_learner_target_forward_kl",
-                    ],
+                    "Learner/behaviour importance ratio",
+                    ["player_learner_actor_ratio"],
                 ),
             ],
         ),
@@ -907,8 +770,6 @@ def rl_sections():
                         "player_history_encoder_gradient_norm",
                         "player_action_head_gradient_norm",
                         "player_v_head_gradient_norm",
-                        "player_pair_value_public_gradient_norm",
-                        "player_pair_value_private_gradient_norm",
                     ],
                     log_y=True,
                 ),
@@ -1081,16 +942,10 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            # The 2026-09-09 support set read top to bottom: what the policy
-            # exposes (flat legal-cell support), what the hinge asks and
-            # pays, what the v-trace threshold discards and the trace it
-            # cuts. Every trajectory keyed to lifetime_step.
             name="11 · Action support & exposure",
             is_open=True,
             panels=[
                 lp(
-                    # The floor of the policy's legal support, as flat
-                    # complete actions: the hinge lifts min toward tau.
                     "Legal-cell probability floor (min / median, log)",
                     ["player_support_min_prob", "player_support_median_prob"],
                     log_y=True,
@@ -1125,40 +980,21 @@ def rl_sections():
                     ["player_support_legal_count"],
                 ),
                 lp(
-                    # The hinge: loss, the fraction of legal cells it is
-                    # pushing on, the per-row mass it asks (N * tau_row) and
-                    # how often the tau_max_mass clamp binds.
-                    "Support hinge loss & active fraction",
-                    ["player_loss_support", "player_support_active_fraction"],
+                    "Fresh voluntary switches / move-or-switch decisions (ceiling 16.155%)",
+                    ["player_fresh_voluntary_switch_frac"],
+                    range_y=(0, 0.25),
                 ),
                 lp(
-                    "Support ask N * tau_row & clamp saturation",
-                    ["player_support_n_tau_row", "player_support_saturated_frac"],
-                    range_y=(0, 1),
-                ),
-                lp(
-                    # The discard rate: the revert trigger is > 1% of taken
-                    # rows sustained over a 250k-fresh-decision window.
-                    "v-trace discard rate · taken rows, by taken modality",
+                    "Fresh switch-rate counts (sum before dividing)",
                     [
-                        "player_discard_taken_frac",
-                        "player_discard_taken_frac_switch",
-                        "player_discard_taken_frac_move",
+                        "player_fresh_voluntary_switch_count",
+                        "player_fresh_move_or_switch_count",
                     ],
-                    range_y=(0, 0.05),
+                    smooth=0,
                 ),
                 lp(
-                    "v-trace discard · legal cells below the line, position of discards",
-                    ["player_discard_legal_frac", "player_discard_position_mean"],
-                    range_y=(0, 1),
-                ),
-                lp(
-                    # c is RAW (rho only carries the threshold, the
-                    # restriction the 2026-09-09 cut audit fired), so _raw is
-                    # the live trace and the thresholded series the cut a
-                    # thresholded c would have made.
-                    "Trace length · live (raw c) vs had c been thresholded",
-                    ["player_trace_len_mean", "player_trace_len_mean_raw"],
+                    "V-trace continuation length",
+                    ["player_trace_len_mean"],
                 ),
                 lp(
                     "Directional switch-logit gradient by term",
@@ -1166,7 +1002,6 @@ def rl_sections():
                         "player_switch_logit_grad_pg",
                         "player_switch_logit_grad_entropy",
                         "player_switch_logit_grad_magnet",
-                        "player_switch_logit_grad_support",
                         "player_switch_logit_grad_actor_total",
                     ],
                 ),

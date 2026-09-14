@@ -1,8 +1,8 @@
 """Jitted train_step smoke: the whole learner update, end to end.
 
-The forward through the flat readout, the v-trace and one-step targets, the
-NashPG bracket (surrogate + entropy duals + magnet + the zero-avoiding KL),
-the value loss and the gradients, on the bundled ex.bin trajectory
+The forward through the flat readout, the v-trace targets against the
+old-policy snapshot, the APPO clipped surrogate with entropy and an EMAgnet
+reference, the value loss and the gradients, on the bundled ex.bin trajectory
 (randombattle config, so the builder branch self-skips). This is the ONLY
 test that compiles the real train_step, so it is what catches a panel that
 went stale or a shape that stopped matching.
@@ -58,6 +58,7 @@ def _ex_batch(actor_input, actor_output):
         game_outcome=jnp.ones((1, B), dtype=jnp.float32),
         game_length=jnp.full((1, B), T, dtype=jnp.int32),
         game_step_offset=jnp.zeros((1, B), dtype=jnp.int32),
+        reuse_count=jnp.zeros((1, B), dtype=jnp.int32),
     )
     return batch
 
@@ -72,8 +73,6 @@ def test_train_step_smoke() -> None:
     from rl.online.training.train_step import TRAIN_STEP_JIT
 
     config = Porygon2LearnerConfig()
-    # The learner's own config function: every config-gated head the
-    # defaults switch on (the pairwise critics, 2026-09-12) is built.
     player_net = get_player_model(player_model_config_for(config))
     builder_net = get_builder_model(
         get_builder_model_config(config.generation, train=True)
@@ -92,36 +91,32 @@ def test_train_step_smoke() -> None:
     )
 
     assert int(new_player_state.step_count) == 1
+    assert "player_fresh_voluntary_switch_frac" in logs
+    assert not any("pair_value" in key or "pair_population" in key for key in logs)
     for key in (
-        # NashPG policy update: the surrogate, its clip occupancy, the
-        # differentiated entropy/magnet terms and the batch-advantage
-        # statistics.
         "player_loss_pg",
-        "player_ppo_clip_frac",
         "player_loss_entropy",
         "player_ref_kl",
-        "player_loss_support",
-        "player_support_active_fraction",
-        "player_support_n_tau_row",
         "player_isr_ess",
-        "player_isr_ess_raw",
         "player_trace_len_mean",
-        "player_trace_len_mean_raw",
-        "player_discard_taken_frac",
-        "player_discard_taken_frac_switch",
-        "player_discard_taken_frac_move",
         "player_support_min_prob",
         "player_applied_delta_rms_pointer_key",
         "player_pg_adv_mean",
         "player_pg_adv_std",
-        "player_reg_snapped",
+        "player_reg_ema_rate",
+        # The APPO surrogate's readouts and the target snapshot's clock.
+        "player_ppo_clip_frac",
+        "player_surrogate_ratio_mean",
+        "player_behaviour_old_ratio_mean",
+        "player_behaviour_old_ratio_clip_frac",
+        "player_old_policy_age",
         "player_loss_v_win",
         "player_loss_kl",
         # Per-level entropy observers.
         "player_entropy_macro",
         "player_entropy_micro_taken",
         # Modality-resolved staleness: de-averaged actor KL and the
-        # off-policy attenuation audit (isr = pi_target/mu_actor).
+        # off-policy attenuation audit (isr = pi_learner/mu_actor).
         "player_learner_actor_forward_kl_switch",
         "player_learner_actor_forward_kl_move",
         "player_isr_switch_voluntary",
@@ -132,6 +127,8 @@ def test_train_step_smoke() -> None:
         # Realised behaviour frequency on the stay/switch axis.
         "player_taken_switch_frac",
         "player_taken_voluntary_switch_frac",
+        "player_fresh_voluntary_switch_count",
+        "player_fresh_move_or_switch_count",
         # Policy mass by modality.
         "player_policy_prob_switch",
         "player_policy_prob_move",
@@ -178,8 +175,14 @@ def test_train_step_smoke() -> None:
     assert float(logs["player_trunk_grad_norm"]) > 0.0
 
     # At init every logit is exactly 0, so the policy is uniform over legal
-    # cells and the reference it just snapped from is the same distribution.
+    # cells and the initial reference has the same distribution.
     assert float(logs["player_ref_kl"]) == pytest.approx(0.0, abs=1e-5)
+    # pi_old is that same init copy, so pi_live/pi_old is 1 on every row and
+    # the surrogate ratio is exactly the capped mu/pi_old factor folded
+    # back: min(1, clip * pi_old / mu), never above one. The snapshot is
+    # one accepted step old after this first update.
+    assert 0.0 < float(logs["player_surrogate_ratio_mean"]) <= 1.0 + 1e-5
+    assert int(logs["player_old_policy_age"]) == 1
 
 
 def test_train_step_runs_the_potential_channel() -> None:

@@ -44,14 +44,12 @@ def session_player_model_config():
     and so does any test that builds a second network to compare against
     the fixture's params (a differing head set misaligns the output trees).
     The PBRS channel's potential head (2026-09-11) is on, as it is whenever
-    the channel runs, so the slot-invariance and gradient-reach tests read it;
-    so are the pairwise critics (2026-09-12), on whenever the learner's
-    coefficient is > 0, its default."""
+    the channel runs, so the slot-invariance and gradient-reach tests read it.
+    """
     from rl.model.config import get_player_model_config
 
     config = get_player_model_config(generation=9, train=True)
     config.potential_head.enabled = True
-    config.pair_value_head.enabled = True
     return config
 
 

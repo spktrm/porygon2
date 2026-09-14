@@ -44,9 +44,7 @@ def test_paired_advantages_masks_distance_and_outer_weight(
     config = SimpleNamespace(player_gamma=discount, player_lambda=0.0)
     isr = jnp.full((4, 6), 0.5)
     logs = jax.jit(
-        lambda: paired_advantage_audit(
-            batch, public, privileged, isr, isr, config, axis
-        )
+        lambda: paired_advantage_audit(batch, public, privileged, isr, config, axis)
     )()
     assert logs["player_adv_audit_switch_all_count"] == 4
     assert logs["player_adv_audit_stay_all_count"] == 7
@@ -54,8 +52,8 @@ def test_paired_advantages_masks_distance_and_outer_weight(
         assert logs[f"player_adv_audit_switch_{horizon}_count"] == 1
     prefix = "player_adv_audit_switch_1_5"
     expected_return = discount**3
-    expected_public = 0.5 * (discount * 0.2 + 0.2)
-    expected_privileged = 0.5 * (discount * -0.4 - 0.4)
+    expected_public = 0.5 * (discount * 0.1 + 0.2)
+    expected_privileged = 0.5 * (discount * -0.2 - 0.4)
     np.testing.assert_allclose(
         logs[f"{prefix}_public_td_sum"], expected_public, atol=1e-6
     )
@@ -73,12 +71,10 @@ def test_paired_advantages_masks_distance_and_outer_weight(
     assert logs[f"{prefix}_priv_negative_public_positive_sum"] == 1
     assert logs[f"{prefix}_privileged_td_negative_mc_positive_sum"] == 1
     assert all(np.isfinite(value) for value in logs.values())
-    # The raw ratio builds c (the learner's v-trace since 2ac1e25): with a
-    # live trace, zeroing it changes the audited advantage.
     traced = SimpleNamespace(player_gamma=discount, player_lambda=1.0)
     audit = jax.jit(
-        lambda raw: paired_advantage_audit(
-            batch, public, privileged, isr, raw, traced, axis
+        lambda ratios: paired_advantage_audit(
+            batch, public, privileged, ratios, traced, axis
         )
     )
     assert (
@@ -88,4 +84,4 @@ def test_paired_advantages_masks_distance_and_outer_weight(
 
 
 def test_missing_metadata_produces_no_audit() -> None:
-    assert paired_advantage_audit(Batch(), None, None, None, None, None, None) == {}
+    assert paired_advantage_audit(Batch(), None, None, None, None, None) == {}

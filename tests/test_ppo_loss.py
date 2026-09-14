@@ -1,5 +1,6 @@
-"""The player policy surrogate: PPO clip semantics, the spo/ppo selector,
-and the clip-fraction readout. The differentiated magnet/entropy terms are
+"""The ratio surrogates: PPO clip semantics, the spo/ppo selector, and the
+clip-fraction readout. The player's clipped target ratio on top of them is
+test_appo_surrogate.py; the differentiated magnet/entropy terms are
 covered in test_targets.py (reference_kl) and the train_step smoke."""
 
 import jax

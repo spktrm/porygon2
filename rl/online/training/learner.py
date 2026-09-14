@@ -21,9 +21,9 @@ from rl.environment.utils import next_tqdm_position
 from rl.online.artifact import (
     Porygon2BuilderTrainState,
     Porygon2PlayerTrainState,
-    builder_scalar_components,
+    builder_checkpoint_components,
     ckpt_root,
-    player_scalar_components,
+    player_checkpoint_components,
     write_checkpoint_components,
 )
 from rl.online.buffer import BuilderTrajectoryStore, PlayerTrajectoryStore
@@ -518,8 +518,9 @@ class Learner:
         self._check_oom_guard(run_state, step)
 
     def _write_checkpoint(self, run_state: RunState, synchronous: bool = False) -> str:
-        """Writes the full resumable state: params, target_params,
-        opt_state, host counters, the serialized League and the controller
+        """Writes live parameters, the player reference and old-policy
+        snapshot, builder target,
+        optimiser state, host counters, the serialised League and controller
         blob, keyed to the run's own step_count.
 
         Everything host-side/fast happens synchronously here (device
@@ -531,19 +532,8 @@ class Learner:
         no time left for the background writer to run."""
         host_player_state = jax.device_get(run_state.player_state)
         host_builder_state = jax.device_get(run_state.builder_state)
-        player_components = dict(
-            params=host_player_state.params,
-            target_params=host_player_state.target_params,
-            reg_params=host_player_state.reg_params,
-            opt_state=host_player_state.opt_state,
-            scalars=player_scalar_components(host_player_state),
-        )
-        builder_components = dict(
-            params=host_builder_state.params,
-            target_params=host_builder_state.target_params,
-            opt_state=host_builder_state.opt_state,
-            scalars=builder_scalar_components(host_builder_state),
-        )
+        player_components = player_checkpoint_components(host_player_state)
+        builder_components = builder_checkpoint_components(host_builder_state)
         save_path = os.path.abspath(
             os.path.join(
                 ckpt_root(self.config),

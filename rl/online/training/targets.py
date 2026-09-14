@@ -47,19 +47,10 @@ def thresholded_target_ratio(
     legal_mask: jax.Array,
     threshold: float,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """The v-trace ratio pi_target(a) / mu(a) at the taken action, with the
-    target policy THRESHOLDED first (rl/model/utils.py prune_log_policy --
-    the same operation the `thresholded` eval slot samples from): a taken
-    action the target has dropped below `threshold` gets ratio 0, so
-    v-trace discards the row. DeepNash's `FineTuning` placement
-    (rnad.py:798 post-processes pi and hands it to v_trace as
-    merged_policy; acting_policy and the policy loss's pi stay raw): this
-    is the ONLY place the thresholded distribution enters the learner.
-    Variance control on the target estimator, not a policy force.
+    """Offline comparison of pruned and raw policy/behaviour ratios.
 
-    Returns (ratio, raw ratio, taken-action-kept mask, fraction of the row's
-    legal cells removed). threshold 0.0 makes ratio == raw ratio bit for
-    bit; the raw ratio is what the telemetry twins read.
+    Returns both ratios, the taken-action-kept mask and the fraction of
+    legal actions removed. Training uses the raw learner policy directly.
     """
     pruned = prune_log_policy(target_log_policy, legal_mask, threshold)
     index = action_index[..., None]
@@ -110,28 +101,24 @@ def scalar_vtrace(
     c_t: jax.Array,
     lambda_: float,
 ) -> tuple[jax.Array, jax.Array]:
-    """One scalar v-trace channel: (value targets, policy advantages).
+    """Detached V-trace labels and once-weighted actor advantages in f32.
 
-    The value recursion bootstraps on `value` with each row's successor (a
-    chunk's final row bootstraps on itself); the advantage is the plain
-    v-trace pass over the same residuals, bootstrapping on the
-    lambda-mixed v-trace value of the NEXT step, so a reward enters exactly
-    once (a done row's discount is 0 and its estimate is its own reward).
-    Linear in (reward, value) at fixed ratios, which is what lets
-    compute_player_targets run the potential channel beside the win
-    channel and add the advantages. f32 throughout (LESSONS 2).
+    Lambda shortens trace continuation only. The actor bootstraps directly
+    on the next corrected value. A bootstrap-only final row has mask zero
+    while its supplied value remains available to the preceding row.
     """
+    reward, value, discount_t, mask, rho_t, c_t = jax.tree.map(
+        lambda array: array.astype(jnp.float32),
+        (reward, value, discount_t, mask, rho_t, c_t),
+    )
     value_next = jnp.concatenate([value[1:], value[-1:]], axis=0)
     td_errors = rho_t * mask * (reward + discount_t * value_next - value)
     vtrace_value = vtrace(td_errors, discount_t, c_t * lambda_) + value
     returns = vtrace_value * mask
-    q_bootstrap = jnp.concatenate(
-        [lambda_ * vtrace_value[1:] + (1 - lambda_) * value[1:], value[-1:]],
-        axis=0,
-    )
+    q_bootstrap = jnp.concatenate([vtrace_value[1:], value[-1:]], axis=0)
     q_estimate = reward + discount_t * q_bootstrap
     advantages = rho_t * (q_estimate - value) * mask
-    return returns, advantages
+    return jax.lax.stop_gradient(returns), jax.lax.stop_gradient(advantages)
 
 
 def compute_player_targets(
@@ -139,83 +126,42 @@ def compute_player_targets(
     value_log_probs: jax.Array,
     isr: jax.Array,
     config: Porygon2LearnerConfig,
-    isr_raw: jax.Array | None = None,
     potential_values: jax.Array | None = None,
 ) -> tuple[PlayerTargets, dict[str, jax.Array]]:
-    """Computes Retrace VALUE targets on the win/loss channel plus the
-    plain v-trace POLICY advantage the PPO surrogate reads (2026-08-26 —
-    the single-action advantage returned after five days away — the
-    all-action logit-force era in between read the advantage head).
+    """Current-policy V-trace using raw learner/behaviour action ratios.
 
-    PBRS/potential shaping retired (Aug 2026): the shaped-advantage era's
-    channel machinery lived here; the win channel is now the sole reward.
-
-    IMPACT-style: ``value_log_probs`` are the *fast* EMA target's predictions
-    and ``isr = pi_target/mu`` its ratio to the behavior policy, so v-trace
-    estimates the target policy's values with off-policy correction — stable
-    under replay reuse because the fast target tracks the learner within ~1k
-    steps.
-
-    config.player_lambda (0.8, AlphaStar's TD(lambda) value) shapes the
-    value targets.
-
-    ``isr`` is the THRESHOLDED ratio (thresholded_target_ratio) and
-    ``isr_raw`` the raw one; None means "the same". rho reads the
-    thresholded ratio, c the RAW one (2026-09-09, pre-registered and fired
-    by the offline cut audit on ckpt_02014000: 7.8% of recorded chunks
-    carried a discard before their midpoint against the 5% gate, median
-    first discard at 21% of the chunk -- with c thresholded too, one
-    abandoned action would have cut credit assignment for every row before
-    it in one chunk in thirteen). So a discarded row loses its own
-    advantage and TD term and nothing else; its value target still
-    bootstraps through c. The raw ratio also feeds the telemetry
-    twins so the ESS, clip-fraction and trace-length panels keep a
-    comparable series across the restart.
+    Both importance weights are truncated at one. Values may come from
+    either critic, but policy ratios always use deployable observations.
+    Returned labels and advantages are detached from the learner.
     """
-    if isr_raw is None:
-        isr_raw = isr
     dones = batch.player_transitions.env_output.done
     mask = (1 - (jnp.cumsum(dones, axis=0) - dones)).astype(jnp.float32)
     discount_t = (1 - dones).astype(jnp.float32) * config.player_gamma * mask
 
-    # Truncated importance weights, AlphaStar/IMPALA: clipped IS only.
-    # rho carries the threshold, c does not (see the docstring).
     rho_t = jnp.minimum(1.0, isr).astype(jnp.float32)
-    c_t = jnp.minimum(1.0, isr_raw).astype(jnp.float32)
+    # Terminal rows carry outcomes, not sampled actions to importance-weight.
+    rho_t = jnp.where(dones, 1.0, rho_t)
+    c_t = rho_t
 
-    # Scalar-space recursion: the same estimator as the per-atom
-    # distribution-space form (v-trace is linear, so @ support commutes
-    # with the
-    # recursion) projected once through two_hot at the end, so the label
-    # is always on the simplex and the recursion is one channel instead
-    # of n_bins. f32 throughout (LESSONS 2: value recursions run and
-    # return f32).
+    # Overlapping chunks train the shared row only in the following chunk.
+    is_final_row = jnp.arange(mask.shape[0])[:, None] == mask.shape[0] - 1
+    value_mask = mask.astype(jnp.bool_) & (~is_final_row | dones)
+    target_mask = value_mask.astype(jnp.float32)
+
     support = jnp.asarray(CAT_VF_SUPPORT, dtype=jnp.float32)
     r_t = batch.player_transitions.env_output.win_reward.astype(jnp.float32) @ support
 
     v_tm1 = jnp.exp(value_log_probs.astype(jnp.float32)) @ support
 
-    # Plain v-trace: the subtracted baseline is V(s).
-    #
-    # Policy advantage: a PLAIN v-trace pass over the V
-    # readout — no Retrace baseline shift — feeding the PPO surrogate's
-    # taken-action advantage (scalar_vtrace; the same construction as the
-    # builder's pg_advantages). done rows are excluded by policy_mask.
     scalar_returns, pg_advantages = scalar_vtrace(
-        r_t, v_tm1, discount_t, mask, rho_t, c_t, config.player_lambda
+        r_t, v_tm1, discount_t, target_mask, rho_t, c_t, config.player_lambda
     )
 
-    # Off-mask rows stay inert zero vectors; every masked row is a proper
-    # two-hot distribution (two_hot clips to the support range).
-    win_returns = two_hot(scalar_returns, support) * mask[..., None]
+    win_returns = two_hot(scalar_returns, support) * target_mask[..., None]
 
-    # The PBRS potential channel (config.player_potential_strength
-    # carries the algebra). `potential_values` is the TARGET potential head,
-    # unit scale. Uncentred: Psi = eta * Phi on nonterminal on-mask rows and 0
-    # on done and padding rows, and the channel value W is forced 0 there
-    # too -- the terminal channel value is exactly 0, which makes a done
-    # row's TD exactly 0 whatever its sampled rho. The exact W is -Psi under
-    # any policy, so a fitted head adds nothing (tests/test_potential_channel).
+    # The potential channel's exact value is -Psi under every policy.
+    # Its live critic cancels shaping once fitted; terminal potentials and
+    # values are zero so they cannot leak into earlier trace residuals.
     potential_returns = ()
     potential_advantages = ()
     if potential_values is not None:
@@ -229,26 +175,13 @@ def compute_player_targets(
             discount_t * psi_next - psi,
             strength * potential_values.astype(jnp.float32) * live,
             discount_t,
-            mask,
+            target_mask,
             rho_t,
             c_t,
             config.player_lambda,
         )
         potential_returns = channel_returns / strength
         pg_advantages = pg_advantages + potential_advantages
-
-    value_mask = mask.astype(jnp.bool_)
-    # Chunked unrolls: a chunk's final row is bootstrap-only — it anchors
-    # the recursions above (v_t reads its value) but
-    # takes no loss here, because chunks overlap by one row and that same
-    # step trains as row 0 of the NEXT chunk. Exception: a done row on the
-    # final position is the game's own terminal row (no next chunk) and
-    # keeps its value target (= the terminal reward). policy_mask below
-    # inherits this through value_mask.
-    is_final_row = jnp.arange(value_mask.shape[0])[:, None] == value_mask.shape[0] - 1
-    value_mask = value_mask & (
-        ~is_final_row | batch.player_transitions.env_output.done.astype(jnp.bool_)
-    )
 
     num_actions = batch.player_transitions.env_output.action_mask.sum(axis=-1)
     policy_mask = (
@@ -257,32 +190,18 @@ def compute_player_targets(
         & (num_actions > 1)
     )
 
-    # Off-policyness of the replayed batch: normalised effective sample
-    # size of the raw importance ratios (1 = fully on-policy; low means the
-    # truncated estimator is living off a few samples) and the fraction of
-    # steps where the v-trace ρ/c truncation at 1 is active. Both feed the
-    # replay-ratio controller diagnostics alongside the actor KL.
-    channel_logs = {}
-    for suffix, ratio in (("", isr), ("_raw", isr_raw)):
-        (
-            channel_logs[f"player_isr_ess{suffix}"],
-            channel_logs[f"player_rho_clip_frac{suffix}"],
-        ) = ratio_ess_and_tail(ratio, policy_mask, 1.0)
-        # Realised trace length had the continuation been built from this
-        # ratio: rows it survives from each policy row (the game's end,
-        # discount 0, ends it for both; a zeroed ratio ends it too). c IS
-        # the raw one, so the live trace is the _raw series; the
-        # thresholded series is the cut the restriction avoids.
-        channel_logs[f"player_trace_len_mean{suffix}"] = average(
-            trace_run_length((ratio > 0.0) & (discount_t > 0.0)), policy_mask
-        )
+    ratio_ess, clipped_fraction = ratio_ess_and_tail(isr, policy_mask, 1.0)
+    channel_logs = {
+        "player_isr_ess": ratio_ess,
+        "player_rho_clip_frac": clipped_fraction,
+        "player_trace_len_mean": average(
+            trace_run_length((isr > 0.0) & (discount_t > 0.0)), policy_mask
+        ),
+    }
 
     return (
         PlayerTargets(
             win_returns=win_returns,
-            # The pairwise critics' label: the same scalar,
-            # clipped as two_hot clips, so it IS win_returns @ support.
-            scalar_returns=jnp.clip(scalar_returns, support[0], support[-1]) * mask,
             pg_advantages=pg_advantages,
             policy_mask=policy_mask,
             value_mask=value_mask,
@@ -313,15 +232,24 @@ def two_hot(scalar: jax.Array, support: jax.Array) -> jax.Array:
 def reference_kl(
     log_policy: jax.Array, reg_log_policy: jax.Array, legal_mask: jax.Array
 ) -> jax.Array:
-    """KL(pi || pi_reg) per state over legal cells, f32 — the expected
-    reference penalty E_pi[log(pi/pi_reg)] the policy objective pays. Both
-    log-policies are
-    full-support learner-side readouts (illegal cells hold junk, masked)."""
-    lp = log_policy.astype(jnp.float32)
-    lr = reg_log_policy.astype(jnp.float32)
-    pi = jnp.exp(lp) * legal_mask
-    pi = pi / jnp.maximum(pi.sum(axis=-1, keepdims=True), 1e-8)
-    return jnp.where(legal_mask, pi * (lp - lr), 0.0).sum(axis=-1)
+    """KL(pi || stop(pi_reg)) over legal actions, per state in f32."""
+
+    def normalise_legal(values):
+        # Re-normalise after promotion: bf16 log-probabilities can lose unit mass.
+        masked = jnp.where(
+            legal_mask, values.astype(jnp.float32), jnp.finfo(jnp.float32).min
+        )
+        return jax.nn.log_softmax(masked, axis=-1)
+
+    policy_log_probs = normalise_legal(log_policy)
+    reference_log_probs = normalise_legal(jax.lax.stop_gradient(reg_log_policy))
+    policy_probs = jnp.where(legal_mask, jnp.exp(policy_log_probs), 0.0)
+    log_ratio = jnp.where(
+        legal_mask & (policy_probs > 0.0),
+        policy_log_probs - reference_log_probs,
+        0.0,
+    )
+    return (policy_probs * log_ratio).sum(axis=-1)
 
 
 def compute_builder_targets(

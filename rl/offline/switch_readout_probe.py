@@ -117,7 +117,7 @@ def extract(args):
         json.dumps(
             {
                 "checkpoint": args.ckpt,
-                "parameters": "target_params",
+                "parameters": "params",
                 "cohort": args.games_pkl,
                 "cohort_provenance": provenance,
                 "games": len(sides),

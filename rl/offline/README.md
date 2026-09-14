@@ -134,6 +134,16 @@ replay_ratio × ensemble-size times. An ensemble gated the signal by
 member agreement (Φ = mean · exp(−scale · std)), so shaping spoke where
 members agreed and went quiet off the human data distribution.
 
+## Retired uniform-KL coefficient screen
+
+The applied-update coefficient screen was retired on 2026-09-14 when the player
+returned to joint entropy and a frozen-reference KL. Its CLI fails explicitly;
+it cannot estimate the current learner's response to a loss the learner no
+longer contains. The exact previous source is archived locally at
+`/tmp/porygon2-uniform-kl-screen-before-vtrace-20260914.py`, with its results in
+`LESSONS.md`. The module retains protocol statistics, checkpoint restoration,
+self-play collection and hypothetical pruning-audit helpers for offline probes.
+
 ## Unilateral interval-model experiment
 
 `interval_data.py` audits adjacent own requests without joining opponent rows.

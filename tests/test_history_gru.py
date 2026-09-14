@@ -170,11 +170,6 @@ def test_gru_weights_are_separate_by_type_and_shared_within_type():
 
 
 def test_identity_changes_only_reach_memory_through_attention_weights():
-    """Queries and keys read content plus identity, values read content
-    alone, so an identity can steer WHERE a row attends but is never copied
-    into memory as a value. Control: with the attention output muted the same
-    identity change leaves memory bit-identical, which is what "only through
-    the weights" means and what makes the live assertions non-vacuous."""
     cfg = ConfigDict(
         dict(
             entity_size=WIDTH,
@@ -195,13 +190,27 @@ def test_identity_changes_only_reach_memory_through_attention_weights():
         changed["params"]["register_identity"] += 1.0
         return changed
 
+    moved_inputs = (events, inputs[1] + 2.0, inputs[2])
     baseline, (_, baseline_probs, _) = apply(params, memory, inputs)
-    moved, (_, moved_probs, _) = apply(move_identities(params), memory, inputs)
+    moved, (_, moved_probs, _) = apply(move_identities(params), memory, moved_inputs)
     assert not np.allclose(baseline_probs, moved_probs)
     assert not np.allclose(baseline, moved)
 
-    muted = jax.tree.map(lambda leaf: leaf, params)
-    muted["params"]["attention"]["attn_out"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
-    muted_baseline = apply(muted, memory, inputs)[0]
-    muted_moved = apply(move_identities(muted), memory, inputs)[0]
-    np.testing.assert_array_equal(muted_baseline, muted_moved)
+    # Fixing weights keeps the value path live, so tag-valued writes would fail.
+    fixed = jax.tree.map(lambda leaf: leaf, params)
+    fixed["params"]["attention"]["query"]["kernel"] = jnp.zeros_like(
+        fixed["params"]["attention"]["query"]["kernel"]
+    )
+    fixed_baseline, (_, fixed_probs, _) = apply(fixed, memory, inputs)
+    fixed_moved, (_, fixed_moved_probs, _) = apply(
+        move_identities(fixed), memory, moved_inputs
+    )
+    np.testing.assert_array_equal(fixed_probs, fixed_moved_probs)
+    np.testing.assert_array_equal(fixed_baseline, fixed_moved)
+
+    muted_values = jax.tree.map(lambda leaf: leaf, fixed)
+    muted_values["params"]["attention"]["value"]["kernel"] = jnp.zeros_like(
+        muted_values["params"]["attention"]["value"]["kernel"]
+    )
+    without_values = apply(muted_values, memory, inputs)[0]
+    assert not np.allclose(fixed_baseline, without_values)

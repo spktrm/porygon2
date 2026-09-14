@@ -32,21 +32,22 @@ from rl.online.training.action_telemetry import (
     masked_policy,
     paired_advantage_audit,
     switch_loss_telemetry,
+    voluntary_switch_telemetry,
 )
 from rl.online.training.loss import (
+    appo_policy_loss,
     backward_kl_loss,
     clip_fraction,
+    clipped_target_ratio,
     factorised_entropies,
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
-    support_hinge_loss,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
     compute_player_targets,
     reference_kl,
-    thresholded_target_ratio,
     unit_potential,
 )
 from rl.online.training.telemetry import (
@@ -56,7 +57,6 @@ from rl.online.training.telemetry import (
     collect_batch_telemetry_data,
     critic_outcome_telemetry,
     head_param_telemetry,
-    pair_value_telemetry,
     potential_telemetry,
     promote_map,
     ratio_ess_and_tail,
@@ -80,20 +80,59 @@ def trunk_group_l2_logs(pred, value_mask) -> dict[str, jax.Array]:
     }
 
 
-def normalise_advantages(
+def advantage_statistics(
     advantages: jax.Array, policy_mask: jax.Array
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """(normalised, mean, std) of the policy advantages over the policy rows,
-    f32: the batch statistics the surrogate reads, off-policy rows zeroed.
-    One function so offline screens (runtime/pbrs-screen) read the learner's
-    own normalisation. The count guard covers an all-masked batch."""
+) -> tuple[jax.Array, jax.Array]:
+    """Masked diagnostics in game-return units; never rescale the actor loss."""
     advantages = advantages.astype(jnp.float32)
     count = jnp.maximum(policy_mask.sum().astype(jnp.float32), 1.0)
     mean = jnp.where(policy_mask, advantages, 0.0).sum() / count
     variance = jnp.where(policy_mask, jnp.square(advantages - mean), 0.0).sum() / count
     std = jnp.sqrt(variance)
-    normalised = jnp.where(policy_mask, (advantages - mean) / (std + 1e-8), 0.0)
-    return normalised, mean, std
+    return mean, std
+
+
+def apply_player_gradients(
+    player_state: Porygon2PlayerTrainState,
+    gradients: Params,
+    loss: jax.Array,
+    frames: jax.Array,
+    reference_rate: float,
+    old_policy_snap_steps: int,
+) -> tuple[Porygon2PlayerTrainState, jax.Array, jax.Array]:
+    """Commit the pre-update-parameter EMA and the old-policy snapshot
+    together with accepted optimiser steps.
+
+    The snapshot is IMPACT's target update: on every accepted step whose
+    new count is a multiple of `old_policy_snap_steps`, pi_old becomes an
+    exact copy of the POST-update live parameters (RLlib syncs its target
+    after the iteration's updates, TargetNetworkMixin tau=1). Written as a
+    rate-0/1 incremental update rather than a branch so the copy is a
+    fresh buffer under donation, like the reference."""
+    if not 0.0 <= reference_rate <= 1.0:
+        raise ValueError("reference_rate must be between zero and one")
+    if old_policy_snap_steps < 1:
+        raise ValueError("old_policy_snap_steps must be at least one")
+    next_step_count = player_state.step_count + 1
+    next_state = player_state.apply_gradients(grads=gradients)
+    snap = (next_step_count % old_policy_snap_steps == 0).astype(jnp.float32)
+    next_state = next_state.replace(
+        step_count=next_step_count,
+        frame_count=player_state.frame_count + frames,
+        reg_params=optax.incremental_update(
+            player_state.params, player_state.reg_params, reference_rate
+        ),
+        old_policy_params=optax.incremental_update(
+            next_state.params, player_state.old_policy_params, snap
+        ),
+    )
+    update_finite = jnp.isfinite(loss) & jnp.isfinite(optax.global_norm(gradients))
+    next_state = jax.lax.cond(
+        update_finite,
+        lambda: next_state,
+        lambda: player_state,
+    )
+    return next_state, update_finite, jnp.where(update_finite, reference_rate, 0.0)
 
 
 def train_step(
@@ -128,16 +167,15 @@ def train_step(
         history=player_history,
     )
 
-    player_target_pred = player_state.apply_fn(
-        player_state.target_params,
+    head_params = HeadParams()
+
+    player_estimate = player_state.apply_fn(
+        player_state.params,
         player_actor_input,
         player_transitions.agent_output.actor_output,
-        HeadParams(),
+        head_params,
     )
 
-    # NashPG reference policy: the FROZEN reg_params' full-support
-    # log-policy on the same batch (one extra forward; stop-gradient by
-    # construction — reg_params are not the differentiated leaf).
     reg_log_policy = player_state.apply_fn(
         player_state.reg_params,
         player_actor_input,
@@ -145,9 +183,18 @@ def train_step(
         HeadParams(),
     ).action_head.log_policy
 
+    # pi_old: the V-trace target policy and the surrogate's clip reference.
+    # Its values are NOT used -- V-trace bootstraps on the live critic, as
+    # RLlib's loss reads model.value_function() beside target_model logits.
+    old_policy_log_prob = player_state.apply_fn(
+        player_state.old_policy_params,
+        player_actor_input,
+        player_transitions.agent_output.actor_output,
+        HeadParams(),
+    ).action_head.log_prob
+
     player_actor_action_head = player_transitions.agent_output.actor_output.action_head
     player_actor_log_prob = player_actor_action_head.log_prob
-    player_target_log_prob = player_target_pred.action_head.log_prob
 
     float_dtype = player_actor_log_prob.dtype
 
@@ -173,98 +220,30 @@ def train_step(
 
     # Already flat: the env mask IS the block-cell vector since 2026-08-31.
     flat_action_mask = player_transitions.env_output.action_mask
-    target_actor_log_ratio = player_target_log_prob - player_actor_log_prob
-    # mu/pi_target clipped at 2, telemetry only (player_impact_clip_frac):
-    # the panel reads how far behaviour has drifted from the fast target.
-    actor_target_clipped_ratio = jnp.exp(-target_actor_log_ratio).clip(min=0.0, max=2.0)
-    # The v-trace ratio pi_target / mu with the TARGET policy thresholded at
-    # player_prune_threshold first (DeepNash's FineTuning
-    # placement): a taken action the target has dropped below the line
-    # gets ratio 0 and v-trace discards the row. This is the only place
-    # the thresholded distribution enters the learner -- the learner
-    # ratio, the surrogate, the magnet, the entropy term and the support
-    # hinge all read the raw policies. The raw ratio feeds the telemetry
-    # twins (player_isr_ess_raw, ...) and nothing else.
-    (
-        target_actor_ratio,
-        target_actor_ratio_raw,
-        target_taken_kept,
-        target_removed_legal_frac,
-    ) = thresholded_target_ratio(
-        player_target_pred.action_head.log_policy,
-        player_actor_log_prob,
-        player_actor_action_head.action_index,
-        flat_action_mask,
-        config.player_prune_threshold,
+    # rho's raw material: pi_old/mu, the ratio V-trace truncates at one.
+    old_policy_actor_ratio = jnp.exp(
+        old_policy_log_prob.astype(jnp.float32)
+        - player_actor_log_prob.astype(jnp.float32)
     )
 
-    # IMPACT-style targets: the fast target network supplies the Retrace
-    # reference policy and value/kl bootstraps. Under
-    # player_privileged_targets the bootstraps -- and therefore
-    # pg_advantages -- come from the PRIVILEGED head (asymmetric
-    # actor-critic); False is bit-for-bit the deployable-head estimator.
     if config.player_privileged_targets:
-        target_value_log_probs = player_target_pred.priv_value_head.log_probs
+        estimate_value_log_probs = player_estimate.priv_value_head.log_probs
     else:
-        target_value_log_probs = player_target_pred.value_head.log_probs
-    # The PBRS potential channel (2026-09-11) bootstraps on the TARGET
-    # potential head, like the win channel on the target critic.
+        estimate_value_log_probs = player_estimate.value_head.log_probs
     potential_values = None
     if config.player_potential_strength > 0:
-        potential_values = player_target_pred.potential_head.logits
+        potential_values = player_estimate.potential_head.logits
     player_targets, channel_logs = compute_player_targets(
         batch,
-        value_log_probs=target_value_log_probs,
-        isr=target_actor_ratio,
+        value_log_probs=estimate_value_log_probs,
+        isr=old_policy_actor_ratio,
         config=config,
-        isr_raw=target_actor_ratio_raw,
         potential_values=potential_values,
     )
     training_logs.update(channel_logs)
     policy_mask = player_targets.policy_mask
     value_mask = player_targets.value_mask
-    # The discard rate: the support hinge holds every legal cell at
-    # player_support_tau, twice the threshold, so in equilibrium nothing
-    # should be discarded -- a non-trivial rate is the hinge failing and
-    # the threshold hiding it (the revert trigger, > 1% of taken rows).
-    discarded = policy_mask & jnp.logical_not(target_taken_kept)
     axis = action_axis_masks(flat_action_mask, player_actor_action_head.action_index)
-    row_position = (
-        jnp.arange(policy_mask.shape[0], dtype=jnp.float32)[:, None]
-        / policy_mask.shape[0]
-    )
-    training_logs.update(
-        dict(
-            player_discard_taken_frac=average(discarded, policy_mask),
-            # By TAKEN modality: a switch-side rate well above the move-side
-            # one is the threshold acting on rare switches -- the
-            # self-sealing direction only the hinge resists.
-            player_discard_taken_frac_switch=average(
-                discarded, policy_mask & axis.taken_switch
-            ),
-            player_discard_taken_frac_move=average(
-                discarded, policy_mask & jnp.logical_not(axis.taken_switch)
-            ),
-            player_discard_legal_frac=average(target_removed_legal_frac, policy_mask),
-            player_discard_position_mean=average(
-                jnp.broadcast_to(row_position, policy_mask.shape), discarded
-            ),
-        )
-    )
-    # NashPG reference SNAP: reg_params <- target_params every
-    # player_reg_snap_steps — their outer-loop rho reset, in place,
-    # still three param sets, FROZEN between snaps. Step 0 snaps
-    # trivially (reg = target = init), and a resume at a snap multiple
-    # snaps on its first step, repairing any accumulated gap at restart.
-    reg_snap = player_state.step_count % config.player_reg_snap_steps == 0
-    training_logs["player_reg_snapped"] = reg_snap.astype(jnp.float32)
-
-    # Fraction of steps where the IMPACT clipped-target correction is
-    # saturated at its cap — a second staleness signal alongside the actor
-    # KL and ESS diagnostics.
-    training_logs["player_impact_clip_frac"] = (
-        (actor_target_clipped_ratio >= 2.0).astype(jnp.float32).mean(where=policy_mask)
-    )
 
     # Fresh-vs-replayed value error: the memorisation gap. A network with
     # healthy plasticity fits fresh and replayed trajectories about equally;
@@ -274,7 +253,7 @@ def train_step(
     # Per-group means are NaN in batches with no fresh (or no replayed)
     # member; wandb line plots skip them.
     if not isinstance(batch.reuse_count, tuple):
-        target_value = player_target_pred.value_head.expectation
+        target_value = player_estimate.value_head.expectation
         return_value = player_targets.win_returns @ cat_vf_support
         value_sq_err = jnp.square(target_value - return_value)
         vm = value_mask.astype(value_sq_err.dtype)
@@ -290,26 +269,15 @@ def train_step(
                 "plasticity_value_err_reuse_gap": fresh_err - replay_err,
             }
         )
-    # NashPG advantage: the plain v-trace pass from targets.py, batch-
-    # normalised over the surrogate's own rows with masked mean/std (the
-    # reference's update_agent does exactly this per minibatch). f32
-    # before promote_map bf16-casts the rest of the targets. The count
-    # guard covers an all-masked batch; there is no running statistic
-    # here to poison (LESSONS 2 applies to EMAs, not batch stats).
     pg_advantages = player_targets.pg_advantages.astype(jnp.float32)
-    pg_adv_norm, pg_adv_mean, pg_adv_std = normalise_advantages(
-        pg_advantages, policy_mask
-    )
+    pg_adv_mean, pg_adv_std = advantage_statistics(pg_advantages, policy_mask)
     training_logs["player_pg_adv_mean"] = pg_adv_mean
     training_logs["player_pg_adv_std"] = pg_adv_std
 
     player_targets = promote_map(player_targets, float_dtype)
 
-    v_target = player_target_pred.value_head.expectation.astype(jnp.float32)
-    # The critics learn the PLAIN game: NashPG carries its reference KL
-    # in the POLICY objective and uses no reward transform
-    # (arXiv:2510.18183), so no penalty stream enters the labels or
-    # bootstraps.
+    v_target = player_estimate.value_head.expectation.astype(jnp.float32)
+    # EMAgnet regularises the policy objective, leaving critic targets in game units.
     # An action was actually taken here — including on forced single-option
     # steps, which policy_mask excludes — but not on terminal rows.
     acted_mask = value_mask & jnp.logical_not(player_transitions.env_output.done)
@@ -321,14 +289,14 @@ def train_step(
     training_logs.update(
         paired_advantage_audit(
             batch,
-            player_target_pred.value_head.log_probs,
-            player_target_pred.priv_value_head.log_probs,
-            target_actor_ratio,
-            target_actor_ratio_raw,
+            player_estimate.value_head.log_probs,
+            player_estimate.priv_value_head.log_probs,
+            old_policy_actor_ratio,
             config,
             axis,
         )
     )
+    training_logs.update(voluntary_switch_telemetry(batch, axis, acted_mask))
     taken_switch = axis.taken_switch
     has_move = axis.has_move
     voluntary_switch_mask = acted_mask & taken_switch & has_move
@@ -354,7 +322,7 @@ def train_step(
     )
 
     # Off-policy attenuation audit, split by the TAKEN modality. isr =
-    # pi_target/mu_actor is what v-trace multiplies its TD errors by
+    # pi_old/mu_actor is what v-trace multiplies its TD errors by
     # (targets.py: rho_t = c_t = min(1, isr)). As pi(switch) decays, isr on
     # switch-taken rows falls
     # below 1 and those rows contribute proportionally less.
@@ -366,7 +334,20 @@ def train_step(
     # is a self-reinforcing loop even though every individual update is
     # properly weighted. below1_frac is the cleaner signal than the
     # mean (isr is heavy-tailed on the upside).
-    isr_f32 = target_actor_ratio.astype(jnp.float32)
+    isr_f32 = old_policy_actor_ratio
+    # RLlib's mean_IS / var_IS: the clamped mu/pi_old factor the surrogate
+    # multiplies in, and how often the cap bit.
+    behaviour_old_ratio = jnp.exp(
+        player_actor_log_prob.astype(jnp.float32)
+        - old_policy_log_prob.astype(jnp.float32)
+    )
+    training_logs["player_behaviour_old_ratio_mean"] = average(
+        jnp.minimum(behaviour_old_ratio, config.player_behaviour_ratio_clip),
+        policy_mask,
+    )
+    training_logs["player_behaviour_old_ratio_clip_frac"] = average(
+        behaviour_old_ratio >= config.player_behaviour_ratio_clip, policy_mask
+    )
     training_logs["player_isr_switch_voluntary"] = average(
         isr_f32, voluntary_switch_mask
     )
@@ -401,7 +382,7 @@ def train_step(
         training_logs["player_value_r2_fresh"] = jnp.where(
             vm_fresh.any(),
             calculate_r2(
-                value_prediction=player_target_pred.value_head.expectation.astype(
+                value_prediction=player_estimate.value_head.expectation.astype(
                     jnp.float32
                 ),
                 value_target=(player_targets.win_returns @ cat_vf_support).astype(
@@ -418,7 +399,7 @@ def train_step(
             params,
             player_actor_input,
             player_transitions.agent_output.actor_output,
-            HeadParams(),
+            head_params,
         )
 
         learner_value_head = learner_player_pred.value_head
@@ -430,9 +411,6 @@ def train_step(
         learner_actor_ess, learner_actor_ratio_tail = ratio_ess_and_tail(
             learner_actor_ratio, policy_mask, 2.0
         )
-
-        learner_target_log_ratio = learner_log_prob - player_target_log_prob
-        learner_target_ratio = jnp.exp(learner_target_log_ratio)
 
         loss_v_win = average(
             optax.softmax_cross_entropy(
@@ -483,29 +461,6 @@ def train_step(
                     mask=potential_mask,
                 ),
             }
-        # The pairwise entity critics: each head's scalar
-        # regressed on the v-trace scalar return the CLS critics' two-hot
-        # is built from, under the same mask, gradient live into what the
-        # head reads. One coefficient for both (config.py carries the
-        # form); 0 builds neither head, so this block is static.
-        loss_pair_value = 0.0
-        pair_value_logs = {}
-        if config.player_pair_value_loss_coef > 0:
-            pair_value_label = player_targets.scalar_returns.astype(jnp.float32)
-            for pair_name, pair_output in (
-                ("public", learner_player_pred.pair_value_public),
-                ("private", learner_player_pred.pair_value_private),
-            ):
-                pair_loss = mse_value_loss(
-                    pred=pair_output.value, target=pair_value_label, valid=value_mask
-                )
-                loss_pair_value = loss_pair_value + pair_loss
-                pair_value_logs[f"player_loss_pair_value_{pair_name}"] = pair_loss
-                pair_value_logs.update(
-                    pair_value_telemetry(
-                        pair_output, pair_value_label, value_mask, pair_name
-                    )
-                )
         action_head_entropy = average(learner_action_head.entropy, policy_mask)
         action_head_normalized_entropy = average(
             learner_action_head.normalized_entropy, policy_mask
@@ -521,17 +476,6 @@ def train_step(
             log_policy_ratio=learner_actor_log_ratio,
             valid=policy_mask,
         )
-        loss_target_forward_kl = forward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
-            valid=policy_mask,
-        )
-        loss_target_backward_kl = backward_kl_loss(
-            policy_ratio=learner_target_ratio,
-            log_policy_ratio=learner_target_log_ratio,
-            valid=policy_mask,
-        )
-
         normalized_modality_entropy = average(
             learner_action_head.normalized_modality_entropy, policy_mask
         )
@@ -545,24 +489,28 @@ def train_step(
         switch_actions = axis.switch_cells
         switch_choice_mask = policy_mask & axis.has_both
 
-        # JOINT surrogate: one pi/mu ratio on the taken action.
         learner_log_policy = learner_action_head.log_policy
         pi_learner = masked_policy(learner_log_policy, flat_action_mask)
 
         macro_valid = policy_mask & (axis.num_legal_modalities >= 2)
         micro_valid = policy_mask & (axis.taken_modality_count >= 2)
 
-        loss_pg = policy_gradient_loss(
-            policy_ratios=learner_actor_ratio,
-            advantages=pg_adv_norm,
+        loss_pg = appo_policy_loss(
+            learner_log_prob=learner_log_prob,
+            behaviour_log_prob=player_actor_log_prob,
+            old_policy_log_prob=old_policy_log_prob,
+            advantages=pg_advantages,
             valid=policy_mask,
-            threshold=config.player_ppo_clip,
-            objective=config.player_pg_objective,
+            clip_ppo=config.player_ppo_clip,
+            behaviour_ratio_clip=config.player_behaviour_ratio_clip,
         )
-        # Per-level entropies (macro = modality marginal, micro = within
-        # the taken modality) are OBSERVERS only — the collapse instruments
-        # the acceptance gates read. The regulariser itself is NashPG's:
-        # the plain joint entropy bonus at the static player_ent_coef.
+        surrogate_ratio = clipped_target_ratio(
+            learner_log_prob=learner_log_prob,
+            behaviour_log_prob=player_actor_log_prob,
+            old_policy_log_prob=old_policy_log_prob,
+            behaviour_ratio_clip=config.player_behaviour_ratio_clip,
+        )
+        # Modality entropies observe collapse; only joint entropy enters the loss.
         h_macro_rows, h_micro_rows = factorised_entropies(
             learner_log_policy, axis.taken_modality, flat_action_mask
         )
@@ -571,29 +519,10 @@ def train_step(
         loss_entropy = -average(
             learner_action_head.entropy.astype(jnp.float32), policy_mask
         )
-        # Magnet: full-distribution KL(pi || pi_reg) per row —
-        # differentiated through the learner side (reg_log_policy comes
-        # off the frozen reg_params, a constant).
         magnet_kl_rows = reference_kl(
             learner_log_policy, reg_log_policy, flat_action_mask
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
-
-        # The flat support hinge (loss.support_hinge_loss): the
-        # one restoring force in this bracket, holding every legal cell at
-        # player_support_tau and, at temperature 0, exactly silent above it
-        # (smoothed in log space by player_support_temperature, nearly
-        # silent from 2 tau up). It is not
-        # pi-prefactored on the cell it lifts, so it is the only term still
-        # acting on an abandoned action; unlike the modality-marginal KL it
-        # replaced it says nothing above the line, where the critic ranks.
-        support_rows, support_active_rows, support_tau_row = support_hinge_loss(
-            learner_log_policy,
-            flat_action_mask,
-            config.player_support_tau,
-            temperature=config.player_support_temperature,
-        )
-        loss_support = average(support_rows, policy_mask)
 
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
@@ -615,33 +544,20 @@ def train_step(
             player_loss_entropy=loss_entropy,
             player_entropy_macro=entropy_macro,
             player_entropy_micro_taken=entropy_micro_taken,
-            player_ppo_clip_frac=clip_fraction(
-                policy_ratios=learner_actor_ratio,
-                valid=policy_mask,
-                clip_ppo=config.player_ppo_clip,
-            ),
             player_policy_prob_switch=policy_prob_switch,
             player_policy_prob_move=policy_prob_move,
             player_policy_prob_ratio=modality_ratio(
                 policy_prob_switch, policy_prob_move
             ),
-            # KL(pi_learner || pi_reg) per state — the magnet loss's own
-            # value (name kept across the transition). Sawtooth: drifts
-            # up against the FROZEN reference, drops to ~0 at each snap;
-            # a level climbing ACROSS snaps is a policy running away
-            # faster than the snap period can repair.
             player_ref_kl=loss_mag,
-            player_loss_support=loss_support,
-            player_support_active_fraction=average(support_active_rows, policy_mask),
-            # N * tau_row: the mass the hinge asks for per row; 1.0 would be
-            # unsatisfiable, the tau_max_mass clamp caps it and
-            # saturated_frac says how often the clamp binds.
-            player_support_n_tau_row=average(
-                flat_action_mask.sum(-1) * support_tau_row, policy_mask
+            # Rows outside the PPO band: how much of the batch the trust
+            # region is actually holding back, RLlib's clip readout.
+            player_ppo_clip_frac=clip_fraction(
+                policy_ratios=surrogate_ratio,
+                valid=policy_mask,
+                clip_ppo=config.player_ppo_clip,
             ),
-            player_support_saturated_frac=average(
-                support_tau_row < config.player_support_tau, policy_mask
-            ),
+            player_surrogate_ratio_mean=average(surrogate_ratio, policy_mask),
         )
         pg_logs.update(
             legal_support_telemetry(
@@ -657,36 +573,25 @@ def train_step(
                 axis.taken_switch,
                 policy_mask,
                 switch_choice_mask,
-                learner_actor_ratio,
-                pg_adv_norm,
+                learner_log_prob,
+                player_actor_log_prob,
+                old_policy_log_prob,
                 pg_advantages,
                 config,
             )
         )
-        # pg bracket + v + kl.
         loss = (
-            # pg: the NashPG bracket — surrogate + ent_coef * (-H) +
-            # mag_coef * KL(pi || pi_reg), one coefficient scaling
-            # improvement and regularisation together — plus the flat
-            # support hinge, the one deliberate divergence from the
-            # reference actor loss (the reference carries no
-            # mass-independent restorer in either mag_divergence mode).
             config.player_pg_coef
             * (
                 loss_pg
                 + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
-                + config.player_support_hinge_coef * loss_support
             )
             # v: one critic, on the deploy-time information set.
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
             # The potential channel's head, unscaled (see above).
             + loss_potential
-            # The pairwise critics, both heads' MSE.
-            + config.player_pair_value_loss_coef * loss_pair_value
-            # The actor backward KL is a diagnostic only: the trust region
-            # against the behaviour policy is the clip and the magnet.
         )
 
         return loss, dict(
@@ -730,13 +635,8 @@ def train_step(
             player_action_normalized_entropy=action_head_normalized_entropy,
             player_normalized_modality_entropy=normalized_modality_entropy,
             player_learner_actor_ratio=average(learner_actor_ratio, policy_mask),
-            # The LEARNER/behaviour ratio's effective sample size and tail,
-            # a different population from player_isr_ess /
-            # player_rho_clip_frac (the TARGET/behaviour ratio v-trace
-            # consumes, rl/online/training/targets.py) -- never one axis.
             player_learner_actor_ess=learner_actor_ess,
             player_learner_actor_ratio_tail_gt2=learner_actor_ratio_tail,
-            player_learner_target_ratio=average(learner_target_ratio, policy_mask),
             player_learner_actor_forward_kl=loss_actor_forward_kl,
             # Modality-resolved split of the SAME k3 estimator. The
             # global mean is an expectation over the policy, so drift
@@ -762,8 +662,6 @@ def train_step(
                 valid=policy_mask & jnp.logical_not(taken_switch),
             ),
             player_learner_actor_backward_kl=loss_actor_backward_kl,
-            player_learner_target_forward_kl=loss_target_forward_kl,
-            player_learner_target_backward_kl=loss_target_backward_kl,
             player_value_head_r2=calculate_r2(
                 value_prediction=learner_value_head.expectation,
                 value_target=player_targets.win_returns @ cat_vf_support,
@@ -792,46 +690,28 @@ def train_step(
             .sum(axis=0)
             .mean(),
             **potential_logs,
-            **pair_value_logs,
         )
 
     player_grad_fn = jax.value_and_grad(player_loss_fn, has_aux=True)
     (player_loss_val, player_logs), player_grads = player_grad_fn(player_state.params)
 
     prev_player_state = player_state
-    player_state = player_state.apply_gradients(grads=player_grads)
-    player_state = player_state.replace(
-        step_count=player_state.step_count + 1,
-        frame_count=player_state.frame_count + player_valid.sum(),
-        # Hard-snapped to the target net every player_reg_snap_steps —
-        # NashPG's outer-loop reference reset (see reg_snap above).
-        reg_params=jax.tree.map(
-            lambda t, r: jnp.where(reg_snap, t, r),
-            player_state.target_params,
-            player_state.reg_params,
-        ),
-        target_params=optax.incremental_update(
-            player_state.params,
-            player_state.target_params,
-            config.player_ema_update_rate,
-        ),
-    )
-    # A non-finite loss or gradient must never reach the params or the EMA
-    # scalars: one poisoned update is permanent, and the next periodic save
-    # then overwrites the last good checkpoint with it. Keep the previous
-    # state wholesale and log the skip.
-    player_update_finite = jnp.isfinite(player_loss_val) & jnp.isfinite(
-        optax.global_norm(player_grads)
-    )
-    player_state = jax.tree.map(
-        lambda new, old: jnp.where(player_update_finite, new, old),
+    player_state, player_update_finite, reference_update_rate = apply_player_gradients(
         player_state,
-        prev_player_state,
+        player_grads,
+        player_loss_val,
+        player_valid.sum(),
+        config.player_reg_ema_rate,
+        config.player_old_policy_snap_steps,
     )
-
     training_logs.update(player_logs)
     training_logs.update(
         dict(
+            player_reg_ema_rate=reference_update_rate,
+            # Updates since pi_old was last copied (0 = this step copied).
+            player_old_policy_age=(
+                player_state.step_count % config.player_old_policy_snap_steps
+            ),
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
             player_gradient_norm=optax.global_norm(player_grads),

@@ -3,14 +3,8 @@ call the loss and target callables (`targets.py` imports `telemetry.py`,
 so these cannot live there without a cycle). Observers only: no loss reads
 anything here.
 
-`legal_support_telemetry`: how close the policy is to pruning, over each
-real decision row's legal cells read as flat complete actions (a move x
-target, or one switch, is one cell — no hierarchy): the minimum and median
-cell probability, the legal-cell count, the fraction of legal cells below
-each of three lines, then the minimum and the fractions split over the
-switch and move cells so the switch floor reads on its own. The exposure
-instrument for the support hinge (what it must lift) and the v-trace
-threshold (what it will discard), and the calibration input for both.
+`legal_support_telemetry`: probability coverage over legal complete actions,
+including separate switch and move readouts.
 
 `switch_loss_telemetry`: dL/ds for adding s to every switch logit with the
 features held fixed — the direction each actor-loss term pushes switching.
@@ -23,7 +17,7 @@ import jax
 import jax.numpy as jnp
 
 from rl.environment.data import CAT_VF_SUPPORT
-from rl.online.training.loss import policy_gradient_loss, support_hinge_loss
+from rl.online.training.loss import appo_policy_loss
 from rl.online.training.targets import compute_player_targets, reference_kl
 from rl.utils import average
 
@@ -92,17 +86,17 @@ def switch_loss_telemetry(
     taken_switch,
     policy_mask,
     choice_mask,
-    policy_ratio,
+    taken_log_prob,
+    behaviour_log_prob,
+    old_policy_log_prob,
     advantages,
-    raw_advantages,
     config,
 ):
     """dL/ds for adding s to every switch logit, holding features fixed.
 
     Positive means gradient descent suppresses switch odds. Terms include
     their training coefficients and share the actual policy-row denominator.
-    This does not attribute shared-feature updates or Adam momentum. JVPs
-    reuse the executable loss definitions, including the SPO/PPO selector.
+    This does not attribute shared-feature updates or Adam momentum.
     """
     log_policy = jax.lax.stop_gradient(log_policy.astype(jnp.float32))
     policy = masked_policy(log_policy, legal_mask)
@@ -111,15 +105,17 @@ def switch_loss_telemetry(
         legal_mask, switch_cells.astype(jnp.float32) - switch_mass[..., None], 0.0
     )
     taken_tangent = taken_switch.astype(jnp.float32) - switch_mass
-    policy_ratio = jax.lax.stop_gradient(policy_ratio.astype(jnp.float32))
+    taken_log_prob = jax.lax.stop_gradient(taken_log_prob.astype(jnp.float32))
 
-    def pg_loss(ratios):
-        return policy_gradient_loss(
-            policy_ratios=ratios,
+    def pg_loss(log_prob):
+        return appo_policy_loss(
+            learner_log_prob=log_prob,
+            behaviour_log_prob=behaviour_log_prob,
+            old_policy_log_prob=old_policy_log_prob,
             advantages=advantages,
             valid=policy_mask,
-            threshold=config.player_ppo_clip,
-            objective=config.player_pg_objective,
+            clip_ppo=config.player_ppo_clip,
+            behaviour_ratio_clip=config.player_behaviour_ratio_clip,
         )
 
     def entropy_loss(log_probs):
@@ -131,24 +127,13 @@ def switch_loss_telemetry(
     def magnet_loss(log_probs):
         return average(reference_kl(log_probs, reg_log_policy, legal_mask), policy_mask)
 
-    def support_loss(log_probs):
-        rows, _, _ = support_hinge_loss(
-            log_probs,
-            legal_mask,
-            config.player_support_tau,
-            temperature=config.player_support_temperature,
-        )
-        return average(rows, policy_mask)
-
     gradients = {}
     gradients["pg"] = (
-        config.player_pg_coef
-        * jax.jvp(pg_loss, (policy_ratio,), (policy_ratio * taken_tangent,))[1]
+        config.player_pg_coef * jax.jvp(pg_loss, (taken_log_prob,), (taken_tangent,))[1]
     )
     for name, objective, coefficient in (
         ("entropy", entropy_loss, config.player_ent_coef),
         ("magnet", magnet_loss, config.player_mag_coef),
-        ("support", support_loss, config.player_support_hinge_coef),
     ):
         gradients[name] = (
             config.player_pg_coef
@@ -167,14 +152,13 @@ def switch_loss_telemetry(
     ):
         selected = choice_mask & taken_mask
         logs[f"player_choice_{name}_count"] = selected.sum()
-        logs[f"player_choice_{name}_adv_raw"] = average(raw_advantages, selected)
-        logs[f"player_choice_{name}_adv_normalised"] = average(advantages, selected)
+        logs[f"player_choice_{name}_adv_raw"] = average(advantages, selected)
         logs[f"player_switch_logit_grad_pg_taken_{name}"] = (
             config.player_pg_coef
             * jax.jvp(
                 pg_loss,
-                (policy_ratio,),
-                (jnp.where(selected, policy_ratio * taken_tangent, 0.0),),
+                (taken_log_prob,),
+                (jnp.where(selected, taken_tangent, 0.0),),
             )[1]
         )
     return logs
@@ -185,13 +169,12 @@ def _sign_disagreement(negative, positive):
 
 
 def paired_advantage_audit(
-    batch, public_log_probs, privileged_log_probs, isr, isr_raw, config, axis
+    batch, public_log_probs, privileged_log_probs, isr, config, axis
 ):
     """Compare both V-trace estimators with behaviour-outcome residuals.
 
-    `isr` / `isr_raw` are the learner's own v-trace inputs (rho from the
-    thresholded ratio, c from the raw one), so the advantages audited are
-    the ones trained on. Uses each head's own baseline for its MC
+    `isr` is the old-policy/behaviour ratio used by V-trace. Each head
+    uses its own baseline for its MC
     residual. The rho-weighted residual additionally matches the V-trace
     advantage's outer weight, so their difference isolates bootstrap
     disagreement on the same row.
@@ -208,9 +191,7 @@ def paired_advantage_audit(
         ("public", public_log_probs),
         ("privileged", privileged_log_probs),
     ):
-        targets, _ = compute_player_targets(
-            batch, log_probs, isr, config, isr_raw=isr_raw
-        )
+        targets, _ = compute_player_targets(batch, log_probs, isr, config)
         value = jnp.exp(log_probs.astype(jnp.float32)) @ jnp.asarray(
             CAT_VF_SUPPORT, dtype=jnp.float32
         )
@@ -271,3 +252,40 @@ def paired_advantage_audit(
             for name, values in signals.items():
                 logs[f"{prefix}_{name}_sum"] = jnp.where(selected, values, 0.0).sum()
     return logs
+
+
+def voluntary_switch_telemetry(batch, axis, acted_mask):
+    """Count fresh chosen switches per chosen move-or-switch decision.
+
+    Sum the counters before dividing across batches. This is a decision
+    proxy for protocol-log frequencies: an attempted move can be cancelled
+    before execution by a faint or flinch. Full-game logs own that comparison.
+    """
+    from rl.environment.protos.features_pb2 import InfoFeature, RequestType
+    from rl.environment.protos.service_pb2 import ModalityEnum
+
+    env = batch.player_transitions.env_output
+    move_request = (
+        env.info[..., InfoFeature.INFO_FEATURE__REQUEST_TYPE]
+        == RequestType.REQUEST_TYPE__MOVE
+    )
+    # WAIT shares MOVE's info token, but its decoded mask is the all-cell sentinel.
+    real_request = move_request & ~env.action_mask.all(axis=-1)
+    taken_move = (axis.taken_modality == ModalityEnum.MODALITY_ENUM__MOVE) | (
+        axis.taken_modality == ModalityEnum.MODALITY_ENUM__WILDCARD
+    )
+    if isinstance(batch.reuse_count, tuple):
+        fresh = jnp.zeros_like(acted_mask)
+    else:
+        fresh = batch.reuse_count == 0
+    decisions = acted_mask & fresh & real_request & (taken_move | axis.taken_switch)
+    switch_count = (decisions & axis.taken_switch).sum(dtype=jnp.int32)
+    decision_count = decisions.sum(dtype=jnp.int32)
+    fraction = switch_count.astype(jnp.float32) / jnp.maximum(decision_count, 1)
+    return {
+        "player_fresh_voluntary_switch_count": switch_count,
+        "player_fresh_move_or_switch_count": decision_count,
+        "player_fresh_voluntary_switch_frac": jnp.where(
+            decision_count > 0, fraction, jnp.nan
+        ),
+    }

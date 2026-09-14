@@ -19,6 +19,1060 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## APPO actor: old-policy snapshot and clipped surrogate — 2026-09-14
+
+User-directed completion of the FootsiesGym alignment below, whose ledger
+left one discrepancy open: "its actor is APPO with a separate target and
+clipped V-trace surrogate; ours remains the score-function V-trace actor".
+The player actor is now that APPO loss. The magnet, critics, replay,
+builder, optimiser and actor publication are unchanged. Code and focused
+checks are complete; the learner has NOT been restarted and no strength
+verdict exists.
+
+The reference is RLlib 2.49.0 `appo_torch_policy.APPOTorchPolicy.loss`
+(the class `EMAgnetTorchPolicy` inherits; its `loss` is a verbatim copy plus
+the magnet terms) with `appo/utils.make_appo_models`,
+`torch_mixins.TargetNetworkMixin` and `APPO.training_step`, read against
+IMPACT (Luo et al. 2020, arXiv 1912.00167). Discrepancies enumerated first:
+
+- RLlib holds THREE distributions in the loss: the behaviour logits stored
+  in the batch (mu), a separate `target_model` (pi_old) and the live model.
+  `logp_ratio = clamp(mu/pi_old, 0, target_worker_clipping=2) * pi_live/mu`
+  enters PPO's `min(A r, A clip(r, 1 +/- 0.4))`. V-trace's rho and c are
+  `pi_old/mu` truncated at 1 (both thresholds 1.0), against the LIVE
+  critic's values. We had one ratio, `pi_live/mu`, capped at one inside a
+  stopped advantage, and a score-function loss on top.
+- RLlib's target is `TargetNetworkMixin.update_target(tau=1.0)`: a hard
+  copy, called at init and in `APPO.training_step` whenever sampled steps
+  since the last copy exceed `num_epochs * minibatch_buffer_size = 1`, i.e.
+  every driver iteration. FootsiesGym never overrides `tau`. With the
+  learner thread keeping pace that is about one gradient step of lag, so
+  in the reference configuration the PPO band is almost never active and
+  the `mu/pi_old` cap does the work. IMPACT Algorithm 1 line 11 is the
+  same hard copy every `t_target` SGD steps, `t_target` a multiple of
+  `N * K` (buffer batches x replays), 4 x 2 = 8 for its discrete tasks.
+  Ours copies the POST-update live parameters every
+  `player_old_policy_snap_steps = 8` accepted updates: the paper's discrete
+  setting, and our replay cap, so a chunk mostly meets one pi_old across
+  its reuses. A snap-every-update setting makes pi_old the pre-update live
+  parameters and the clip inert (`tests/test_appo_surrogate.py` pins the
+  loss it reduces to).
+- The old-policy tree is NOT an EMA and is a separate clock from the
+  magnet (rate 3.75e-5, mean age ~26.7k updates): three parameter sets
+  per policy, live / old-policy / magnet, only the first optimised.
+- FootsiesGym's magnet forward is not detached (a wasted backward through
+  the magnet) and its `kl` mean ignores sequence padding; ours keeps the
+  stopped, masked f32 `reference_kl`. RLlib masks its losses after the
+  fact (`reduce_mean_valid`) but forms the ratios on padded rows; ours
+  zero invalid rows before the ratio is formed, so padding cannot leak
+  through the clip.
+- RLlib checkpoints neither target nor magnet (a restore seeds a random
+  magnet). Ours persists `player/old_policy_params` beside `reg_params`;
+  a checkpoint without it seeds a live copy, and the retired
+  `player/target_params` EMA component is still ignored on load. The new
+  name is deliberate: the old name carried a different mechanism.
+
+Coefficients: `player_ppo_clip = 0.4` (RLlib `clip_param`, unchanged by
+FootsiesGym), `player_behaviour_ratio_clip = 2.0` (`target_worker_clipping`),
+`player_old_policy_snap_steps = 8`. `player_pg_coef`, entropy and magnet
+coefficients are untouched. The advantage that multiplies the ratio is the
+same stopped, truncated-rho V-trace advantage as before, now with
+`rho = min(1, pi_old/mu)`: the V-trace `player_isr_*` panels therefore read
+`pi_old/mu` from this change on, not `pi_live/mu` (`player_learner_actor_*`
+still carries the live ratio). New panels: `player_ppo_clip_frac`,
+`player_surrogate_ratio_mean`, `player_behaviour_old_ratio_mean` and
+`_clip_frac` (RLlib's mean_IS and the cap's hit rate), `player_old_policy_age`
+(updates since the last copy, 0 on a copy step). Section 1 of the Signal
+health view carries them; rerun `scripts/wandb_views.py`.
+
+Gradient shape, for the four questions: the surrogate's per-row force on
+the taken logit is `r * A` inside the band and exactly zero past it in the
+push direction, with `r <= clip * pi_live/mu` bounded by the cap; the clip
+is what the removed score-function loss lacked as a bound on reuse. The
+band is around pi_old, not the row's own mu, so with replay it is one
+trust region per snapshot period rather than one per stale row. Nothing in
+it refills a starved cell: the pi prefactor caveat stands unchanged.
+
+Removed: `loss.vtrace_policy_loss` and its `tests/test_vtrace_loss.py`
+(the pre-change tree has both; `git rm` the test). `switch_loss_telemetry`
+now takes the behaviour and old-policy log-probs and differentiates the
+real surrogate, so `player_switch_logit_grad_pg` reads the clipped loss.
+
+Validation: 28 focused checks pass (the new surrogate tests, the
+reference-update tests including the snapshot's exact-copy, separate-buffer
+under donation, rejected-step and every-step cases, and the PPO objective
+tests), run against the real `loss.py` and the extracted update function in
+an isolated JAX harness. Black, isort, autoflake and Ruff pass on every
+changed file. NOT run here: the real-model train_step smoke, the switch
+telemetry JVP test, the checkpoint migration tests and the rest of the fast
+suite; run `env/bin/python -m pytest tests/ -m "not slow"` and then the
+slow suite when no learner is live, before any restart. For a later run:
+hold `player_ppo_clip_frac` on a panel from the first step; a fraction
+pinned near zero says the band is inert at this snap period, a fraction
+climbing across each 8-step period is the reuse the band bounds. Acceptance
+is matched evaluation strength, critic R2, replay KL/ESS and fresh switch
+coverage together, as for the magnet change below.
+
+## EMAgnet aligned to the FootsiesGym code variant — 2026-09-14
+
+The user chose the executable code variant after the paper/code discrepancy
+was explained. This supersedes the pending forward-KL and fresh-data-clock
+adaptation below. That adaptation was never launched. Training remains on
+its already-loaded code; this change has not restarted the learner.
+
+The reference is FootsiesGym commit
+`5fe9ead885325fe0011130c75b4ec53042e44dfa`, specifically
+[emagnet.py](https://github.com/como-research/FootsiesGym/blob/5fe9ead885325fe0011130c75b4ec53042e44dfa/experimentation/experiments/rllib/components/emagnet.py#L247)
+and the fixed [experiment configuration](https://github.com/como-research/FootsiesGym/blob/5fe9ead885325fe0011130c75b4ec53042e44dfa/experimentation/experiments/rllib/experiment.py#L266).
+The reference discrepancies were read before implementation:
+
+- It uses `KL(live || magnet)`, not the papers' opposite direction.
+- Its EMA mutates during each loss call, before the optimiser step. Our
+  pure JAX loss stays mutation-free, but the committed EMA uses the same
+  pre-update live parameters, once per accepted optimiser update. Failed
+  updates and extra diagnostic/initialisation calls do not advance it.
+- Its actor is APPO with a separate target and clipped V-trace surrogate.
+  Ours remains the existing score-function V-trace actor over replay.
+- Our reference is detached, uses the learner's legal-action masks and f32
+  distributions, starts as an independent live copy, and survives full
+  checkpoint resume. The example constructs another model without an
+  explicit initial copy in that file; this does not override our donation
+  and restoration contracts.
+- The numerical coefficients now match the example, but its reward scale
+  is +/-10 and ours is +/-1, its learning rate is `6e-4` and ours `3e-5`,
+  and the training batches/update estimators differ. This is neither a
+  reward-scale conversion nor evidence of matched gradient strength,
+  fresh-data staleness or reproduction of its unpublished paper experiments.
+
+Current settings are `player_reg_ema_rate=3.75e-5`, `player_mag_coef=.04`,
+`player_ent_coef=.006`, and `player_pg_coef=1`. The EMA rule is
+`reference_next = (1-tau) * reference + tau * live_before_update` on every
+accepted step, including batches entirely drawn from previously used replay.
+Its retention half-life is about 18,484 accepted updates. Relative to the
+post-update live parameters, mean parameter age tends to `1/tau`, about
+26,667 updates. No rescaling by first-use fraction, batch size or replay cap
+remains. Zero rate freezes the magnet; rate one copies pre-update live
+parameters, preserving the source timing.
+
+The first-use progress helper, tests for its discarded clock and its panel
+are removed. `player_ref_kl` now measures `KL(live || reference)`;
+`player_reg_ema_rate` records the fixed applied rate, zero on rejection.
+Checkpoint schema, builder, critics, replay scheduling and actor publication
+are unchanged. Exact f32 KL still re-normalises after bf16 promotion and
+masks illegal entries before arithmetic. Its derivative is
+`pi * (log(pi/reference) - KL(pi || reference))`; restoring gradients can
+vanish near collapsed live actions. Finite full-support reference logits
+give finite zero-sum logit gradients, but there is no uniform force bound
+independent of reference log-probability gaps. Adam b1=.9 and shared-parameter
+mean drift remain governed by the existing optimiser and observed by the
+existing switch-gradient, pointer/encoder and applied-delta panels. No
+entropy floor or neural convergence claim follows from this variant.
+
+Validation: 51 focused reference-update, KL/target, switch-telemetry,
+checkpoint-migration and V-trace-loss tests passed. Positive controls
+distinguish pre-update from post-update averaging and reverse from forward
+KL; tests retain exact rollback/freeze and repeated-donation checks.
+Black and Ruff passed. No real-model forward, full train-step execution or
+training restart ran. No runtime strength verdict is available. For a later
+run, hold settings for one EMA half-life absent nonfinite updates or a
+material strength regression; assess matched evaluation strength, critic
+quality, replay KL/ESS, fresh action coverage and parameter drift together.
+
+The exact pre-change source snapshot is
+`runtime/emagnet-code-alignment-20260914/before-code-alignment.tar`; it
+preserves the then-dirty files for a selective reversal without reverting
+unrelated work to Git HEAD. The two dated entries below retain the discarded
+clock and source-audit history.
+
+## FootsiesGym EMAgnet source audit — 2026-09-14
+
+The user supplied `como-research/FootsiesGym`'s legacy RLlib EMAgnet example.
+Inspected commit `5fe9ead885325fe0011130c75b4ec53042e44dfa`, with source
+copies under `/tmp/porygon2-footsies-audit`. This audit changes no training
+code, coefficient or live process. It supplies concrete settings for a
+related implementation and experiment, not the original EMAgnet benchmark
+settings missing from the prior search.
+
+The example's fixed experiment configuration sets
+`magnet_learning_rate_schedule=(6e-4)/16=3.75e-5`,
+`temperature_schedule=.04` (magnet KL strength), entropy `.006`,
+`train_batch_size=4096`, and learning rate `6e-4`:
+[experiment.py](https://github.com/como-research/FootsiesGym/blob/5fe9ead885325fe0011130c75b4ec53042e44dfa/experimentation/experiments/rllib/experiment.py#L266).
+The `.005` EMA rate and `.1` temperature in the policy constructor are
+fallbacks overridden by this configuration.
+
+Its [loss](https://github.com/como-research/FootsiesGym/blob/5fe9ead885325fe0011130c75b4ec53042e44dfa/experimentation/experiments/rllib/components/emagnet.py#L247)
+calls `action_dist.kl(magnet_dist)`, meaning `KL(live || magnet)`, opposite
+to both the original EMAgnet paper and the FootsiesGym paper equations.
+The EMA is mutated inside `loss()` before it returns, hence per loss
+evaluation before the optimiser step, including evaluations of reused
+data. It is not the original paper's post-epoch update or our first-use-row
+clock. The class inherits APPO and includes a target-policy V-trace estimate
+and clipped importance-ratio surrogate. Numerical EMA rates must therefore
+be compared with update frequency and processed/new data volume, not alone.
+
+The [FootsiesGym paper, Table 4](https://arxiv.org/html/2607.06514v1#A3.SS2)
+reports actual experiment settings: EMA rate `1e-4`, entropy `.003`, magnet
+KL strength `.5`, 48 parallel games, rollout length 64, eight epochs and
+eight minibatches per epoch. Its equation uses `KL(magnet || live)`.
+However, 'after each PPO update' leaves the exact EMA event ambiguous
+without the experiment code. The repository's
+[README](https://github.com/como-research/FootsiesGym/blob/5fe9ead885325fe0011130c75b4ec53042e44dfa/README.md#L186)
+explicitly says its paper experiments did not use the supplied RLlib or
+CleanRL examples and that their code is forthcoming. Do not combine the
+paper's batch/epoch counts with this example's per-loss EMA mutation to
+claim an exact fresh-data conversion. The two sources differ in their
+coefficients as well as their objectives and training procedure.
+
+Our pending forward-KL implementation still follows the papers' stated
+direction. Its first-use-row EMA clock remains a separately documented
+replay adaptation, with no direct implementation precedent established by
+this repository. No new default or restart follows from this audit alone.
+
+## EMAgnet reference with a fresh-data clock — 2026-09-14
+
+User-directed replacement of the NashPG reference, followed by a request to
+account for replay in fresh-data units. Code and focused checks are complete;
+the learner has not been restarted for this change. No strength improvement
+has been measured.
+
+Reference discrepancies were enumerated before implementation. EMAgnet
+[Eq. 1](https://arxiv.org/html/2606.23995v1#S3.SS1) uses
+`KL(reference || live)`, opposite to NashPG's `KL(live || reference)`.
+[Appendix B](https://arxiv.org/html/2606.23995v1#A2) updates the parameter EMA
+after each PPO epoch, including repeated epochs over a rollout. Our actor
+remains replay V-trace with raw stopped advantages; the magnet does not
+construct critic targets or behaviour importance ratios. No official code
+was linked by the paper or found in the focused search. Its rollout size,
+epoch count and selected coefficients are insufficiently specified to
+reproduce an exact fresh-data timescale. The paper reports log-uniform
+search ranges `tau=[1e-5,.1]`, KL strength `[.01,32]`, residual entropy
+`[1e-4,.1]`, and a choice of entropy annealing; these are not defaults or
+winning settings ([Appendix D](https://arxiv.org/html/2606.23995v1#A4)).
+
+The player now minimises `KL(stop(reference) || live)` over legal actions.
+Both log distributions are normalised in f32 after promotion; illegal
+entries are masked before normalisation. The per-logit force is
+`player_pg_coef * player_mag_coef * (pi_live - pi_reference)`, bounded by
+`.05` in absolute value with current coefficients and zero-sum over legal
+actions. It retains restoring force when live mass vanishes but reference
+mass remains. The moving reference can itself forget actions, so this does
+not impose an exploration floor. Adam b1=.9 can still overshoot instantaneous
+equilibria; zero-sum logit gradients do not prevent mean-logit drift induced
+through shared parameters. Existing switch-direction PG/entropy/magnet JVPs,
+pointer/encoder gradient norms and applied-delta panels remain the observers.
+
+Initial coefficients stay `player_mag_coef=.05`, `player_ent_coef=.02`,
+`player_pg_coef=1`. `player_reg_ema_rate=2e-4` replaces the snapshot interval.
+This rate is our choice, not a paper result. It was initially chosen to match
+the former 10,000-update snapshot's average parameter age; the user's later
+fresh-data instruction changes its clock and therefore gives a longer memory
+in optimiser updates when data is reused.
+
+One nominal fresh batch means `batch_size * (player_chunk_length - 1)`
+first-use valid policy rows: currently 252. For each learner batch:
+
+```
+fresh_batches = first_use_policy_rows / 252
+tau_applied = -expm1(fresh_batches * log1p(-player_reg_ema_rate))
+reference = (1 - tau_applied) * reference + tau_applied * post_update_live
+```
+
+First-use is replay's pre-increment `reuse_count == 0`; policy masks exclude
+padding, terminal, bootstrap-only and singleton-action rows. Fixed nominal
+units make the clock independent of shape trimming and variable chunk
+lengths. Absent reuse metadata denotes fresh data, as in fixture/offline
+batches. All-replay batches continue optimising the policy but leave the
+magnet unchanged. Rate zero freezes it; rate one copies after updates with
+fresh policy rows. Failed updates restore the whole state through `lax.cond`
+and report zero applied rate.
+
+Eight equal fresh-data fractions give `tau_applied=2.5002188e-5` per update
+and the same old-reference retention as one nominal fresh batch. The base
+half-life is about 3,465 nominal fresh batches. At full-length eight-use
+sampling this is about 27,723 optimiser updates, with mean parameter age
+about 39,995 updates; actual fresh decision counts determine the clock.
+This preserves exponential retention per new policy row, not identical
+averaged parameters or policy KL across different replay schedules. It is
+an explicit replay adaptation, not EMAgnet's published per-epoch schedule:
+later PPO epochs contain no first-use data but still advance its EMA.
+
+Checkpoint schema and `reg_params` storage are unchanged. Scratch and
+parameter-only loading initialise an independent live copy; full resume
+preserves the saved reference, including an older NashPG reference used as
+the initial EMA value. No extra clock counter is needed. Replay, V-trace,
+critics, optimiser, actor publication and builder updates retain their
+previous behaviour. The generic `player_ref_kl` metric now denotes
+`KL(reference || live)` and must not be compared numerically with its old
+direction without recomputation. `player_reg_snapped` is removed;
+`player_reg_ema_rate` records the applied rate and `player_reg_fresh_batches`
+records this batch's progress. The Signal health view was updated at
+https://wandb.ai/jtwin/pokemon-rl?nw=8cvs1lfao19.
+
+Validation: 53 focused reference-update, target, switch-telemetry,
+checkpoint-migration and V-trace-loss checks passed across the seam runs.
+The first reference test run exposed overly strict f32 expectations around
+`expm1(log1p(...))`; numerical assertions now allow ordinary f32 rounding,
+while rollback and freeze assertions remain exact. Ruff and diff checks
+passed. No real-model forward, train-step execution or training restart was
+performed. An independent review checked masking, donation, restoration and
+the fresh-data clock.
+
+For a later experiment, judge at matched fresh-policy-row budgets and retain
+coefficients for at least one base half-life (about 873,278 new policy rows),
+absent nonfinite updates or material strength regression. Compare matched
+evaluation strength, replay KL/ESS, critic quality, fresh switch coverage,
+choice entropy, magnet KL and shared-parameter drift; entropy alone is not
+acceptance. The immediately following ledger records the prior snapshot
+rule and coefficients. Reverting this mechanism requires restoring both
+the reverse-KL helper and periodic-copy update; changing only the EMA rate
+does not recover NashPG.
+
+## Replay V-trace actor and one frozen NashPG reference — 2026-09-14
+
+User-directed simplification, including initial regularisation coefficients.
+This implementation was launched into a new lineage later on 2026-09-14;
+startup/update validation below is not evidence of improved strength. The player
+keeps replay (256 chunks, maximum eight uses, first-use fraction .125, existing
+staleness/reuse controller), behaviour action log-probabilities and both
+critics. Builder objectives and EMA updates remain unchanged.
+
+Reference discrepancies were enumerated before implementation:
+
+- The old player already used the raw live/behaviour ratio in its SPO/PPO
+  surrogate. Its IMPACT worker/target correction was telemetry only; its
+  separate EMA still supplied actual V-trace policy ratios and critic values.
+- The previous advantage already included clipped importance weighting,
+  then underwent batch centring/scaling and entered another ratio surrogate.
+  The replacement is IMPALA's score-function actor loss with exactly one
+  stopped weighted advantage: `-mean(log_pi_taken * stop(rho * advantage))`.
+  It is a V-trace actor with NashPG's regularisers, not a verbatim copy of
+  NashPG's public PPO implementation.
+- Current live policy/critic predictions now construct detached f32 labels.
+  Both rho and continuation use the raw legal policy ratio, capped at one;
+  lambda .8 appears only in continuation. Actor bootstrap is `r + gamma *
+  vtrace_next`, with no second lambda mixture. Terminal outcomes have no
+  sampled action and use rho=1. A nonterminal final chunk row supplies its
+  value bootstrap but no TD or loss. Categorical labels are projected once.
+- The reference copies post-update live parameters every 10,000 successful
+  optimiser updates, then freezes. Failed updates roll back optimiser,
+  parameters, reference and counters together. Public NashPG defaults have
+  1,000 inner collection updates with four epochs and four minibatches:
+  16,000 Adam steps per reference, not 1,000 of our learner steps.
+- Our Adam moments, epsilon 1e-5 and learning rate 3e-5 stay fixed. The public
+  code uses a different collection/update scheme and LR 3e-4; its numerical
+  coefficients cannot be transferred without accounting for advantage scale.
+
+Player EMA state and its config, player PPO/SPO selector/clip and forward
+uniform-KL coefficient are removed. Training target pruning is removed;
+`player_prune_threshold` remains an evaluation-only intervention. Training
+actors still sample their full legal policy. The frozen reference remains
+separate from replay behaviour: it determines the regularised objective,
+whereas behaviour probabilities correct sampled data.
+
+Initial coefficients: `player_ent_coef=.02`, `player_mag_coef=.05`,
+`player_pg_coef=1`, `player_reg_snap_steps=10_000`. W&B run `o1rsldit`, six
+sampled `player_pg_adv_std` observations returned on 2026-09-14:
+.2405, .2733, .2216, .2111, .2148, .2422. At representative std .25, the new
+raw-unit magnet .05 is approximately old normalised-unit .2, while entropy
+.02 is approximately .08. That raises entropy's relative influence after
+removing the extra uniform penalty without importing the paper's .1 directly
+onto a much smaller raw actor signal. This is a scale-based starting choice,
+not an exact equivalence: current instead of EMA estimates, canonical actor
+bootstrap, removed centring and Adam/shared critic gradients all matter.
+
+The old sp75b/sp75c pair remains evidence against indiscriminate flattening:
+uniform KL .05 improved switch mass but reduced the measured opponent win
+rate .343 to .186 (one historical pair). It does not establish that all
+entropy-only configurations fail. The older ledger's categorical statement
+that no entropy coefficient can work is too strong: in a two-action fixed-gap
+example, `p_bad = 1 / (1 + exp(gap / tau))` is positive for finite gap and
+positive tau. Both expected policy-gradient and entropy forces carry a pi
+factor; a small entropy gradient alone does not prove it cannot oppose PG.
+The equilibrium may be extremely concentrated and recovery very slow; deep
+neural, off-policy training has no guaranteed minimum action frequency.
+Negative entropy already equals `KL(pi || U_legal) - log(num_legal)`.
+
+For fixed finite reference logits the exact policy-space gradients are finite
+and sum to zero over legal logits. The stopped return-scale actor advantage
+is bounded on the terminal-only +/-1 channel (no potential channel). The
+magnet's force depends on reference log-probability gaps, so it has no uniform
+bound independent of the reference. Adam momentum b1=.9 can carry updates
+past instantaneous equilibria; zero-sum logit gradients do not imply zero
+parameter-induced mean drift. Existing switch-direction PG/entropy/magnet
+JVPs, pointer/shared-encoder gradients and applied-delta panels are retained.
+No new force controller or automatic coefficient adaptation is introduced.
+
+EMA timing correction: with rate .001, mean parameter age is
+`(1-.001)/.001 = 999` updates and half-life is about 693 updates. Copying that
+EMA and freezing it for another 10,000 updates produced an approximate
+1,000-to-11,000 mean-vintage lag, averaging 6,000 over a cycle. This was not
+an 11,000-update EMA time constant or a direct policy-distance measurement.
+The new live-source reference has no EMA component to that age.
+
+The local R-NaD reference `/home/joseph/Downloads/rnad.py:872` uses
+`jax.lax.cond` to rotate two references from its updated EMA target. At the
+user's request our snapshot and nonfinite rollback also use `jax.lax.cond`,
+replacing tree-mapped `jnp.where` selections with whole-pytree branches. The
+snapshot still keeps one live-source reference. Neither API guarantees
+separate physical output buffers or a runtime advantage; re-donation after a
+snap and rejected updates are covered by focused tests. No speedup is claimed.
+
+Full checkpoints now persist player live/reference/Adam/counters; legacy
+player EMA files are explicitly ignored before decoding. Existing saved
+references survive full resume; pre-reference and parameter-only restores
+seed an independent live copy. Historical league entries retain their
+explicit saved parameter key. New player publications/evaluation use live
+parameters, with raw eval series named `main-*`; prior EMA eval scores are
+not an exact matched control. The retired uniform-KL applied-update screen
+fails explicitly and its exact source is archived at
+`/tmp/porygon2-uniform-kl-screen-before-vtrace-20260914.py`. Historical
+mechanisms remain in commit `0f6da86`, which also includes since-retired pair
+heads: do not restore that commit wholesale over the existing dirty tree.
+
+Validation: 124 focused target/loss/reference-update/checkpoint/league/
+telemetry/inference-loading tests passed across their respective seam runs. A guarded
+`jax.eval_shape` traced real-model initialisation and the complete learner
+forward/gradient update for the bundled (58,1) fixture in 5.829 seconds,
+peak RSS 655.7 MiB; lowering and compilation were explicitly forbidden.
+No real-model forward or GPU train-step test ran alongside the live learner.
+The updated Signal health dashboard was built and saved at
+https://wandb.ai/jtwin/pokemon-rl?nw=tdumfdg18u1.
+
+Acceptance for a later run: hold these static coefficients for two complete
+reference periods (20,000 accepted updates), absent nonfinite updates or a
+material performance regression. Read actor/behaviour KL against the existing
+replay ceiling .045, raw-ratio ESS, fresh-game action coverage, choice entropy,
+reference KL across its cycle, critic quality and matched evaluation strength
+together. A prettier entropy curve alone is not acceptance. No runtime verdict
+of training strength is claimed by this ledger.
+
+User-authorised launch: `session-1789347450-main` / W&B `aa5pcqt9`, isolated
+under `ckpts/gen9/lineages/vtrace-nashpg-20260914`. Params-only initialisation
+inherits live player/builder weights from `ckpts/gen9/ckpt_00340000`
+(340,000 player updates, 69,407,288 frames, parent W&B `o1rsldit`), with fresh
+optimisers, copied reference, counters, league and replay. Old checkpoint files
+and their W&B identity remain in place. New generic `--ckpt-subdir` scopes the
+existing config field; params/scratch reject occupied explicit destinations,
+checkpoint mode permits resume, and paths escaping the generation root or
+combined with BR mode are rejected. 42 CLI/BR setup tests passed.
+
+The old SIGINT stop at 10:49:47 hit the existing donated-state window: its
+interrupt checkpoint was skipped because a state array had been deleted.
+The final main.py message saying the checkpoint was saved was misleading;
+the complete periodic checkpoint at 340,000 is the actual source. No newer
+complete checkpoint or league snapshot was available. This loses unsaved
+updates and must not be described as a lossless restart.
+
+The new process loaded the source weights, filled replay and began applying
+updates after its fixed shape precompilation. Reported non-active shape
+compiles: (64,192) 85.5 seconds and (64,256) 34.8 seconds; the active (48,128)
+shape compiled on its first real call. Beyond 100 applied batches, observed
+throughput was roughly 4–5 updates/second. These are startup observations,
+not a performance comparison with the prior learner. At logged step 281,
+applied-update count was also 281, skipped-update metric 0, gradient norm
+1.454, raw ratio ESS .9725, reference KL .01536 and realised replay reuse
+7.922 (cap eight).
+
+Source-weight hashes and commands are recorded in
+`runtime/vtrace-nashpg-20260914/provenance.json`, `start.sh` (first launch only)
+and `resume.sh` (checkpoint resume in the same subtree). A copy of provenance
+is stored as the new checkpoint root's `lineage.json`.
+
+ISR oscillation audit, same day: all 8,235 consecutive logged updates of
+`aa5pcqt9` were read, with local evidence in
+`runtime/vtrace-nashpg-20260914/isr-history.json` and `isr-oscillation.png`.
+The below-one fraction uses the raw live/recorded-behaviour taken-action
+ratio, a strict threshold, and a per-batch conditional denominator. Median
+voluntary-switch count is five rows; 2.1% of batches have none and log zero.
+These amplify jaggedness but do not explain the broad waves: after pooling
+by matching row counts, updates 2,401–2,800 have switch below-one fraction
+.067 and mean raw ratio 1.740, versus .951 and .606 at 3,201–3,600. Mean
+choice-state switch mass is .0943 versus .0517 in those windows, though the
+sampled states also change. Switch/non-switch below-one fractions correlate
+at -.925 across complete 200-update bins. No reference snapshots occurred;
+reuse cap stayed eight except two 200-update intervals at seven, starting
+at 2,000 and 4,500. Neither explains the repeated waves as a periodic reset.
+
+Coefficient-weighted common-switch-logit directional gradients average
+PG +.0027005, entropy -.0021155, magnet -.0004891, net +.0000958. Positive
+means gradient descent suppresses switching. PG is positive in every
+400-update window; entropy is negative on every record; the magnet is
+negative on 78.6% of records and resists some high-switch phases. This is
+consistent with delayed policy/behaviour feedback under opposing objectives,
+not identification of a unique oscillator: these JVPs hold features fixed,
+omit Adam momentum/shared critic effects, and sample changing replay states.
+Global raw-ratio ESS median .943 does not rule out subgroup attenuation.
+Do not interpret the fraction alone as attenuation magnitude or a reason to
+retune coefficients; mean clipped ratios would measure attenuation directly.
+No learner settings changed for this diagnostic.
+
+Replay/KL follow-up through update 19,634: exact history is stored in
+`runtime/vtrace-nashpg-20260914/replay-kl-audit.json`; controller events and
+the chart are beside it. Recomputing all 196 completed controller ticks from
+their 100-record KL means reproduces every published tick cap. The sustained
+14,001–15,000 actor-KL mean .07227 drove reuse towards six: cap 8->7 at
+14,100 (sensor .05712), first 7->6 at 14,600 (.08760). The 18,001–19,000
+mean is back to .04368, with cap alternating six/seven. At 19,600 the sensor
+is .06410, cap six and realised reuse 5.882. Realised reuse is sampled chunks
+divided by newly admitted chunks, so inventory/prefetch/admission timing
+separates it from the current cap. No manual reuse or coefficient change.
+
+The PI is not a hard threshold gate: its proportional term can reduce cap
+when the KL mean rises but remains below .045 (17,300: .03854, cap 7->6).
+For 2,001–10,000 versus 10,001–19,634, batch-mean overall KL rises
+.03666->.04896, non-switch-conditioned KL .02865->.04475, while
+switch-conditioned KL .06857->.06603. Preclip gradient norm falls
+4.37->1.93, pointer-query/key applied-delta RMS stays roughly unchanged,
+and no update is skipped. These are changing-batch diagnostics, not matched
+state comparisons or proof of unchanged policy sensitivity. The reference
+snap at 10,000 resets reference KL but does not immediately increase actor
+KL; its causal role in later drift is unproven. Behaviour age is not logged
+per sampled chunk, so current telemetry cannot separate actor/admission lag,
+replay-state composition and policy movement as causes of the KL rise.
+
+Exact target provenance checked on 2026-09-14: commit `ae2c1c3` (2026-07-30,
+`improve replay eff`) introduced `player_replay_kl_target = 0.045` as a literal
+in the former `rl/learner/config.py`. Its comment attributes the value to a
+buffer-capacity plateau diagnosis, but no numerical derivation or comparison
+against .05 was found in that commit or the relevant ledger/design records.
+Treat .045 as an inherited heuristic, not a calibrated safety boundary. Later
+KL/ESS measurements provide context for its scale, not its original derivation.
+
+References: [IMPALA, section 4](https://proceedings.mlr.press/v80/espeholt18a/espeholt18a.pdf),
+[NashPG](https://arxiv.org/html/2510.18183v3),
+[public defaults](https://github.com/ntu-agents/nashpg/blob/main/conf/algorithm/nash_pg.yaml),
+[JAX conditional semantics](https://docs.jax.dev/en/latest/_autosummary/jax.lax.cond.html).
+
+## Pair critic removal and forward uniform KL — 2026-09-13
+
+User-directed removal of the pairwise auxiliary critics and population
+moments, replacing the support hinge with `KL(U_legal || policy)`. Both
+pair heads, feature-moment banks, learner reductions/updates, auxiliary
+scalar target payload, losses, configuration, probe and dashboard metrics
+are removed. The deployable/privileged CLS critics and action readout remain.
+Checkpoint resume merges by the current parameter/Adam paths, dropping old
+heads while retaining shared parameters, targets, reference, optimiser,
+counters and league. A small checkpoint-only unpickler recognises the two
+retired scalar record names so old population pickles can be discarded
+without keeping their implementation in the live model. Actual
+`ckpts/gen9/ckpt_00060000/player/scalars` decoded successfully (60,000 steps,
+12,945,896 frames). The committed pair-head baseline is recoverable from
+`0f6da86`; the population-moment extension was uncommitted when removal was
+requested, with its measurements and design preserved in the next ledger.
+
+`uniform_kl_rows` scores the mean `-log pi` across each row's legal cells,
+minus `log(N)`, in f32. Empty/singleton rows are zero, illegal cells are
+masked before reduction and the learner uses its existing policy mask.
+`player_uniform_kl_coef=0.005` replaces the hinge coefficient/tau/temperature
+inside the policy-gradient bracket. Loss and switch-direction metrics are
+`player_loss_uniform_kl` and `player_switch_logit_grad_uniform_kl`. Independent
+legal-probability/pruning exposure metrics remain. The offline coefficient
+screen is now `rl.offline.uniform_kl_screen`.
+
+This restores the previously recorded extra actor regulariser; it does not
+change the SPO/PPO selector, entropy/magnet, Adam or clipping order. Per-logit
+force is `coef * (pi - 1/N)`, bounded and zero-sum with no probability-prefactor
+on the restoring term. There is no direct force along the softmax-invariant
+mean direction. Adam b1=.9 can carry motion through an equilibrium; the
+existing pointer/shared-encoder parameter and applied-delta panels remain
+the drift checks. Shared gradients reach the action readout and encoder;
+no separate human-derived reward or action override is introduced.
+
+Coefficient evidence and acceptance (not yet a post-change result):
+
+- `runtime/replay-audit-01861967/analysis.json` records 19,512 voluntary
+  switches / 96,622 observed move-or-switch actions = 20.19415868%. The
+  requested 80% ceiling is **16.15532694%**, conservatively below the newer
+  corpus's corresponding 16.423% ceiling.
+- The prior flat-KL .05 experiment pinned within-modality entropy at .93
+  and reduced matched BR win rate .343 to .186 (ledger around sp75c). The
+  new .005 is one tenth that coefficient, selected for a smaller policy
+  flattening force, not by balancing loss magnitudes.
+- W&B run `57ctruuo`, step61,392, before this change: switch opportunity
+  mass .02244, hinge switch derivative -.01049, policy-gradient switch
+  derivative +.007368, within-modality entropy .7822. These are a single
+  minibatch and are not human-comparable switch frequencies. At pg_coef1,
+  the new KL's entire switch-shift derivative has magnitude at most .005,
+  less than half that measured old restoring force.
+- Fresh chosen-action counters `player_fresh_voluntary_switch_count` and
+  `player_fresh_move_or_switch_count` sum before division; their fraction
+  excludes forced/preview/wait/standalone, replay reuse and inactive rows,
+  retaining singleton moves. They are a decision proxy: protocol logs omit
+  some attempted moves cancelled by faint/flinch, so complete-game logs
+  own the final human comparison.
+- Pre-register the acceptance on T=1 complete games: the pooled voluntary
+  switch fraction and its game-bootstrap upper 95% bound must be <= the
+  16.1553% ceiling over at least 500 games; hold across two consecutive
+  windows. Compare strength and within-move entropy at matched checkpoints
+  as well. If the ceiling fails, screen .0025 and 0 against .005 in separate
+  coefficient phases; do not add a switching heuristic or vary static JIT
+  config within the live learner. No fixed coefficient is a hard switch cap.
+
+The active learner was left running pending the user's restart choice.
+No post-change training/gameplay coefficient sweep has been run; .005 is a
+provisional evidence-based starting value, not a validated behavioural bound.
+Focused validation: 25 loss/target/telemetry checks, 48 checkpoint/merge/BR
+checks, 9 fresh-switch tests and 2 protocol-screen tests passed; Ruff,
+Black and whitespace checks passed. A guarded `jax.eval_shape` traced
+initialisation and the full gradient/train-step on the real T=58/B=1 fixture
+in 7.49 seconds, peak host RSS 656.5MiB, without materialising model params
+or allowing model lowering/compilation. The resulting 435 metrics included
+all fresh-switch fields and no retired pair fields. Reproducer/log:
+`/tmp/porygon2_abstract_pair_removal.py` and its `.log` sibling. This is an
+arity/shape check, not numerical GPU validation.
+Signal health dashboard refreshed with the retired metrics removed and
+uniform-KL/fresh-switch panels. Real-model forwards are deferred while the
+learner is live.
+
+### Authorised restart and coefficient screen — 2026-09-13
+
+The user subsequently authorised checkpoint/restart/tuning and asked whether
+the extra old-loss training justified a fresh lineage. Chosen: a new experiment
+record with the full trained state retained, rather than random initialisation;
+no evidence established that the inherited policy should be discarded.
+Graceful Ctrl-C saved `ckpts/gen9/ckpt_00128223` at 128,223 completed updates,
+26,327,764 frames. W&B baseline `57ctruuo` finished. Its identity file was
+archived to `runtime/uniform-kl-calibration-20260913/previous-wandb-runs.json`;
+all checkpoint and league files remain available. The new W&B experiment is
+`nm6i7f45`, named `uniform-kl-0.005-from-128223-main`, with explicit checkpoint
+resume and the same counters, weights, targets, optimiser and league.
+
+Four GPU tests passed: both real train-step paths (ordinary and potential
+channel), actor/learner equivalence, and the privileged partition. Three
+abstract precision checks and two protocol screen tests also passed. The
+independent service must run with `service/` as its working directory: the
+current worker reads `../constants/data.json`. A root-directory launch failed
+before any games; only that task-owned process was terminated and restarted
+from the correct directory. No unrelated process was stopped.
+
+Frozen screen on eight T=1 self-play games: 18 chunks, four full batches,
+11 voluntary switches / 481 observed move-or-switch actions = 2.2869%.
+Both perspectives use the same frozen checkpoint here. No taken action was
+discarded by the existing .005 v-trace pruning threshold. Each coefficient
+used the same restored Adam state and recorded batches, two consecutive
+updates per batch to read the first update's result. Compiled executables
+were cleared between coefficient phases.
+
+| KL coefficient | Encoder gradient norm | KL switch-shift derivative | KL after one update | Switch mass after one update | Within-taken-modality entropy after one update |
+|---|---|---|---|---|---|
+| 0 | 2.52317 | 0.0000000 | 1.013915 | 0.0339408 | 0.672210 |
+| 0.0025 | 2.52272 | -0.0006851 | 1.013849 | 0.0339582 | 0.672161 |
+| 0.005 | 2.52290 | -0.0013701 | 1.013621 | 0.0339636 | 0.672271 |
+| 0.01 | 2.52298 | -0.0027403 | 1.013738 | 0.0339577 | 0.672211 |
+
+The .005 setting stayed at the control's encoder gradient scale and entropy,
+with a live restoring derivative and reduced KL. Single-update switch changes
+are small and not monotonic after the restored Adam/bf16 computation; this
+screen does not establish a trained-policy equilibrium. .005 is selected for
+the live hold. Results: `runtime/uniform-kl-calibration-20260913/coefficient-screen.json`.
+
+Direct restart reused the existing tmux panes, with a scoped `BATTLE_LOG_DIR`
+on the service and explicit `--load-mode checkpoint --init-ckpt` on the
+learner, avoiding `start.sh`'s broad W&B stop pass. Actual resume logs confirmed
+that only the two retired head subtrees dropped from the three parameter
+banks. Startup included slow per-leaf `jnp.copy` kernel compilation under the
+learner environment (SIGUSR1 stack confirms `create_train_state`, not a hang),
+then fixed-shape compilation. W&B confirmed step 128,543, uniform KL 1.066,
+uniform-KL switch derivative -.001668 and skipped-update metric 0.
+
+The acceptance clock starts **2026-09-13T11:33:29.699479Z**, after confirmed
+publication at least through 128,500. Full protocol logs carry their start
+time as the first `|t:|` timestamp: only games starting strictly after that
+bound count, excluding old in-flight policies. Reports select the live
+`main:p0gNN` side; the other side may be a historical league snapshot and
+must not be pooled with main. The runtime reporter uses the existing parser,
+completion-ordered 500-game windows and pooled-count game bootstraps; unknown
+start times are excluded. Startup-only reports are diagnostic, not acceptance.
+
+### Forward uniform KL hold passed — 2026-09-13
+
+The .005 coefficient passed the pre-registered two consecutive 500-game
+windows on the live main side, restricted to games starting after the verified
+post-change publication bound. Exactly 1,000 games are selected; 1,098 were
+available at the final refresh and the 98 later games are excluded from this
+pre-registered result. Forced/pivot replacements and the historical opponent's
+actions are excluded; the denominator is observed executed moves plus voluntary
+switches, using the same parser as the human reference.
+
+| Completion window (UTC) | Games | Voluntary switches / observed moves-or-switches | Rate | Game-bootstrap 95% interval | Ceiling |
+|---|---|---|---|---|---|
+| 11:33:32.275–11:38:34.846 | 500 | 298 / 10,195 | 2.923001% | 2.598030–3.263154% | 16.155327% |
+| 11:38:35.355–11:43:39.038 | 500 | 247 / 10,451 | 2.363410% | 2.053500–2.683190% | 16.155327% |
+
+Both upper bounds clear the requested 80%-of-human ceiling. Keep
+`player_uniform_kl_coef=0.005`. This is an observed hold result, not a hard
+constraint on future policies. The paired coefficient screen established local
+update sensitivity; the full-game hold established the behavioural criterion.
+No fresh-start model or new actor action heuristic was used.
+
+The new learner was last verified at step 131,726 with skipped-update metric
+0, uniform KL 1.384 and within-taken-modality entropy .6193 (individual logged
+batches, not pooled hold summaries). A 64-row W&B history sample independently
+verified the new fresh counters: 31 rows carried first-use decisions, totalling
+21 chosen switches / 703 chosen move-or-switch decisions. No inference should
+be drawn from their zero counts on reuse-only batches.
+
+The service and learner remain running in the existing `train` tmux session,
+experiment `nm6i7f45`; the temporary offline service and screen exited. Proof
+is in `runtime/uniform-kl-calibration-20260913/`, including
+`live-report-20260913T114442Z.json`, `final-switch-acceptance.json`,
+`restart-provenance.json`, the coefficient-screen results and validation logs.
+The runtime reporter's CPU controls include main-side identity swaps, forced
+and pivot exclusions, pooled game-level resampling, incomplete-window/high-rate
+negative controls and protocol start-time filtering. Evaluation strength is
+reported separately; changing live snapshots, sparse raw-main eval interleaving
+and the old run's EMA summary prevent a matched strength-improvement claim.
+
+### Uniform KL adequacy review — 2026-09-13, step 148,710
+
+The user's follow-up asks whether .005 is large enough. The switching ceiling
+is an upper bound, so passing it cannot establish sufficient exploration or
+an optimal coefficient. A 512-row W&B history sample from `nm6i7f45`, read at
+12:40 UTC, compares the first 5k updates with the latest sampled window
+(143,266–148,688; 126 logged batches). Mean legal switch-cell exposure below
+the .005 pruning threshold rose from 13.55% to 37.66%; exposure below .001
+in the latest window was only .208%. Mean within-taken-modality entropy was
+.6838 initially and .6639 recently; raw uniform KL was 1.1768 and 1.3269.
+These are means of sampled batch metrics on changing replay distributions,
+not matched-policy effects or pooled action frequencies.
+
+The latest window's coefficient-weighted switch-shift derivatives were
+PG +.0020941, uniform KL -.0015846, entropy -.0005616 and magnet -.0001300,
+with total -.0001821. The KL therefore supplies a material restoring force
+(about 76% of PG's opposing mean), while the total direct actor derivative
+still slightly favours switching. These diagnostics hold features fixed and
+cannot attribute shared-feature or Adam updates; declining switch mass alone
+does not prove that the KL is overwhelmed.
+
+The latest two complete 500-game main-policy windows were 205/10,219 =
+2.0061% (game-bootstrap 95% interval 1.7279–2.2743%) and 204/10,234 =
+1.9934% (1.7240–2.2709%), completing 12:29:41–12:39:52 UTC. Both remain well
+below the 16.1553% human-derived ceiling. This leaves room for a .01 trial,
+judged on pruning exposure, within-modality discrimination and strength as
+well as switching. It does not justify jumping to the historically harmful
+.05 or treating increased switching as a strength improvement. No coefficient
+change or restart was performed for this review. Evidence:
+`runtime/uniform-kl-calibration-20260913/kl-adequacy-history-20260913.json` and
+`latest-switch-windows-20260913T123957Z.json` in the same directory.
+
+### Uniform KL target raised to 16% — 2026-09-13
+
+The user explicitly replaced the former switching ceiling with a **16%
+target**, requesting a smart coefficient estimate and minimum restarts.
+Fresh main-side T=1 protocol windows completing 12:56:42–13:06:21 UTC were
+141/9,729 = 1.4493% and 158/10,014 = 1.5778%; pooled 299/19,743 = 1.51446%.
+These use executed moves plus voluntary switches, excluding forced/pivot
+replacements and historical-opponent actions.
+
+Selected `player_uniform_kl_coef=0.07`, from .005. Linear extrapolation to
+.16 gives .052824. The approximate equilibrium
+`coef * (uniform_switch_share - switch_fraction) = headwind * switch_fraction
+* (1 - switch_fraction)` corrects for the restoring force weakening as mass
+returns: assumed effective uniform switch shares .35/.40/.45/.50 give
+.07940/.07225/.06756/.06425. Thus .07 centres the scenario range. These
+shares are assumptions, not measured current-mask statistics; this is not
+a causal fit or confidence interval. The one-update screen cannot identify
+long-run response. The historical .05 discrimination/strength regression
+remains relevant; increased switching alone is not a strength claim.
+
+Graceful stop saved `ckpts/gen9/ckpt_00157138`, 157,138 updates and
+32,049,328 frames. A single learner restart uses explicit full checkpoint
+resume, retaining parameters, EMA targets, reference, Adam, counters and
+league. The service remains running. Only the prior W&B identity file was
+archived to the new task directory to separate the coefficient phase; all
+trained state is retained. Thirteen focused uniform-KL/fresh-switch checks
+passed. No new sampling heuristic or runtime controller was introduced.
+
+Pre-registered operational target: 15–17% in each of two consecutive
+500-game main-side windows, reporting game-bootstrap 95% intervals. Wait at
+least 20,000 updates after the change (through 177,138) before a plateau-based
+retune, and inspect the trend across reference snapshots; gross overshoot or
+instability can justify earlier intervention. Filter games by start time
+after verified changed-policy publication. Watch within-modality entropy,
+strength, skipped updates, pruning exposure and shared-parameter drift.
+The old reporter's below-ceiling `accepted` flag does not establish this
+new target. Training outcome is pending; coefficient alone cannot enforce
+an exact behaviour frequency.
+
+Resume verified on new W&B run `o1rsldit` at step 157,262: coefficient .07,
+skipped updates 0, uniform KL 1.245 and its switch-shift derivative -.01688.
+Actor publication is verified through 157,250. The task's
+`acceptance-start.json` records a conservative subsequent UTC start bound.
+The CPU target reporter has four passing tests and requires both target-band
+windows' 95% intervals to contain 16%. A thread heartbeat checks every
+15 minutes and continues the authorised calibration; the first hold cannot
+pass before step 177,138. One learner restart has occurred so far.
+
+Evidence and operational state: `runtime/uniform-kl-target16-20260913/`
+contains `baseline-games.json`, `baseline-game-records.json`,
+`coefficient-estimate.md`, `restart-provenance.json` and `live-learner.log`.
+The direct fallback is restoring the coefficient to .005 and resuming the
+saved pre-change full checkpoint; any such rollback requires a measured
+reason, not the prior ceiling criterion.
+
+## Pair critic population moments — 2026-09-13
+
+User requested an abstract, adapting reference population without retained
+example teams. This supersedes the fixed-reference implementation recorded
+below while retaining entity-local inputs, uniform living-pair aggregation
+and the endgame-cancellation repair. Learning stopped at the full legacy
+`ckpts/gen9/ckpt_00048083` checkpoint (run `57ctruuo`, frame 10,607,468,
+manifest `local_reference_v1`). Actual checkpoint migration and one finite
+update passed all three production shapes; the live restart is recorded
+below separately from the earlier 40,226 restart.
+
+`PopulationPairValueTerms` now learns bounded tanh features for unary hidden
+units and cross/synergy queries and keys. It subtracts their running means
+BEFORE the linear unary readout or bilinear interaction. Cross uses the
+skew part and synergy the symmetric part, divided by `2*sqrt(qk_size)`;
+there is no tanh after the pair product. If the means equal the current
+feature expectations, product-reference pair marginals are zero. Actual
+means track changing learned features and shared entity embeddings with
+lag, so this is an approximate population decomposition. No causal credit,
+Gaussian population, exact online identification or learning benefit is
+claimed. The historical finite-example algebra check alone does not prove
+these running estimates are accurate.
+
+Both pair functions are bounded by `4*sqrt(qk_size)`, hence **64** at width
+256. This is wider than the previous fixed-reference cross/synergy bounds
+3/4; comparisons of raw contribution amplitudes across the boundary are
+not like-for-like. Unary readout weights remain unconstrained. Query and
+unary readouts start at zero with live upstream paths; keys are live.
+Pair loss coefficient stays 1.0. No cosine penalty or additional reward
+signal is introduced. Pair losses still bypass the trunk directly and can
+change shared local embedders through their existing gradient paths.
+
+`pair_population.py` stores five feature-mean banks indexed by head and
+public/private visibility. The public head pools living entities from both
+sides into its public channel. The sheet head keeps our private channel
+separate from the opponent public channel. Learner and EMA-target weights
+have separate population states. A forward reads the PREVIOUS means;
+statistics from that forward update them only afterwards, with gradients
+stopped. The population is fresh-decision/living-entity weighted, not
+game-balanced: only first-use replay columns, valid nonterminal decision
+rows and valid living entities contribute. The value mask excludes the
+bootstrap overlap row; missing reuse provenance contributes nothing. The
+existing evaluation-to-training gate still owns exclusion of eval games.
+
+The provisional half-life is **65,536 fresh living-entity observations per
+channel**, not learner updates or replay draws. At 12 contributors per
+decision this is about 5,461 fresh decision rows; visibility channels have
+different counts. Debiased exponential weighting makes the first nonempty
+update its observed mean, leaves empty channels exactly unchanged, and
+tracks normalised coverage mass in [0,1]. Mass is not an effective sample
+size or confidence interval. Feature means remain in [-1,1]. The half-life
+is a research assumption without tuning evidence; feature/encoder drift
+and correlated decision samples remain calibration limitations.
+
+The `population_moments_v1` manifest and `population_terms` namespace
+coordinate persistence. Legacy 48,083 migration resets both auxiliary
+heads, their corresponding optimiser leaves and empty population states;
+shared model/target/regulariser parameters, matching optimiser moments and
+global optimiser count, training/frame counters, builder and league are
+preserved. Current-format restoration requires finite, bounded,
+shape-compatible means and masses. Compatible parameter-only loads carry
+main moments and copy them to seeded targets; incompatible heads and
+moments reset together. Offline main/EMA diagnostics load the matching
+checkpointed population and leave it frozen. Old exemplar assets and their
+generator are removed from the active implementation.
+
+Verified logs: 17 head tests, 7 population tests and 27 model/integration
+tests passed. These cover product-marginal controls, symmetry/locality,
+nonzero initial gradients, side/visibility weighting, inactive NaNs,
+debiased startup, a 32,768-update bounded-state scan, fresh-row masks,
+actor/learner policy equality, privileged partition, dtype and carry.
+The earlier 38 history checks remain evidence for the unchanged history
+encoder; they are not 38 additional new tests in this phase. All 22 focused
+checkpoint tests passed, covering legacy migration, exact restoration,
+invalid/missing moments, parameter-only resets and matching offline reads.
+Their command/output transcript is `checkpoint-tests.txt` in the directory
+below. Scoped Black/isort checks, Ruff and `git diff --check` passed.
+Logs: `runtime/pair-population-abstract-20260913/` and
+`runtime/pair-history-fix-20260913/pair-population-head-tests.log`.
+The first production smoke harness exhausted GPU memory while retaining
+multiple full train states for comparisons. The harness now compares host
+copies and allocates states sequentially; this was a validation-memory
+failure, not a demonstrated learner OOM. Its failed attempt is preserved in
+`runtime/pair-population-abstract-20260913/resume-smoke-harness-memory.log`.
+
+The sequential smoke passed (48,128), (64,192) and (64,256) in
+65.70/62.84/41.32 seconds respectively, including compilation and the first
+update, not steady-state throughput. Shared parameters matched the stopped
+checkpoint bit-for-bit; both population banks were initially empty and
+then updated. Applied public cross-query RMS was 3.228e-5/2.404e-5/2.404e-5.
+Saving and restoring both moment banks was bit-exact. Reused replay left
+both unchanged, and an injected non-finite update restored the entire
+previous player state with zero reported population movement. Evidence:
+`runtime/pair-population-abstract-20260913/resume-smoke.json` and its script
+and log. Dashboard "Signal health" was refreshed with population panels.
+
+Restart verified from 48,083 with `bash start.sh --load-mode checkpoint
+--init-ckpt ckpts/gen9/ckpt_00048083`: the same W&B run `57ctruuo` reported
+`resumed=True`. At the live check it had reached training/lifetime step
+48,468, with skipped-update metric 0, public/sheet pair loss .2454/.1959,
+and public cross-query applied RMS 2.385e-5. Population coverage mass was
+.3680/.2074/.2026 for public-public/sheet-public/sheet-private; warm-up
+therefore had not finished. The public channel consumed 246 fresh entity
+observations on that reported update, with mean discrepancy .1037 and
+actual mean movement .000732. Training-batch removal-MSE gains were
+-.02412/.02581, mixed early behaviour rather than a usefulness verdict.
+Live precompiles took 75.4/40.2 seconds for (64,192)/(64,256). Learner PID
+717025 and service PID 717209 remained running with no logged traceback
+or OOM. Live log: `runtime/learner_20260913_163154.log`. No commit or push.
+
+Pre-register a warm-up of one observation half-life in every populated
+channel (coverage mass at least .5), followed by **5,000 learner updates**
+at unchanged coefficients unless correctness, non-finite updates or
+material regression require intervention. Inspect population pre-update
+mean discrepancy, actual mean movement, counts/mass and applied query/key
+updates alongside pair losses and plain-T1 evaluation. After warm-up,
+measure cross/synergy removal-MSE gains on games excluded from fitting,
+with each checkpoint's population frozen and uncertainty grouped by game.
+Existing live `*_mse_gain` panels describe training batches, not held-out
+evidence. A larger pair variance or a nonzero term is not acceptance.
+No improved learning or playing strength has been established. The local
+design and acceptance record is
+`docs/pair-population-moments-2026-09-13.md`; the preceding entry preserves
+the retired design's measurements and original source/checkpoint handles.
+
+## Pair critic locality repair and history audit — 2026-09-13
+
+User authorised stopping learning, diagnosing and repairing the pair critics,
+checking the new history encoder, and restarting. Run `57ctruuo` stopped
+cleanly at `ckpts/gen9/ckpt_00040226`; its parameters, targets, optimiser,
+regulariser state, scalars and league restored successfully. Pre-change code:
+`0f6da86adf306e5608320ea0a902b738682bffd6`. Unrelated `data/ps` changes remain.
+
+At sampled 30k–38k updates, public/sheet pair R² was .817/.821, but cross
+variance divided by total prediction variance was only .00021/.00024.
+Post-trunk unary rows could encode the whole board. Alive-roster grand-mean
+centring did not identify main effects: uniform pair weights cancelled it,
+and 1v1 cross and two-survivor symmetric synergy were necessarily zero.
+
+Both heads now read entity-local embeddings before history, row identities
+and trunk attention. Unary outputs subtract their fixed-reference mean;
+cross/synergy functions are double-centred over that reference AFTER tanh.
+Cross remains antisymmetric, synergy symmetric, with conservative absolute
+bounds 3/4. Uniform alive-pair means replace learned selection. This defines
+predictive effects relative to a specified product reference, not causal
+credit or effects conditional on the actual correlated game distribution.
+The sheet head still reads our private sheet and opponent public rows; its
+common reference mixes the two information channels. No direct pair-loss
+gradient enters the trunk, although shared entity embedders still train.
+The CLS heads, policy, targets and loss coefficient (1.0) are unchanged.
+
+The reference asset `rl/model/pair_reference.json` packages raw
+observations from 32 distinct non-evaluation training games in the historical
+checkpoint-01889162 self-play collection, seed 920. Existing held-out games
+are excluded. Source SHA, exact selections and sampling seed 20260913 are
+recorded; `scripts/make_pair_reference.py` reproduces the asset. Public uses
+32 public samples; sheet uses 16 private and 16 public. References are encoded
+once per trajectory outside the time vmap, with fixed shapes. Initialise
+these shared embedders before that vmap: doing so afterwards leaked a tracer
+under Flax intermediate capture. The dtype test exposed and verified the fix.
+New manifests record the reference digest and `local_reference_v1` form.
+The `local_terms` namespace resets only auxiliary heads and their moments
+when merging the old checkpoint; all shared parameters matched bit-for-bit.
+
+Frozen-embedding screen: 72 fitting and 24 held-out games, both perspectives
+kept together, all reference games excluded, 1,000 fixed updates at 3e-4,
+seed 20260913. Against an identically initialised unary-only arm, held-out
+outcome MSE public 1.3205 -> 1.2850, sheet 1.3150 -> 1.2758. Game-bootstrap
+95% improvement intervals [-.0606, .1246] / [-.0238, .0941] include zero.
+Every arm overfit the small cohort (training R² .982–.997, held-out R² < 0).
+This is no generalisation or playing-strength success. Pair gradients were
+nonzero; held-out 1v1 cross RMS .1597/.1031 on 48 states. Probe parameters
+were discarded. No coefficient sweep or minimum pair-variance quota.
+
+History: 38 focused tests passed for the 19-row recurrence, separate
+entity/field/register GRUs, chronological and request-count alignment,
+padding, carry and rewrite/reset. Strengthened a vacuous identity-isolation
+test with fixed Q and live V/output plus live-Q and muted-V controls; no
+production history change was justified. All 162 checkpoint player leaves
+were finite. On one bundled game (58 requests, 168 events), maximum bf16
+suffix/full memory differences were .0456/.0121/.0201 for entity/field/
+register state; f32 GPU differences .00181/.00133/.000884. Full-model
+log-policy/value-log-probability errors .0143/.0428 were below the existing
+.05 tolerance. Mean write fraction .0442, retention biases 3.975–4.028.
+Nonterminal history reset changed policy total variation .17–.85% and value
+log probability by up to .317; functional, with stronger critic effect in
+this sample, not evidence of improved play.
+
+Validation: 14 pair-head tests; reference provenance, positive-control
+full-model locality and removal-MSE telemetry; privileged partition,
+actor/learner equality, checkpoint merge and dtype checks passed. Actual
+checkpoint restoration plus one finite update passed every production
+shape, (48,128)/(64,192)/(64,256), with nonzero applied pair-query deltas.
+Compile-plus-first-update times were 68.72/63.57/42.23 seconds respectively;
+these are not steady-state throughput measurements. Ruff and diff checks
+passed. Local reproducible scripts, reports and logs:
+`runtime/pair-history-fix-20260913/`; detailed local plan:
+`docs/pair-history-repair-2026-09-13.md`.
+
+The earlier cross-share gate is superseded by the repaired definition.
+Hold 50k fresh updates before judging usefulness. New `*_mse_gain` panels
+measure error increase when removing cross, synergy or both on TRAINING
+batches; positive is useful there, not held-out proof. Read alongside plain
+T=1 evaluation. Sustained regression calls for a matched coefficient-zero
+control, not repeated scale cuts. High all-row trunk cosine (.750 early,
+.841 at 30k–39k; centred participation 10.98 -> 7.05) is not evidence that
+this head caused it. No cosine penalty was introduced. Recover using the
+pre-change code and checkpoint above, preserving unrelated work; no commit
+or push was made for this task.
+
+Restart verified: `bash start.sh --load-mode checkpoint --init-ckpt
+ckpts/gen9/ckpt_00040226` restored the same W&B run (`resumed=True`). At the
+post-start check, training/lifetime step was 40522, skipped-update metric 0,
+public/sheet pair losses .1440/.1707 and public cross-query applied RMS
+3.699e-5. Removal-MSE gains were -.002935/.03069: early mixed behaviour,
+not an acceptance verdict. All live batch shapes compiled; startup's two
+explicit precompiles took 82.7/41.0 seconds. Service and learner remained
+running, with no logged traceback/OOM. Dashboard "Signal health" refreshed
+with the new gain panels. Live log: `runtime/learner_20260913_152958.log`.
+
+Subsequent user constraint: a permanently fixed sample is unacceptable as a
+general design, especially for formats with player-built teams. The bank is
+not a whitelist (feature-based heads can score unseen teams), but the archived
+random-battle population is an unnecessary format-specific dependency. Keep
+the local-input and endgame-cancellation repairs separate from this anchoring
+choice. A rolling, same-format, training-only reference is a candidate, with
+game-balanced sampling, fixed tensor capacity, independent scored games and
+checkpointed/frozen evaluation references. It is not a drop-in refresh:
+changing the reference changes auxiliary predictions at fixed parameters
+under the current equations. Current-batch centring couples predictions to
+batch companions; a null anchor does not identify population main effects.
+Reference-free local scoring is possible with a weaker interpretation claim.
+No replacement was implemented or run restarted during this design review.
+Reference: Lengerich et al., AISTATS 2020, section 5.2,
+https://proceedings.mlr.press/v108/lengerich20a.html.
+
+Further user direction: model the reference population abstractly instead of
+retaining representative examples. A sufficient-statistics design is possible:
+for local features phi and population mean mu, the bilinear interaction
+(phi(x)-mu)^T M (phi(y)-mu) has zero product-reference marginals. Skew/symmetric
+M preserves cross/synergy symmetry. No Gaussian assumption or raw exemplars
+are needed. NumPy algebra check against 2,048 explicitly averaged examples
+matched within 1.34e-14, with nonzero interactions and stale-mean controls
+(`runtime/pair-population-abstract-20260913/moment_check.py`). This verifies
+algebra, not a production implementation or training benefit.
+
+First moments are insufficient for the CURRENT nonlinear head: a zero-mean
+population [-1,-1,2] has mean tanh -0.186387. Keep pair readout bilinear after
+centring; any bounded nonlinear feature map must precede moment estimation.
+Parameter-only bounds can preserve centring; per-pair tanh cannot. Means of
+changing learned features also lag the current encoder. The existing local
+EntitySumPool is linear in fixed masked feature blocks, including occupancy
+features for biases, so their moments can be projected through current weights
+without this representation-age error (apart from numerical precision).
+The nonlinear unary MLP needs its own hidden-feature/output expectation
+estimate, or a changed readout; its expectation cannot be inferred from the
+input mean. These are explicit design constraints, not an implemented fix.
+Population statistics should be format/visibility-specific, estimated from
+training data rather than value-loss gradients, and checkpointed/frozen for
+evaluation. Finite estimates and changing self-play still require calibration.
+Background: https://arxiv.org/abs/1605.09522.
+
 ## Per-history-step register assessment — 2026-09-13
 
 User requested stopping learning and inspecting the event-step attention for

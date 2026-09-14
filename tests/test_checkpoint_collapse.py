@@ -57,19 +57,9 @@ def ckpt_dir() -> str:
 
 
 @pytest.fixture(scope="session")
-def ckpt_target_params(ckpt_dir: str) -> dict:
-    """The EMA (target) params — same choice the league uses for opponents,
-    since it's the smoothed, deployable snapshot rather than the noisier
-    live optimiser params.
-
-    Skips on a checkpoint written by a superseded architecture: this probe
-    reads param tables by NAME, so a stale lineage fails on the name
-    rather than on the collapse it is meant to detect. `cls_embedding` is
-    the sentinel — it replaced the 4-row `value_embeddings_table` when the
-    three residual streams became one sequence (2026-08-29), and that in
-    turn had replaced the all/private/public ladder tables when the
-    privileged critic was deleted (2026-08-25)."""
-    params = checkpoint.load_component(ckpt_dir, "player", "target_params")
+def ckpt_live_params(ckpt_dir: str) -> dict:
+    """Skip old architectures whose named tables cannot establish collapse."""
+    params = checkpoint.load_component(ckpt_dir, "player", "params")
     names = {
         getattr(path[-1], "key", None)
         for path, _ in jax.tree_util.tree_leaves_with_path(params)
@@ -106,7 +96,7 @@ def _pairwise_cosine_similarities(table: np.ndarray) -> np.ndarray:
 
 @pytest.mark.gpu
 def test_checkpoint_representation_not_collapsed(
-    ckpt_dir: str, ckpt_target_params: dict
+    ckpt_dir: str, ckpt_live_params: dict
 ) -> None:
     """Runs the live learner's capacity probe (dormant-unit fraction +
     srank@0.99, see rl.model.capacity.embedding_stats) against this checkpoint's
@@ -137,7 +127,7 @@ def test_checkpoint_representation_not_collapsed(
     from rl.online.artifact import merge_params
 
     fresh = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
-    _, kept_fresh, _ = merge_params(fresh, ckpt_target_params)
+    _, kept_fresh, _ = merge_params(fresh, ckpt_live_params)
     if kept_fresh:
         pytest.skip(
             f"checkpoint predates the current architecture "
@@ -154,7 +144,7 @@ def test_checkpoint_representation_not_collapsed(
     )
 
     probe = make_capacity_probe(network)
-    logs = probe(ckpt_target_params, batch)
+    logs = probe(ckpt_live_params, batch)
 
     for name in ("action", "value"):
         dormant_frac = float(np.asarray(logs[f"capacity_{name}_emb_dormant_frac"]))
@@ -169,12 +159,12 @@ def test_checkpoint_representation_not_collapsed(
         )
 
 
-def test_checkpoint_embedding_tables_not_collapsed(ckpt_target_params: dict) -> None:
+def test_checkpoint_embedding_tables_not_collapsed(ckpt_live_params: dict) -> None:
     """The small learned embedding tables (value-ladder query rows,
     target/pass action-grid rows) shouldn't collapse into near-duplicate
     row vectors — read directly off params, no forward pass needed."""
     for name in _EMBEDDING_TABLE_NAMES:
-        table = _find_leaf(ckpt_target_params, name)
+        table = _find_leaf(ckpt_live_params, name)
         assert np.isfinite(table).all(), f"{name}: contains non-finite values"
 
         if table.shape[0] < 2:

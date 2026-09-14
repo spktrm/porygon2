@@ -82,8 +82,8 @@ TypeScript game service speaking protobuf over websockets.
   heuristic baseline at T=1.
   `modules.py`: generic primitives only — architecture lives next to its wiring.
 - `rl/online/training/` — the learner, split by what each piece needs to
-  run. `train_step.py`: the jitted update (losses, EMA target, non-finite
-  gate) — ONE function by necessity, it is jitted on a static `config` and
+  run. `train_step.py`: the jitted update (losses, EMA magnet, old-policy
+  snapshot, non-finite gate) — ONE function by necessity, it is jitted on a static `config` and
   donates the train states. `batching.py`: the static shape lattice and
   `stack_batch`. `run_state.py`: `RunState`, the run's mutable bundle.
   `workers.py`: the three background threads + the replay-reuse PI
