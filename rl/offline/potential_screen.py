@@ -52,7 +52,7 @@ from rl.model.utils import legal_log_policy
 from rl.offline.uniform_kl_screen import record_chunks, restored_states
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.batching import stack_batch
-from rl.online.training.loss import vtrace_policy_loss
+from rl.online.training.loss import appo_policy_loss
 from rl.online.training.targets import compute_player_targets, unit_potential
 from rl.online.training.telemetry import action_axis_masks
 from rl.online.training.train_step import TRAIN_STEP_JIT
@@ -62,7 +62,7 @@ LOGIT_BUDGET = 0.10
 
 
 def policy_logit_gradient(player_state, batch, config: Porygon2LearnerConfig):
-    """Differentiate the player's score-function loss with its labels fixed."""
+    """Differentiate the player's APPO surrogate with its labels fixed."""
     transitions = batch.player_transitions
     actor_input = PlayerActorInput(
         env=transitions.env_output,
@@ -73,12 +73,14 @@ def policy_logit_gradient(player_state, batch, config: Porygon2LearnerConfig):
     learner = player_state.apply_fn(
         player_state.params, actor_input, actor_output, HeadParams()
     )
+    old_policy_log_prob = player_state.apply_fn(
+        player_state.old_policy_params, actor_input, actor_output, HeadParams()
+    ).action_head.log_prob
     behaviour_log_prob = actor_output.action_head.log_prob
     action_index = actor_output.action_head.action_index
     legal = transitions.env_output.action_mask
     ratio = jnp.exp(
-        learner.action_head.log_prob.astype(jnp.float32)
-        - behaviour_log_prob.astype(jnp.float32)
+        old_policy_log_prob.astype(jnp.float32) - behaviour_log_prob.astype(jnp.float32)
     )
     if config.player_privileged_targets:
         value_log_probs = learner.priv_value_head.log_probs
@@ -99,10 +101,14 @@ def policy_logit_gradient(player_state, batch, config: Porygon2LearnerConfig):
         taken = jnp.take_along_axis(
             legal_log_policy(log_policy, legal), action_index[..., None], axis=-1
         )[..., 0]
-        return vtrace_policy_loss(
-            log_prob=taken,
+        return appo_policy_loss(
+            learner_log_prob=taken,
+            behaviour_log_prob=behaviour_log_prob,
+            old_policy_log_prob=old_policy_log_prob,
             advantages=targets.pg_advantages,
             valid=targets.policy_mask,
+            clip_ppo=config.player_ppo_clip,
+            behaviour_ratio_clip=config.player_behaviour_ratio_clip,
         )
 
     gradient = jax.grad(surrogate)(learner.action_head.log_policy.astype(jnp.float32))
