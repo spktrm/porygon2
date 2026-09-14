@@ -29,17 +29,38 @@ def test_identical_rows_are_fully_collapsed() -> None:
     assert np.isnan(participation)
 
 
-def test_common_offset_reads_on_cosine_not_participation() -> None:
-    """A shared large offset over an orthonormal spread: cosine goes to ~1
-    while the centred participation is untouched -- the two instruments
-    disagree exactly when a common direction carries a live residual."""
+def _raw_cosine(values: np.ndarray) -> float:
+    unit = values / np.linalg.norm(values, axis=-1, keepdims=True)
+    cosines = unit @ unit.T
+    off_diagonal = ~np.eye(len(values), dtype=bool)
+    return float(cosines[off_diagonal].mean())
+
+
+def test_one_large_shared_channel_cannot_carry_the_cosine() -> None:
+    """A shared large offset in ONE channel over an orthonormal spread: the
+    raw cosine reads ~1 (the control, computed here), the channel-scaled
+    reading counts it as one agreeing channel among nine live ones, and
+    the centred participation is untouched either way."""
     rows = 8
     spread = np.eye(rows, 16, dtype=np.float32)
     offset = np.zeros(16, dtype=np.float32)
     offset[-1] = 30.0
+    assert _raw_cosine(spread + offset) > 0.99
     cosine, participation = _np(spread + offset)
-    assert cosine > 0.99
+    # Scaled: the spread channels sit at sqrt(rows) in their one row and the
+    # offset channel at 1 everywhere, so each pair agrees on 1 / (rows + 1).
+    assert abs(cosine - 1 / (rows + 1)) < 1e-4
     assert abs(participation - (rows - 1)) < 1e-4
+
+
+def test_agreement_across_many_channels_still_reads_collapsed() -> None:
+    """The scaling must not erase real convergence: rows that share the same
+    direction across every channel, at different magnitudes, read ~1."""
+    rng = np.random.default_rng(2)
+    direction = rng.normal(size=16).astype(np.float32)
+    magnitudes = np.linspace(0.5, 4.0, 8, dtype=np.float32)
+    cosine, _ = _np(magnitudes[:, None] * direction[None, :])
+    assert abs(cosine - 1.0) < 1e-4
 
 
 def test_zeroed_row_is_excluded() -> None:

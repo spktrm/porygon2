@@ -130,21 +130,30 @@ def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:
     existing panels as "entropy at ceiling while the pointer params grow",
     which is indistinguishable from the phase-1 support-anchor shape.
 
-    Cosine is UNCENTRED: q and k pass through RMSNorm, not LayerNorm, so a
-    shared direction is exactly what every attention in the trunk sees.
-    Participation is of the CENTRED Gram -- tr(G)^2 / ||G||_F^2, the number
-    of equal-variance directions that would give the same spectrum, no
-    eigendecomposition -- so it reads the spread AROUND the shared direction
-    and the two disagree precisely when a common offset carries a live
-    residual. Participation is NaN when there is no spread at all (an
-    all-identical set); cosine is NaN with fewer than two valid rows.
-    A valid row is one with nonzero norm: the trunk hard-zeroes invalid
-    rows every block, so that is its own invariant.
+    Every channel is first scaled to unit RMS over the valid rows, so the
+    reading is about how many channels the rows agree on, not about which
+    channels are large: a handful of high-magnitude channels shared by
+    every row (a common offset, a massive activation) would otherwise carry
+    the raw cosine to 1 while the rest of the features disagree.
+    Cosine is UNCENTRED after that scaling: q and k pass through RMSNorm,
+    not LayerNorm, so a shared direction is still what every attention in
+    the trunk sees. Participation is of the CENTRED Gram of the same scaled
+    rows -- tr(G)^2 / ||G||_F^2, the number of equal-variance directions
+    that would give the same spectrum, no eigendecomposition -- so it reads
+    the spread AROUND the shared direction. Participation is NaN when there
+    is no spread at all (an all-identical set); cosine is NaN with fewer
+    than two valid rows. A valid row is one with nonzero norm: the trunk
+    hard-zeroes invalid rows every block, so that is its own invariant.
     """
     rows = sequence.shape[-2]
-    values = sequence.astype(jnp.float32)
+    raw = sequence.astype(jnp.float32)
+    valid = jnp.linalg.norm(raw, axis=-1) > 0
+    num_valid = jnp.maximum(valid.sum(-1), 1)
+    channel_rms = jnp.sqrt(
+        (jnp.square(raw) * valid[..., None]).sum(-2) / num_valid[..., None]
+    )
+    values = raw / jnp.maximum(channel_rms, 1e-12)[..., None, :]
     norms = jnp.linalg.norm(values, axis=-1)
-    valid = norms > 0
     unit = values / jnp.maximum(norms, 1e-12)[..., None]
     pair = valid[..., :, None] & valid[..., None, :] & ~jnp.eye(rows, dtype=bool)
     cosines = jnp.einsum("...id,...jd->...ij", unit, unit)
@@ -155,7 +164,6 @@ def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:
         jnp.nan,
     )
 
-    num_valid = jnp.maximum(valid.sum(-1), 1)
     mean_row = (values * valid[..., None]).sum(-2) / num_valid[..., None]
     centred = (values - mean_row[..., None, :]) * valid[..., None]
     gram = jnp.einsum("...id,...jd->...ij", centred, centred)
