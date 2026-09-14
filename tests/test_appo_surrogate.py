@@ -1,5 +1,5 @@
-"""The player's APPO actor: the clipped target ratio and the surrogate built
-on it, checked against RLlib's appo_torch_policy.loss algebra by hand."""
+"""The player's APPO actor: the clipped target ratio, checked against RLlib's
+appo_torch_policy.loss algebra by hand, and SPO's quadratic surrogate on it."""
 
 import jax
 import jax.numpy as jnp
@@ -76,30 +76,52 @@ class TestAppoPolicyLoss:
 
         return float(jax.jit(jax.grad(objective))(jnp.log(jnp.array([learner])))[0])
 
-    def test_at_the_snapshot_the_gradient_is_the_capped_weighted_score(self) -> None:
-        # pi_live == pi_old: the ratio is min(1, 2 pi_old/mu) <= 1, and with
-        # A > 0 the pessimistic min keeps the raw term whether or not the
-        # capped ratio sits below the band, so d(-ratio*A)/dlogpi =
-        # -min(1, 2 pi_old/mu) * A. This is the loss a snap-every-update
+    @staticmethod
+    def _spo_grad(ratio, advantage, eps):
+        # d/dlogpi of -(r A - |A| (r-1)^2 / 2eps) with dr/dlogpi = r.
+        return -ratio * (advantage - abs(advantage) * (ratio - 1) / eps)
+
+    def test_at_the_snapshot_inside_the_cap_the_gradient_is_the_score(self) -> None:
+        # pi_live == pi_old and mu/pi_old < 2: r == 1, the quadratic is
+        # flat, so d(-r A)/dlogpi = -A. This is the loss a snap-every-update
         # config reduces to.
         assert self._grad_wrt_learner(0.3, 0.2, 0.3, 0.5) == pytest.approx(
             -0.5, rel=1e-6
         )
-        assert self._grad_wrt_learner(0.1, 0.5, 0.1, 0.5) == pytest.approx(
-            -0.5 * 2.0 * 0.1 / 0.5, rel=1e-6
-        )
 
-    def test_clip_zeroes_the_gradient_in_the_push_direction(self) -> None:
-        # pi_live/pi_old = 1.5 with A > 0: outside 1 + 0.4, no force.
-        assert self._grad_wrt_learner(0.3, 0.2, 0.2, 0.5) == 0.0
-        # Same ratio with A < 0 points back into the band: force survives.
+    def test_the_cap_places_the_ratio_below_one_and_spo_pulls_it_up(self) -> None:
+        # pi_live == pi_old, mu/pi_old = 5 > 2: r = 2 pi_old/mu = 0.4, below
+        # 1 - eps. PPO's min would keep -r A = -0.2; SPO adds the restoring
+        # term |A| r (1 - r)/eps = 0.3 toward the band, and with A < 0 that
+        # term is the ENTIRE force and still raises pi_live.
+        assert self._grad_wrt_learner(0.1, 0.5, 0.1, 0.5) == pytest.approx(
+            self._spo_grad(0.4, 0.5, 0.4), rel=1e-6
+        )
+        assert self._grad_wrt_learner(0.1, 0.5, 0.1, 0.5) == pytest.approx(
+            -0.5, rel=1e-6
+        )
+        assert self._grad_wrt_learner(0.1, 0.5, 0.1, -0.5) == pytest.approx(
+            self._spo_grad(0.4, -0.5, 0.4), rel=1e-6
+        )
+        assert self._grad_wrt_learner(0.1, 0.5, 0.1, -0.5) < 0.0
+
+    def test_past_the_band_the_quadratic_reverses_the_push(self) -> None:
+        # pi_live/pi_old = 1.5 with A > 0: past 1 + 0.4, the sign flips and
+        # the row pulls back toward the edge where PPO's clip would go flat.
+        assert self._grad_wrt_learner(0.3, 0.2, 0.2, 0.5) == pytest.approx(
+            self._spo_grad(1.5, 0.5, 0.4), rel=1e-6
+        )
+        assert self._grad_wrt_learner(0.3, 0.2, 0.2, 0.5) > 0.0
+        # Same ratio with A < 0: advantage and restoring term agree.
         assert self._grad_wrt_learner(0.3, 0.2, 0.2, -0.5) == pytest.approx(
-            0.5 * 1.5, rel=1e-6
+            self._spo_grad(1.5, -0.5, 0.4), rel=1e-6
         )
-        # Positive control: a wider band lets the A > 0 gradient through.
+        # Positive control: a wider band puts 1.5 inside it and the A > 0
+        # gradient keeps its sign.
         assert self._grad_wrt_learner(0.3, 0.2, 0.2, 0.5, clip=0.6) == pytest.approx(
-            -0.5 * 1.5, rel=1e-6
+            self._spo_grad(1.5, 0.5, 0.6), rel=1e-6
         )
+        assert self._grad_wrt_learner(0.3, 0.2, 0.2, 0.5, clip=0.6) < 0.0
 
     def test_masked_rows_and_empty_batches_are_inert(self) -> None:
         learner = jnp.array([-0.5, jnp.nan, jnp.inf])

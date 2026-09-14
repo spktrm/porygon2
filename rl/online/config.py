@@ -325,15 +325,20 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # builds neither the head nor the channel -- today's learning rule.
     player_potential_strength: float = 0.0
     # APPO actor (RLlib appo_torch_policy.loss, FootsiesGym's parent class):
-    # V-trace advantages against pi_old = old_policy_params, then the PPO
-    # clipped surrogate on clip(mu/pi_old, 0, player_behaviour_ratio_clip)
-    # * pi_live/mu, with entropy and FootsiesGym's KL(live || reference).
-    # No batch normalisation of the advantage.
+    # V-trace advantages against pi_old = old_policy_params, then SPO's
+    # quadratic surrogate (arXiv 2401.16025, the builder's too) on
+    # clip(mu/pi_old, 0, player_behaviour_ratio_clip) * pi_live/mu, with
+    # entropy and FootsiesGym's KL(live || reference). No batch
+    # normalisation of the advantage.
     player_pg_coef: float = 1.0
-    # RLlib clip_param (APPOConfig default; FootsiesGym does not override).
+    # SPO's eps: the band edge 1 +/- eps where the quadratic's restoring
+    # force balances the advantage -- an optimum, not a boundary, so this is
+    # more permissive than PPO's clip at the same number. The number is
+    # RLlib's APPO clip_param (FootsiesGym does not override), kept across
+    # the objective switch so only the objective moves.
     player_ppo_clip: float = 0.4
     # RLlib target_worker_clipping: the cap on mu/pi_old, IMPACT's pull-back
-    # of a stale worker's ratio before the PPO clip sees it.
+    # of a stale worker's ratio before the surrogate sees it.
     player_behaviour_ratio_clip: float = 2.0
     # IMPACT Algorithm 1 line 11: pi_old <- live every t_target accepted
     # updates, a hard copy, t_target = N*K = 4*2 = 8 for its discrete tasks

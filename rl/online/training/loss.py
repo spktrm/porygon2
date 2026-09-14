@@ -141,10 +141,15 @@ def appo_policy_loss(
     clip_ppo: float,
     behaviour_ratio_clip: float,
 ) -> jax.Array:
-    """The APPO actor loss: PPO's clipped surrogate on the clipped target
-    ratio, over stopped V-trace advantages that already carry their own
-    truncated rho = min(1, pi_old/mu). Invalid rows are zeroed before the
-    ratio is formed so non-finite padding cannot leak through the clip."""
+    """The APPO actor loss with SPO's quadratic in place of the PPO clip:
+    r A - |A| (r - 1)^2 / (2 eps) on the clipped target ratio, over stopped
+    V-trace advantages that already carry their own truncated
+    rho = min(1, pi_old/mu). The gradient in r vanishes at
+    r = 1 + eps sign(A) and reverses beyond it, a restoring force toward the
+    band edge where PPO's min goes flat -- including on rows the mu/pi_old
+    cap has placed below 1 - eps, which SPO pulls back UP regardless of the
+    advantage's sign. Invalid rows are zeroed before the ratio is formed so
+    non-finite padding cannot leak through the cap."""
     ratio = clipped_target_ratio(
         learner_log_prob=jnp.where(valid, learner_log_prob, 0.0),
         behaviour_log_prob=jnp.where(valid, behaviour_log_prob, 0.0),
@@ -158,7 +163,7 @@ def appo_policy_loss(
         advantages=advantages,
         valid=valid,
         threshold=clip_ppo,
-        objective="ppo",
+        objective="spo",
     )
 
 

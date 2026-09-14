@@ -113,6 +113,29 @@ climbing across each 8-step period is the reuse the band bounds. Acceptance
 is matched evaluation strength, critic R2, replay KL/ESS and fresh switch
 coverage together, as for the magnet change below.
 
+## SPO on the APPO ratio — 2026-09-14
+
+User decision, same day, before any relaunch: `appo_policy_loss` selects
+`"spo"` (Xie et al., arXiv 2401.16025, `r A - |A| (r-1)^2 / 2 eps`, the
+builder's objective) in place of PPO's `min`, on the SAME IMPACT ratio
+`clip(mu/pi_old, 0, 2) * pi_live/mu` and the same stopped V-trace advantage.
+`player_ppo_clip` stays 0.4, deliberately: only the objective moves, and
+under SPO the number is where the restoring force balances A (an optimum,
+not a boundary), so 0.4 is MORE permissive than PPO 0.4 and than the 0.2
+the NashPG lineage ran SPO at on pi_live/mu. No SPO-vs-PPO A/B verdict
+exists on any lineage; the 08-26 selector was never read.
+
+Two properties the tests pin (`tests/test_appo_surrogate.py`): past the band
+the gradient REVERSES rather than going flat; and on rows the mu/pi_old cap
+places at `r = 2 pi_old/mu < 1 - eps` (behaviour took the action at more than
+twice pi_old's probability) SPO pulls pi_live back UP toward `0.3 mu`
+regardless of the advantage's sign, where PPO's min kept the raw term. That
+is a bounded (<= |A|/4eps per row) pull toward stale behaviour policies on
+exactly the rows `player_behaviour_old_ratio_clip_frac` counts -- read that
+panel beside `player_surrogate_ratio_mean`; a cap fraction that is not small
+means the anchor is live on a real share of rows. `player_ppo_clip_frac`
+now reads the fraction of rows beyond the band, no longer a clip event.
+
 ## EMAgnet aligned to the FootsiesGym code variant — 2026-09-14
 
 The user chose the executable code variant after the paper/code discrepancy
