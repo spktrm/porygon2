@@ -149,6 +149,8 @@ def test_train_step_smoke() -> None:
         # Trunk over-smoothing (plan step c-live).
         "player_trunk_row_cosine",
         "player_trunk_row_participation",
+        "player_loss_uniform_kl",
+        "player_switch_logit_grad_uniform_kl",
         "player_state_kernel_rms_hp",
         "player_state_kernel_rms_status",
         "player_state_kernel_rms_boosts",

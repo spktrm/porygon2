@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 
 from rl.environment.data import CAT_VF_SUPPORT
-from rl.online.training.loss import appo_policy_loss
+from rl.online.training.loss import appo_policy_loss, uniform_kl_rows
 from rl.online.training.targets import compute_player_targets, reference_kl
 from rl.utils import average
 
@@ -127,6 +127,9 @@ def switch_loss_telemetry(
     def magnet_loss(log_probs):
         return average(reference_kl(log_probs, reg_log_policy, legal_mask), policy_mask)
 
+    def uniform_kl_loss(log_probs):
+        return average(uniform_kl_rows(log_probs, legal_mask), policy_mask)
+
     gradients = {}
     gradients["pg"] = (
         config.player_pg_coef * jax.jvp(pg_loss, (taken_log_prob,), (taken_tangent,))[1]
@@ -134,6 +137,7 @@ def switch_loss_telemetry(
     for name, objective, coefficient in (
         ("entropy", entropy_loss, config.player_ent_coef),
         ("magnet", magnet_loss, config.player_mag_coef),
+        ("uniform_kl", uniform_kl_loss, config.player_uniform_kl_coef),
     ):
         gradients[name] = (
             config.player_pg_coef

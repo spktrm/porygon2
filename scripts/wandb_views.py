@@ -271,6 +271,7 @@ def rl_sections():
                     [
                         "player_loss_pg",
                         "player_loss_entropy",
+                        "player_loss_uniform_kl",
                         "player_ref_kl",
                         "player_loss_v_win",
                     ],
@@ -1008,6 +1009,7 @@ def rl_sections():
                         "player_switch_logit_grad_pg",
                         "player_switch_logit_grad_entropy",
                         "player_switch_logit_grad_magnet",
+                        "player_switch_logit_grad_uniform_kl",
                         "player_switch_logit_grad_actor_total",
                     ],
                 ),

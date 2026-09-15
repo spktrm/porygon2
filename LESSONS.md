@@ -19,6 +19,38 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Forward KL to uniform restored at .05 — 2026-09-16
+
+User decision after the overnight control (ijk4nyi4, no floor): switch
+mass on choice rows 0.42 → 0.01–0.02 by 140k and flat after, 0.003 at the
+last logged batch before the restart at ~320k; switch rows per batch 1–3;
+eval switching < 1%; importance ratio on switch rows 0.35–0.5 from 140k
+(the truncation regime); winrate vs the heuristic 0.25 and rising WITHOUT
+switching. The direct forces on the switch logit summed to ~0 for the whole
+descent (pg +3e-3 vs entropy −1e-3 + magnet −2.3e-3 at 0.1–0.3 mass), so
+the collapse ran through shared features; every term in the loss was
+proportional to the mass it was defending.
+`uniform_kl_rows` (KL(U_legal || pi), logit gradient pi − 1/k, bounded and
+zero-sum) enters the pg bracket at `player_uniform_kl_coef = 0.05`, logged
+as `player_loss_uniform_kl`, with `player_switch_logit_grad_uniform_kl`
+beside the entropy and magnet terms. Coefficient: the fixed-point formula
+p = c / (k (Delta + c)) with the run's k = 6.6 legal cells and measured
+Delta = 0.052 (stay − switch advantage, 40k–120k) gives c ≈ .004–.015 for a
+modality mass of .03–.10 (3 switch cells); the empirical calibration on
+this codebase (o1rsldit at .07 held .02–.03 for 355k steps; .005 on
+2026-09-13 held nothing) implies an effective Delta ~20x the panel's, the
+shared-feature / replay-reuse / momentum routes the formula omits. .05 is
+the calibration's number. Read `player_switch_mass_choice` after 30k
+steps: below .03 double, above .10 halve. It is a floor and a container:
+it holds the sample count (table: a .03 per-state edge needs ~5–10 switch
+rows per batch to resolve over 1000 updates at adv std .30), it does not
+make the switch advantage positive; that needs the critic (per-entity
+labels) or the pool. Deploy-time tax ≤ c per decision across bad cells;
+the thresholded eval actor prunes below .005.
+Resumed from ijk4nyi4's latest checkpoint, not scratch: the term acts on a
+collapsed policy, so the mass rising from .003 toward the floor IS the
+read, against the flat line it would otherwise have stayed on.
+
 ## Layout ordered by tier — 2026-09-15
 
 Same relaunch, user request: `SEQUENCE_LAYOUT` (and the `SequenceGroup`

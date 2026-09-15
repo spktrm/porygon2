@@ -351,6 +351,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # a reward-scale conversion to our game (see the 2026-09-14 source audit).
     player_mag_coef: float = 0.05
     player_ent_coef: float = 0.01
+    # KL(uniform over legal cells || policy), the one force on a cell that
+    # does not vanish with its mass: the entropy and magnet floors are
+    # exponential in the advantage gap and closed on switching at 0.005
+    # mass on three lineages. Its floor is c / (k (Delta + c)); the formula
+    # with the run's own k and Delta gives ~.015 and the measured
+    # calibration (0.07 held 0.02-0.03 on the March lineage, 0.005 held
+    # nothing) gives ~.05, the gap being the shared-feature and momentum
+    # routes the formula omits. 0 removes the term.
+    player_uniform_kl_coef: float = 0.05
     # Evaluation only: prune low-probability actions in the thresholded slot.
     # Training actors and V-trace always use the full legal distribution.
     player_prune_threshold: float = 0.005

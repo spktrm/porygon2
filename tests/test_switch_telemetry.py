@@ -8,7 +8,7 @@ import numpy as np
 
 from rl.environment.data import MOVE_CELL_OFFSET, NUM_ACTION_CELLS, NUM_SWITCH_CELLS
 from rl.online.training.action_telemetry import switch_loss_telemetry
-from rl.online.training.loss import appo_policy_loss
+from rl.online.training.loss import appo_policy_loss, uniform_kl_rows
 from rl.online.training.targets import reference_kl
 from rl.utils import average
 
@@ -18,6 +18,7 @@ def test_switch_direction_matches_full_logit_derivative() -> None:
         player_pg_coef=0.8,
         player_ent_coef=0.01,
         player_mag_coef=0.2,
+        player_uniform_kl_coef=0.05,
         player_ppo_clip=0.2,
         player_behaviour_ratio_clip=2.0,
     )
@@ -67,6 +68,9 @@ def test_switch_direction_matches_full_logit_derivative() -> None:
                 config.player_pg_coef
                 * config.player_mag_coef
                 * average(reference_kl(log_policy, reference, legal), valid),
+                config.player_pg_coef
+                * config.player_uniform_kl_coef
+                * average(uniform_kl_rows(log_policy, legal), valid),
             ]
         )
 
@@ -92,7 +96,7 @@ def test_switch_direction_matches_full_logit_derivative() -> None:
     actual = jnp.stack(
         [
             logs[f"player_switch_logit_grad_{name}"]
-            for name in ("pg", "entropy", "magnet")
+            for name in ("pg", "entropy", "magnet", "uniform_kl")
         ]
     )
     np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-5)

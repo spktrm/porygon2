@@ -43,6 +43,7 @@ from rl.online.training.loss import (
     forward_kl_loss,
     mse_value_loss,
     policy_gradient_loss,
+    uniform_kl_rows,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
@@ -534,6 +535,9 @@ def train_step(
             learner_log_policy, reg_log_policy, flat_action_mask
         )
         loss_mag = average(magnet_kl_rows, policy_mask)
+        loss_uniform_kl = average(
+            uniform_kl_rows(learner_log_policy, flat_action_mask), policy_mask
+        )
 
         # Modality decomposition of the two factors any taken-action
         # update is throttled by: pi mass and the observer critic's |A|,
@@ -553,6 +557,7 @@ def train_step(
         pg_logs = dict(
             player_loss_pg=loss_pg,
             player_loss_entropy=loss_entropy,
+            player_loss_uniform_kl=loss_uniform_kl,
             player_entropy_macro=entropy_macro,
             player_entropy_micro_taken=entropy_micro_taken,
             player_policy_prob_switch=policy_prob_switch,
@@ -597,6 +602,7 @@ def train_step(
                 loss_pg
                 + config.player_ent_coef * loss_entropy
                 + config.player_mag_coef * loss_mag
+                + config.player_uniform_kl_coef * loss_uniform_kl
             )
             # v: one critic, on the deploy-time information set.
             + config.player_value_head_loss_coef * loss_v_win
