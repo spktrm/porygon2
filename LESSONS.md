@@ -19,6 +19,25 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Interrupt checkpoint no longer skipped — 2026-09-16
+
+Defect 2 of the 2026-09-11 health check, and it cost this morning's restart
+~17k steps (the old learner ran to ~337k, Ctrl-C wrote nothing, the resume
+took ckpt_00319999). Cause: the jitted train step donates the old train
+state, and a Ctrl-C that lands between the donation and the rebinding of
+the new state leaves run_state on deleted buffers, so the synchronous
+interrupt save raised and was skipped; with a step in flight ~95% of the
+time, that was the usual outcome. Fix: `DeferredInterrupt` in learner.py
+installs a SIGINT handler on the main thread for the life of the loop;
+the first Ctrl-C sets a flag and the loop raises KeyboardInterrupt at its
+next safe point (top of the loop, or after the periodic tasks once the
+step has rebound run_state), where the checkpoint reads whole state; a
+second Ctrl-C raises immediately (the escape for a wedged step, with the
+old skip message). The handler is restored in the loop's finally and
+before the interrupt save, so a Ctrl-C during the write still aborts it.
+`tests/test_deferred_interrupt.py` pins the three behaviours with
+`signal.raise_signal`. Takes effect at the next learner start.
+
 ## Forward KL to uniform restored at .05 — 2026-09-16
 
 User decision after the overnight control (ijk4nyi4, no floor): switch

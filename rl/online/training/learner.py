@@ -4,6 +4,7 @@ import logging
 import os
 import pickle
 import queue
+import signal
 import threading
 import time
 from typing import Callable
@@ -65,6 +66,47 @@ class OOMGuardTriggered(Exception):
     def __init__(self, checkpoint_path: str):
         super().__init__(checkpoint_path)
         self.checkpoint_path = checkpoint_path
+
+
+class DeferredInterrupt:
+    """Holds SIGINT until the training loop's next safe point.
+
+    The jitted train step donates the old train state, and a Ctrl-C that
+    lands between that donation and the rebinding of the new state leaves
+    run_state pointing at deleted buffers, so the interrupt checkpoint
+    read them and was skipped (three times in a row by 2026-09-11). The
+    first Ctrl-C only sets a flag; `check()` raises KeyboardInterrupt where
+    run_state is whole. A second Ctrl-C raises immediately, the escape
+    hatch for a wedged step. Installs only on the main thread, where
+    Python permits signal handlers; elsewhere it is inert.
+    """
+
+    def __init__(self):
+        self.pending = False
+        self._previous = None
+
+    def _handle(self, signum, frame):
+        if self.pending:
+            raise KeyboardInterrupt
+        self.pending = True
+        logger.info(
+            "Ctrl-C received: finishing the current step before the "
+            "checkpoint (press again to abort without one)."
+        )
+
+    def __enter__(self):
+        if threading.current_thread() is threading.main_thread():
+            self._previous = signal.signal(signal.SIGINT, self._handle)
+        return self
+
+    def __exit__(self, *exc_info):
+        if self._previous is not None:
+            signal.signal(signal.SIGINT, self._previous)
+        return False
+
+    def check(self):
+        if self.pending:
+            raise KeyboardInterrupt
 
 
 class Learner:
@@ -270,12 +312,15 @@ class Learner:
         run the periodic tasks. The actor pool runs
         continuously and independently."""
         start_workers(self.run_state, self.config)
+        interrupt = DeferredInterrupt()
         try:
+            interrupt.__enter__()
             # num_steps bounds TRAIN steps (host_step, seeded from the
             # restored step counter), not loop ticks: the idle/empty
             # continues below burn iterations without training, so at a
             # small --num-steps a run can end well short of its budget.
             while self.run_state.host_step < self.config.num_steps:
+                interrupt.check()
                 if self.done:
                     break
                 run_state = self._ready_run_state()
@@ -304,6 +349,7 @@ class Learner:
                     - run_state.created_at_frame
                 )
                 self._handle_periodic_tasks(run_state, run_state.host_step, logs)
+                interrupt.check()
 
             # Normal completion (num_steps reached, or a stop condition —
             # the BR winrate stop — set self.done): one synchronous full
@@ -316,7 +362,11 @@ class Learner:
 
         except KeyboardInterrupt:
             # One synchronous full save so a deliberate restart loses
-            # nothing since the last periodic checkpoint.
+            # nothing since the last periodic checkpoint. Reached from
+            # interrupt.check() at a safe point, or from a second Ctrl-C
+            # mid-step, in which case the donated state makes the save
+            # fail and the periodic checkpoint is what a restart resumes.
+            interrupt.__exit__(None, None, None)
             logger.info("Keyboard interrupt received. Saving checkpoint...")
             run_state = self.run_state
             try:
@@ -324,7 +374,8 @@ class Learner:
             except RuntimeError:
                 logger.exception(
                     "Skipping interrupt checkpoint: train state was donated "
-                    "mid-step. Latest periodic checkpoint is unaffected."
+                    "mid-step (second Ctrl-C). Latest periodic checkpoint is "
+                    "unaffected."
                 )
             raise
         except Exception:
@@ -336,6 +387,7 @@ class Learner:
             logger.exception("Learner training crashed")
             raise
         finally:
+            interrupt.__exit__(None, None, None)
             self.done = True
             # strict=False: process is exiting — a straggler here is
             # tolerable (daemon threads die with the process), and raising
