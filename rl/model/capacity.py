@@ -15,6 +15,7 @@ harness, and scripts/attn_probe.py for the same pattern on attention.
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from rl.environment.interfaces import PlayerActorInput
 
@@ -69,14 +70,18 @@ def make_capacity_probe(network):
             packed_history=batch.player_packed_history,
             history=batch.player_history,
         )
-        # The flat-trunk encoder returns ONE (T, B, 80, D) sequence for the
-        # learner, (T, B, 73, D) for the actor (2026-08-29); the "action"
-        # stream is the contiguous private|move|target row block the readout
-        # consumes, the "value" stream is the CLS row the critic reads.
-        from rl.model.constants import CLS_ROW, PRIVATE_ROWS, TARGET_ROWS
+        # The "action" stream is the three row groups the readout consumes,
+        # gathered by their named slices (they are not adjacent in the
+        # tier-ordered layout); the "value" stream is the CLS row.
+        from rl.model.constants import CLS_ROW, MOVE_ROWS, PRIVATE_ROWS, TARGET_ROWS
 
         sequence = encode(params, actor_input)
-        action_emb = sequence[:, :, PRIVATE_ROWS.start : TARGET_ROWS.stop]
+        action_rows = np.r_[
+            np.arange(*PRIVATE_ROWS.indices(sequence.shape[2])),
+            np.arange(*MOVE_ROWS.indices(sequence.shape[2])),
+            np.arange(*TARGET_ROWS.indices(sequence.shape[2])),
+        ]
+        action_emb = sequence[:, :, action_rows]
         value_emb = sequence[:, :, CLS_ROW]
         dones = batch.player_transitions.env_output.done
         valid = (jnp.cumsum(dones, axis=0) - dones) == 0
