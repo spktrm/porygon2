@@ -126,6 +126,39 @@ def get_player_model_config(
     # built only when the learner's player_potential_strength > 0 (main.py
     # sets `enabled`). One scalar in unit potential units, zero at init so a
     # merge starts the channel at W = 0 in params, target and reg alike.
+    # The event world model (rl/model/world_model.py): an observer of the
+    # trunk's public output rows, trained by the offline world-model trainer
+    # and read by the eval actor's search. Off by default: the learner's
+    # tree carries no world-model leaves unless enabled.
+    cfg.world_model = ConfigDict()
+    cfg.world_model.enabled = False
+    cfg.world_model.model_size = entity_size
+    cfg.world_model.decoder = ConfigDict()
+    cfg.world_model.decoder.num_blocks = 2
+    cfg.world_model.decoder.num_heads = num_heads
+    cfg.world_model.decoder.qk_size = encoder_qkv_size
+    cfg.world_model.decoder.v_size = encoder_qkv_size
+    cfg.world_model.decoder.model_size = entity_size
+    cfg.world_model.decoder.hidden_size = encoder_hidden_size
+    cfg.world_model.decoder.use_bias = encoder_use_bias
+    cfg.world_model.decoder.qk_layer_norm = encoder_qk_layer_norm
+    cfg.world_model.flow = ConfigDict()
+    cfg.world_model.flow.block = ConfigDict()
+    cfg.world_model.flow.block.num_blocks = 2
+    cfg.world_model.flow.block.num_heads = num_heads
+    cfg.world_model.flow.block.qk_size = encoder_qkv_size
+    cfg.world_model.flow.block.v_size = encoder_qkv_size
+    cfg.world_model.flow.block.model_size = entity_size
+    cfg.world_model.flow.block.hidden_size = encoder_hidden_size
+    cfg.world_model.flow.block.use_bias = encoder_use_bias
+    cfg.world_model.flow.block.qk_layer_norm = encoder_qk_layer_norm
+    # Euler steps per imagined event; set by the open-loop read at 1/2/4/8.
+    cfg.world_model.flow_steps = 4
+    # Group-scale floor for the normalised difference (the 1e-2 floor the
+    # delta grounding head carried: an all-static group is floored, never
+    # divided by zero).
+    cfg.world_model.scale_floor = 1e-2
+
     cfg.potential_head = ConfigDict()
     cfg.potential_head.enabled = False
     cfg.potential_head.zero_init_output = True

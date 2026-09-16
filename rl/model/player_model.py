@@ -44,6 +44,7 @@ from rl.model.heads import (
 )
 from rl.model.trunk import row_homogeneity
 from rl.model.utils import get_num_params, prune_log_policy
+from rl.model.world_model import EventWorldModel
 
 
 def actor_params_view(variables):
@@ -86,6 +87,8 @@ class Porygon2PlayerModel(nn.Module):
         # absent unless the channel runs, so strength 0 keeps today's tree.
         if self.cfg.potential_head.enabled:
             self.potential_head = RegressionValueLogitHead(self.cfg.potential_head)
+        if self.cfg.world_model.enabled:
+            self.world_model = EventWorldModel(self.cfg.world_model, name="world_model")
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
