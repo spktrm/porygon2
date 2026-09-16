@@ -13,7 +13,7 @@ deleted. Personal workspaces ("<user>'s workspace") and any differently
 named views are never touched. Pass --keep-old-views to skip pruning.
 
 Usage:
-    python scripts/wandb_views.py [--entity ENTITY] [--project rl|world_model|both]
+    python scripts/wandb_views.py [--entity ENTITY] [--project rl|offline|both]
         [--update-rl-url URL]
         [--keep-old-views]
 
@@ -1022,8 +1022,9 @@ def members(stem):
     return [f"{stem}_mean"] + [f"{stem}_m{k}" for k in range(4)]
 
 
-def world_model_sections():
-    """The event world model's offline trainer (rl/offline/train.py)."""
+def offline_sections():
+    """The offline trainer (rl/offline/train.py): the public critic and the
+    event world model on the replay export."""
     kinds = ["move", "switch", "drag", "cant", "faint", "residual", "end"]
     return [
         ws.Section(
@@ -1163,7 +1164,7 @@ def main():
     parser.add_argument("--entity", default="jtwin")
     parser.add_argument(
         "--project",
-        choices=("rl", "world_model", "both"),
+        choices=("rl", "offline", "both"),
         default="both",
         help="Select saved views to refresh; defaults to every project.",
     )
@@ -1187,12 +1188,12 @@ def main():
                 "lifetime_step",
             )
         )
-    if args.project in ("world_model", "both"):
+    if args.project in ("offline", "both"):
         requests.append(
             (
                 "pokemon-rl-offline",
                 "Event world model",
-                world_model_sections(),
+                offline_sections(),
                 None,
                 None,
                 None,

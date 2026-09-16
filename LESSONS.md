@@ -19,6 +19,33 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Removal ledger — 2026-09-16 offline tidy
+
+Everything below existed at tag **`pre-offline-tidy-2026-09-16`** (commit
+`06e3184`); `git checkout pre-offline-tidy-2026-09-16 -- <path>` brings a file
+back. The pass was structure-only: the world-model trainer's per-batch terms on
+a fixed batch and fixed params (ckpt_00373138) were dumped before the tag and
+compared after each commit — 277 arrays, 0 differences, three times.
+
+| mechanism | paths / symbols deleted | removed in | why it went |
+|---|---|---|---|
+| Separate offline critic architecture | `rl/offline/model.py` (`Porygon2OfflineCritic`: antisymmetric margin probe, survival / next-action / unseen-hazard / revealed-set heads, rating embed, `RelationalRounds`), `rl/offline/train.py` (old: losses, pair batching, ensemble, `_overlay_params`), `rl/offline/artifact.py` (potential Φ loader + uncertainty gate), the label two-thirds of `rl/offline/dataset.py`, `Porygon2OfflineConfig` (old), Makefile `ensemble` target, the wandb "Critic health" view | the tidy's second commit | no runtime consumer (the potential channel reads the service fit; `offline_critic_ckpt_path` was gone); no longer constructed against the 3-row field state; the world-model trainer already trained `public_v_head` on replays, i.e. the critic on the live model |
+| `_overlay_params` | `rl/offline/train.py` (old) | same | duplicated `rl/online/artifact.py::merge_params` with union semantics (it ADDED checkpoint-only leaves — the trainer's tree carried the learner's private-path leaves); `overlay_whole` in the trainer wraps `merge_params` and refuses a loaded subtree that did not land whole |
+| Decoded event-stream layer | `replays/shards/<format>/decoded/*.npz` + manifest, `rl/offline/event_stream.py` (`convert`, `EventStreamStore`), `rl/offline/world_model_data.py` (`WorldModelDataset`, the dead `shuffle_buffer_size` reader) | the tidy's fourth commit | a pure function of the terminal state cached on disk: it bought a 3 s startup over ~12 s at the price of a second format, manifest and refresh rule. `rl/offline/dataset.py::load_replay_store` decodes the export at startup (8 CPU-only spawn workers, 98,512 trajectories in 12 s, 3 GB RSS) bit-identically |
+| `--max-history-steps` as a dead knob | — (kept, made LIVE at the store: the trailing window re-derives the labels on the window) | same | the store ignored it |
+
+Two paid-for lessons from the pass: (1) importing the model package
+initialises CUDA (`rl/environment/data.py` builds a pretrained-embedding
+device array at import), so a spawn pool whose workers import it claims the
+GPU per worker — the loader sets `CUDA_VISIBLE_DEVICES=""` in the environment
+the children inherit for the pool's lifetime; (2) a script without an
+`if __name__ == "__main__"` guard that calls the loader is re-imported by every
+spawned worker, each re-runs it, dies on the bootstrap check and is respawned
+without end (37 minutes, ~16 × 0.7 GB, a host-memory crash of the editor). The
+default `decode_workers` is 8 for that reason.
+
+---
+
 ## Public event world model, Steps 3–4: the offline trainer and the search read — 2026-09-16
 
 Step 3 (`rl/offline/world_model_data.py`, `rl/offline/train_world_model.py`,

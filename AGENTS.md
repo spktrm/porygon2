@@ -164,9 +164,12 @@ wire enums: that experiment was reverted and is documented in `LESSONS.md`.
 - `rl/online/training/learner.py`: construction, loop, and periodic scheduling.
   Prefer free functions over `RunState` where practical so tests can use stubs.
 - `rl/checkpoint.py`: sharded checkpoint persistence and loading.
-- `rl/offline/harness.py`: play games with plain parameters and re-run training
-  heads on chunks for joint per-row diagnostics. Other offline probes and the
-  replay critic trainer are described in `rl/offline/README.md`.
+- `rl/offline/`: the replay export (`shards.py`), the in-memory store that
+  decodes it at startup (`dataset.py`), the one offline trainer (`train.py`:
+  public critic, world model behind `--world-model`) and `harness.py`, which
+  plays games with plain parameters and re-runs training heads on chunks for
+  joint per-row diagnostics; see `rl/offline/README.md`.
+- `rl/probes/`: model diagnostics that read the model through the harness.
 - `service/src/scripts/offline.ts`: replay-to-protobuf shard export using the
   same live state encoder; both perspectives of a game stay in one record.
 - `data/`, `embeddings/`, `replays/`, `scrape/`: data preparation and collection.

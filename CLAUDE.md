@@ -96,8 +96,23 @@ TypeScript game service speaking protobuf over websockets.
   `learner.py`: construction, the loop,
   the periodic schedule. Free functions over `RunState` where possible —
   that is what lets the tests drive them with plain stubs.
-- `rl/offline/` — `harness.py`: play games with plain params + re-run the
-  train=True heads over the chunks; the per-row joint stats wandb can't give.
+- `rl/offline/` — the replay export and what trains on it. `shards.py`
+  reads the service's export (the ONLY on-disk form: `replays/shards/`,
+  `replays/README.md`); `dataset.py` decodes it once at startup into
+  memory (`load_replay_store`, a CPU-only spawn pool; a script calling it
+  must guard `__main__`) and serves padded batches; `train.py` is the ONE
+  offline trainer — the player model's public path over a learner trunk,
+  the public critic (`public_v_head`) always and the event world model
+  behind `--world-model` (off = the offline critic); `harness.py`: play
+  games with plain params + re-run the train=True heads over the chunks;
+  `search_ablation.py`, `event_audit.py`, `position_potential.py` (the
+  service fit's python reference). `rl/environment/event_labels.py` holds
+  the per-event labels. The old separate critic architecture was deleted
+  2026-09-16 (LESSONS "Removal ledger — 2026-09-16 offline tidy").
+- `rl/probes/` — the model diagnostics (separation, type, kind, switch
+  depth/readout, first-block, attention routes, trunk homogeneity, tactical
+  cohort, the potential and uniform-KL screens, battle stats); they read
+  the model through `rl/offline/harness.py`. Never wired into training.
 - `rl/online/` — what the ACTORS also touch, so it stays flat:
   `player_actor.py` plays whole games and emits fixed-length chunks
   (`chunk_spans`); `inference.py` zero-wait batched actor inference with a
@@ -155,7 +170,7 @@ TypeScript game service speaking protobuf over websockets.
   agree with (LESSONS "PBRS potential channel"). SECOND scoped exception
   (user, 2026-09-16): human replays MAY train the event world model, the
   public critic (`public_v_head`) and the public action model
-  (`rl/offline/train_world_model.py` on the replay shards); those
+  (`rl/offline/train.py` on the replay shards); those
   parameters are read by the searching EVAL actor only and by
   `public_v_head`, which feeds no policy target — the self-play policy's
   losses never see a human-derived signal (LESSONS "Public event world

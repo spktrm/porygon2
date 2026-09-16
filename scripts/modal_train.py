@@ -2,10 +2,12 @@
 
 Two entrypoints on one app (shared image and volumes):
 
-- train_offline — rl/offline/train.py on replay shards. Shards live on the
-  `porygon2-replays` volume (upload them first, below); artifacts land in
-  ckpts/offline/ on the `porygon2-ckpts` volume in the exact layout the RL
-  learner consumes (offline_critic_ckpt_path).
+- train_offline — rl/offline/train.py on the replay shards: the public
+  critic (and, by default, the event world model) over a learner trunk.
+  Shards live on the `porygon2-replays` volume (upload them first, below);
+  the trunk checkpoint must be on the ckpts volume; artifacts land in
+  ckpts/offline/ in the learner's checkpoint layout, merged by path at a
+  params-mode relaunch or read by the searching eval actor.
 - train_rl — rl/online/main.py plus the node game service in the same container
   (compiled at image-build time, launched on ws://localhost:8080 before the
   learner starts). Checkpoints go to ckpts/gen{N}/ on the same volume, so a
@@ -21,12 +23,13 @@ the box): `modal run --detach scripts/modal_train.py::refresh_replays`.
 Or upload existing local shards (replays/shards/{format_id}/ -> volume):
     modal run scripts/modal_train.py::upload_replays
 
-Train the offline critic (args after --cli go verbatim to rl.offline.train):
+Train offline (args after --cli go verbatim to rl.offline.train):
     modal run --detach scripts/modal_train.py::train_offline \
-        --cli "--ensemble --num-steps 10000"
+        --cli "--trunk-ckpt ckpts/gen9/ckpt_00373138 --num-steps 30000"
+    ... --cli "--trunk-ckpt ckpts/gen9/ckpt_00373138 --no-world-model"
 
-Train the RL agent (self-contained — the RL learner has consumed nothing
-from the offline critic since PBRS shaping was retired, Aug 2026):
+Train the RL agent (self-contained — the self-play policy's losses read
+nothing trained on replays):
     modal run --detach scripts/modal_train.py::train_rl
 
 Fetch artifacts back:
@@ -244,9 +247,9 @@ def train_offline(cli: str = ""):
 
     Shards are read from the replays volume ({dataset_dir}/{format_id}/,
     default replays/shards) and artifacts written to the ckpts volume
-    (ckpts/offline/...). Pass anything rl.offline.train accepts, e.g.
-    --cli "--ensemble --num-steps 10000" or
-    --cli "--ensemble-index 2 --resume-from ..."."""
+    (ckpts/offline/...). Pass anything rl.offline.train accepts:
+    --trunk-ckpt is required, --no-world-model trains the critic alone,
+    --resume-from restarts an offline run."""
     os.chdir(REPO_REMOTE)
     args = shlex.split(cli)
 

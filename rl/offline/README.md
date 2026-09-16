@@ -1,213 +1,37 @@
-# Offline critic training
+# rl/offline — the replay export and what trains on it
 
-Trains the player model's `encoder` + `v_head` to predict final game outcome
-from Pokemon Showdown replays (Monte-Carlo, public view). The intended use
-was a head start for early self-play — a frozen critic supplying a
-potential-based shaping signal while the RL model itself trained from
-scratch. That consumption path is retired (see Stage 4); what remains here
-is a standalone research program.
+The export is the only form on disk (`replays/README.md`); everything
+derived from it is rebuilt in memory at startup. The model is the live
+player model: nothing here has its own architecture.
 
-## Pipeline
+| module | what it is | who reads it |
+|---|---|---|
+| `shards.py` | the service's export (`replays/shards/<format>/shard-NNN.bin`, `[uint32-LE len][EnvironmentBatch]` per replay, both perspectives): manifest check, shard listing, record iterator, byte offsets, the per-game holdout hash | `dataset.py`, `event_audit.py`, tests |
+| `dataset.py` | `load_replay_store`: decodes every trajectory's terminal state ONCE (the whole event stream + `rl/environment/event_labels.py` labels) across a CPU-only spawn pool (~12 s, 8 workers, 3 GB) into `ReplayStore`, which serves padded `ReplayBatch`es; both perspectives of a game share a batch; `max_history_steps` is the load-time trailing window | `train.py` |
+| `train.py` | the ONE offline trainer: `OfflineTrainer` = the player model's public path (encoder + trunk on the 55 public rows, overlaid from `--trunk-ckpt` and frozen unless `--joint`), the public critic `public_v_head` on every valid event state, and the event world model behind `--world-model` (default on; `--no-world-model` = the offline critic). Artifacts under `ckpts/offline/<format>/ckpt_NNNNNNNN` in the learner's checkpoint layout | `harness.load_search_params`, the learner's params-mode load (`merge_params` by path), `scripts/modal_train.py` |
+| `config.py` | `Porygon2OfflineConfig`, the one offline config | `train.py` |
+| `harness.py` | play games with plain params against a second service (`PORT=8081`), re-run the train=True heads over chunks, `search_arm` for the depth-1 rollouts | `rl/probes/*`, `search_ablation.py` |
+| `search_ablation.py` | the three-arm search read (plain / search / value-blind), Wilson intervals | — |
+| `event_audit.py` | corpus numbers for the event world model (kind shares, events per turn, snapshot lag) | — |
+| `position_potential.py` (+ json) | the python reference of the service's position-potential fit (`service/src/server/position_potential.ts`), test-pinned | `tests/test_position_potential.py` |
+
+Runs:
 
 ```
-1. Download replays          python replays/main.py gen9randombattle -l 20000 --min-rating 1500
-2. Export tensor shards      cd service && npm run offline -- gen9randombattle [--min-rating R] [--workers N]
-3. Train the critic          python -m rl.offline.train [--num-steps 50000] [--debug]
-4. (no RL consumption path — PBRS shaping retired Aug 2026)
+env/bin/python -u rl/offline/train.py --trunk-ckpt ckpts/gen9/ckpt_00373138            # critic + world model
+env/bin/python -u rl/offline/train.py --trunk-ckpt ckpts/gen9/ckpt_00373138 --no-world-model
+env/bin/python -m rl.offline.search_ablation --checkpoint ... --world-model ckpts/offline/...
 ```
 
-> **2026-08-21:** the five analysis/inspection scripts that lived here —
-> `visualise.py` (per-game Φ HTML), `announced_leak.py` (Φ_ann invariance
-> probe), `causality.py` (future-information leak check), `diagnose.py`
-> (overfit-one-batch + martingale audit) and `baseline.py` (hand-rule
-> lower bound) — were deleted in the feature-bloat pass. None was
-> imported by anything; each was a standalone `__main__`. The verdict
-> rules they encoded are preserved in `LESSONS.md` 12, and the code is
-> one command away: `git checkout pre-cleanup-2026-08-21 -- rl/offline/`.
-> The trainer, model, dataset, config and artifact boundary are untouched.
+`python -u`: stdout is block-buffered through tee otherwise. A script that
+calls `load_replay_store` must guard its entry point (`if __name__ ==
+"__main__"`): the spawned workers re-import it.
 
-## Stage 2 — exporter (service/src/scripts/offline.ts)
+Human replays train ONLY what is listed above (CLAUDE.md, second scoped
+exception): the self-play policy's losses never see a replay-derived
+signal.
 
-Replays each spectator log through the **same** state encoder as live
-self-play (`TrainablePlayerAI` + `StateHandler`), from **both** players'
-perspectives, on a `worker_threads` pool. Output shards live at
-`replays/shards/{format_id}/shard-*.bin`; each record is
-`[uint32-LE length][EnvironmentBatch proto]`, **one per replay**, holding
-both perspectives' trajectories — so the trainer's per-record holdout
-split is per game and can never leak a game's mirrored, label-flipped
-twin across the train/eval boundary. A `manifest.json` records filters
-and counts. Trajectories follow the RL
-`Trajectory` convention: **only the terminal state carries the history
-caches** (shared across all of that trajectory's steps), so records are
-O(T) instead of O(T²) and the trainer consumes each full-history
-trajectory in one history-encoder scan.
-
-Spectator logs contain no `|request|` lines, so exported states differ from
-live observations in these ways (all deterministic):
-
-- `private_team` is all-unspecified and `my_moveset` is all-PAD rows —
-  the encoding is **public-view only**.
-- The action mask is all-ones; `REQUEST_TYPE` is always MOVE;
-  `HAS_PREV_ACTION` is 0.
-- States are emitted at `|turn|` boundaries plus one terminal state
-  (live play emits per request, which additionally includes forced
-  switches and team preview).
-
-The outcome label rides in the final state's info features
-(`WIN/LOSS/TIE_REWARD`), derived from the `|win|` line vs. the perspective
-player's name — trajectories without a decided outcome are dropped.
-
-## Stage 3 — trainer (rl/offline/train.py)
-
-`Porygon2OfflineCritic` = the player model's recurrent **history pathway
-only** (`Encoder.encode_history` → `PerSlotHistoryEncoder` →
-`Encoder.pool_history`, shared module code and param paths with the RL
-model) plus an offline-only **antisymmetric linear probe**: the pool runs
-twice with side masks (shared params) — my-side slots + field, opponent
-slots + field — and a single weight vector scores the flattened latent
-difference, with logits `[-z, tie_bias, z]`. Mirror-antisymmetry
-Φ(mirror(s)) = −Φ(s) therefore holds by construction; combined with
-pair-aware batching (both perspectives of a game always share a batch,
-see dataset.py) this makes game-identity memorization unable to reduce
-the loss — only side-differenced structure can. The RL trunk reads the
-same (unmasked) pooled latents as history-context tokens, so the
-capacity stays in the critic's own history pathway. It reads nothing but the public
-event stream — private team, own moveset, and action masks are
-architecturally unreachable, and the history inputs are identical between
-replay exports and live play, so the frozen Φ carries no train/serve bias
-into RL. Loss is softmax cross-entropy over **13 margin bins** (final
-alive-mon differential in [-6, +6], sign-clamped to the recorded result —
-forfeits keep the true winner) at every valid step, so Φ = expected
-margin ∈ [-1, 1] grades positions by decisiveness instead of only
-win-probability. Forfeits get special handling (measured on 50k rated
-games: ~48% played out, ~41% conceded, ~11% forfeited with the winner not
-ahead on mons): games where the sign-clamp engages are **dropped**
-(`drop_clamped_forfeits` — the result contradicts the position, and the
-noise is perspective-consistent and side-differenced, exactly what the
-antisymmetric probe would otherwise learn), and concessions are treated
-as **right-censored margins** (`concession_censor_decay` — label mass
-decays geometrically from the concession margin up to the winner's
-alive-mon count, the hardest margin any played-out continuation could
-have reached, countering the compression of conceded margins toward ±1..3
-relative to played-out games). Both apply at label-construction time in dataset.py, so changing
-them needs no shard re-export. For uncertainty-gated shaping, train an ensemble:
-`--ensemble` trains all `num_ensemble_splits` members **simultaneously**
-in one process — stacked params/optimizer with a vmapped member step
-(pure parallelism, gradients never mix across members), one shard pass
-routing each game to its member, and shared-holdout evals that log live
-gate diagnostics (per-member metrics side by side, member std, gated
-sign accuracy). Artifacts stay per-member (`{format_id}-ensk/`), so
-consumption is unchanged. `--ensemble-index k` (k = 0..K-1) still trains
-a single member on the identical split (same salted hash) — use it to
-retrain one bad member without touching the others. Config is
-`Porygon2OfflineConfig` (rl/offline/config.py) — composed from the same
-`BaseTrainingConfig` as the RL learner config but fully independent of it.
-
-Artifacts: `ckpts/offline/{format_id}/ckpt_{step:08}/` in the standard
-checkpoint layout (`player/params` via cloudpickle) plus a `manifest.json`.
-
-## Announced states (Φ_ann) — DELETED 2026-09-02
-
-The announced-state path (outcome-masked one-step advance of the pre-turn
-recurrent state, `announced_states_at_requests`, `announced_loss_weight`,
-the manifest's `announced_states` flag) was deleted with the history
-encoder restructure: it had been broken since the 2026-09-01 GRU hoist
-and never shipped a validated critic. The skill/luck decomposition and
-dice-excised PBRS it was built for are recorded in the LESSONS.md ledger;
-`announced_leak.py`, its one-sided invariance check, went 2026-08-21.
-
-## Stage 4 — consumption by the RL pipeline
-
-**There is none, as of Aug 2026.** PBRS/potential shaping is retired
-(`rl/online/targets.py`), `offline_critic_ckpt_path` no longer exists in
-`Porygon2LearnerConfig`, and nothing in `rl/online/` imports this package.
-The offline critic remains a standalone research program with its own
-entrypoint and its own wandb project.
-
-For the record, the consumption mode that existed: the trained params
-never entered the RL network (the RL model trains fully from scratch, no
-frozen or warm-started subtrees). Φ was loaded once at startup, kept
-outside the train state, and evaluated **once per trajectory** as it
-entered the replay buffer — the frozen critic makes Φ immutable data, so
-recomputing it inside the train step would redo identical work
-replay_ratio × ensemble-size times. An ensemble gated the signal by
-member agreement (Φ = mean · exp(−scale · std)), so shaping spoke where
-members agreed and went quiet off the human data distribution.
-
-## Retired uniform-KL coefficient screen
-
-The applied-update coefficient screen was retired on 2026-09-14 when the player
-returned to joint entropy and a frozen-reference KL. Its CLI fails explicitly;
-it cannot estimate the current learner's response to a loss the learner no
-longer contains. The exact previous source is archived locally at
-`/tmp/porygon2-uniform-kl-screen-before-vtrace-20260914.py`, with its results in
-`LESSONS.md`. The module retains protocol statistics, checkpoint restoration,
-self-play collection and hypothetical pruning-audit helpers for offline probes.
-
-## Unilateral interval-model experiment
-
-`interval_data.py` audits adjacent own requests without joining opponent rows.
-`interval_features.py` collects explicitly research-training self-play and exports
-frozen policy-readable features. `train_interval.py` compares three isolated arms:
-legacy combined chance, conditional combined codes, and conditional codes whose
-first posterior reads only history-row movement. The two conditional arms have
-identical parameter shapes and initial parameters. History rows contain contextual
-information; this is not an identified opponent-action model or public-belief solver.
-
-With a separately started service on port 8081 (run the service from `service/`):
-
-```sh
-PS_SERVICE_URI=ws://localhost:8081 env/bin/python -m rl.offline.interval_features \
-  --checkpoint ckpts/gen9/ckpt_01889162 \
-  --directory runtime/interval-01889162 --collect-games 128
-
-env/bin/python -m rl.offline.train_interval \
-  --checkpoint ckpts/gen9/ckpt_01889162 \
-  --data runtime/interval-01889162/features.npz \
-  --out runtime/interval-hold-01889162 --steps 25000 --eval-every 5000
-```
-
-Use a fresh output directory; existing experiments are never overwritten. The
-collection manifest records eligibility, game grouping and the fixed held-out
-split. Historical evaluation archives cannot be imported as training. A smoke
-run can use `--steps 200 --eval-every 200 --prior-samples 8`; hold-period comparisons
-use 32 prior samples by default. Only collected generation-9 random-battle
-coverage is established by this exporter; doubles fixtures do not validate the
-known service alignment defect or supply missing format data.
-
-The policy, own-action encoder and critic remain frozen. Only the copied decoder
-and latent inference networks train, with new Adam state. The one-step objective
-is masked copy-relative consistency, distillation of the frozen next-state value
-distribution and the existing balanced-KL coefficients. It omits production
-multi-step, grounding, generator and terminal-outcome objectives; do not interpret
-it as a drop-in production ablation. Prior evaluation samples the two conditional
-codes ancestrally. Reports include whole-game bootstrap uncertainty and raw reads;
-critic agreement is not counterfactual ground truth. Checkpoints are isolated
-MessagePack files containing experiment parameters, optimiser state and step.
-
-For data/reuse controls, `--eval-steps 200 1000` adds early evaluations and
-`--train-eval-limit 1663` reads a fixed training subset through the same critic
-and prior sampler. Progress includes unique sampled games/intervals and sampled
-passes. Optional feature arrays `train_eligible` and `final_test` explicitly
-select the training pool and reserve final-test games; final-test rows must be
-held out, and all partitions are checked for whole-game separation. Validation
-runs on schedule; final-test evaluation runs only at the specified final update.
-Changing the training pool leaves the objective and optimiser unchanged.
-
-`direct_interval.py` provides bounded direct successor-value probes on the same
-frozen features. `DirectIntervalValue` starts at the current critic distribution
-and learns a centred logit residual; its state-only control has identical initial
-parameters with the action input zeroed. Training uses self-generated successor
-critic distributions, with exact latent-action marginalisation at evaluation.
-`select_checkpoint` uses validation reads only, choosing the earliest maximum
-copy-relative gain. Development selection is not an untouched-test result, and
-neither critic agreement nor an explicit-action increment proves counterfactual
-accuracy. No production model wiring consumes this diagnostic.
-
-For a root-only action-input control, `train_direct(...,
-action_representation="rows")` consumes aligned `taken_cell` records. It gathers
-the existing source/target rows and warm-starts a projection from the checkpoint's
-`action_encoder/query_proj`, bypassing categorical action sampling. The default
-`"latent"` path preserves the categorical control. This diagnostic changes the
-action-input parameter count and feature scale; it is not an imagined-node action
-representation or a production model change.
+History: the separate offline critic architecture (margin probe, survival /
+next-action / unseen / set heads, ensemble, `ckpts/offline/*-ens*`) and the
+on-disk decoded layer were deleted 2026-09-16 — LESSONS "Removal ledger —
+2026-09-16 offline tidy", tag `pre-offline-tidy-2026-09-16`.
