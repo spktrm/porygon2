@@ -23,9 +23,9 @@ from collections.abc import Iterator
 import numpy as np
 
 from constants import NUM_HISTORY
+from rl.environment.event_labels import NO_SLOT, EventKind, EventLabels, relevant_edges
 from rl.environment.interfaces import PlayerHistoryOutput, PlayerPackedHistoryOutput
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.offline.event_labels import NO_SLOT, EventKind, EventLabels, relevant_edges
 from rl.offline.shards import check_shard_manifest, is_holdout, iter_shard_payloads
 from rl.offline.world_model_data import (
     WorldModelBatch,

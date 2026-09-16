@@ -8,10 +8,10 @@ import os
 import numpy as np
 import pytest
 
+from rl.environment.event_labels import EventLabels
 from rl.environment.protos.service_pb2 import EnvironmentBatch
 from rl.offline import event_stream as shards
 from rl.offline.config import Porygon2WorldModelConfig
-from rl.offline.event_labels import EventLabels
 from rl.offline.shards import iter_shard_payloads
 from rl.offline.world_model_data import trajectory_to_example
 

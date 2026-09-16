@@ -28,6 +28,7 @@ from ml_collections import ConfigDict
 
 import wandb
 from rl import checkpoint as checkpoint_lib
+from rl.environment.event_labels import EventKind, EventLabels
 from rl.environment.interfaces import EventStates
 from rl.model import world_model as wm
 from rl.model.config import get_player_model_config
@@ -36,7 +37,6 @@ from rl.model.encoder import SIDE_MINE, SIDE_OPPONENT, Encoder, active_slot_rows
 from rl.model.heads import CategoricalValueLogitHead
 from rl.model.utils import get_num_params
 from rl.offline.config import Porygon2WorldModelConfig
-from rl.offline.event_labels import EventKind, EventLabels
 from rl.offline.event_stream import EventStreamStore
 from rl.offline.world_model_data import WorldModelBatch
 from rl.online.artifact import merge_params

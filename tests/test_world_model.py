@@ -11,6 +11,7 @@ import optax
 from ml_collections import ConfigDict
 
 from rl.environment.data import NUM_MOVES
+from rl.environment.event_labels import NO_SLOT, DeclaredKind, EventKind
 from rl.model import world_model as wm
 from rl.model.constants import (
     HISTORY_ENTITY_ROWS,
@@ -18,7 +19,6 @@ from rl.model.constants import (
     NUM_PUBLIC_SLOTS,
     PUBLIC_ROWS,
 )
-from rl.offline.event_labels import NO_SLOT, DeclaredKind, EventKind
 
 WIDTH = 32
 

@@ -23,6 +23,7 @@ from rl.environment.data import (
     OTHER_CELL_OFFSET,
     TARGET_SLOT_INDICES,
 )
+from rl.environment.event_labels import NO_SLOT, DeclaredKind, EventKind
 from rl.environment.protos.features_pb2 import (
     EntityPrivateNodeFeature,
     EntityPublicNodeFeature,
@@ -32,7 +33,6 @@ from rl.environment.protos.features_pb2 import (
 from rl.model import world_model as wm
 from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.model.identity import FIRST_ACTIVE_POSITION, SECOND_ACTIVE_POSITION
-from rl.offline.event_labels import NO_SLOT, DeclaredKind, EventKind
 
 SIDE_MINE = 1
 SIDE_OPPONENT = 0

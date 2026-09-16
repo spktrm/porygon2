@@ -7,10 +7,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from rl.environment.data import NUM_MOVES
+from rl.environment.event_labels import NO_SLOT, DeclaredKind, EventKind
 from rl.model import event_search as es
 from rl.model import world_model as wm
 from rl.model.constants import NUM_PUBLIC_SEQUENCE_ROWS
-from rl.offline.event_labels import NO_SLOT, DeclaredKind, EventKind
 
 WIDTH = 8
 MY_SLOT, THEIR_SLOT = 0, 6

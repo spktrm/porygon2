@@ -17,6 +17,7 @@ import os
 import numpy as np
 
 from constants import NUM_HISTORY
+from rl.environment import event_labels
 from rl.environment.protos.features_pb2 import (
     EntityPublicNodeFeature,
     FieldFeature,
@@ -25,7 +26,6 @@ from rl.environment.protos.features_pb2 import (
 from rl.environment.protos.service_pb2 import EnvironmentBatch
 from rl.environment.utils import process_state
 from rl.model.constants import NUM_PUBLIC_SLOTS
-from rl.offline import event_labels
 from rl.offline.shards import check_shard_manifest, iter_shard_payloads
 
 _LAG_FEATURES = np.array(

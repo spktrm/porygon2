@@ -29,6 +29,12 @@ from jaxtyping import ArrayLike
 from ml_collections import ConfigDict
 
 from rl.environment.data import NUM_MOVES
+from rl.environment.event_labels import (
+    NUM_DECLARED_KINDS,
+    NUM_EVENT_KINDS,
+    DeclaredKind,
+    EventKind,
+)
 from rl.environment.protos.enums_pb2 import MovesEnum
 from rl.model.constants import (
     ALLY_TARGET_ROWS,
@@ -46,12 +52,6 @@ from rl.model.constants import (
 )
 from rl.model.modules import FFWMLP, MLP, MultiHeadAttention, RMSNorm
 from rl.model.trunk import Trunk
-from rl.offline.event_labels import (
-    NUM_DECLARED_KINDS,
-    NUM_EVENT_KINDS,
-    DeclaredKind,
-    EventKind,
-)
 
 NUM_SLOT_CLASSES = NUM_PUBLIC_SLOTS + 1  # + NO_SLOT
 NUM_TOUCHED_BITS = NUM_PUBLIC_SLOTS + 1  # + the field bit

@@ -21,7 +21,7 @@ replays/
       shard-NNN-partKK.npz         the same trajectories decoded ONCE: the terminal state's
                                    unpadded event stream per trajectory (field steps, packed
                                    public / revealed / edge rows, offsets), the per-step
-                                   event labels (rl/offline/event_labels.py), the outcome,
+                                   event labels (rl/environment/event_labels.py), the outcome,
                                    the holdout flag and the record id
 ```
 
@@ -38,7 +38,7 @@ Rules that keep the layers honest:
   layout (an old export decoded silently to garbage once). `decoded/`
   records the export commit it came from and its store refuses a mismatch.
 - Re-export (`shards/`) after any proto feature change; re-decode
-  (`decoded/`) after any change to `rl/offline/event_labels.py` or to
+  (`decoded/`) after any change to `rl/environment/event_labels.py` or to
   `process_state`. Move the old directory aside rather than mixing.
 - A trajectory's packed rows are addressed by ABSOLUTE index from its
   field steps (`RELEVANT_ENTITY_IDX*`); windowing the two axes

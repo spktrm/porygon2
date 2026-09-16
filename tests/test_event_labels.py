@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import numpy as np
 
+from rl.environment import event_labels as labels
 from rl.environment.protos.enums_pb2 import BattlemajorargsEnum, MovesEnum
 from rl.environment.protos.features_pb2 import (
     EntityEdgeFeature,
@@ -11,7 +12,6 @@ from rl.environment.protos.features_pb2 import (
 from rl.environment.utils import get_ex_trajectory
 from rl.model import history_encoder
 from rl.model.constants import NUM_PUBLIC_SLOTS, RELEVANT_ENTITY_FEATURES
-from rl.offline import event_labels as labels
 
 MOVE = BattlemajorargsEnum.BATTLEMAJORARGS_ENUM__MOVE
 SWITCH = BattlemajorargsEnum.BATTLEMAJORARGS_ENUM__SWITCH

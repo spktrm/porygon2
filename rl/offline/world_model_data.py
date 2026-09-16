@@ -19,6 +19,7 @@ import jax
 import numpy as np
 from jaxtyping import ArrayLike
 
+from rl.environment.event_labels import EventLabels, event_labels
 from rl.environment.interfaces import PlayerHistoryOutput, PlayerPackedHistoryOutput
 from rl.environment.protos.service_pb2 import EnvironmentBatch, EnvironmentTrajectory
 from rl.environment.utils import (
@@ -27,7 +28,6 @@ from rl.environment.utils import (
     clip_packed_history,
     process_state,
 )
-from rl.offline.event_labels import EventLabels, event_labels
 from rl.offline.shards import is_holdout, iter_shard_payloads, list_shards
 
 
