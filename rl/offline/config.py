@@ -13,7 +13,11 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
 
     dataset_dir: str = "replays/shards"
     holdout_modulus: int = 20
-    batch_size: int = 8
+    # One trajectory per step: the geometric bucket is that game's own length
+    # (no padding to the longest of a batch) and the step is a sequential
+    # map over trajectories anyway, so smaller batches are more updates for
+    # the same throughput. Intervals below are in steps = trajectories.
+    batch_size: int = 1
     min_history_length: int = 64
     # Trailing window over the event stream per trajectory, applied by the
     # store at load (NUM_HISTORY 512 is the whole game on this corpus); a
@@ -31,7 +35,7 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     joint: bool = False
     # Off = the critic alone: public_v_head on every valid event state.
     world_model: bool = True
-    num_steps: int = 30000
+    num_steps: int = 240000
     learning_rate: float = 3e-4
     lr_final_fraction: float = 0.1
     clip_gradient: float = 10.0
@@ -52,9 +56,9 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     scale_momentum: float = 0.99
     # Samples per state for the eval-only imagined-value reads.
     eval_samples: int = 8
-    log_interval_steps: int = 50
-    eval_interval_steps: int = 1000
-    eval_batches: int = 32
+    log_interval_steps: int = 200
+    eval_interval_steps: int = 5000
+    eval_batches: int = 256
     save_interval_steps: int = 5000
     artifact_root: str = "ckpts/offline"
 

@@ -317,19 +317,21 @@ class ReplayStore:
         )
 
     def train_batches(self, seed: int = 0) -> Iterator[ReplayBatch]:
+        """An epoch is the games shuffled with both perspectives adjacent,
+        cut into batches of trajectories: every trajectory is seen once per
+        epoch at any batch size, and a pair shares a batch when it fits."""
         rng = random.Random(seed)
-        games_per_batch = max(1, self.config.batch_size // 2)
+        batch_size = self.config.batch_size
         while True:
             order = list(range(len(self.train_games)))
             rng.shuffle(order)
-            for start in range(0, len(order) - games_per_batch + 1, games_per_batch):
-                members = [
-                    index
-                    for game in order[start : start + games_per_batch]
-                    for index in self.train_games[game]
-                ][: self.config.batch_size]
+            epoch = [index for game in order for index in self.train_games[game]]
+            for start in range(0, len(epoch) - batch_size + 1, batch_size):
                 yield collate(
-                    [self.example(index) for index in members],
+                    [
+                        self.example(index)
+                        for index in epoch[start : start + batch_size]
+                    ],
                     self.config.min_history_length,
                 )
 
