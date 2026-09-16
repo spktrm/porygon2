@@ -492,14 +492,19 @@ class EventWorldModel(nn.Module):
         scale: jax.Array,
         rng: jax.Array,
     ) -> jax.Array:
-        return self.flow.sample(
-            rows,
-            self.event_token_embeddings(tokens),
-            row_mask,
-            scale,
-            rng,
-            self.cfg.flow_steps,
+        """The next state: the flow's sample on the update rows, the mean
+        step's deterministic residual on every other row -- the trunk
+        mixes rows, so an untouched entity's post-trunk row still moves
+        (60% of the difference energy on the first run's read), and a
+        single pass carries that where denoising would be wasted."""
+        event = self.event_token_embeddings(tokens)
+        sampled = self.flow.sample(
+            rows, event, row_mask, scale, rng, self.cfg.flow_steps
         )
+        residual = (
+            self.mean_step(rows, event) * scale[jnp.asarray(LOCAL_GROUP_IDS)][:, None]
+        )
+        return jnp.where(row_mask[:, None], sampled, rows + residual.astype(rows.dtype))
 
     def terminal_outcome(self, rows: jax.Array) -> jax.Array:
         return self.terminal_outcome_head(rows[PUBLIC_CLS_LOCAL_ROW]).astype(

@@ -71,6 +71,38 @@ Step 4 (`rl/model/event_search.py`, the binding in `player_model.py`,
   two-proportion test, 400 games per arm to resolve ~7 pp. The plan's
   "paired seeds" wording was wrong and is corrected.
 
+## Public event world model, first run's defects — 2026-09-16
+
+The first trainer run (wandb 55xsk5wm, 1,000 steps on ckpt_00373138)
+read: kind NLL 1.70 -> 1.17 nats (the kind marginal is ~1.4, uniform
+1.95), move 4.45 -> 2.42, touched F1 .94, new-turn accuracy .86, flow
+loss 0.82 -> 0.56 and mean control 0.79 -> 0.55 (copy = 1). It also
+exposed four defects, all fixed before the relaunch:
+- The learner checkpoint's `player/params` component is the VARIABLES
+  dict `{"params": tree}`; the trainer's guarded overlay
+  (`if key in restored`) matched nothing and trained on a RANDOM encoder
+  with a fresh public head -- which is why `loss_public_value` sat at
+  ln 2 with R2 0.00 from step 50. The overlay now indexes `["params"]`
+  and RAISES if the encoder or the head does not overlay exactly; the
+  artifact is saved in the same layout. Rule: a guarded overlay is a
+  silent no-op waiting to happen; assert the overlay.
+- `nats_per_token` read 1.3e8: labels outside the grammar mask (a move
+  event whose move token is unknown, id < SWITCH_IN) scored -log 0 = 1e9.
+  Such labels leave the loss and are counted (`label_illegal_{actor,
+  move,target}`).
+- The eval crashed pooling (H, 55) per-row sums across history buckets;
+  per-row sums are now (55,) per trajectory (summed over steps).
+- `untouched_delta_frac` read 0.60: 60% of the true post-trunk difference
+  energy sits on rows OUTSIDE the touched set -- the trunk mixes rows and
+  every slot's history state moves each step. The plan's fallback
+  applied: `imagine()` adds the mean step's deterministic residual on the
+  untouched rows (one pass, no denoising) and the mean step trains on
+  every valid row (its loss on the update rows stays the flow's control).
+
+Operational: `pkill`/`pgrep -f` with a pattern that appears in the tool
+shell's own command line kills that shell (exit 144); kill by a
+bracketed pattern (`[t]rain_...`) or by pid from a separate command.
+
 ## Public event world model, Steps 1–2: the per-event public state and the model — 2026-09-16
 
 Step 1 (72541ee, structure-only): `PUBLIC_SEQUENCE_ROWS` = the public

@@ -126,11 +126,12 @@ def load_search_params(ckpt_dir: str, world_model_dir: str):
     `world_model` and `public_v_head` subtrees in place of its own -- the
     public critic the artifact trained on replays is the one the
     rollouts price with."""
-    params = dict(load_params(ckpt_dir))
+    variables = load_params(ckpt_dir)
     artifact = checkpoint.load_component(world_model_dir, "player", "params")
+    params = dict(variables["params"])
     for name in ("world_model", "public_v_head"):
-        params[name] = artifact[name]
-    return params
+        params[name] = artifact["params"][name]
+    return {**variables, "params": params}
 
 
 def play_games(

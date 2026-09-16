@@ -143,6 +143,28 @@ class WorldModelTrainer(nn.Module):
         nll = jax.vmap(wm.grammar_nll)(
             terms.logits, tokens, touched_bits, labels.new_turn, labels.num_revealed
         )  # (H, 5)
+        # A label outside the grammar mask (a move event whose move token is
+        # unknown, a target never revealed) scores -log 0: it leaves the
+        # loss and is counted instead.
+        actor_legal = jax.vmap(lambda kind, n, actor: wm.actor_mask(kind, n)[actor])(
+            labels.kind, labels.num_revealed, labels.actor
+        )
+        move_legal = jax.vmap(lambda kind, move: wm.move_mask(kind)[move])(
+            labels.kind, labels.move
+        )
+        target_legal = jax.vmap(lambda n, target: wm.target_mask(n)[target])(
+            labels.num_revealed, labels.target
+        )
+        label_legal = jnp.stack(
+            [
+                jnp.ones_like(actor_legal),
+                actor_legal,
+                move_legal,
+                target_legal,
+                jnp.ones_like(actor_legal),
+            ],
+            axis=-1,
+        )
         position_valid = terms.grammar_valid & labels.valid[:, None]
         sums = {}
         counts = {}
@@ -150,6 +172,14 @@ class WorldModelTrainer(nn.Module):
         def add(name, value, mask):
             sums[name] = jnp.sum(jnp.where(mask, value, 0.0))
             counts[name] = jnp.sum(mask.astype(jnp.float32))
+
+        for index, name in enumerate(("actor", "move", "target")):
+            add(
+                f"label_illegal_{name}",
+                (~label_legal[:, index + 1]).astype(jnp.float32),
+                position_valid[:, index + 1],
+            )
+        position_valid = position_valid & label_legal
 
         for index, name in enumerate(("kind", "actor", "move", "target", "touched")):
             add(f"loss_{name}", nll[:, index], position_valid[:, index])
@@ -202,23 +232,34 @@ class WorldModelTrainer(nn.Module):
         group_scale = scale[jnp.asarray(wm.LOCAL_GROUP_IDS)]
         x1_energy = terms.delta_energy / jnp.square(group_scale)[None]
         update_valid = row_mask & pair_valid[:, None]
-        sums["flow_error"] = jnp.where(update_valid, terms.flow_error, 0.0)
-        sums["mean_error"] = jnp.where(update_valid, terms.mean_error, 0.0)
-        sums["x1_energy"] = jnp.where(update_valid, x1_energy, 0.0)
-        sums["delta_energy_update"] = jnp.where(update_valid, terms.delta_energy, 0.0)
+        # Per-row sums over the steps, (55,): the batch and the eval pool
+        # them further, so no history bucket shows in a leaf's shape.
+        all_valid = pair_valid[:, None] & jnp.ones_like(row_mask)
+        sums["flow_error"] = jnp.where(update_valid, terms.flow_error, 0.0).sum(0)
+        # The mean step covers EVERY row: the update rows as the flow's
+        # matched control, the rest as the residual imagine() applies.
+        sums["mean_error"] = jnp.where(all_valid, terms.mean_error, 0.0).sum(0)
+        sums["mean_error_update"] = jnp.where(update_valid, terms.mean_error, 0.0).sum(
+            0
+        )
+        sums["x1_energy"] = jnp.where(update_valid, x1_energy, 0.0).sum(0)
+        sums["x1_energy_all"] = jnp.where(all_valid, x1_energy, 0.0).sum(0)
+        sums["all_rows"] = all_valid.astype(jnp.float32).sum(0)
+        sums["delta_energy_update"] = jnp.where(
+            update_valid, terms.delta_energy, 0.0
+        ).sum(0)
         sums["delta_energy_untouched"] = jnp.where(
             ~row_mask & pair_valid[:, None], terms.delta_energy, 0.0
-        )
-        sums["update_rows"] = update_valid.astype(jnp.float32)
+        ).sum(0)
+        sums["update_rows"] = update_valid.astype(jnp.float32).sum(0)
         for kind in EventKind:
             kind_mask = pair_valid & (labels.kind == kind)
             sums[f"delta_energy_untouched_{kind.name.lower()}"] = jnp.where(
                 ~row_mask & kind_mask[:, None], terms.delta_energy, 0.0
-            )
+            ).sum(0)
             sums[f"delta_energy_all_{kind.name.lower()}"] = jnp.where(
                 kind_mask[:, None], terms.delta_energy, 0.0
-            )
-        # Per-row sums stay (H, 55) here; the batch pooling sums them.
+            ).sum(0)
 
         # The public critic on real states, every valid step.
         value = self.public_v_head(states[:, PUBLIC_CLS_LOCAL_ROW])
@@ -311,10 +352,14 @@ def pooled_metrics(pooled: BatchTerms, scale: jax.Array, floor: float) -> dict:
         sums["flow_error"], sums["x1_energy"], update_rows, floor
     )
     mean_loss, mean_groups = wm.pooled_group_loss(
-        sums["mean_error"], sums["x1_energy"], update_rows, floor
+        sums["mean_error"], sums["x1_energy_all"], sums["all_rows"] > 0, floor
+    )
+    control_loss, _ = wm.pooled_group_loss(
+        sums["mean_error_update"], sums["x1_energy"], update_rows, floor
     )
     metrics["loss_flow"] = flow_loss
-    metrics["loss_mean_control"] = mean_loss
+    metrics["loss_mean_control"] = control_loss
+    metrics["loss_mean_all_rows"] = mean_loss
     for index, name in enumerate(wm.LOCAL_GROUP_NAMES):
         metrics[f"flow_loss_{name}"] = flow_groups[index]
         metrics[f"mean_loss_{name}"] = mean_groups[index]
@@ -375,7 +420,7 @@ def total_loss(config: Porygon2WorldModelConfig, metrics: dict) -> jax.Array:
         + config.target_loss_weight * metrics["loss_target"]
         + config.touched_loss_weight * metrics["loss_touched"]
         + config.flow_loss_weight * metrics["loss_flow"]
-        + config.mean_loss_weight * metrics["loss_mean_control"]
+        + config.mean_loss_weight * metrics["loss_mean_all_rows"]
         + config.terminal_loss_weight * metrics["loss_terminal"]
         + config.public_value_loss_weight * metrics["loss_public_value"]
     )
@@ -506,7 +551,9 @@ def save_artifact(
         save_path,
         config,
         dict(
-            params=with_delta_scale(state.params, state.scale),
+            # The learner's layout: the variables dict, so merge_params and
+            # the harness read the artifact exactly as a learner checkpoint.
+            params={"params": with_delta_scale(state.params, state.scale)},
             scalars=dict(step_count=step, delta_scale=np.asarray(state.scale)),
         ),
         builder_state_components={},
@@ -580,16 +627,28 @@ def main() -> None:
             method=WorldModelTrainer.trajectory_terms,
         )
     )(jax.random.key(seed), init_batch)["params"]
-    restored = checkpoint_lib.load_component(config.trunk_ckpt, "player", "params")
+    # The learner's component is the variables dict, {"params": tree}.
+    restored = checkpoint_lib.load_component(config.trunk_ckpt, "player", "params")[
+        "params"
+    ]
     params = _overlay_params(
-        params,
-        {key: restored[key] for key in ("encoder", "public_v_head") if key in restored},
+        params, {key: restored[key] for key in ("encoder", "public_v_head")}
     )
+    for key in ("encoder", "public_v_head"):
+        overlaid = jax.tree.map(
+            lambda a, b: bool(np.array_equal(np.asarray(a), np.asarray(b))),
+            params[key],
+            restored[key],
+        )
+        if not all(jax.tree.leaves(overlaid)):
+            raise ValueError(f"{key} did not overlay exactly from {config.trunk_ckpt}")
     scale = jnp.ones(wm.NUM_PUBLIC_GROUPS, jnp.float32)
     if config.resume_from is not None:
         params = _overlay_params(
             params,
-            checkpoint_lib.load_component(config.resume_from, "player", "params"),
+            checkpoint_lib.load_component(config.resume_from, "player", "params")[
+                "params"
+            ],
         )
         scalars = checkpoint_lib.load_component(config.resume_from, "player", "scalars")
         scale = jnp.asarray(scalars["delta_scale"], jnp.float32)
