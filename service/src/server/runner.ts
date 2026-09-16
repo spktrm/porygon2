@@ -267,9 +267,12 @@ export class TrainablePlayerAI extends RandomPlayerAI {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     override receiveRequest(request: ChoiceRequest) {}
 
-    createGameState(includeHistory: boolean = true): EnvironmentState {
+    createGameState(
+        includeHistory: boolean = true,
+        historyStepCount?: number,
+    ): EnvironmentState {
         const stateHandler = new StateHandler(this);
-        return stateHandler.build(includeHistory);
+        return stateHandler.build(includeHistory, historyStepCount);
     }
 
     getRequest(): AnyObject {

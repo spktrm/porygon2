@@ -4611,7 +4611,7 @@ export class StateHandler {
         return hp / maxHp;
     }
 
-    getInfo(historyLength: number): Uint8Array {
+    getInfo(historyStepCount: number): Uint8Array {
         const playerIndex = this.player.getPlayerIndex();
         if (playerIndex === undefined) {
             throw new Error("Player index is undefined");
@@ -4626,7 +4626,7 @@ export class StateHandler {
         infoBuffer[InfoFeature.INFO_FEATURE__REQUEST_COUNT] =
             this.player.requestCount;
         infoBuffer[InfoFeature.INFO_FEATURE__HISTORY_STEP_COUNT] =
-            historyLength;
+            historyStepCount;
 
         const { winReward, lossReward, tieReward } = this.getWinReward();
         infoBuffer[InfoFeature.INFO_FEATURE__WIN_REWARD] = winReward ?? 0;
@@ -4797,7 +4797,10 @@ export class StateHandler {
         return new Uint8Array(fieldBuffer.buffer);
     }
 
-    build(includeHistory: boolean = true): EnvironmentState {
+    build(
+        includeHistory: boolean = true,
+        historyStepCount?: number,
+    ): EnvironmentState {
         this.player.rewardTracker.updateFaintedCount(this.player.privateBattle);
 
         const request = this.player.getRequest();
@@ -4832,7 +4835,14 @@ export class StateHandler {
               };
 
         const state = new EnvironmentState();
-        const info = this.getInfo(historyLength);
+        // The index of the last history edge whose effects the state holds,
+        // on every state: a non-terminal offline slice is aligned to the
+        // shared history by it. By default the committed-edge count; the
+        // exporter passes one more for a slice taken before the line that
+        // commits the pending edge (its effects are already in the state).
+        const info = this.getInfo(
+            historyStepCount ?? this.player.eventHandler.edgeBuffer.numEdges,
+        );
         state.setInfo(info);
 
         const allyActive = this.player.publicBattle.sides[playerIndex].active;

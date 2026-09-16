@@ -15,9 +15,13 @@ replays/
     manifest.json                  export_commit, num_history, feature_counts, counts
     shard-NNN.bin                  the service's export: [uint32-LE len][EnvironmentBatch]
                                    per replay, both perspectives, one EnvironmentState per
-                                   |turn| plus the terminal state; ONLY the terminal state
-                                   carries the history caches (the whole event stream);
-                                   public view only (private blocks zero, all-ones mask)
+                                   committed history edge (major arg), holding that edge's
+                                   effects, labelled by INFO_FEATURE__HISTORY_STEP_COUNT
+                                   (the 1-based edge index; a turn boundary's slice is taken
+                                   after the |turn| line); the last is the terminal state and
+                                   ONLY it carries the history caches (the whole event
+                                   stream); public view only (private blocks zero,
+                                   all-ones mask)
 ```
 
 | layer | written by | read by |

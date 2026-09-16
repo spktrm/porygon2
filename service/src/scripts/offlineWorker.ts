@@ -4,15 +4,19 @@
  * Receives a list of replay JSON files, replays each spectator protocol log
  * through the SAME state encoder used in live self-play (TrainablePlayerAI +
  * StateHandler) from both players' perspectives, and appends one
- * EnvironmentTrajectory record per (replay, perspective) to its own shard
- * file as [uint32-LE length][serialized proto bytes].
+ * EnvironmentTrajectory per (replay, perspective), both in one
+ * EnvironmentBatch record per replay, to its own shard file as
+ * [uint32-LE length][serialized proto bytes].
  *
  * Spectator logs carry no |request| lines, so:
  *  - playerIndex is pinned manually per perspective,
  *  - private_team / my_moveset encode as all-unspecified (public-view only),
  *  - the action mask is all-ones (StateHandler already supports a null
  *    request),
- *  - states are emitted at each |turn| boundary plus one terminal state.
+ *  - states are emitted at every committed history edge (one per major
+ *    arg -- move, switch/drag/replace, cant, faint -- taken BEFORE the line
+ *    that opens the next edge, so a slice never carries the next event's
+ *    announcement), at each |turn| boundary, plus one terminal state.
  *
  * Must run with CWD=service/ (data.ts loads ../constants and ../data
  * relative to the working directory).
@@ -68,6 +72,21 @@ const noopStream = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
 } as any;
 
+// The lines whose handlers commit the pending edge (state.ts addEdge): the
+// major args, and the bare "|" block separator the protocol parser reports
+// as |done| -- it follows every action's effect lines, so the state before
+// it is the post-effect state of that edge. |turn| commits too and is
+// handled in the loop.
+const EDGE_OPENING_CMDS = new Set([
+    "move",
+    "switch",
+    "drag",
+    "replace",
+    "cant",
+    "faint",
+    "",
+]);
+
 class OfflinePlayerAI extends TrainablePlayerAI {
     override getRequest(): AnyObject {
         // Spectator logs carry no |request| lines, so battle.request stays
@@ -102,11 +121,29 @@ export function encodePerspective(
     }
 
     const states: EnvironmentState[] = [];
+    // The stream position (last edge held) of each pushed slice: one slice
+    // per position, so a boundary slice replaces a same-position slice and
+    // the terminal state stands for the last edge.
+    const positions: number[] = [];
+    const edgeBuffer = player.eventHandler.edgeBuffer;
     for (const line of lines) {
         if (!line.startsWith("|")) {
             continue;
         }
         const cmd = line.slice(1).split("|")[0];
+        // A major arg commits the pending edge inside its own handler, so
+        // the state of the committed edge is the one BEFORE this line;
+        // taken speculatively, kept only if a commit follows (the first
+        // major arg after |turn| finds an empty edge and commits nothing).
+        // History caches are shared per trajectory (RL Trajectory
+        // convention): only the terminal state carries them, so
+        // non-terminal states skip the O(history) snapshot and records
+        // stay O(T) instead of O(T^2).
+        let edgeState: EnvironmentState | undefined;
+        const edgesBefore = edgeBuffer.numEdges;
+        if (EDGE_OPENING_CMDS.has(cmd) && !player.done) {
+            edgeState = player.createGameState(false, edgesBefore + 1);
+        }
         // getWinReward scans player.log for the |win| line, comparing the
         // winner name against player.userName.
         player.log.push(line);
@@ -114,12 +151,23 @@ export function encodePerspective(
             player.done = true;
         }
         player.addLine(cmd, line);
+        if (edgeState !== undefined && edgeBuffer.numEdges > edgesBefore) {
+            states.push(edgeState);
+            positions.push(edgesBefore + 1);
+        }
         if (cmd === "turn" && !player.done) {
-            // History caches are shared per trajectory (RL Trajectory
-            // convention): only the terminal state carries them, so
-            // non-terminal states skip the O(history) snapshot and records
-            // stay O(T) instead of O(T^2).
+            // The boundary slice is taken AFTER the line, as the live
+            // request is (turn number advanced, the pending edge
+            // committed); when the separator already committed it, the
+            // boundary slice takes that position over. The request count
+            // advances once per turn so the edge features keep the live
+            // distribution.
+            if (positions.at(-1) === edgeBuffer.numEdges) {
+                states.pop();
+                positions.pop();
+            }
             states.push(player.createGameState(false));
+            positions.push(edgeBuffer.numEdges);
             player.requestCount += 1;
         }
     }
@@ -127,6 +175,9 @@ export function encodePerspective(
     if (!player.done) {
         // No decided outcome in the log — useless as a critic target.
         return null;
+    }
+    if (positions.at(-1) === edgeBuffer.numEdges) {
+        states.pop();
     }
     states.push(player.createGameState());
     if (states.length < 2) {

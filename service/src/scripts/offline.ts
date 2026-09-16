@@ -240,6 +240,11 @@ async function main() {
             "repeated [uint32-LE length][EnvironmentBatch proto bytes] — " +
             "one record per replay holding both perspectives",
         history: "terminal state only — shared per trajectory (RL convention)",
+        states:
+            "one per committed history edge, holding that edge's effects " +
+            "(INFO_FEATURE__HISTORY_STEP_COUNT = the edge index, 1-based); " +
+            "a |turn| boundary's slice is taken after the line; the last " +
+            "one is the terminal state with the caches",
         perspective: "both players; public-view only (no private info)",
     };
     fs.writeFileSync(
