@@ -181,6 +181,9 @@ class Porygon2WorldModelConfig(BaseTrainingConfig):
     flow_loss_weight: float = 1.0
     mean_loss_weight: float = 1.0
     terminal_loss_weight: float = 1.0
+    # The head's parameters receive no other gradient, so under Adam this
+    # weight is a no-op up to eps (scale invariance): the head's noise
+    # lever is its learning rate. Kept at 1 so the logged loss is the CE.
     public_value_loss_weight: float = 1.0
     # EMA of the per-group RMS difference the flow is scaled by.
     scale_momentum: float = 0.99

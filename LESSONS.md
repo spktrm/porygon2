@@ -71,6 +71,40 @@ Step 4 (`rl/model/event_search.py`, the binding in `player_model.py`,
   two-proportion test, 400 games per arm to resolve ~7 pp. The plan's
   "paired seeds" wording was wrong and is corrected.
 
+## Public event world model, second run's read (louxsi55) — 2026-09-16
+
+Held-out at 3,000 steps (batch 8 trajectories, ~1,000 events per batch,
+0.3 s/step, trunk ckpt_00373138 frozen): nats per token 1.28; touched
+F1 .93; new-turn accuracy .79; flow loss on touched rows 0.28 (copy = 1)
+vs the mean control 0.61 on the same rows; mean step on every row 0.27;
+imagined-value R2 (sample mean vs the real next value under the same
+head) 0.84, faint steps 0.69; CRPS flow 0.046 vs the control's |error|
+0.057. The opponent's move among its revealed moves is at 3.5% -- the
+960-way move head has not yet learned to read the actor's revealed row.
+`untouched_delta_frac` 0.70: the mean residual on untouched rows is
+load-bearing, not a corner. The run is deterministic (seed 0, streamed
+shards): a relaunch with the same config reproduces every eval to three
+decimals, which is how the first run's evals were recognised as the same
+model. bc26c7f's message claims the head weight dropped to .02; that
+edit never landed and the weight stayed 1.0 -- and it would have been a
+no-op anyway: the head's params get no other gradient, so Adam's scale
+invariance makes a weight on its loss inert up to eps.
+
+The public critic finding. The learner's public critic (R2 .59 on
+self-play requests) reads R2 -0.10 with CE 1.65 on per-event replay
+states -- confident and wrong -- and the replay-trained head reaches
+only .016 held-out after 3k steps (its per-batch train R2 swings
+-.08 .. .29 with four games per batch, which the first run misread as a
+collapse). The train and eval code paths agree exactly on the same
+batches (probe), so this is the model, not the instrument: the value
+reads above are consistency reads against a weak critic, and the plan's
+Step 3 acceptance on `imagined_value_r2` is not yet a read on true
+value. Candidates, in order: the head's own LEARNING RATE (four outcome
+bits per step is the noise), longer training, then `joint` so the public
+tier adapts to replay event states (INFO is a MOVE request with every
+target legal, the snapshot is first-touch, human games are not
+self-play).
+
 ## Public event world model, first run's defects — 2026-09-16
 
 The first trainer run (wandb 55xsk5wm, 1,000 steps on ckpt_00373138)
