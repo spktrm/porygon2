@@ -183,12 +183,15 @@ class WorldModelTrainer(nn.Module):
 
         for index, name in enumerate(("kind", "actor", "move", "target", "touched")):
             add(f"loss_{name}", nll[:, index], position_valid[:, index])
-        add("nats_per_token", nll.sum(-1), labels.valid)
+        # Only the positions the grammar asks for count: a switch event has
+        # no move, and its move logit at the sentinel reads -log 0.
+        event_nll = jnp.where(position_valid, nll, 0.0).sum(-1)
+        add("nats_per_token", event_nll, labels.valid)
         counts["nats_per_token"] = position_valid.astype(jnp.float32).sum()
         for kind in EventKind:
             add(
                 f"nll_kind_{kind.name.lower()}",
-                nll.sum(-1),
+                event_nll,
                 labels.valid & (labels.kind == kind),
             )
         actor_hit = terms.logits.actor.argmax(-1) == labels.actor
