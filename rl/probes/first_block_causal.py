@@ -22,10 +22,10 @@ from rl.model.constants import (
     SequenceGroup,
 )
 from rl.model.trunk import TrunkBlock
-from rl.offline.switch_depth_probe import ROOT as DEPTH_ROOT
-from rl.offline.switch_depth_probe import split_masks
-from rl.offline.switch_readout_probe import fit_readout
-from rl.offline.type_probe import _OPP_ROW
+from rl.probes.switch_depth_probe import ROOT as DEPTH_ROOT
+from rl.probes.switch_depth_probe import split_masks
+from rl.probes.switch_readout_probe import fit_readout
+from rl.probes.type_probe import _OPP_ROW
 
 ROOT = Path("runtime/type-probe-switch/first-block-causal")
 ARMS = ("baseline", "info", "cls", "info_cls", "field", "mass_control", "skip")

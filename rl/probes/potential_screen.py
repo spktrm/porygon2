@@ -24,7 +24,7 @@ rescreen at 0.025; if that fails too, relaunch at 0 and record why.
 
     PORT=8081 MAX_WORKERS=2 MEMORY_STATS_PATH=/tmp/x.json \\
         node service/dist/server/index.js
-    PS_SERVICE_URI=ws://localhost:8081 env/bin/python -m rl.offline.potential_screen \\
+    PS_SERVICE_URI=ws://localhost:8081 env/bin/python -m rl.probes.potential_screen \\
         --checkpoint ckpts/gen9/ckpt_00360000 --games 32 \\
         --out runtime/pbrs-screen/ckpt_00360000.json
 
@@ -49,13 +49,13 @@ import numpy as np
 from rl.environment.interfaces import PlayerActorInput
 from rl.model.heads import HeadParams
 from rl.model.utils import legal_log_policy
-from rl.offline.uniform_kl_screen import record_chunks, restored_states
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.training.batching import stack_batch
 from rl.online.training.loss import appo_policy_loss
 from rl.online.training.targets import compute_player_targets, unit_potential
 from rl.online.training.telemetry import action_axis_masks
 from rl.online.training.train_step import TRAIN_STEP_JIT
+from rl.probes.uniform_kl_screen import record_chunks, restored_states
 
 logger = logging.getLogger(__name__)
 LOGIT_BUDGET = 0.10

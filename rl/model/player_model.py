@@ -520,7 +520,7 @@ class Porygon2PlayerModel(nn.Module):
             # Rows converging to one direction reads on the existing panels
             # as "entropy at ceiling while the pointer params grow" -- the
             # phase-1 support-anchor shape -- so it gets its own reading.
-            # Offline twin: rl/offline/trunk_homogeneity.py, per block.
+            # Offline twin: rl/probes/trunk_homogeneity.py, per block.
             row_cosine, row_participation = row_homogeneity(sequence)
             group_l2_sum, group_rows = trunk_out_group_l2
             learner_only = {

@@ -619,7 +619,7 @@ def train_step(
             player_loss_v_win_public=loss_v_win_public,
             # Trunk over-smoothing (cosine up / participation down = rows
             # converging); the offline per-block twin is
-            # rl/offline/trunk_homogeneity.py.
+            # rl/probes/trunk_homogeneity.py.
             player_trunk_row_cosine=average(
                 learner_player_pred.trunk_row_cosine, value_mask
             ),

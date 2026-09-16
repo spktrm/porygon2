@@ -1473,7 +1473,7 @@ class Encoder(nn.Module):
     ):
         """The trunk's INPUT over time, (T, rows, width) with its row_valid --
         `_assemble_sequence` with the real history inputs and no trunk.
-        Offline reads only (rl/offline/{trunk_homogeneity,separation_probe});
+        Offline reads only (rl/probes/{trunk_homogeneity,separation_probe});
         nothing in training calls it."""
         assemble = nn.vmap(
             Encoder._assemble_sequence,

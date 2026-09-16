@@ -21,8 +21,8 @@ import optax
 from rl.model.config import get_player_model_config
 from rl.model.constants import PRIVATE_ROWS, PUBLIC_ROWS, SEQUENCE_READ_MASK
 from rl.model.trunk import TrunkBlock
-from rl.offline.switch_readout_probe import fit_readout, initial_params, logits, metrics
-from rl.offline.type_probe import _OPP_ROW
+from rl.probes.switch_readout_probe import fit_readout, initial_params, logits, metrics
+from rl.probes.type_probe import _OPP_ROW
 
 ROOT = Path("runtime/type-probe-switch/depth")
 CHECKPOINT = "ckpts/gen9/ckpt_02339569"
@@ -54,9 +54,9 @@ apply_depths = jax.jit(trunk_depths)
 def extract(args):
     from rl.model.player_model import get_player_model
     from rl.offline import harness
-    from rl.offline.separation_probe import actor_input_of
-    from rl.offline.type_probe import TypeTables, label_switch_batch
     from rl.online.training.batching import stack_batch
+    from rl.probes.separation_probe import actor_input_of
+    from rl.probes.type_probe import TypeTables, label_switch_batch
 
     reference = np.load("runtime/type-probe-switch/frozen_02339569.npz")
     lookup = {
@@ -192,7 +192,7 @@ def split_masks(games, seed):
 
 def depth_controls():
     from rl.model.constants import POLICY_READABLE_ROWS
-    from rl.offline.separation_probe import _ridge_predict
+    from rl.probes.separation_probe import _ridge_predict
 
     reference = np.load("runtime/type-probe-switch/frozen_02339569.npz")
     results = []

@@ -61,7 +61,7 @@ class TrunkBlock(nn.Module):
         # Hard-zero invalid rows so a padded row never accumulates content.
         sequence = jnp.where(row_valid[..., None], sequence, 0)
         # The block's output residual stream, for the offline row-homogeneity
-        # read (rl/offline/trunk_homogeneity.py). Same gate as the attention
+        # read (rl/probes/trunk_homogeneity.py). Same gate as the attention
         # sow; training never allocates it.
         if COLLECT_INTERMEDIATES:
             self.sow("intermediates", "residual", sequence.astype(jnp.float32))

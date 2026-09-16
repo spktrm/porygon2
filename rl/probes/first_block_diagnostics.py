@@ -14,8 +14,8 @@ from flax import linen as nn
 from rl.model.config import get_player_model_config
 from rl.model.constants import CLS_ROW, PRIVATE_ROWS, SEQUENCE_SLICES, SequenceGroup
 from rl.model.modules import RMSNorm
-from rl.offline.attention_routes import capture, groups_and_rows
-from rl.offline.switch_depth_probe import apply_depths
+from rl.probes.attention_routes import capture, groups_and_rows
+from rl.probes.switch_depth_probe import apply_depths
 
 
 def main():

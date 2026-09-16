@@ -1,6 +1,6 @@
 import pytest
 
-from rl.offline import uniform_kl_screen
+from rl.probes import uniform_kl_screen
 
 
 def test_protocol_switch_report_excludes_pivots_forced_and_incomplete(

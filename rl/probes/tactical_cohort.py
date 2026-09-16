@@ -18,8 +18,8 @@ service started with BATTLE_LOG_DIR set so the simulator's own `-immune`
 lines confirm the taken-move events. `read` runs a checkpoint's target
 params over the cohort and emits the metric at T=1 and T=.5.
 
-    env/bin/python -m rl.offline.tactical_cohort collect --checkpoint ckpts/gen9/ckpt_N
-    env/bin/python -m rl.offline.tactical_cohort read --checkpoint ckpts/gen9/ckpt_M \\
+    env/bin/python -m rl.probes.tactical_cohort collect --checkpoint ckpts/gen9/ckpt_N
+    env/bin/python -m rl.probes.tactical_cohort read --checkpoint ckpts/gen9/ckpt_M \\
         --out runtime/tactical-cohort/read-ckpt_M.json
 """
 
@@ -45,7 +45,7 @@ from rl.model.constants import (
     OPP_ACTIVE_PUBLIC_ROWS,
 )
 from rl.offline import harness
-from rl.offline.type_probe import (
+from rl.probes.type_probe import (
     IMMUNE,
     TypeTables,
     label_batch,

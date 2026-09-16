@@ -22,13 +22,14 @@ from rl.model.config import (
 )
 from rl.model.player_model import get_player_model
 from rl.model.utils import prune_log_policy
-from rl.offline import battle_stats, harness
+from rl.offline import harness
 from rl.online.artifact import (
     create_train_state,
     load_from_checkpoint,
     player_model_config_for,
 )
 from rl.online.config import Porygon2LearnerConfig
+from rl.probes import battle_stats
 
 logger = logging.getLogger(__name__)
 

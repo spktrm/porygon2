@@ -33,7 +33,7 @@ ability's blanket immunities (Levitate etc.) applied when known. Status moves
 are not labelled. Ability immunities from an UNREVEALED ability are label
 noise, not modelled.
 
-    env/bin/python -m rl.offline.type_probe --games-pkl X.pkl --ckpt ckpts/...
+    env/bin/python -m rl.probes.type_probe --games-pkl X.pkl --ckpt ckpts/...
 """
 
 from __future__ import annotations
@@ -66,14 +66,14 @@ from rl.model.constants import (
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.offline import harness
-from rl.offline.separation_probe import (
+from rl.online.training.batching import stack_batch
+from rl.probes.separation_probe import (
     _assembled_and_encoded_fn,
     _ridge_accuracy,
     _ridge_r,
     actor_input_of,
     make_apply,
 )
-from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
 

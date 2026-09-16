@@ -31,7 +31,7 @@ falsified and the launch does not happen on this justification.
 
 Usage (learner down; games from a pickle, so no service needed):
 
-    env/bin/python -m rl.offline.separation_probe \\
+    env/bin/python -m rl.probes.separation_probe \\
         --games-pkl runtime/discrim_sides_ckpt224773.pkl --probe both
 """
 

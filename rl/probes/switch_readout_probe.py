@@ -22,12 +22,12 @@ def extract(args):
     from rl.model.constants import CLS_ROW, PRIVATE_ROWS, PUBLIC_ROWS
     from rl.model.player_model import get_player_model
     from rl.offline import harness
-    from rl.offline.separation_probe import (
+    from rl.online.training.batching import stack_batch
+    from rl.probes.separation_probe import (
         _assembled_and_encoded_fn,
         actor_input_of,
     )
-    from rl.offline.type_probe import _OPP_ROW, TypeTables, label_switch_batch
-    from rl.online.training.batching import stack_batch
+    from rl.probes.type_probe import _OPP_ROW, TypeTables, label_switch_batch
 
     sides = harness.load(args.games_pkl)
     provenance_path = Path(args.games_pkl).with_name("provenance.json")
@@ -217,7 +217,7 @@ def metrics(predictions, labels):
 
 
 def controls(args):
-    from rl.offline.separation_probe import _ridge_predict
+    from rl.probes.separation_probe import _ridge_predict
 
     cache = np.load(args.cache)
     results = []

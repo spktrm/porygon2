@@ -12,7 +12,7 @@ sequence and per SequenceGroup, on real batches; the live panel
 Needs the residual sow, so COLLECT_INTERMEDIATES is set here before
 rl.model is imported (the flag is read at import).
 
-    env/bin/python rl/offline/trunk_homogeneity.py \\
+    env/bin/python rl/probes/trunk_homogeneity.py \\
         --games-pkl runtime/lineage_games_ckpt182000.pkl [--ckpt ckpts/gen9/ckpt_00182000]
 """
 
@@ -32,8 +32,8 @@ from rl.model.constants import SEQUENCE_LAYOUT, SEQUENCE_SLICES  # noqa: E402
 from rl.model.player_model import get_player_model  # noqa: E402
 from rl.model.trunk import row_homogeneity  # noqa: E402
 from rl.offline import harness  # noqa: E402
-from rl.offline.separation_probe import actor_input_of, fresh_variables  # noqa: E402
 from rl.online.training.batching import stack_batch  # noqa: E402
+from rl.probes.separation_probe import actor_input_of, fresh_variables  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

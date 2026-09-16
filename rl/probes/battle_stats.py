@@ -3,7 +3,7 @@ every population, so a human replay (omniscient log), a model self-play
 game and a model-vs-heuristic game (both p1's log from the service's
 BATTLE_LOG_DIR dump) are measured with the same code.
 
-    env/bin/python rl/offline/battle_stats.py \\
+    env/bin/python rl/probes/battle_stats.py \\
         --human replays/data/gen9randombattle --human-min-rating 1900 \\
         --logs /path/to/selfplay_logs --logs /path/to/heuristic_logs
 

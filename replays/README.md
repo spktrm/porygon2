@@ -22,7 +22,7 @@ replays/
 
 | layer | written by | read by |
 |---|---|---|
-| `data/` | `replays/main.py` | the exporter; `rl/offline/battle_stats.py` (log parser) |
+| `data/` | `replays/main.py` | the exporter; `rl/probes/battle_stats.py` (log parser) |
 | `shards/*.bin` | `service/src/scripts/offline.ts` (`npm run offline -- <format>`) | `rl/offline/dataset.py::load_replay_store` (every consumer: the offline trainer, `rl/offline/event_audit.py`) |
 
 Rules that keep the layers honest:

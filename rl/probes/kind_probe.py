@@ -23,7 +23,7 @@ Needs the residual sow, so COLLECT_INTERMEDIATES is set before rl.model
 is imported. Runs on ANY architecture with the same row groups, so the
 same script reads the sum-pool lineage against this one.
 
-    env/bin/python rl/offline/kind_probe.py --ckpt ckpts/gen9/ckpt_00260000 \\
+    env/bin/python rl/probes/kind_probe.py --ckpt ckpts/gen9/ckpt_00260000 \\
         --games-pkl runtime/lineage_games_ckpt182000.pkl
 """
 
@@ -57,16 +57,16 @@ from rl.model.constants import (
 )
 from rl.model.player_model import get_player_model  # noqa: E402
 from rl.offline import harness  # noqa: E402
-from rl.offline.separation_probe import (  # noqa: E402
+from rl.online.training.batching import stack_batch  # noqa: E402
+from rl.probes.separation_probe import (  # noqa: E402
     _ridge_accuracy,
     _ridge_predict,
     _ridge_r,
     actor_input_of,
     fresh_variables,
 )
-from rl.offline.trunk_homogeneity import _sequences, valid_steps  # noqa: E402
-from rl.offline.type_probe import _OPP_ROW, TypeTables, opponent_types  # noqa: E402
-from rl.online.training.batching import stack_batch  # noqa: E402
+from rl.probes.trunk_homogeneity import _sequences, valid_steps  # noqa: E402
+from rl.probes.type_probe import _OPP_ROW, TypeTables, opponent_types  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
