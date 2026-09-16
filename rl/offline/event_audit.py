@@ -26,7 +26,7 @@ from rl.environment.protos.service_pb2 import EnvironmentBatch
 from rl.environment.utils import process_state
 from rl.model.constants import NUM_PUBLIC_SLOTS
 from rl.offline import event_labels
-from rl.offline.dataset import check_shard_manifest, iter_shard_payloads
+from rl.offline.shards import check_shard_manifest, iter_shard_payloads
 
 _LAG_FEATURES = np.array(
     [

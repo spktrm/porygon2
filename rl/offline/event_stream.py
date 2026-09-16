@@ -25,12 +25,8 @@ import numpy as np
 from constants import NUM_HISTORY
 from rl.environment.interfaces import PlayerHistoryOutput, PlayerPackedHistoryOutput
 from rl.environment.protos.features_pb2 import FieldFeature
-from rl.offline.dataset import (
-    _is_holdout,
-    check_shard_manifest,
-    iter_shard_payloads,
-)
 from rl.offline.event_labels import NO_SLOT, EventKind, EventLabels, relevant_edges
+from rl.offline.shards import check_shard_manifest, is_holdout, iter_shard_payloads
 from rl.offline.world_model_data import (
     WorldModelBatch,
     WorldModelExample,
@@ -91,7 +87,7 @@ def _convert_range(args) -> str:
         examples = record_to_examples(payload)
         for side, example in enumerate(examples):
             pieces.append(_trim(example))
-            meta["holdout"].append(_is_holdout(shard, index, holdout_modulus))
+            meta["holdout"].append(is_holdout(shard, index, holdout_modulus))
             meta["record"].append(index)
             meta["side"].append(side)
     stem = os.path.splitext(os.path.basename(shard))[0]

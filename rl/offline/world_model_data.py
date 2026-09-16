@@ -9,6 +9,7 @@ free side-swap control) and the holdout split is per game, as in
 rl/offline/dataset.py.
 """
 
+import os
 import random
 from collections.abc import Iterator, Sequence
 from dataclasses import field
@@ -26,8 +27,8 @@ from rl.environment.utils import (
     clip_packed_history,
     process_state,
 )
-from rl.offline.dataset import _is_holdout, iter_shard_payloads, list_shards
 from rl.offline.event_labels import EventLabels, event_labels
+from rl.offline.shards import is_holdout, iter_shard_payloads, list_shards
 
 
 @chex.dataclass
@@ -131,12 +132,12 @@ def collate(
 class WorldModelDataset:
     def __init__(self, config):
         self.config = config
-        self.shards = list_shards(config)
+        self.shards = list_shards(os.path.join(config.dataset_dir, config.format_id))
 
     def _iter_records(self, holdout: bool) -> Iterator[list[WorldModelExample]]:
         for shard in self.shards:
             for index, payload in enumerate(iter_shard_payloads(shard)):
-                if _is_holdout(shard, index, self.config.holdout_modulus) != holdout:
+                if is_holdout(shard, index, self.config.holdout_modulus) != holdout:
                     continue
                 examples = record_to_examples(payload, self.config.max_history_steps)
                 if examples:

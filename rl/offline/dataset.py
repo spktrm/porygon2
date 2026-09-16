@@ -11,10 +11,8 @@ reused unchanged.
 """
 
 import hashlib
-import json
 import os
 import queue
-import struct
 import threading
 from collections.abc import Iterator, Sequence
 
@@ -23,12 +21,6 @@ import jax
 import numpy as np
 from jaxtyping import ArrayLike
 
-from rl.environment.data import (
-    NUM_ENTITY_EDGE_FEATURES,
-    NUM_ENTITY_PUBLIC_FEATURES,
-    NUM_ENTITY_REVEALED_FEATURES,
-    NUM_FIELD_FEATURES,
-)
 from rl.environment.data import NUM_MOVES as MOVE_VOCAB_SIZE
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.enums_pb2 import MovesEnum
@@ -45,9 +37,10 @@ from rl.environment.utils import (
     geometric_bucket,
     process_state,
 )
+from rl.offline import shards
 from rl.offline.config import Porygon2OfflineConfig
-
-_LENGTH_STRUCT = struct.Struct("<I")
+from rl.offline.shards import is_holdout as _is_holdout
+from rl.offline.shards import iter_shard_payloads
 
 # Margin bins: final alive-mon differential in [-6, +6], 13 classes.
 MAX_MARGIN = 6
@@ -139,67 +132,8 @@ class OfflineBatch:
     set_masks: ArrayLike
 
 
-def check_shard_manifest(shard_dir: str) -> dict:
-    """A shard's feature layout must be the one this code was built
-    against: the July 2026 export decoded without error after the
-    action-mask and feature-count changes and read garbage. The exporter
-    writes the counts; an export that predates them is refused outright."""
-    manifest_path = os.path.join(shard_dir, "manifest.json")
-    try:
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-    except FileNotFoundError as error:
-        raise FileNotFoundError(f"No manifest at {manifest_path}") from error
-    expected = {
-        "public": NUM_ENTITY_PUBLIC_FEATURES,
-        "revealed": NUM_ENTITY_REVEALED_FEATURES,
-        "edge": NUM_ENTITY_EDGE_FEATURES,
-        "field": NUM_FIELD_FEATURES,
-        "info": len(InfoFeature.keys()),
-    }
-    counts = manifest.get("feature_counts")
-    if "export_commit" not in manifest or counts != expected:
-        raise ValueError(
-            f"Stale shards at {shard_dir}: manifest feature counts {counts} vs "
-            f"{expected} (export_commit {manifest.get('export_commit')}) -- "
-            f"re-export with service/src/scripts/offline.ts."
-        )
-    return manifest
-
-
 def list_shards(config: Porygon2OfflineConfig) -> list[str]:
-    shard_dir = os.path.join(config.dataset_dir, config.format_id)
-    if not os.path.isdir(shard_dir):
-        raise FileNotFoundError(
-            f"No shard directory at {shard_dir} — run the offline exporter "
-            f"(service/src/scripts/offline.ts) first."
-        )
-    check_shard_manifest(shard_dir)
-    shards = sorted(
-        os.path.join(shard_dir, f) for f in os.listdir(shard_dir) if f.endswith(".bin")
-    )
-    if not shards:
-        raise FileNotFoundError(f"No .bin shards in {shard_dir}")
-    return shards
-
-
-def iter_shard_payloads(shard_path: str) -> Iterator[bytes]:
-    with open(shard_path, "rb") as f:
-        while True:
-            header = f.read(_LENGTH_STRUCT.size)
-            if len(header) < _LENGTH_STRUCT.size:
-                return
-            (length,) = _LENGTH_STRUCT.unpack(header)
-            payload = f.read(length)
-            if len(payload) < length:
-                return  # truncated tail (interrupted exporter) — drop it
-            yield payload
-
-
-def _is_holdout(shard_path: str, record_index: int, holdout_modulus: int) -> bool:
-    key = f"{os.path.basename(shard_path)}:{record_index}".encode()
-    digest = hashlib.md5(key).digest()
-    return int.from_bytes(digest[:4], "little") % holdout_modulus == 0
+    return shards.list_shards(os.path.join(config.dataset_dir, config.format_id))
 
 
 def _ensemble_bucket(shard_path: str, record_index: int, num_splits: int) -> int:
