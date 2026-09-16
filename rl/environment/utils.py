@@ -240,7 +240,7 @@ def pad_history_to_level(
 
 
 # All eight RELEVANT_ENTITY_IDX columns: the service writes up to eight and
-# the model's _RELEVANT_ENTITY_FEATURES reads all of them.
+# the model's RELEVANT_ENTITY_FEATURES reads all of them.
 _ALL_RELEVANT_IDX_COLUMNS = np.array(
     [FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{k}") for k in range(8)]
 )

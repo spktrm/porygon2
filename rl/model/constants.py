@@ -30,9 +30,19 @@ from rl.environment.data import (
     TARGET_SLOT_INDICES,
     WILDCARD_MOVE_INDICES,
 )
+from rl.environment.protos.features_pb2 import FieldFeature
 
 # Public slots the history encoder tracks: 6 per side, both sides.
 NUM_PUBLIC_SLOTS = 12
+# All EIGHT columns the service writes (state.ts maxRelevant = 8). Listing
+# fewer silently drops the rows of any step touching more entities than are
+# listed -- spread moves, hazard cascades -- before the scatter sees them.
+RELEVANT_ENTITY_FEATURES = np.array(
+    [
+        FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{index}")
+        for index in range(8)
+    ]
+)
 # Rows of my private sheet.
 NUM_PRIVATE_SLOTS = 6
 # The field triple, mirrored by the history field triple: global, mine, theirs.

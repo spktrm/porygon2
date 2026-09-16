@@ -16,11 +16,20 @@
  * the progress line stays readable; --verbose prints them all.
  */
 
+import { execSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { Worker } from "worker_threads";
 
+import {
+    NUM_HISTORY,
+    numEntityEdgeFeatures,
+    numFieldFeatures,
+    numInfoFeatures,
+    numPublicEntityNodeFeatures,
+    numRevealedEntityNodeFeatures,
+} from "../server/data";
 import type { OfflineWorkerStats } from "./offlineWorker";
 
 const WORKER_PATH = path.resolve(__dirname, "offlineWorker.js");
@@ -212,6 +221,21 @@ async function main() {
         num_sim_warnings: total.warnings,
         shards: numWorkers,
         created_at: new Date().toISOString(),
+        // The loader refuses a shard whose feature layout is not the one it
+        // was built against (rl/offline/dataset.py list_shards): the July
+        // 2026 shards silently mis-decoded after the action-mask and
+        // feature-count changes, and a wrong reshape is not always an error.
+        export_commit: execSync("git rev-parse HEAD", { cwd: PROJECT_ROOT })
+            .toString()
+            .trim(),
+        num_history: NUM_HISTORY,
+        feature_counts: {
+            public: numPublicEntityNodeFeatures,
+            revealed: numRevealedEntityNodeFeatures,
+            edge: numEntityEdgeFeatures,
+            field: numFieldFeatures,
+            info: numInfoFeatures,
+        },
         record_format:
             "repeated [uint32-LE length][EnvironmentBatch proto bytes] — " +
             "one record per replay holding both perspectives",

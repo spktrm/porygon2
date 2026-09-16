@@ -11,6 +11,7 @@ reused unchanged.
 """
 
 import hashlib
+import json
 import os
 import queue
 import struct
@@ -22,6 +23,12 @@ import jax
 import numpy as np
 from jaxtyping import ArrayLike
 
+from rl.environment.data import (
+    NUM_ENTITY_EDGE_FEATURES,
+    NUM_ENTITY_PUBLIC_FEATURES,
+    NUM_ENTITY_REVEALED_FEATURES,
+    NUM_FIELD_FEATURES,
+)
 from rl.environment.data import NUM_MOVES as MOVE_VOCAB_SIZE
 from rl.environment.interfaces import PlayerActorInput
 from rl.environment.protos.enums_pb2 import MovesEnum
@@ -132,6 +139,34 @@ class OfflineBatch:
     set_masks: ArrayLike
 
 
+def check_shard_manifest(shard_dir: str) -> dict:
+    """A shard's feature layout must be the one this code was built
+    against: the July 2026 export decoded without error after the
+    action-mask and feature-count changes and read garbage. The exporter
+    writes the counts; an export that predates them is refused outright."""
+    manifest_path = os.path.join(shard_dir, "manifest.json")
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f"No manifest at {manifest_path}") from error
+    expected = {
+        "public": NUM_ENTITY_PUBLIC_FEATURES,
+        "revealed": NUM_ENTITY_REVEALED_FEATURES,
+        "edge": NUM_ENTITY_EDGE_FEATURES,
+        "field": NUM_FIELD_FEATURES,
+        "info": len(InfoFeature.keys()),
+    }
+    counts = manifest.get("feature_counts")
+    if "export_commit" not in manifest or counts != expected:
+        raise ValueError(
+            f"Stale shards at {shard_dir}: manifest feature counts {counts} vs "
+            f"{expected} (export_commit {manifest.get('export_commit')}) -- "
+            f"re-export with service/src/scripts/offline.ts."
+        )
+    return manifest
+
+
 def list_shards(config: Porygon2OfflineConfig) -> list[str]:
     shard_dir = os.path.join(config.dataset_dir, config.format_id)
     if not os.path.isdir(shard_dir):
@@ -139,6 +174,7 @@ def list_shards(config: Porygon2OfflineConfig) -> list[str]:
             f"No shard directory at {shard_dir} — run the offline exporter "
             f"(service/src/scripts/offline.ts) first."
         )
+    check_shard_manifest(shard_dir)
     shards = sorted(
         os.path.join(shard_dir, f) for f in os.listdir(shard_dir) if f.endswith(".bin")
     )

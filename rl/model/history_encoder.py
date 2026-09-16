@@ -22,6 +22,7 @@ from rl.model.constants import (
     NUM_HISTORY_REGISTERS,
     NUM_HISTORY_STATE_ROWS,
     NUM_PUBLIC_SLOTS,
+    RELEVANT_ENTITY_FEATURES,
 )
 from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
 
@@ -40,23 +41,13 @@ FIELD_ROW_GLOBAL, FIELD_ROW_MINE, FIELD_ROW_THEIRS = 0, 1, 2
 # ENTITY_PUBLIC_NODE_FEATURE__SIDE == 1 is mine (service isMySide).
 SIDE_MINE = 1
 
-# All EIGHT columns the service writes (state.ts maxRelevant = 8). Listing
-# fewer silently drops the rows of any step touching more entities than are
-# listed -- spread moves, hazard cascades -- before the scatter sees them.
-_RELEVANT_ENTITY_FEATURES = np.array(
-    [
-        FieldFeature.Value(f"FIELD_FEATURE__RELEVANT_ENTITY_IDX{index}")
-        for index in range(8)
-    ]
-)
-
 
 def relevant_edges(history_field: jax.Array) -> tuple[jax.Array, jax.Array]:
     """A step's edges are the cache rows named by its RELEVANT_ENTITY_IDX
     columns, capped by NUM_RELEVANT: (H, K) row indices and the (H, K)
     bool mask of the live ones. Written once -- the encoder's gather and
     the wire-side telemetry must agree on it."""
-    relevant = history_field[:, _RELEVANT_ENTITY_FEATURES]  # (H, K)
+    relevant = history_field[:, RELEVANT_ENTITY_FEATURES]  # (H, K)
     num_relevant = history_field[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT]
     edge_mask = jnp.arange(relevant.shape[1])[None] < num_relevant[:, None]
     return relevant, edge_mask
