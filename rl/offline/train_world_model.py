@@ -37,8 +37,7 @@ from rl.model.encoder import SIDE_MINE, SIDE_OPPONENT, Encoder, active_slot_rows
 from rl.model.heads import CategoricalValueLogitHead
 from rl.model.utils import get_num_params
 from rl.offline.config import Porygon2WorldModelConfig
-from rl.offline.event_stream import EventStreamStore
-from rl.offline.world_model_data import WorldModelBatch
+from rl.offline.dataset import ReplayBatch, load_replay_store
 from rl.online.artifact import merge_params
 
 Params = dict
@@ -76,12 +75,12 @@ class WorldModelTrainer(nn.Module):
         self.public_v_head = CategoricalValueLogitHead(self.cfg.public_v_head)
         self.world_model = wm.EventWorldModel(self.cfg.world_model, name="world_model")
 
-    def events(self, batch: WorldModelBatch) -> EventStates:
+    def events(self, batch: ReplayBatch) -> EventStates:
         return self.encoder.encode_events(batch.packed_history, batch.history)
 
     def trajectory_terms(
         self,
-        batch: WorldModelBatch,
+        batch: ReplayBatch,
         scale: jax.Array,
         rng: jax.Array,
         with_samples: bool,
@@ -431,7 +430,7 @@ def total_loss(config: Porygon2WorldModelConfig, metrics: dict) -> jax.Array:
 
 
 def batch_terms(
-    model, params, batch: WorldModelBatch, scale, rng, with_samples, num_samples
+    model, params, batch: ReplayBatch, scale, rng, with_samples, num_samples
 ):
     keys = jax.random.split(rng, batch.win_reward.shape[0])
 
@@ -457,7 +456,7 @@ def make_train_step(config: Porygon2WorldModelConfig, model, optimiser, model_cf
     floor = model_cfg.world_model.scale_floor
 
     @jax.jit
-    def train_step(state: TrainerState, batch: WorldModelBatch, rng):
+    def train_step(state: TrainerState, batch: ReplayBatch, rng):
         def loss_fn(params):
             pooled = batch_terms(model, params, batch, state.scale, rng, False, 0)
             metrics = pooled_metrics(pooled, state.scale, floor)
@@ -492,13 +491,13 @@ def make_eval_step(config: Porygon2WorldModelConfig, model, model_cfg):
     floor = model_cfg.world_model.scale_floor
 
     @jax.jit
-    def eval_step(state: TrainerState, batch: WorldModelBatch, rng):
+    def eval_step(state: TrainerState, batch: ReplayBatch, rng):
         pooled = batch_terms(
             model, state.params, batch, state.scale, rng, True, config.eval_samples
         )
         return pooled
 
-    def evaluate(state, batches: Iterator[WorldModelBatch], rng) -> dict[str, float]:
+    def evaluate(state, batches: Iterator[ReplayBatch], rng) -> dict[str, float]:
         pooled = None
         for index, batch in enumerate(batches):
             terms = jax.device_get(
@@ -628,7 +627,7 @@ def main() -> None:
         os.environ["WANDB_MODE"] = "disabled"
     model_cfg = world_model_config(config.joint)
     model = WorldModelTrainer(model_cfg)
-    dataset = EventStreamStore(config)
+    dataset = load_replay_store(config)
     shard_manifest = dataset.manifest
     print(f"{len(dataset)} trajectories, {len(dataset.train_games)} training games")
     first_batch = next(dataset.eval_batches())

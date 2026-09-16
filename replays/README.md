@@ -1,9 +1,11 @@
-# replays/ — the offline export, one dataset in three forms
+# replays/ — the offline export, one dataset in two forms
 
 Everything under here is gitignored except this file and `main.py`.
-The three layers are ONE dataset at three stages of decoding; nothing
-here is specific to a consumer, and a new consumer reads the deepest
-layer that already has what it needs rather than adding a fourth.
+The two layers are ONE dataset at two stages: the raw replay and the
+service's export of it. Nothing derived is stored beside them -- a consumer
+decodes the export in memory at startup (`rl/offline/dataset.py::
+load_replay_store`, ~15 s across 16 processes for the whole corpus) and
+chooses its own resolution there.
 
 ```
 replays/
@@ -16,35 +18,27 @@ replays/
                                    |turn| plus the terminal state; ONLY the terminal state
                                    carries the history caches (the whole event stream);
                                    public view only (private blocks zero, all-ones mask)
-    decoded/
-      manifest.json                export_commit it was decoded from (checked on load)
-      shard-NNN-partKK.npz         the same trajectories decoded ONCE: the terminal state's
-                                   unpadded event stream per trajectory (field steps, packed
-                                   public / revealed / edge rows, offsets), the per-step
-                                   event labels (rl/environment/event_labels.py), the outcome,
-                                   the holdout flag and the record id
 ```
 
 | layer | written by | read by |
 |---|---|---|
 | `data/` | `replays/main.py` | the exporter; `rl/offline/battle_stats.py` (log parser) |
-| `shards/*.bin` | `service/src/scripts/offline.ts` (`npm run offline -- <format>`) | `rl/offline/dataset.py` (the offline critic, decodes per record with a prefetch thread) |
-| `shards/decoded/` | `rl/offline/event_stream.py` (`env/bin/python rl/offline/event_stream.py`, 16 workers, ~11 s) | `rl/offline/train_world_model.py` via `EventStreamStore` (3 GB in memory, a batch is a slice) |
+| `shards/*.bin` | `service/src/scripts/offline.ts` (`npm run offline -- <format>`) | `rl/offline/dataset.py::load_replay_store` (every consumer: the offline trainer, `rl/offline/event_audit.py`) |
 
 Rules that keep the layers honest:
 
 - `shards/manifest.json` carries the export commit and the proto feature
-  counts; `rl/offline/dataset.py::check_shard_manifest` refuses any other
-  layout (an old export decoded silently to garbage once). `decoded/`
-  records the export commit it came from and its store refuses a mismatch.
-- Re-export (`shards/`) after any proto feature change; re-decode
-  (`decoded/`) after any change to `rl/environment/event_labels.py` or to
-  `process_state`. Move the old directory aside rather than mixing.
+  counts; `rl/offline/shards.py::check_shard_manifest` refuses any other
+  layout (an old export decoded silently to garbage once).
+- Re-export after any proto feature change; move the old directory aside
+  rather than mixing. A change to `rl/environment/event_labels.py` or to
+  `process_state` needs nothing: the store decodes at startup.
 - A trajectory's packed rows are addressed by ABSOLUTE index from its
   field steps (`RELEVANT_ENTITY_IDX*`); windowing the two axes
-  independently breaks every gather. `decoded/` stores the whole
-  trajectory, so no rebasing is needed until the trailing clip in
-  `rl/environment/utils.py::clip_history_windows_tail`.
+  independently breaks every gather. The store holds the whole
+  trajectory; the trailing window (`max_history_steps`) goes through
+  `rl/environment/utils.py::clip_history_windows_tail` and re-derives the
+  labels on the window.
 - The holdout split is per GAME (both perspectives together), by a hash of
-  (shard path, record index) modulo `holdout_modulus`; `decoded/` stores
-  the flag so every consumer agrees.
+  (shard path, record index) modulo `holdout_modulus`
+  (`rl/offline/shards.py::is_holdout`), so every consumer agrees.

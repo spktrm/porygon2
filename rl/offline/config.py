@@ -1,3 +1,5 @@
+import os
+
 import chex
 
 from rl.config.common import AdamWConfig, BaseTrainingConfig
@@ -11,13 +13,15 @@ class Porygon2WorldModelConfig(BaseTrainingConfig):
 
     dataset_dir: str = "replays/shards"
     holdout_modulus: int = 20
-    shuffle_buffer_size: int = 128
     batch_size: int = 8
     min_history_length: int = 64
-    # Trailing window over the event stream per trajectory (NUM_HISTORY 512
-    # is the whole game on this corpus); a smaller cap trades early events
-    # for memory when the GPU is shared.
+    # Trailing window over the event stream per trajectory, applied by the
+    # store at load (NUM_HISTORY 512 is the whole game on this corpus); a
+    # smaller cap trades early events for memory when the GPU is shared.
     max_history_steps: int = 512
+    # Processes decoding the export at startup (1 = in one worker). Each
+    # imports the model package (~0.7 GB); 8 decode the corpus in ~20 s.
+    decode_workers: int = 8
     # The learner checkpoint whose encoder + public critic are the frozen
     # substrate (required); resume_from restarts a world-model run.
     trunk_ckpt: str | None = None
@@ -51,3 +55,6 @@ class Porygon2WorldModelConfig(BaseTrainingConfig):
     eval_batches: int = 32
     save_interval_steps: int = 5000
     artifact_root: str = "ckpts/world_model"
+
+    def shard_dir(self) -> str:
+        return os.path.join(self.dataset_dir, self.format_id)
