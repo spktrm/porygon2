@@ -2,7 +2,7 @@
 
 Creates/refreshes two views:
   - pokemon-rl         -> "Signal health"  (training-run diagnostics)
-  - pokemon-rl-offline -> "Event world model"  (rl/offline/train_world_model.py)
+  - pokemon-rl-offline -> "Event world model"  (rl/offline/train.py)
 
 Panel keys mirror what rl/online/main.py and the offline trainer log; when
 metrics are added or renamed, update the sections here and re-run. Each run without
@@ -1023,7 +1023,7 @@ def members(stem):
 
 
 def world_model_sections():
-    """The event world model's offline trainer (rl/offline/train_world_model.py)."""
+    """The event world model's offline trainer (rl/offline/train.py)."""
     kinds = ["move", "switch", "drag", "cant", "faint", "residual", "end"]
     return [
         ws.Section(

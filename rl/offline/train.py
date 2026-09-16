@@ -1,13 +1,12 @@
-"""Offline trainer for the event world model (plan Step 3).
+"""The offline trainer: the player model's PUBLIC path -- encoder + trunk
+on the 55 public rows, the public critic and (unless --no-world-model) the
+event world model -- as one module whose submodule names are the player
+model's, so `merge_params` resumes every leaf by path at a learner
+relaunch. The encoder is overlaid from a learner checkpoint and frozen
+unless `joint`; the critic and the world model train on the replay export.
 
-The player model's PUBLIC path -- encoder + trunk on the 55 public rows,
-the public critic, the event world model -- as one module whose submodule
-names are the player model's, so `merge_params` resumes every leaf by
-path at a learner relaunch. The encoder is overlaid from a learner
-checkpoint and frozen unless `joint`; the world model and the public
-critic train on the replay shards.
-
-    env/bin/python rl/offline/train_world_model.py --trunk-ckpt ckpts/gen9/ckpt_XXXXXXXX
+    env/bin/python -u rl/offline/train.py --trunk-ckpt ckpts/gen9/ckpt_XXXXXXXX
+    env/bin/python -u rl/offline/train.py --trunk-ckpt ... --no-world-model
 """
 
 import argparse
@@ -36,7 +35,7 @@ from rl.model.constants import PUBLIC_CLS_LOCAL_ROW
 from rl.model.encoder import SIDE_MINE, SIDE_OPPONENT, Encoder, active_slot_rows
 from rl.model.heads import CategoricalValueLogitHead
 from rl.model.utils import get_num_params
-from rl.offline.config import Porygon2WorldModelConfig
+from rl.offline.config import Porygon2OfflineConfig
 from rl.offline.dataset import ReplayBatch, load_replay_store
 from rl.online.artifact import merge_params
 
@@ -59,21 +58,24 @@ class BatchTerms(NamedTuple):
     counts: dict
 
 
-def world_model_config(joint: bool) -> ConfigDict:
+def trainer_model_config(joint: bool, world_model: bool) -> ConfigDict:
     cfg = get_player_model_config(generation=9, train=True)
     cfg.encoder.public_only = True
-    cfg.world_model.enabled = True
+    cfg.world_model.enabled = world_model
     cfg.world_model.joint = joint
     return cfg
 
 
-class WorldModelTrainer(nn.Module):
+class OfflineTrainer(nn.Module):
     cfg: ConfigDict
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
         self.public_v_head = CategoricalValueLogitHead(self.cfg.public_v_head)
-        self.world_model = wm.EventWorldModel(self.cfg.world_model, name="world_model")
+        if self.cfg.world_model.enabled:
+            self.world_model = wm.EventWorldModel(
+                self.cfg.world_model, name="world_model"
+            )
 
     def events(self, batch: ReplayBatch) -> EventStates:
         return self.encoder.encode_events(batch.packed_history, batch.history)
@@ -93,8 +95,75 @@ class WorldModelTrainer(nn.Module):
         states = events.states
         if not self.cfg.world_model.joint:
             states = jax.lax.stop_gradient(states)
+        sums = {}
+        counts = {}
+
+        def add(name, value, mask):
+            sums[name] = jnp.sum(jnp.where(mask, value, 0.0))
+            counts[name] = jnp.sum(mask.astype(jnp.float32))
+
+        self.critic_terms(add, counts, states, events.step_valid, labels, batch)
+        if self.cfg.world_model.enabled:
+            self.world_model_terms(
+                add,
+                sums,
+                counts,
+                events,
+                states,
+                labels,
+                batch,
+                scale,
+                rng,
+                with_samples,
+                num_samples,
+            )
+        return BatchTerms(sums=sums, counts=counts)
+
+    def critic_terms(self, add, counts, states, step_valid, labels, batch) -> None:
+        """The public critic on real states, every valid step."""
+        value = self.public_v_head(states[:, PUBLIC_CLS_LOCAL_ROW])
+        outcome_bin = jnp.argmax(batch.win_reward)
+        value_nll = -value.log_probs[:, outcome_bin]
+        outcome_value = jnp.asarray([-1.0, 0.0, 1.0])[outcome_bin]
+        add("loss_public_value", value_nll, step_valid)
+        add("value_residual", jnp.square(value.expectation - outcome_value), step_valid)
+        add(
+            "value_residual_boundary",
+            jnp.square(value.expectation - outcome_value),
+            step_valid & labels.new_turn,
+        )
+        add(
+            "value_residual_midturn",
+            jnp.square(value.expectation - outcome_value),
+            step_valid & ~labels.new_turn,
+        )
+        add(
+            "outcome_value", jnp.full_like(value.expectation, outcome_value), step_valid
+        )
+        add(
+            "outcome_value_sq",
+            jnp.full_like(value.expectation, outcome_value**2),
+            step_valid,
+        )
+        counts["value_residual_boundary_n"] = counts["value_residual_boundary"]
+        counts["value_residual_midturn_n"] = counts["value_residual_midturn"]
+
+    def world_model_terms(
+        self,
+        add,
+        sums,
+        counts,
+        events: EventStates,
+        states: jax.Array,
+        labels: EventLabels,
+        batch: ReplayBatch,
+        scale: jax.Array,
+        rng: jax.Array,
+        with_samples: bool,
+        num_samples: int,
+    ) -> None:
         num_steps = states.shape[0]
-        step_valid = events.step_valid
+        events.step_valid
         pair_valid = labels.valid & ~labels.terminal
         next_states = jnp.roll(states, -1, axis=0)
 
@@ -166,13 +235,6 @@ class WorldModelTrainer(nn.Module):
             axis=-1,
         )
         position_valid = terms.grammar_valid & labels.valid[:, None]
-        sums = {}
-        counts = {}
-
-        def add(name, value, mask):
-            sums[name] = jnp.sum(jnp.where(mask, value, 0.0))
-            counts[name] = jnp.sum(mask.astype(jnp.float32))
-
         for index, name in enumerate(("actor", "move", "target")):
             add(
                 f"label_illegal_{name}",
@@ -264,35 +326,8 @@ class WorldModelTrainer(nn.Module):
                 kind_mask[:, None], terms.delta_energy, 0.0
             ).sum(0)
 
-        # The public critic on real states, every valid step.
-        value = self.public_v_head(states[:, PUBLIC_CLS_LOCAL_ROW])
-        outcome_bin = jnp.argmax(batch.win_reward)
-        value_nll = -value.log_probs[:, outcome_bin]
-        outcome_value = jnp.asarray([-1.0, 0.0, 1.0])[outcome_bin]
-        add("loss_public_value", value_nll, step_valid)
-        add("value_residual", jnp.square(value.expectation - outcome_value), step_valid)
-        add(
-            "value_residual_boundary",
-            jnp.square(value.expectation - outcome_value),
-            step_valid & labels.new_turn,
-        )
-        add(
-            "value_residual_midturn",
-            jnp.square(value.expectation - outcome_value),
-            step_valid & ~labels.new_turn,
-        )
-        add(
-            "outcome_value", jnp.full_like(value.expectation, outcome_value), step_valid
-        )
-        add(
-            "outcome_value_sq",
-            jnp.full_like(value.expectation, outcome_value**2),
-            step_valid,
-        )
-        counts["value_residual_boundary_n"] = counts["value_residual_boundary"]
-        counts["value_residual_midturn_n"] = counts["value_residual_midturn"]
-
         # The terminal outcome head, at the real terminal step only.
+        outcome_bin = jnp.argmax(batch.win_reward)
         terminal_nll = -jax.nn.log_softmax(terms.terminal_logits, axis=-1)[
             :, outcome_bin
         ]
@@ -339,7 +374,6 @@ class WorldModelTrainer(nn.Module):
             spread = jnp.abs(sampled[:, None] - sampled[None, :]).mean((0, 1))
             add("value_crps", abs_err - 0.5 * spread, pair_valid)
             add("value_crps_mean_control", jnp.abs(sample_mean - real_next), pair_valid)
-        return BatchTerms(sums=sums, counts=counts)
 
 
 def pooled_metrics(pooled: BatchTerms, scale: jax.Array, floor: float) -> dict:
@@ -350,6 +384,23 @@ def pooled_metrics(pooled: BatchTerms, scale: jax.Array, floor: float) -> dict:
     scalar_keys = [key for key, value in sums.items() if jnp.ndim(value) == 0]
     for key in scalar_keys:
         metrics[key] = sums[key] / jnp.maximum(counts[key], 1.0)
+    n = jnp.maximum(counts["outcome_value"], 1.0)
+    outcome_var = sums["outcome_value_sq"] / n - jnp.square(sums["outcome_value"] / n)
+    metrics["public_value_r2"] = 1.0 - metrics["value_residual"] / jnp.maximum(
+        outcome_var, 1e-8
+    )
+    metrics["public_value_r2_boundary"] = 1.0 - metrics[
+        "value_residual_boundary"
+    ] / jnp.maximum(outcome_var, 1e-8)
+    metrics["public_value_r2_midturn"] = 1.0 - metrics[
+        "value_residual_midturn"
+    ] / jnp.maximum(outcome_var, 1e-8)
+    if "flow_error" in sums:
+        world_model_metrics(metrics, sums, counts, scale, floor)
+    return metrics
+
+
+def world_model_metrics(metrics: dict, sums: dict, counts: dict, scale, floor) -> None:
     update_rows = sums["update_rows"] > 0
     flow_loss, flow_groups = wm.pooled_group_loss(
         sums["flow_error"], sums["x1_energy"], update_rows, floor
@@ -387,17 +438,6 @@ def pooled_metrics(pooled: BatchTerms, scale: jax.Array, floor: float) -> dict:
     metrics["touched_f1"] = (
         2 * precision * recall / jnp.maximum(precision + recall, 1e-8)
     )
-    n = jnp.maximum(counts["outcome_value"], 1.0)
-    outcome_var = sums["outcome_value_sq"] / n - jnp.square(sums["outcome_value"] / n)
-    metrics["public_value_r2"] = 1.0 - metrics["value_residual"] / jnp.maximum(
-        outcome_var, 1e-8
-    )
-    metrics["public_value_r2_boundary"] = 1.0 - metrics[
-        "value_residual_boundary"
-    ] / jnp.maximum(outcome_var, 1e-8)
-    metrics["public_value_r2_midturn"] = 1.0 - metrics[
-        "value_residual_midturn"
-    ] / jnp.maximum(outcome_var, 1e-8)
     if "imagined_residual" in sums:
         m = jnp.maximum(counts["real_next_value"], 1.0)
         next_var = sums["real_next_value_sq"] / m - jnp.square(
@@ -412,21 +452,33 @@ def pooled_metrics(pooled: BatchTerms, scale: jax.Array, floor: float) -> dict:
         metrics["imagined_value_r2_nonfaint"] = 1.0 - metrics[
             "imagined_residual_nonfaint"
         ] / jnp.maximum(next_var, 1e-8)
-    return metrics
 
 
-def total_loss(config: Porygon2WorldModelConfig, metrics: dict) -> jax.Array:
-    return (
-        config.kind_loss_weight * metrics["loss_kind"]
-        + config.actor_loss_weight * metrics["loss_actor"]
-        + config.move_loss_weight * metrics["loss_move"]
-        + config.target_loss_weight * metrics["loss_target"]
-        + config.touched_loss_weight * metrics["loss_touched"]
-        + config.flow_loss_weight * metrics["loss_flow"]
-        + config.mean_loss_weight * metrics["loss_mean_all_rows"]
-        + config.terminal_loss_weight * metrics["loss_terminal"]
-        + config.public_value_loss_weight * metrics["loss_public_value"]
-    )
+def loss_weights(config: Porygon2OfflineConfig) -> dict[str, float]:
+    weights = {}
+    if config.world_model:
+        weights.update(
+            loss_kind=config.kind_loss_weight,
+            loss_actor=config.actor_loss_weight,
+            loss_move=config.move_loss_weight,
+            loss_target=config.target_loss_weight,
+            loss_touched=config.touched_loss_weight,
+            loss_flow=config.flow_loss_weight,
+            loss_mean_all_rows=config.mean_loss_weight,
+            loss_terminal=config.terminal_loss_weight,
+        )
+    weights["loss_public_value"] = config.public_value_loss_weight
+    return weights
+
+
+def total_loss(config: Porygon2OfflineConfig, metrics: dict) -> jax.Array:
+    total = None
+    for name, weight in loss_weights(config).items():
+        if total is None:
+            total = weight * metrics[name]
+        else:
+            total = total + weight * metrics[name]
+    return total
 
 
 def batch_terms(
@@ -443,7 +495,7 @@ def batch_terms(
             key,
             with_samples,
             num_samples,
-            method=WorldModelTrainer.trajectory_terms,
+            method=OfflineTrainer.trajectory_terms,
         )
 
     # Sequential over trajectories (a scan, rematerialised): a vmap over 8
@@ -452,7 +504,7 @@ def batch_terms(
     return jax.tree.map(lambda x: x.sum(0), per_trajectory)
 
 
-def make_train_step(config: Porygon2WorldModelConfig, model, optimiser, model_cfg):
+def make_train_step(config: Porygon2OfflineConfig, model, optimiser, model_cfg):
     floor = model_cfg.world_model.scale_floor
 
     @jax.jit
@@ -467,27 +519,31 @@ def make_train_step(config: Porygon2WorldModelConfig, model, optimiser, model_cf
         )
         updates, opt_state = optimiser.update(grads, state.opt_state, state.params)
         params = optax.apply_updates(state.params, updates)
-        batch_scale = wm.group_delta_scale(
-            pooled.sums["delta_energy_update"]
-            / jnp.maximum(pooled.sums["update_rows"], 1.0),
-            pooled.sums["update_rows"] > 0,
-            floor,
-        )
-        scale = (
-            config.scale_momentum * state.scale
-            + (1 - config.scale_momentum) * batch_scale
-        )
+        scale = state.scale
         metrics["loss"] = loss
         metrics["gradient_norm"] = optax.global_norm(grads)
-        metrics["out_proj_rms"] = jnp.sqrt(
-            jnp.mean(jnp.square(params["world_model"]["flow"]["out_proj"]["kernel"]))
-        )
+        if config.world_model:
+            batch_scale = wm.group_delta_scale(
+                pooled.sums["delta_energy_update"]
+                / jnp.maximum(pooled.sums["update_rows"], 1.0),
+                pooled.sums["update_rows"] > 0,
+                floor,
+            )
+            scale = (
+                config.scale_momentum * state.scale
+                + (1 - config.scale_momentum) * batch_scale
+            )
+            metrics["out_proj_rms"] = jnp.sqrt(
+                jnp.mean(
+                    jnp.square(params["world_model"]["flow"]["out_proj"]["kernel"])
+                )
+            )
         return TrainerState(params, opt_state, scale, state.step + 1), metrics
 
     return train_step
 
 
-def make_eval_step(config: Porygon2WorldModelConfig, model, model_cfg):
+def make_eval_step(config: Porygon2OfflineConfig, model, model_cfg):
     floor = model_cfg.world_model.scale_floor
 
     @jax.jit
@@ -518,15 +574,20 @@ def make_eval_step(config: Porygon2WorldModelConfig, model, model_cfg):
 
 
 def param_labels(params: Params, joint: bool) -> Params:
-    trained = {"world_model", "public_v_head"}
+    trained = {"public_v_head"}
+    if "world_model" in params:
+        trained.add("world_model")
     if joint:
         trained.add("encoder")
-    labels = {
-        key: jax.tree.map(lambda _: "train" if key in trained else "frozen", value)
-        for key, value in params.items()
-    }
-    # The flow's scale is written by the trainer's EMA, never by a gradient.
-    labels["world_model"]["delta_scale"] = "frozen"
+    labels = {}
+    for key, value in params.items():
+        if key in trained:
+            labels[key] = jax.tree.map(lambda _: "train", value)
+        else:
+            labels[key] = jax.tree.map(lambda _: "frozen", value)
+    if "world_model" in params:
+        # The flow's scale is written by the trainer's EMA, never by a gradient.
+        labels["world_model"]["delta_scale"] = "frozen"
     return labels
 
 
@@ -546,13 +607,15 @@ def overlay_whole(params: Params, loaded: Params, source: str) -> Params:
 
 
 def with_delta_scale(params: Params, scale: jax.Array) -> Params:
+    if "world_model" not in params:
+        return params
     params = dict(params)
     params["world_model"] = dict(params["world_model"], delta_scale=scale)
     return params
 
 
 def save_artifact(
-    config: Porygon2WorldModelConfig,
+    config: Porygon2OfflineConfig,
     state: TrainerState,
     step: int,
     shard_manifest: dict,
@@ -580,10 +643,11 @@ def save_artifact(
     with open(os.path.join(save_path, "manifest.json"), "w") as f:
         json.dump(
             dict(
-                kind="world_model",
+                kind="offline",
                 format_id=config.format_id,
                 step=step,
                 trunk_ckpt=config.trunk_ckpt,
+                world_model=config.world_model,
                 joint=config.joint,
                 public_only=True,
                 export_commit=shard_manifest.get("export_commit"),
@@ -595,11 +659,17 @@ def save_artifact(
     return save_path
 
 
-def parse_args() -> tuple[Porygon2WorldModelConfig, int, bool]:
+def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trunk-ckpt", required=True)
     parser.add_argument("--resume-from", default=None)
     parser.add_argument("--joint", action="store_true")
+    parser.add_argument(
+        "--world-model",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="off = the critic alone: public_v_head on every event state",
+    )
     parser.add_argument("--num-steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
@@ -608,14 +678,17 @@ def parse_args() -> tuple[Porygon2WorldModelConfig, int, bool]:
     parser.add_argument("--debug", action="store_true", help="wandb disabled")
     args = parser.parse_args()
     overrides = dict(
-        trunk_ckpt=args.trunk_ckpt, resume_from=args.resume_from, joint=args.joint
+        trunk_ckpt=args.trunk_ckpt,
+        resume_from=args.resume_from,
+        joint=args.joint,
+        world_model=args.world_model,
     )
     for name in ("num_steps", "batch_size", "learning_rate", "max_history_steps"):
         value = getattr(args, name)
         if value is not None:
             overrides[name] = value
     return (
-        dataclasses.replace(Porygon2WorldModelConfig(), **overrides),
+        dataclasses.replace(Porygon2OfflineConfig(), **overrides),
         args.seed,
         args.debug,
     )
@@ -625,8 +698,8 @@ def main() -> None:
     config, seed, debug = parse_args()
     if debug:
         os.environ["WANDB_MODE"] = "disabled"
-    model_cfg = world_model_config(config.joint)
-    model = WorldModelTrainer(model_cfg)
+    model_cfg = trainer_model_config(config.joint, config.world_model)
+    model = OfflineTrainer(model_cfg)
     dataset = load_replay_store(config)
     shard_manifest = dataset.manifest
     print(f"{len(dataset)} trajectories, {len(dataset.train_games)} training games")
@@ -641,7 +714,7 @@ def main() -> None:
             key,
             False,
             0,
-            method=WorldModelTrainer.trajectory_terms,
+            method=OfflineTrainer.trajectory_terms,
         )
     )(jax.random.key(seed), init_batch)["params"]
     # The learner's component is the variables dict, {"params": tree}.
@@ -663,7 +736,8 @@ def main() -> None:
             config.resume_from,
         )
         scalars = checkpoint_lib.load_component(config.resume_from, "player", "scalars")
-        scale = jnp.asarray(scalars["delta_scale"], jnp.float32)
+        if "delta_scale" in scalars:
+            scale = jnp.asarray(scalars["delta_scale"], jnp.float32)
     schedule = optax.cosine_decay_schedule(
         init_value=config.learning_rate,
         decay_steps=config.num_steps,
@@ -690,9 +764,9 @@ def main() -> None:
     evaluate = make_eval_step(config, model, model_cfg)
     wandb.init(
         project="pokemon-rl-offline",
-        name=f"wm-{config.format_id}",
+        name=f"offline-{config.format_id}",
         config=dict(
-            world_model_config=dataclasses.asdict(config),
+            offline_config=dataclasses.asdict(config),
             num_params=get_num_params(params),
         ),
     )
@@ -712,8 +786,11 @@ def main() -> None:
             logs["step"] = step
             wandb.log(logs, step=step)
             print(
-                f"step {step} loss {logs['loss']:.3f} nats/token {logs['nats_per_token']:.3f} "
-                f"flow {logs['loss_flow']:.3f} mean {logs['loss_mean_control']:.3f}"
+                f"step {step} loss {logs['loss']:.3f} "
+                f"public value {logs['loss_public_value']:.3f} "
+                f"nats/token {logs.get('nats_per_token', float('nan')):.3f} "
+                f"flow {logs.get('loss_flow', float('nan')):.3f} "
+                f"mean {logs.get('loss_mean_control', float('nan')):.3f}"
             )
         if step % config.eval_interval_steps == 0:
             eval_batches = (
@@ -723,13 +800,18 @@ def main() -> None:
             eval_metrics = evaluate(state, eval_batches, jax.random.fold_in(rng, step))
             wandb.log(eval_metrics, step=step)
             print(
-                f"eval step {step}: nats/token {eval_metrics.get('eval_nats_per_token', float('nan')):.3f} "
+                f"eval step {step}: public value R2 "
+                f"{eval_metrics.get('eval_public_value_r2', float('nan')):.3f} "
+                f"nats/token {eval_metrics.get('eval_nats_per_token', float('nan')):.3f} "
                 f"flow {eval_metrics.get('eval_loss_flow', float('nan')):.3f} "
                 f"imagined R2 {eval_metrics.get('eval_imagined_value_r2', float('nan')):.3f}"
             )
-            score = eval_metrics.get("eval_loss_flow", float("inf")) + eval_metrics.get(
-                "eval_nats_per_token", float("inf")
-            )
+            if config.world_model:
+                score = eval_metrics.get(
+                    "eval_loss_flow", float("inf")
+                ) + eval_metrics.get("eval_nats_per_token", float("inf"))
+            else:
+                score = eval_metrics.get("eval_loss_public_value", float("inf"))
             if score < best_eval:
                 best_eval = score
                 save_artifact(config, state, step, shard_manifest, best=True)

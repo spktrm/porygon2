@@ -6,10 +6,10 @@ from rl.config.common import AdamWConfig, BaseTrainingConfig
 
 
 @chex.dataclass(frozen=True)
-class Porygon2WorldModelConfig(BaseTrainingConfig):
-    """The event world model's offline trainer (rl/offline/train_world_model.py):
-    the player model's public path frozen from a learner checkpoint, the
-    world model and the public critic trained on the replay shards."""
+class Porygon2OfflineConfig(BaseTrainingConfig):
+    """The offline trainer (rl/offline/train.py): the player model's public
+    path frozen from a learner checkpoint, the public critic (and, with
+    world_model, the event world model) trained on the replay shards."""
 
     dataset_dir: str = "replays/shards"
     holdout_modulus: int = 20
@@ -26,9 +26,11 @@ class Porygon2WorldModelConfig(BaseTrainingConfig):
     # substrate (required); resume_from restarts a world-model run.
     trunk_ckpt: str | None = None
     resume_from: str | None = None
-    # Joint: the next-event losses also train the encoder (Step 6 of the
-    # plan); off = observer, the trunk never moves.
+    # Joint: the offline losses also train the encoder (Step 6 of the
+    # world-model plan); off = observer, the trunk never moves.
     joint: bool = False
+    # Off = the critic alone: public_v_head on every valid event state.
+    world_model: bool = True
     num_steps: int = 30000
     learning_rate: float = 3e-4
     lr_final_fraction: float = 0.1
@@ -54,7 +56,7 @@ class Porygon2WorldModelConfig(BaseTrainingConfig):
     eval_interval_steps: int = 1000
     eval_batches: int = 32
     save_interval_steps: int = 5000
-    artifact_root: str = "ckpts/world_model"
+    artifact_root: str = "ckpts/offline"
 
     def shard_dir(self) -> str:
         return os.path.join(self.dataset_dir, self.format_id)

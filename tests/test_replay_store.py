@@ -11,7 +11,7 @@ import pytest
 from rl.environment.event_labels import EventLabels
 from rl.environment.protos.service_pb2 import EnvironmentBatch
 from rl.offline import dataset
-from rl.offline.config import Porygon2WorldModelConfig
+from rl.offline.config import Porygon2OfflineConfig
 from rl.offline.shards import check_shard_manifest, iter_shard_payloads, list_shards
 
 SOURCE = "replays/shards/gen9randombattle"
@@ -38,7 +38,7 @@ def assert_same_example(stored, reference) -> None:
 @pytest.mark.skipif(not os.path.isdir(SOURCE), reason="replay shards not on this box")
 def test_store_reproduces_the_decoded_example() -> None:
     shard = list_shards(SOURCE)[0]
-    config = Porygon2WorldModelConfig(batch_size=2)
+    config = Porygon2OfflineConfig(batch_size=2)
     part = dataset._decode_range((shard, 0, 3, 0, config.holdout_modulus))
     store = dataset.ReplayStore(config, [part], check_shard_manifest(SOURCE))
     batch = EnvironmentBatch()
@@ -57,7 +57,7 @@ def test_store_reproduces_the_decoded_example() -> None:
     # A load-time window re-derives the labels on the tail exactly as the
     # decode would.
     windowed = dataset.ReplayStore(
-        Porygon2WorldModelConfig(batch_size=2, max_history_steps=64), [part], {}
+        Porygon2OfflineConfig(batch_size=2, max_history_steps=64), [part], {}
     )
     assert_same_example(
         windowed.example(0),
@@ -72,6 +72,6 @@ def test_pool_decodes_the_whole_corpus() -> None:
     expected = CORPUS_TRAJECTORIES.get(manifest["export_commit"])
     if expected is None:
         pytest.skip(f"corpus count not recorded for {manifest['export_commit']}")
-    store = dataset.load_replay_store(Porygon2WorldModelConfig(decode_workers=4))
+    store = dataset.load_replay_store(Porygon2OfflineConfig(decode_workers=4))
     assert len(store) == expected
     assert len(store.holdout) + sum(len(g) for g in store.train_games) == expected
