@@ -2,9 +2,9 @@
 
 Creates/refreshes two views:
   - pokemon-rl         -> "Signal health"  (training-run diagnostics)
-  - pokemon-rl-offline -> "Critic health"  (offline critic / Phi ensemble)
+  - pokemon-rl-offline -> "Event world model"  (rl/offline/train_world_model.py)
 
-Panel keys mirror what rl/online/main.py and rl/offline/train.py log; when
+Panel keys mirror what rl/online/main.py and the offline trainer log; when
 metrics are added or renamed, update the sections here and re-run. Each run without
 an --update-url SAVES A NEW VIEW (the API matches by internal id, not
 display name); superseded copies are then PRUNED automatically — after each
@@ -13,8 +13,8 @@ deleted. Personal workspaces ("<user>'s workspace") and any differently
 named views are never touched. Pass --keep-old-views to skip pruning.
 
 Usage:
-    python scripts/wandb_views.py [--entity ENTITY] [--project rl|offline|both]
-        [--update-rl-url URL] [--update-offline-url URL]
+    python scripts/wandb_views.py [--entity ENTITY] [--project rl|world_model|both]
+        [--update-rl-url URL]
         [--keep-old-views]
 
 Requires `pip install wandb-workspaces` and a logged-in wandb credential.
@@ -1115,101 +1115,6 @@ def world_model_sections():
     ]
 
 
-def offline_sections():
-    return [
-        ws.Section(
-            name="0 · Outcome head (Φ)",
-            is_open=True,
-            panels=[
-                lp("Held-out loss", members("eval_loss")),
-                lp(
-                    "Sign accuracy (all steps vs terminal)",
-                    ["eval_accuracy_mean", "eval_accuracy_last_step_mean"],
-                ),
-                lp("Margin MAE", members("eval_margin_mae")),
-                lp("Margin std (train batch)", ["margin_std_mean"]),
-            ],
-        ),
-        ws.Section(
-            name="1 · Ensemble & gate",
-            is_open=True,
-            panels=[
-                lp("Member disagreement (std)", ["eval_gate_member_std"]),
-                lp("Gated |Φ| (scale 5)", ["eval_gate_abs_phi"]),
-                lp("Gated sign accuracy", ["eval_gate_accuracy"]),
-            ],
-        ),
-        ws.Section(
-            name="Aux heads (held-out)",
-            panels=[
-                lp(
-                    "Survival",
-                    ["eval_survival_loss_mean", "eval_survival_loss_imminent_mean"],
-                ),
-                lp(
-                    "Unseen-move hazard",
-                    ["eval_unseen_loss_mean", "eval_unseen_loss_imminent_mean"],
-                ),
-                lp(
-                    "Revealed-set head",
-                    ["eval_set_loss_mean", "eval_set_pos_prob_mean"],
-                ),
-                lp(
-                    "Next-action loss",
-                    ["eval_action_loss_mean", "eval_action_loss_unrevealed_mean"],
-                ),
-                lp(
-                    "Next-action accuracy",
-                    [
-                        "eval_action_accuracy_mean",
-                        "eval_action_accuracy_unrevealed_mean",
-                    ],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="Train-side (batch, per member)",
-            panels=[
-                lp("Train loss", members("loss")),
-                lp("Gradient norm", members("gradient_norm"), log_y=True),
-                lp("Train sign accuracy", members("accuracy")),
-                lp(
-                    "Train survival / unseen",
-                    [
-                        "survival_loss_mean",
-                        "survival_loss_imminent_mean",
-                        "unseen_loss_mean",
-                        "unseen_loss_imminent_mean",
-                    ],
-                ),
-                lp(
-                    "Train action / set",
-                    [
-                        "action_loss_mean",
-                        "action_loss_unrevealed_mean",
-                        "set_loss_mean",
-                    ],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="Data & target counts",
-            panels=[
-                lp("Valid steps / batch", ["num_valid_steps_mean"]),
-                lp(
-                    "Aux target counts",
-                    [
-                        "num_action_targets_mean",
-                        "num_survival_targets_mean",
-                        "num_unseen_targets_mean",
-                        "num_set_positives_mean",
-                    ],
-                ),
-            ],
-        ),
-    ]
-
-
 def save_view(entity, project, name, sections, update_url, settings=None, force_x=None):
     # Panel-level x overrides the workspace-level x_axis setting, and the
     # save/round-trip path materialises the default "Step" (wandb's row
@@ -1258,12 +1163,11 @@ def main():
     parser.add_argument("--entity", default="jtwin")
     parser.add_argument(
         "--project",
-        choices=("rl", "offline", "world_model", "both"),
+        choices=("rl", "world_model", "both"),
         default="both",
         help="Select saved views to refresh; defaults to every project.",
     )
     parser.add_argument("--update-rl-url", default=None)
-    parser.add_argument("--update-offline-url", default=None)
     parser.add_argument(
         "--keep-old-views",
         action="store_true",
@@ -1281,17 +1185,6 @@ def main():
                 args.update_rl_url,
                 ws.WorkspaceSettings(x_axis="lifetime_step"),
                 "lifetime_step",
-            )
-        )
-    if args.project in ("offline", "both"):
-        requests.append(
-            (
-                "pokemon-rl-offline",
-                "Critic health",
-                offline_sections(),
-                args.update_offline_url,
-                None,
-                None,
             )
         )
     if args.project in ("world_model", "both"):

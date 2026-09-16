@@ -38,8 +38,8 @@ from rl.model.utils import get_num_params
 from rl.offline.config import Porygon2WorldModelConfig
 from rl.offline.event_labels import EventKind, EventLabels
 from rl.offline.event_stream import EventStreamStore
-from rl.offline.train import _overlay_params
 from rl.offline.world_model_data import WorldModelBatch
+from rl.online.artifact import merge_params
 
 Params = dict
 
@@ -531,6 +531,21 @@ def param_labels(params: Params, joint: bool) -> Params:
     return labels
 
 
+def overlay_whole(params: Params, loaded: Params, source: str) -> Params:
+    """merge_params, refusing a loaded subtree that did not land leaf for
+    leaf: a missing or reshaped leaf under a loaded top-level key means the
+    checkpoint is not this model's, not a resume across a change."""
+    merged, kept_fresh, dropped = merge_params(params, loaded)
+    misses = [path for path in kept_fresh if path.split("/")[1] in loaded]
+    if misses:
+        raise ValueError(
+            f"{source}: {len(misses)} leaves did not overlay: {misses[:5]}"
+        )
+    if dropped:
+        print(f"{source}: {len(dropped)} checkpoint-only subtrees not carried")
+    return merged
+
+
 def with_delta_scale(params: Params, scale: jax.Array) -> Params:
     params = dict(params)
     params["world_model"] = dict(params["world_model"], delta_scale=scale)
@@ -634,24 +649,19 @@ def main() -> None:
     restored = checkpoint_lib.load_component(config.trunk_ckpt, "player", "params")[
         "params"
     ]
-    params = _overlay_params(
-        params, {key: restored[key] for key in ("encoder", "public_v_head")}
+    params = overlay_whole(
+        params,
+        {key: restored[key] for key in ("encoder", "public_v_head")},
+        config.trunk_ckpt,
     )
-    for key in ("encoder", "public_v_head"):
-        overlaid = jax.tree.map(
-            lambda a, b: bool(np.array_equal(np.asarray(a), np.asarray(b))),
-            params[key],
-            restored[key],
-        )
-        if not all(jax.tree.leaves(overlaid)):
-            raise ValueError(f"{key} did not overlay exactly from {config.trunk_ckpt}")
     scale = jnp.ones(wm.NUM_PUBLIC_GROUPS, jnp.float32)
     if config.resume_from is not None:
-        params = _overlay_params(
+        params = overlay_whole(
             params,
             checkpoint_lib.load_component(config.resume_from, "player", "params")[
                 "params"
             ],
+            config.resume_from,
         )
         scalars = checkpoint_lib.load_component(config.resume_from, "player", "scalars")
         scale = jnp.asarray(scalars["delta_scale"], jnp.float32)

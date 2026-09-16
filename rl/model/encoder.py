@@ -1370,8 +1370,7 @@ class Encoder(nn.Module):
         caches, the field history, and INFO_FEATURE__REQUEST_COUNT — no
         private observation fields, movesets, or action masks. This makes
         it safe to train against replay exports (which contain exactly the
-        same inputs) and reuse live without any distribution projection;
-        the offline outcome critic (rl/offline/model.py) builds on it.
+        same inputs) and reuse live without any distribution projection.
 
         Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) slot states,
         (T, D) field state, (T, NUM_PUBLIC_SLOTS, D) latest raw node

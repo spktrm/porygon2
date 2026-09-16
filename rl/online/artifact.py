@@ -1,7 +1,7 @@
 """RL train-state lifecycle and checkpoint artifacts.
 
-The online mirror of rl/offline/artifact.py: the single boundary through
-which trained RL products are created, saved, restored and merged.
+The single boundary through which trained RL products are created,
+saved, restored and merged.
 Checkpoints are written with a manifest.json capturing the architecture
 capabilities (entity size, decision slots, policy-head variant) so loads
 across architecture changes fail with a sentence instead of a pytree
