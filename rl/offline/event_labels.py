@@ -182,10 +182,16 @@ def step_events(
     previous[1:] = conditions[:-1]
     field_touched = (conditions != previous).any(axis=1) & valid
 
-    new_turn = (
-        history_field[:, FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE] == 0
-    ) & valid
+    # TURN_ORDER_VALUE is never 0 on the wire (a turn's first committed edge
+    # reads 2), so a turn opens where TURN_VALUE changes.
     turn = history_field[:, FieldFeature.FIELD_FEATURE__TURN_VALUE]
+    previous_turn = np.empty_like(turn)
+    previous_turn[0] = -1
+    previous_turn[1:] = turn[:-1]
+    first_valid = np.zeros(num_steps, dtype=bool)
+    if valid.any():
+        first_valid[valid.argmax()] = True
+    new_turn = (first_valid | (turn != previous_turn)) & valid
     request_count = history_field[:, FieldFeature.FIELD_FEATURE__REQUEST_COUNT]
 
     highest = np.where(

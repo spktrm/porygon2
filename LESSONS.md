@@ -19,6 +19,55 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Public event world model, Step 0: event labels and the re-export — 2026-09-16
+
+Plan approved 2026-09-16 (branch `public-event-world-model`, plan file
+`~/.claude/plans/i-want-to-revist-lively-ember.md`): the latent world model
+reopened as a model of the PUBLIC battle stepping one service edge at a
+time on top of the trunk's 55 public output rows (public tier +
+PUBLIC_CLS), major args decoded discretely, entity consequences as a flow
+over the post-trunk difference gated by a predicted touched set, trained
+standalone on human replay shards, read by depth-1 sampled rollouts
+against a value-blind arm. User decisions: token decode for major args
+only; diffusion over the difference from the start with the deterministic
+mean step as the matched control; touched-set prediction before
+denoising; human replays may train the world model, the public critic and
+the public action model (a scoped amendment to the self-play-only rule:
+eval-actor reads only, `public_v_head` feeds no policy target).
+
+Wire facts that shaped the labels (`rl/offline/event_labels.py`):
+- One history step is one COMMITTED edge; `|turn|` and `|done|` only
+  commit the pending edge (`state.ts:2080-2092, 3441-3467`). There is no
+  turn step.
+- `TURN_ORDER_VALUE` is NEVER 0 on the wire: a turn's first committed edge
+  reads 2 (the lead segment 1), later edges skip numbers. The turn
+  boundary is a CHANGE in `TURN_VALUE` between consecutive valid steps.
+  `FIELD_FEATURE__TYPE` is never written (dead column).
+- The cache snapshots an entity's public row on its FIRST touch inside an
+  edge (`Edge.updatePokemon`, `state.ts:1363`), so a step's cache row can
+  be pre-effect: `snapshot_lag_frac` 0.100 over 895,510 (slot, boundary)
+  pairs against the `|turn|` state's `public_team` (HP_RATIO / STATUS /
+  FAINTED) -- under the plan's 0.20 fallback bar, the per-event
+  PUBLIC_ENTITY source stays the cache snapshot.
+- Execution is not submission: the own declaration in force is the turn's
+  first own MOVE/SWITCH/CANT-with-a-move (a DRAG never declares), the
+  answering SWITCH after an own FAINT, UNKNOWN otherwise -- 4.4% of steps.
+
+Re-export (cc999c1, 4 workers, 4m40s at ~180 replays/s): 50,000 logs ->
+98,512 trajectories / 2,760,044 per-turn states, identical to the July
+manifest, 9.3 GB in 4 shards. The manifest now carries `export_commit`,
+`num_history` and the five feature counts and `list_shards` refuses any
+other layout (the July shards decoded to garbage after d9e6410's
+structured mask). July shards kept aside at
+`replays/shards/gen9randombattle-july-20260730`.
+
+Audit (2,000 records = 4,000 games, 335,262 steps,
+`runtime/event-audit-20260916.json`): KIND share MOVE .47 / SWITCH .235 /
+DRAG .0015 / CANT .018 / FAINT .094 / RESIDUAL .17 / END .012; events per
+turn mean 2.96, p90 4, p99 6 (`max_events` 8 covers p99); no game
+reached the 512-step window; 30.9 decisions per game; own
+cant-without-a-move 2.1% of own events.
+
 ## Interrupt checkpoint no longer skipped — 2026-09-16
 
 Defect 2 of the 2026-09-11 health check, and it cost this morning's restart

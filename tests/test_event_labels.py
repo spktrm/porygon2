@@ -41,7 +41,8 @@ class Stream:
         field = np.zeros(NUM_FIELD, np.int32)
         field[FieldFeature.FIELD_FEATURE__VALID] = 1
         field[FieldFeature.FIELD_FEATURE__TURN_VALUE] = self.turn
-        field[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE] = 0 if new_turn else 1
+        # never 0 on the wire; the label must not read it
+        field[FieldFeature.FIELD_FEATURE__TURN_ORDER_VALUE] = 2
         field[FieldFeature.FIELD_FEATURE__WEATHER_ID] = weather
         field[FieldFeature.FIELD_FEATURE__REQUEST_COUNT] = request_count
         field[FieldFeature.FIELD_FEATURE__NUM_RELEVANT] = len(rows)
