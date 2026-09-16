@@ -10,6 +10,7 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.data import (
+    CAT_VF_SUPPORT,
     CELL_MODALITY_MASK,
     NUM_MODALITY_FEATURES,
     NUM_SWITCH_CELLS,
@@ -23,11 +24,13 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
 )
 from rl.environment.utils import get_ex_player_step
+from rl.model import event_search
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
     MOVE_ROWS,
     PRIVATE_ROWS,
+    PUBLIC_CLS_LOCAL_ROW,
     PUBLIC_CLS_ROW,
     TARGET_ROWS,
     VALUE_CLS_ROW,
@@ -59,6 +62,10 @@ def actor_params_view(variables):
     # The optional doubles readout is an actor consumer too.
     if "slot_conditioning" in variables["params"]:
         required.append("slot_conditioning")
+    # The searching eval actor reads the world model and the public critic.
+    for name in ("world_model", "public_v_head"):
+        if name in variables["params"]:
+            required.append(name)
     return {"params": {name: variables["params"][name] for name in required}}
 
 
@@ -147,6 +154,7 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
         prune_threshold: float = 0.0,
+        logit_bonus: jax.Array | None = None,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
         the block cells (the historical path, unchanged); doubles = two head-level
@@ -157,7 +165,7 @@ class Porygon2PlayerModel(nn.Module):
                 sequence_rows, valid_mask, head, train, temp, prune_threshold
             )
         return self._forward_single_slot(
-            sequence_rows, valid_mask, head, train, temp, prune_threshold
+            sequence_rows, valid_mask, head, train, temp, prune_threshold, logit_bonus
         )
 
     def _legal_logits(
@@ -185,6 +193,7 @@ class Porygon2PlayerModel(nn.Module):
         temp: float,
         prune_threshold: float = 0.0,
         decision_slot: int = 0,
+        logit_bonus: jax.Array | None = None,
     ):
         """Score one decision's cells and pick an action.
 
@@ -202,6 +211,8 @@ class Porygon2PlayerModel(nn.Module):
         """
         flat_valid = valid_mask
         pi_logits = self._legal_logits(sequence_rows, valid_mask, temp, decision_slot)
+        if logit_bonus is not None:
+            pi_logits = jnp.where(valid_mask, pi_logits + logit_bonus, pi_logits)
         # prior=None is uniform over legal cells -- which is exactly what the
         # flat readout's all-zero init produces, so the init policy and the
         # metric anchor are the same distribution.
@@ -222,6 +233,7 @@ class Porygon2PlayerModel(nn.Module):
         train: bool,
         temp: float,
         prune_threshold: float = 0.0,
+        logit_bonus: jax.Array | None = None,
     ):
         if train:
             given_index = head.action_index
@@ -233,6 +245,7 @@ class Porygon2PlayerModel(nn.Module):
             given_index,
             temp,
             prune_threshold,
+            logit_bonus=logit_bonus,
         )
         learner_only = {}
         if self.cfg.train:
@@ -356,9 +369,124 @@ class Porygon2PlayerModel(nn.Module):
             normalized_modality_entropy=normalized_modality_entropy,
         )
 
+    def _search_bonus(
+        self, sequence: jax.Array, row_valid: jax.Array, env_step: PlayerEnvOutput
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """Depth-1 sampled event rollouts (rl/model/event_search.py) from
+        this request's public rows: one declared action per enumerated
+        legal cell, Q from the public critic at the rollouts' leaves, the
+        bonus Q / temp on the legal cells (zero on the value-blind arm)."""
+        cfg = self.cfg.search
+        public_index = jnp.asarray(self.encoder.search_public_rows())
+        public_rows = sequence[public_index]
+        public_valid = row_valid[public_index]
+        legal = env_step.action_mask
+        cells = jnp.nonzero(legal, size=cfg.max_cells, fill_value=0)[0]
+        num_legal = legal.sum()
+        cell_valid = jnp.arange(cfg.max_cells) < num_legal
+        overflow = num_legal > cfg.max_cells
+        root = event_search.root_info(env_step)
+        declared_kind, declared_arg = jax.vmap(
+            functools.partial(
+                event_search.declared_from_cell, env_step=env_step, root=root
+            )
+        )(cells)
+        world = self.world_model
+        if self.is_initializing():
+            # Parameters are created on first use; created inside the
+            # rollout's scan they leak as tracers, so touch every reader
+            # once outside it at init.
+            blank = event_search.blank_tokens()
+            world.decode(
+                public_rows,
+                public_valid,
+                jnp.asarray(0),
+                jnp.asarray(0),
+                blank,
+                jnp.asarray(True),
+            )
+            world.imagine(
+                public_rows,
+                blank,
+                jnp.ones(public_rows.shape[0], jnp.bool_),
+                world.delta_scale,
+                self.make_rng("sampling"),
+            )
+            world.terminal_outcome(public_rows)
+            self.public_v_head(public_rows[PUBLIC_CLS_LOCAL_ROW])
+
+        def search_fns(module) -> event_search.EventSearchFns:
+            """The readers bound to `module` -- the transformed module
+            inside a lifted scan, `self` outside it."""
+            model = module.world_model
+
+            def value_fn(rows):
+                return module.public_v_head(rows[PUBLIC_CLS_LOCAL_ROW]).expectation
+
+            def terminal_fn(rows):
+                probs = jax.nn.softmax(model.terminal_outcome(rows))
+                return probs @ jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
+
+            return event_search.EventSearchFns(
+                decode_fn=lambda rows, kind, arg, tokens, mine: model.decode(
+                    rows, public_valid, kind, arg, tokens, mine
+                ),
+                imagine_fn=lambda rows, tokens, mask, rng: model.imagine(
+                    rows, tokens, mask, model.delta_scale, rng
+                ),
+                value_fn=value_fn,
+                terminal_fn=terminal_fn,
+            )
+
+        budget = event_search.RolloutBudget(max_events=cfg.max_events, temp=1.0)
+
+        def lifted_scan(step, init, keys):
+            def body(module, carry, key):
+                return step(search_fns(module), carry, key)
+
+            return nn.scan(
+                body,
+                variable_broadcast="params",
+                split_rngs={"params": False},
+                in_axes=0,
+                out_axes=0,
+            )(self, init, keys)
+
+        q, _ = event_search.q_values(
+            public_rows,
+            declared_kind,
+            declared_arg,
+            cell_valid,
+            root,
+            search_fns(self),
+            budget,
+            cfg.num_samples,
+            self.make_rng("sampling"),
+            scan=lifted_scan,
+        )
+        cell_bonus = event_search.search_bonus(q, cell_valid, cfg.temp, cfg.value_blind)
+        bonus = (
+            jnp.zeros(legal.shape, jnp.float32)
+            .at[cells]
+            .add(jnp.where(cell_valid, cell_bonus, 0.0))
+        )
+        bonus = jnp.where(overflow, 0.0, bonus)
+        base = self._legal_logits(
+            (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
+            legal,
+            1.0,
+        )
+        diagnostics = event_search.search_diagnostics(base, bonus, legal)
+        return bonus, {
+            "search_root_kl": diagnostics["search_root_kl"],
+            "search_bonus_gap": diagnostics["search_bonus_gap"],
+            "search_overflow": overflow,
+        }
+
     def get_head_outputs(
         self,
         sequence: jax.Array,
+        row_valid: jax.Array,
         trunk_out_group_l2: tuple[jax.Array, jax.Array] | None,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
@@ -372,6 +500,12 @@ class Porygon2PlayerModel(nn.Module):
         history_stats and history_carry are per TRAJECTORY (the history is
         shared across the requests); closed over rather than mapped, so the
         vmap in __call__ broadcasts them to one copy per step."""
+        logit_bonus = None
+        search_outputs = {}
+        if self.cfg.search.enabled:
+            logit_bonus, search_outputs = self._search_bonus(
+                sequence, row_valid, env_step
+            )
         action_head = self._forward_action_head(
             (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
             env_step.action_mask,
@@ -379,6 +513,7 @@ class Porygon2PlayerModel(nn.Module):
             train=self.cfg.train,
             temp=head_params.temp,
             prune_threshold=head_params.prune_threshold,
+            logit_bonus=logit_bonus,
         )
         learner_only = {}
         if self.cfg.train:
@@ -417,6 +552,7 @@ class Porygon2PlayerModel(nn.Module):
             # The CLS row, and only the CLS row.
             value_head=self.v_head(sequence[CLS_ROW]),
             history_carry=history_carry,
+            **search_outputs,
             **learner_only,
         )
 
@@ -428,7 +564,7 @@ class Porygon2PlayerModel(nn.Module):
     ):
         (
             sequence,
-            _,
+            row_valid,
             trunk_out_group_l2,
             history_stats,
             history_carry,
@@ -448,6 +584,7 @@ class Porygon2PlayerModel(nn.Module):
             )
         )(
             sequence,
+            row_valid,
             trunk_out_group_l2,
             actor_input.env,
             actor_output,

@@ -121,6 +121,18 @@ def load_params(ckpt_dir: str, which: str = "params"):
     return checkpoint.load_component(ckpt_dir, "player", which)
 
 
+def load_search_params(ckpt_dir: str, world_model_dir: str):
+    """The learner checkpoint's params with the world-model artifact's
+    `world_model` and `public_v_head` subtrees in place of its own -- the
+    public critic the artifact trained on replays is the one the
+    rollouts price with."""
+    params = dict(load_params(ckpt_dir))
+    artifact = checkpoint.load_component(world_model_dir, "player", "params")
+    for name in ("world_model", "public_v_head"):
+        params[name] = artifact[name]
+    return params
+
+
 def play_games(
     params,
     n_games: int,
@@ -134,6 +146,7 @@ def play_games(
     side_filters: dict[int, ActorInputFilter] | None = None,
     temperature: float = 1.0,
     device: str | None = None,
+    search_arm: str | None = None,
 ) -> list[list[Trajectory]]:
     """Plays n_games games, `pairs` at a time, and returns one chunk list
     per PARAMS-DRIVEN side in completion order: `opponent="self"` is
@@ -151,6 +164,18 @@ def play_games(
         device = ctx.config.player_actor_device
     actor_device, actor_dtype = resolve_actor_device(device)
     actor_config = get_player_model_config(generation, train=False, dtype=actor_dtype)
+    if search_arm is not None:
+        # The searching actor (plan Step 4): `params` must carry the
+        # world-model artifact's subtrees (load_search_params); "blind"
+        # consumes the same rollouts and adds nothing.
+        if search_arm not in ("search", "blind"):
+            raise ValueError(
+                f"search_arm must be 'search' or 'blind', got {search_arm!r}"
+            )
+        actor_config.encoder.with_public_cls = True
+        actor_config.world_model.enabled = True
+        actor_config.search.enabled = True
+        actor_config.search.value_blind = search_arm == "blind"
     actor_net = get_player_model(actor_config)
     agent = Agent(
         actor_net.apply,

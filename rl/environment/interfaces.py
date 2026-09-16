@@ -142,6 +142,12 @@ class PlayerActorOutput:
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows
     # of the trunk's output. The over-smoothing instrument; learner-only.
+    # The searching eval actor's diagnostics (rl/model/event_search.py):
+    # root KL between the searched and the base policy, the best-minus-
+    # expected bonus, and the enumeration overflow flag. () elsewhere.
+    search_root_kl: ArrayLike = ()
+    search_bonus_gap: ArrayLike = ()
+    search_overflow: ArrayLike = ()
     trunk_row_cosine: ArrayLike = ()
     trunk_row_participation: ArrayLike = ()
     # Per-group residual magnitude of the trunk's output (trunk.group_row_l2):

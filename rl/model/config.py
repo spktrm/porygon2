@@ -159,6 +159,19 @@ def get_player_model_config(
     # divided by zero).
     cfg.world_model.scale_floor = 1e-2
 
+    # Depth-1 sampled event rollouts on the eval actor (rl/model/event_search.py):
+    # for each legal cell, `num_samples` rollouts to the next own decision,
+    # the public critic at the leaf, Q / temp added to the readout's logits.
+    # Needs cfg.world_model.enabled; value_blind consumes the same rollouts
+    # and adds nothing -- the matched control arm.
+    cfg.search = ConfigDict()
+    cfg.search.enabled = False
+    cfg.search.num_samples = 8
+    cfg.search.max_cells = 16
+    cfg.search.max_events = 8
+    cfg.search.temp = 1.0
+    cfg.search.value_blind = False
+
     cfg.potential_head = ConfigDict()
     cfg.potential_head.enabled = False
     cfg.potential_head.zero_init_output = True
