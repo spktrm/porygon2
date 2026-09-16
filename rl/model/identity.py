@@ -112,6 +112,40 @@ def private_positions(
     )
 
 
+def public_identities(
+    public_sides: jax.Array,
+    public_positions: jax.Array,
+    side_embeddings: jax.Array,
+    position_embeddings: jax.Array,
+    target_embeddings: jax.Array,
+) -> jax.Array:
+    """The full-layout identity table with only the public tier's rows
+    set: entity and history-entity rows carry their own side and
+    position, the target rows their fixed side/position mixes, the field
+    triples the side pair. Written once for the request path and the
+    per-event path."""
+    identities = jnp.zeros(
+        (NUM_SEQUENCE_ROWS, side_embeddings.shape[-1]), side_embeddings.dtype
+    )
+    entity_identities = (
+        side_embeddings[public_sides] + position_embeddings[public_positions]
+    )
+    identities = identities.at[PUBLIC_ROWS].set(entity_identities)
+    identities = identities.at[HISTORY_ENTITY_ROWS].set(entity_identities)
+    targets = (
+        target_embeddings
+        + jnp.asarray(TARGET_SIDE_WEIGHTS, side_embeddings.dtype) @ side_embeddings
+        + jnp.asarray(TARGET_POSITION_WEIGHTS, position_embeddings.dtype)
+        @ position_embeddings
+    )
+    identities = identities.at[TARGET_ROWS].set(targets)
+    for group in (SequenceGroup.FIELD, SequenceGroup.HISTORY_FIELD):
+        identities = identities.at[SEQUENCE_SLICES[group]].set(
+            field_identities(side_embeddings)
+        )
+    return identities
+
+
 def sequence_identities(
     env_step: PlayerEnvOutput,
     side_embeddings: jax.Array,
@@ -120,20 +154,18 @@ def sequence_identities(
     *,
     include_opponent: bool,
 ) -> jax.Array:
-    identities = jnp.zeros(
-        (NUM_SEQUENCE_ROWS, side_embeddings.shape[-1]), side_embeddings.dtype
+    identities = public_identities(
+        env_step.public_team[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+        ],
+        env_step.public_team[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ],
+        side_embeddings,
+        position_embeddings,
+        target_embeddings,
     )
-    public_sides = env_step.public_team[
-        :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
-    ]
-    public_positions = env_step.public_team[
-        :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-    ]
-    public_identities = (
-        side_embeddings[public_sides] + position_embeddings[public_positions]
-    )
-    identities = identities.at[PUBLIC_ROWS].set(public_identities)
-    identities = identities.at[HISTORY_ENTITY_ROWS].set(public_identities)
+    targets = identities[TARGET_ROWS]
     identities = identities.at[PRIVATE_ROWS].set(
         side_embeddings[SIDE_MINE]
         + position_embeddings[
@@ -146,17 +178,6 @@ def sequence_identities(
             + position_embeddings[
                 private_positions(env_step, env_step.opp_private_team, SIDE_OPPONENT)
             ]
-        )
-    targets = (
-        target_embeddings
-        + jnp.asarray(TARGET_SIDE_WEIGHTS, side_embeddings.dtype) @ side_embeddings
-        + jnp.asarray(TARGET_POSITION_WEIGHTS, position_embeddings.dtype)
-        @ position_embeddings
-    )
-    identities = identities.at[TARGET_ROWS].set(targets)
-    for group in (SequenceGroup.FIELD, SequenceGroup.HISTORY_FIELD):
-        identities = identities.at[SEQUENCE_SLICES[group]].set(
-            field_identities(side_embeddings)
         )
     previous_source, previous_target = chosen_bank_rows(
         identities[PRIVATE_ROWS],

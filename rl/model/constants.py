@@ -319,6 +319,20 @@ LEARNER_ONLY_GROUPS = frozenset(
     }
 )
 POLICY_READABLE_ROWS = np.flatnonzero(_policy_readable)
+# The public-only sequence: the public tier (a layout prefix, asserted) plus
+# PUBLIC_CLS -- the rows the event world model and the public critic read.
+# Closed under the read mask, so the trunk on these rows alone reproduces
+# the learner's public rows.
+PUBLIC_SEQUENCE_ROWS = np.concatenate([PUBLIC_TIER_ROWS, [PUBLIC_CLS_ROW]])
+NUM_PUBLIC_SEQUENCE_ROWS = len(PUBLIC_SEQUENCE_ROWS)
+PUBLIC_CLS_LOCAL_ROW = len(PUBLIC_TIER_ROWS)
+assert (PUBLIC_TIER_ROWS == np.arange(len(PUBLIC_TIER_ROWS))).all()
+assert not SEQUENCE_READ_MASK[
+    np.ix_(
+        PUBLIC_SEQUENCE_ROWS,
+        np.setdiff1d(np.arange(NUM_SEQUENCE_ROWS), PUBLIC_SEQUENCE_ROWS),
+    )
+].any()
 NUM_POLICY_READABLE_ROWS = len(POLICY_READABLE_ROWS)
 assert (
     POLICY_READABLE_ROWS

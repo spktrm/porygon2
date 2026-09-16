@@ -1,4 +1,5 @@
 import functools
+from typing import NamedTuple
 
 import flax.linen as nn
 import jax
@@ -17,6 +18,7 @@ from rl.environment.data import (
     TARGET_SLOT_INDICES,
 )
 from rl.environment.interfaces import (
+    EventStates,
     HistoryCarry,
     PlayerEnvOutput,
     PlayerHistoryOutput,
@@ -37,6 +39,7 @@ from rl.environment.protos.features_pb2 import (
     FieldFeature,
     InfoFeature,
     MovesetFeature,
+    RequestType,
 )
 from rl.model.constants import (
     ALLY_TARGET_ROWS,
@@ -53,6 +56,7 @@ from rl.model.constants import (
     OPP_ACTIVE_PUBLIC_ROWS,
     POLICY_READABLE_ROWS,
     PRIVATE_TOKEN_TYPES,
+    PUBLIC_SEQUENCE_ROWS,
     PUBLIC_TOKEN_TYPES,
     SEQUENCE_GROUP_IDS,
     SEQUENCE_LAYOUT,
@@ -80,7 +84,16 @@ from rl.model.history_encoder import (
     history_carry_from,
     history_step_stats,
 )
-from rl.model.identity import field_identities, sequence_identities
+from rl.model.identity import (
+    BENCH_POSITION,
+    FIRST_ACTIVE_POSITION,
+    SECOND_ACTIVE_POSITION,
+    SIDE_MINE,
+    SIDE_OPPONENT,
+    field_identities,
+    public_identities,
+    sequence_identities,
+)
 from rl.model.modules import (
     COLLECT_INTERMEDIATES,
     EntitySumPool,
@@ -151,6 +164,44 @@ def _lifted_entity_vmap(method):
             split_rngs={"params": False},
         )
     )
+
+
+def active_slot_rows(
+    slot_valid: jax.Array, sides: jax.Array, positions: jax.Array, side: int
+) -> tuple[jax.Array, jax.Array]:
+    """(..., 2) the slot holding each active position of `side` (first,
+    second) and (..., 2) whether one exists -- the rows the target slots
+    add, read off the slots' own side/position features."""
+    found = []
+    rows = []
+    for position in (FIRST_ACTIVE_POSITION, SECOND_ACTIVE_POSITION):
+        match = slot_valid & (sides == side) & (positions == position)
+        found.append(match.any(axis=-1))
+        rows.append(match.argmax(axis=-1))
+    return jnp.stack(rows, axis=-1), jnp.stack(found, axis=-1)
+
+
+class PublicRowInputs(NamedTuple):
+    """Everything the public tier's rows are assembled from, AFTER the
+    entity/field embedders: the request path fills it from the env step
+    and the history pathway, the per-event path from the history scan's
+    own per-step products. One assembly, two sources."""
+
+    public_rows: jax.Array  # (12, D)
+    public_valid: jax.Array  # (12,)
+    public_sides: jax.Array  # (12,)
+    public_positions: jax.Array  # (12,)
+    ally_active_rows: jax.Array  # (2,) public rows the ALLY target slots add
+    ally_active_valid: jax.Array  # (2,)
+    enemy_active_rows: jax.Array  # (2,)
+    enemy_active_valid: jax.Array  # (2,)
+    field_rows: jax.Array  # (3, D)
+    history_entity_rows: jax.Array  # (12, D)
+    history_row_valid: jax.Array  # (12,)
+    history_field_rows: jax.Array  # (3, D)
+    history_register_rows: jax.Array  # (4, D)
+    info: jax.Array  # the request's info vector (REQUEST_TYPE, NUM_ACTIVE read)
+    target_slot_valid: jax.Array  # (17,)
 
 
 class Encoder(nn.Module):
@@ -822,31 +873,63 @@ class Encoder(nn.Module):
         """
         dtype = self.cfg.dtype
 
+        not_done = jnp.logical_not(env_step.done)
+        move_cells = env_step.action_mask[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET].reshape(
+            len(MOVE_INDICES), len(TARGET_SLOT_INDICES)
+        )
+        other_cells = env_step.action_mask[OTHER_CELL_OFFSET:]
+        move_slot_valid = move_cells.any(axis=-1) & not_done
+        target_slot_valid = (move_cells.any(axis=0) | other_cells) & not_done
+        switch_legal = env_step.action_mask[:MOVE_CELL_OFFSET].any() & not_done
+        ally_slot_active = (
+            jnp.arange(len(ALLY_TARGET_ROWS))
+            < env_step.info[InfoFeature.INFO_FEATURE__NUM_ACTIVE]
+        )
+        ally_rows = jnp.asarray(ALLY_TARGET_ROWS)
+        target_slot_valid = target_slot_valid.at[ally_rows].set(
+            target_slot_valid[ally_rows] | (switch_legal & ally_slot_active)
+        )
+
         public_rows, public_valid = _lifted_entity_vmap(Encoder._embed_public_entity)(
             self, env_step.public_team, env_step.revealed_team
         )
+        field_rows, *_ = self._embed_field(env_step.field)
+        # Public rows are per side, actives first, so the active rows the
+        # target slots add sit at fixed indices.
+        parts = self._public_parts(
+            PublicRowInputs(
+                public_rows=public_rows,
+                public_valid=public_valid,
+                public_sides=env_step.public_team[
+                    :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
+                ],
+                public_positions=env_step.public_team[
+                    :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+                ],
+                ally_active_rows=jnp.asarray(MY_ACTIVE_PUBLIC_ROWS),
+                ally_active_valid=jnp.ones(len(MY_ACTIVE_PUBLIC_ROWS), jnp.bool_),
+                enemy_active_rows=jnp.asarray(OPP_ACTIVE_PUBLIC_ROWS),
+                enemy_active_valid=jnp.ones(len(OPP_ACTIVE_PUBLIC_ROWS), jnp.bool_),
+                field_rows=field_rows,
+                history_entity_rows=history_row_states,
+                history_row_valid=history_row_valid,
+                history_field_rows=history_field_state,
+                history_register_rows=history_register_states,
+                info=env_step.info,
+                target_slot_valid=target_slot_valid,
+            )
+        )
+        target_rows = parts[SequenceGroup.TARGET_SLOT][0]
+
         private_rows, private_valid = self._embed_private_entities(
             env_step.private_team
         )
-        history_entity_rows = history_row_states.astype(dtype)
-
         move_rows, move_revealed = self._embed_moves(env_step.my_moveset)
         move_rows = move_rows + jnp.where(
             jnp.asarray(IS_WILDCARD_MOVE_SLOT)[:, None],
             self.wildcard_move_bias.astype(dtype),
             self.regular_move_bias.astype(dtype),
         )
-
-        target_rows = jnp.zeros_like(self.target_slot_embeddings, dtype=dtype)
-        target_rows = target_rows.at[jnp.asarray(ALLY_TARGET_ROWS)].add(
-            public_rows[jnp.asarray(MY_ACTIVE_PUBLIC_ROWS)]
-        )
-        target_rows = target_rows.at[jnp.asarray(ENEMY_TARGET_ROWS)].add(
-            public_rows[jnp.asarray(OPP_ACTIVE_PUBLIC_ROWS)]
-        )
-
-        field_rows, *_ = self._embed_field(env_step.field)
-        history_field_rows = history_field_state.astype(dtype)
 
         prev_source, prev_target = chosen_bank_rows(
             private_rows,
@@ -865,74 +948,31 @@ class Encoder(nn.Module):
             InfoFeature.INFO_FEATURE__HAS_PREV_ACTION
         ].astype(jnp.bool_)
 
-        info_row = self.info_linear(
-            one_hot_concat_jax(
-                [
-                    encode_one_hot_info(
-                        env_step.info, InfoFeature.INFO_FEATURE__REQUEST_TYPE
-                    ),
-                    encode_one_hot_info(
-                        env_step.info, InfoFeature.INFO_FEATURE__NUM_ACTIVE
-                    ),
-                ],
-                dtype=dtype,
-            )
-        )[None]
-
-        not_done = jnp.logical_not(env_step.done)
-        move_cells = env_step.action_mask[MOVE_CELL_OFFSET:OTHER_CELL_OFFSET].reshape(
-            len(MOVE_INDICES), len(TARGET_SLOT_INDICES)
-        )
-        other_cells = env_step.action_mask[OTHER_CELL_OFFSET:]
-        move_slot_valid = move_cells.any(axis=-1) & not_done
-        target_slot_valid = (move_cells.any(axis=0) | other_cells) & not_done
-        switch_legal = env_step.action_mask[:MOVE_CELL_OFFSET].any() & not_done
-        ally_slot_active = (
-            jnp.arange(len(ALLY_TARGET_ROWS))
-            < env_step.info[InfoFeature.INFO_FEATURE__NUM_ACTIVE]
-        )
-        ally_rows = jnp.asarray(ALLY_TARGET_ROWS)
-        target_slot_valid = target_slot_valid.at[ally_rows].set(
-            target_slot_valid[ally_rows] | (switch_legal & ally_slot_active)
-        )
-
         register_valid = jnp.ones(NUM_TRUNK_REGISTERS_PER_TIER, dtype=jnp.bool_)
-        parts = {
-            SequenceGroup.PUBLIC_ENTITY: (public_rows.astype(dtype), public_valid),
-            SequenceGroup.TARGET_SLOT: (target_rows, target_slot_valid),
-            SequenceGroup.FIELD: (
-                field_rows.astype(dtype),
-                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
-            ),
-            SequenceGroup.HISTORY_FIELD: (
-                history_field_rows,
-                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
-            ),
-            SequenceGroup.INFO: (info_row.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
-            SequenceGroup.HISTORY_ENTITY: (history_entity_rows, history_row_valid),
-            SequenceGroup.HISTORY_REGISTER: (
-                history_register_states.astype(dtype),
-                jnp.ones(NUM_HISTORY_REGISTERS, jnp.bool_),
-            ),
-            SequenceGroup.PUBLIC_REGISTER: (
-                self.public_register_embeddings.astype(dtype),
-                register_valid,
-            ),
-            SequenceGroup.CLS: (
-                self.cls_embedding.astype(dtype),
-                jnp.ones(1, dtype=jnp.bool_),
-            ),
-            SequenceGroup.PRIVATE_ENTITY: (private_rows.astype(dtype), private_valid),
-            SequenceGroup.MOVE_SLOT: (
-                move_rows.astype(dtype),
-                move_revealed & move_slot_valid,
-            ),
-            SequenceGroup.PREV_ACTION: (prev_action_rows, jnp.full(2, has_prev_action)),
-            SequenceGroup.PRIVATE_REGISTER: (
-                self.private_register_embeddings.astype(dtype),
-                register_valid,
-            ),
-        }
+        parts[SequenceGroup.CLS] = (
+            self.cls_embedding.astype(dtype),
+            jnp.ones(1, dtype=jnp.bool_),
+        )
+        parts.update(
+            {
+                SequenceGroup.PRIVATE_ENTITY: (
+                    private_rows.astype(dtype),
+                    private_valid,
+                ),
+                SequenceGroup.MOVE_SLOT: (
+                    move_rows.astype(dtype),
+                    move_revealed & move_slot_valid,
+                ),
+                SequenceGroup.PREV_ACTION: (
+                    prev_action_rows,
+                    jnp.full(2, has_prev_action),
+                ),
+                SequenceGroup.PRIVATE_REGISTER: (
+                    self.private_register_embeddings.astype(dtype),
+                    register_valid,
+                ),
+            }
+        )
         if self.cfg.train:
             opp_private_rows, opp_private_valid = self._embed_private_entities(
                 env_step.opp_private_team
@@ -947,20 +987,101 @@ class Encoder(nn.Module):
                         self.privileged_register_embeddings.astype(dtype),
                         register_valid,
                     ),
-                    SequenceGroup.PUBLIC_CLS: (
-                        self.public_cls_embedding.astype(dtype),
-                        jnp.ones(1, dtype=jnp.bool_),
-                    ),
+                    SequenceGroup.PUBLIC_CLS: self._public_cls_part(),
                     SequenceGroup.VALUE_CLS: (
                         self.value_cls_embedding.astype(dtype),
                         jnp.ones(1, dtype=jnp.bool_),
                     ),
                 }
             )
-        # Assembled in LAYOUT order from a dict keyed by group, so the order
-        # exists once, in constants.py; the check is against the kept rows'
-        # group ids, not just their count.
-        kept_rows = self.kept_rows()
+        identities = sequence_identities(
+            env_step,
+            self.side_bias(jnp.arange(2)),
+            self.pos_bias(jnp.arange(3)),
+            self.target_slot_embeddings.astype(dtype),
+            include_opponent=self.cfg.train,
+        )
+        return self._finish_sequence(parts, self.kept_rows(), identities)
+
+    def _public_parts(
+        self, inputs: PublicRowInputs
+    ) -> dict[SequenceGroup, tuple[jax.Array, jax.Array]]:
+        """The eight public-tier groups as (rows, valid), keyed by group."""
+        dtype = self.cfg.dtype
+        target_rows = jnp.zeros_like(self.target_slot_embeddings, dtype=dtype)
+        target_rows = target_rows.at[jnp.asarray(ALLY_TARGET_ROWS)].add(
+            jnp.where(
+                inputs.ally_active_valid[:, None],
+                inputs.public_rows[inputs.ally_active_rows],
+                0,
+            )
+        )
+        target_rows = target_rows.at[jnp.asarray(ENEMY_TARGET_ROWS)].add(
+            jnp.where(
+                inputs.enemy_active_valid[:, None],
+                inputs.public_rows[inputs.enemy_active_rows],
+                0,
+            )
+        )
+        info_row = self.info_linear(
+            one_hot_concat_jax(
+                [
+                    encode_one_hot_info(
+                        inputs.info, InfoFeature.INFO_FEATURE__REQUEST_TYPE
+                    ),
+                    encode_one_hot_info(
+                        inputs.info, InfoFeature.INFO_FEATURE__NUM_ACTIVE
+                    ),
+                ],
+                dtype=dtype,
+            )
+        )[None]
+        return {
+            SequenceGroup.PUBLIC_ENTITY: (
+                inputs.public_rows.astype(dtype),
+                inputs.public_valid,
+            ),
+            SequenceGroup.TARGET_SLOT: (target_rows, inputs.target_slot_valid),
+            SequenceGroup.FIELD: (
+                inputs.field_rows.astype(dtype),
+                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
+            ),
+            SequenceGroup.HISTORY_FIELD: (
+                inputs.history_field_rows.astype(dtype),
+                jnp.ones(NUM_FIELD_ROWS, dtype=jnp.bool_),
+            ),
+            SequenceGroup.INFO: (info_row.astype(dtype), jnp.ones(1, dtype=jnp.bool_)),
+            SequenceGroup.HISTORY_ENTITY: (
+                inputs.history_entity_rows.astype(dtype),
+                inputs.history_row_valid,
+            ),
+            SequenceGroup.HISTORY_REGISTER: (
+                inputs.history_register_rows.astype(dtype),
+                jnp.ones(NUM_HISTORY_REGISTERS, jnp.bool_),
+            ),
+            SequenceGroup.PUBLIC_REGISTER: (
+                self.public_register_embeddings.astype(dtype),
+                jnp.ones(NUM_TRUNK_REGISTERS_PER_TIER, dtype=jnp.bool_),
+            ),
+        }
+
+    def _public_cls_part(self) -> tuple[jax.Array, jax.Array]:
+        return (
+            self.public_cls_embedding.astype(self.cfg.dtype),
+            jnp.ones(1, dtype=jnp.bool_),
+        )
+
+    def _finish_sequence(
+        self,
+        parts: dict[SequenceGroup, tuple[jax.Array, jax.Array]],
+        kept_rows: np.ndarray,
+        identities: jax.Array,
+    ) -> tuple[jax.Array, jax.Array]:
+        """Concatenate the parts in LAYOUT order (the order exists once, in
+        constants.py; checked against the kept rows' group ids), normalise
+        each row's content, then add the identities and group bias the
+        content RMS must not rescale."""
+        dtype = self.cfg.dtype
         kept_groups = [group for group, _ in SEQUENCE_LAYOUT if group in parts]
         assert [int(group) for group in kept_groups] == sorted(
             set(SEQUENCE_GROUP_IDS[kept_rows].tolist()),
@@ -969,18 +1090,8 @@ class Encoder(nn.Module):
         sequence = jnp.concatenate([parts[group][0] for group in kept_groups], axis=0)
         row_valid = jnp.concatenate([parts[group][1] for group in kept_groups])
         assert sequence.shape[0] == len(kept_rows), sequence.shape
-        assert sequence.shape[0] == len(kept_rows), sequence.shape
-
-        # Content RMS must not rescale the shared semantic identities.
-        group_ids = self.group_ids()
+        group_ids = jnp.asarray(SEQUENCE_GROUP_IDS[kept_rows])
         sequence = self.input_normalisation(sequence, row_valid, group_ids)
-        identities = sequence_identities(
-            env_step,
-            self.side_bias(jnp.arange(2)),
-            self.pos_bias(jnp.arange(3)),
-            self.target_slot_embeddings.astype(dtype),
-            include_opponent=self.cfg.train,
-        )
         sequence = sequence + identities[kept_rows]
         sequence = sequence + self.sequence_group_bias.astype(dtype)[group_ids]
         sequence = jnp.where(row_valid[:, None], sequence, 0)
@@ -1023,11 +1134,139 @@ class Encoder(nn.Module):
         sequence = self.output_normalisation(trunk_out, row_valid, self.group_ids())
         return sequence, row_valid, trunk_out_group_l2
 
+    def _event_inputs(
+        self,
+        history_output,
+        step_field_embeddings: jax.Array,
+        public_cache: jax.Array,
+        num_active: int,
+    ) -> tuple[PublicRowInputs, jax.Array, jax.Array, jax.Array, jax.Array]:
+        """Per-step PublicRowInputs from the history scan's own products
+        (leading axis H): the slot's latest snapshot as its public row, its
+        side/position/fainted read off the cache row that snapshot came
+        from, the step's field rows, the scan states as the history rows.
+        The request row is a MOVE request with `num_active` actives and
+        every target legal -- the replay convention."""
+        row_index = history_output.node_row_index
+        slot_valid = row_index >= 0
+        cached = public_cache[row_index.clip(0)]
+        sides = jnp.where(
+            slot_valid,
+            cached[..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE],
+            0,
+        )
+        positions = jnp.where(
+            slot_valid,
+            cached[..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE],
+            BENCH_POSITION,
+        )
+        fainted = jnp.where(
+            slot_valid,
+            cached[..., EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED],
+            0,
+        )
+
+        ally_rows, ally_found = active_slot_rows(
+            slot_valid, sides, positions, SIDE_MINE
+        )
+        enemy_rows, enemy_found = active_slot_rows(
+            slot_valid, sides, positions, SIDE_OPPONENT
+        )
+        num_steps = row_index.shape[0]
+        info = jnp.zeros((num_steps, len(InfoFeature.keys())), jnp.int32)
+        info = info.at[:, InfoFeature.INFO_FEATURE__REQUEST_TYPE].set(
+            RequestType.REQUEST_TYPE__MOVE
+        )
+        info = info.at[:, InfoFeature.INFO_FEATURE__NUM_ACTIVE].set(num_active)
+        inputs = PublicRowInputs(
+            public_rows=history_output.node_snapshots,
+            public_valid=slot_valid,
+            public_sides=sides,
+            public_positions=positions,
+            ally_active_rows=ally_rows,
+            ally_active_valid=ally_found,
+            enemy_active_rows=enemy_rows,
+            enemy_active_valid=enemy_found,
+            field_rows=step_field_embeddings,
+            history_entity_rows=history_output.slot_snapshots,
+            history_row_valid=slot_valid,
+            history_field_rows=history_output.field_snapshots,
+            history_register_rows=history_output.register_snapshots,
+            info=info,
+            target_slot_valid=jnp.ones(
+                (num_steps, len(TARGET_SLOT_INDICES)), jnp.bool_
+            ),
+        )
+        return inputs, slot_valid, sides, positions, fainted
+
+    def _event_state(
+        self, inputs: PublicRowInputs
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """One event's public sequence through the trunk: (post-trunk rows,
+        pre-trunk rows, row_valid) over PUBLIC_SEQUENCE_ROWS."""
+        parts = self._public_parts(inputs)
+        parts[SequenceGroup.PUBLIC_CLS] = self._public_cls_part()
+        identities = public_identities(
+            inputs.public_sides,
+            inputs.public_positions,
+            self.side_bias(jnp.arange(2)),
+            self.pos_bias(jnp.arange(3)),
+            self.target_slot_embeddings.astype(self.cfg.dtype),
+        )
+        sequence, row_valid = self._finish_sequence(
+            parts, PUBLIC_SEQUENCE_ROWS, identities
+        )
+        read_mask = SEQUENCE_READ_MASK[
+            np.ix_(PUBLIC_SEQUENCE_ROWS, PUBLIC_SEQUENCE_ROWS)
+        ]
+        group_ids = jnp.asarray(SEQUENCE_GROUP_IDS[PUBLIC_SEQUENCE_ROWS])
+        trunk_out = self.trunk(sequence, row_valid, read_mask)
+        return (
+            self.output_normalisation(trunk_out, row_valid, group_ids),
+            sequence,
+            row_valid,
+        )
+
+    def encode_events(
+        self,
+        packed_history_step: PlayerPackedHistoryOutput,
+        history_step: PlayerHistoryOutput,
+        carry: HistoryCarry = HistoryCarry(),
+        num_active: int = 1,
+    ) -> EventStates:
+        """The public sequence through the trunk after EVERY history step:
+        the event world model's states. Reads the packed caches and the
+        field history only -- nothing a replay does not carry."""
+        history_output, _, _, step_field_embeddings = self._run_history_encoder(
+            packed_history_step, history_step, carry
+        )
+        inputs, slot_valid, sides, positions, fainted = self._event_inputs(
+            history_output,
+            step_field_embeddings,
+            packed_history_step.public_cache,
+            num_active,
+        )
+        states, pre_trunk, row_valid = jax.vmap(self._event_state)(inputs)
+        return EventStates(
+            states=states,
+            inputs=pre_trunk,
+            row_valid=row_valid,
+            step_valid=history_output.step_valid,
+            step_request_count=history_output.step_request_count,
+            slot_valid=slot_valid,
+            public_sides=sides,
+            public_positions=positions,
+            public_fainted=fainted,
+            node_row_index=history_output.node_row_index,
+        )
+
     def kept_rows(self) -> np.ndarray:
         """Which rows of SEQUENCE_LAYOUT this forward assembles: all of them
         for the learner, the policy-readable ones for the actor. Every head
         index is below the first dropped row (asserted in constants.py), so
         a head's absolute index names the same row in either sequence."""
+        if self.cfg.get("public_only", False):
+            return PUBLIC_SEQUENCE_ROWS
         if self.cfg.train:
             return np.arange(NUM_SEQUENCE_ROWS)
         return POLICY_READABLE_ROWS

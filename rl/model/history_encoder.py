@@ -86,6 +86,10 @@ class PerSlotHistoryOutput:
     # entity's current snapshot, unmixed by GRU gating — what a hand
     # evaluator reads. Parameter-free carry.
     node_snapshots: ArrayLike = ()
+    # The packed cache row that snapshot came from, (H, 12), -1 never
+    # touched: the per-event public state reads the slot's raw features
+    # (side, position, fainted) off that row.
+    node_row_index: ArrayLike = ()
     # Carry stores f32 recurrence outputs, before the snapshot casts.
     final_slot_state: ArrayLike = ()
     final_field_state: ArrayLike = ()
@@ -531,12 +535,18 @@ class PerSlotHistoryEncoder(nn.Module):
             edge_mask & step_valid[:, None], slot_ids, NUM_PUBLIC_SLOTS
         )
 
-        def scatter_step(step_messages, step_nodes, step_source, step_segments):
+        def scatter_step(
+            step_messages, step_nodes, step_source, step_segments, step_rows
+        ):
             counts = jax.ops.segment_sum(
                 jnp.ones(step_segments.shape, jnp.int32),
                 step_segments,
                 num_segments=NUM_PUBLIC_SLOTS + 1,
             )[:-1]
+            latest_row = jax.ops.segment_max(
+                step_rows, step_segments, num_segments=NUM_PUBLIC_SLOTS + 1
+            )[:-1]
+            latest_row = jnp.where(counts > 0, latest_row, -1)
             summed = jax.ops.segment_sum(
                 step_messages, step_segments, num_segments=NUM_PUBLIC_SLOTS + 1
             )[:-1]
@@ -551,15 +561,21 @@ class PerSlotHistoryEncoder(nn.Module):
                 )[:-1]
                 > 0
             )
-            return summed, counts, node_means, sources
+            return summed, counts, node_means, sources, latest_row
 
-        slot_messages, counts, node_means, slot_sources = jax.vmap(scatter_step)(
+        slot_messages, counts, node_means, slot_sources, step_rows = jax.vmap(
+            scatter_step
+        )(
             messages,
             jnp.take(node_content_cache, relevant, axis=0),
             is_source,
             segments,
+            relevant.astype(jnp.int32),
         )
         touched = counts > 0
+        # Packed rows are appended in step order, so the running maximum is
+        # each slot's latest row as of every step.
+        node_row_index = jax.lax.cummax(step_rows, axis=0)
         # Snapshot support remains solely for the standalone offline critic.
         step_index = jnp.arange(touched.shape[0])[:, None]
         last_touched = jax.lax.cummax(jnp.where(touched, step_index, -1), axis=0)
@@ -583,11 +599,12 @@ class PerSlotHistoryEncoder(nn.Module):
         if node_identity_cache is None:
             slot_identities = jnp.zeros_like(slot_messages)
         else:
-            _, _, slot_identities, _ = jax.vmap(scatter_step)(
+            _, _, slot_identities, _, _ = jax.vmap(scatter_step)(
                 messages,
                 jnp.take(node_identity_cache, relevant, axis=0),
                 is_source,
                 segments,
+                relevant.astype(jnp.int32),
             )
         attention_identities = jnp.zeros_like(event_rows)
         attention_identities = attention_identities.at[:, HISTORY_SLOT_STATE_ROWS].set(
@@ -610,6 +627,7 @@ class PerSlotHistoryEncoder(nn.Module):
             field_snapshots=states[:, HISTORY_FIELD_STATE_ROWS],
             register_snapshots=states[:, HISTORY_REGISTER_STATE_ROWS],
             node_snapshots=node_snapshots,
+            node_row_index=node_row_index,
             final_slot_state=final_memory[HISTORY_SLOT_STATE_ROWS],
             final_field_state=final_memory[HISTORY_FIELD_STATE_ROWS],
             final_register_state=final_memory[HISTORY_REGISTER_STATE_ROWS],

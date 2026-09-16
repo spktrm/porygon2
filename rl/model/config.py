@@ -47,6 +47,10 @@ def get_player_model_config(
     # The actor's encoder assembles the policy-readable rows only
     # (Encoder.kept_rows); the learner's every row.
     cfg.encoder.train = train
+    # The public-only sequence (PUBLIC_SEQUENCE_ROWS): the offline world-model
+    # trainer's rows. Nothing private is assembled; encode_events is the
+    # entry point.
+    cfg.encoder.public_only = False
 
     encoder_num_heads = num_heads
     encoder_hidden_size_scale = 4

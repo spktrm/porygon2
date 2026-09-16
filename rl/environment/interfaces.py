@@ -59,6 +59,24 @@ class HistoryCarry:
 
 
 @dataclass
+class EventStates:
+    """The public sequence after the trunk at EVERY history step of a
+    trajectory (the event world model's states), with the per-step raw
+    slot features the assembly read off the packed cache."""
+
+    states: ArrayLike = ()  # (H, NUM_PUBLIC_SEQUENCE_ROWS, D)
+    inputs: ArrayLike = ()  # (H, NUM_PUBLIC_SEQUENCE_ROWS, D), before the trunk
+    row_valid: ArrayLike = ()  # (H, NUM_PUBLIC_SEQUENCE_ROWS)
+    step_valid: ArrayLike = ()  # (H,)
+    step_request_count: ArrayLike = ()  # (H,)
+    slot_valid: ArrayLike = ()  # (H, 12)
+    public_sides: ArrayLike = ()  # (H, 12)
+    public_positions: ArrayLike = ()  # (H, 12)
+    public_fainted: ArrayLike = ()  # (H, 12)
+    node_row_index: ArrayLike = ()  # (H, 12)
+
+
+@dataclass
 class PlayerActorInput:
     env: PlayerEnvOutput = field(default_factory=PlayerEnvOutput)
     packed_history: PlayerPackedHistoryOutput = field(
