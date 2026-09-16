@@ -37,9 +37,9 @@ from rl.model.heads import CategoricalValueLogitHead
 from rl.model.utils import get_num_params
 from rl.offline.config import Porygon2WorldModelConfig
 from rl.offline.event_labels import EventKind, EventLabels
+from rl.offline.event_stream import EventStreamStore
 from rl.offline.train import _overlay_params
 from rl.offline.world_model_data import WorldModelBatch
-from rl.offline.world_model_shards import WorldModelShardStore
 
 Params = dict
 
@@ -613,7 +613,7 @@ def main() -> None:
         os.environ["WANDB_MODE"] = "disabled"
     model_cfg = world_model_config(config.joint)
     model = WorldModelTrainer(model_cfg)
-    dataset = WorldModelShardStore(config)
+    dataset = EventStreamStore(config)
     shard_manifest = dataset.manifest
     print(f"{len(dataset)} trajectories, {len(dataset.train_games)} training games")
     first_batch = next(dataset.eval_batches())

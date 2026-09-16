@@ -153,9 +153,6 @@ class Porygon2WorldModelConfig(BaseTrainingConfig):
     world model and the public critic trained on the replay shards."""
 
     dataset_dir: str = "replays/shards"
-    # The converted world-model shards (rl/offline/world_model_shards.py):
-    # the trainer reads these, never the replay records.
-    wm_shard_dir: str = "replays/wm"
     holdout_modulus: int = 20
     shuffle_buffer_size: int = 128
     batch_size: int = 8

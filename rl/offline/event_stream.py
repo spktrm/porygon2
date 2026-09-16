@@ -1,13 +1,15 @@
-"""Replay shards -> world-model shards, once, and the store that trains
-from them.
+"""The offline export's decoded event stream, on disk beside the records.
 
-The trainer used to parse two protobuf records, decode the terminal
-state's caches and derive the event labels in numpy on the training
-thread at every step. `convert` does that work once, in parallel, and
-writes the unpadded event stream per trajectory (CSR: concatenated rows
-plus offsets) so a batch is a slice, a pad and a stack.
+`replays/shards/<format>/` holds the service's export: one protobuf
+record per replay. `convert` decodes each trajectory's terminal state
+once (the whole public event stream) and derives the per-step event
+labels, writing the unpadded stream (CSR: concatenated field / public /
+revealed / edge rows plus offsets, labels per step, outcome, holdout flag
+and record id) to `replays/shards/<format>/decoded/`; `EventStreamStore`
+serves it from memory, so a batch is a slice, a pad and a stack instead
+of a protobuf parse and a label derivation on the training thread.
 
-    env/bin/python rl/offline/world_model_shards.py --workers 16
+    env/bin/python rl/offline/event_stream.py --workers 16
 """
 
 import argparse
@@ -37,6 +39,13 @@ from rl.offline.world_model_data import (
 )
 
 LABEL_FIELDS = tuple(EventLabels.__dataclass_fields__)
+DECODED = "decoded"
+
+
+def decoded_dir(source_dir: str) -> str:
+    return os.path.join(source_dir, DECODED)
+
+
 LABEL_PAD = {
     "kind": int(EventKind.RESIDUAL),
     "actor": NO_SLOT,
@@ -147,25 +156,27 @@ def convert(
         )
 
 
-class WorldModelShardStore:
-    """Every converted trajectory in memory (~4 GB for the corpus), served
-    as the padded WorldModelBatch the trainer already consumes. Both
-    perspectives of a game share a batch; the holdout split is the
-    converter's."""
+class EventStreamStore:
+    """Every decoded trajectory in memory (3 GB for the corpus), served as
+    the padded WorldModelBatch the trainer consumes. Both perspectives of
+    a game share a batch; the holdout split is the converter's."""
 
     def __init__(self, config):
         self.config = config
-        shard_dir = os.path.join(config.wm_shard_dir, config.format_id)
+        source_dir = os.path.join(config.dataset_dir, config.format_id)
+        shard_dir = decoded_dir(source_dir)
+        if not os.path.isdir(shard_dir):
+            raise FileNotFoundError(
+                f"No decoded event stream at {shard_dir} -- run "
+                f"rl/offline/event_stream.py once over the export."
+            )
         with open(os.path.join(shard_dir, MANIFEST)) as f:
             self.manifest = json.load(f)
-        source_manifest = check_shard_manifest(
-            os.path.join(config.dataset_dir, config.format_id)
-        )
+        source_manifest = check_shard_manifest(source_dir)
         if source_manifest["export_commit"] != self.manifest["export_commit"]:
             raise ValueError(
-                f"World-model shards at {shard_dir} were converted from export "
-                f"{self.manifest['export_commit']}, the replay shards are "
-                f"{source_manifest['export_commit']} -- reconvert."
+                f"{shard_dir} was decoded from export {self.manifest['export_commit']}, "
+                f"the records are {source_manifest['export_commit']} -- reconvert."
             )
         self.parts = []
         for name in sorted(os.listdir(shard_dir)):
@@ -273,12 +284,17 @@ class WorldModelShardStore:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default="replays/shards/gen9randombattle")
-    parser.add_argument("--out", default="replays/wm/gen9randombattle")
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--parts", type=int, default=4, help="parts per source shard")
     parser.add_argument("--holdout-modulus", type=int, default=20)
     args = parser.parse_args()
-    convert(args.source, args.out, args.workers, args.holdout_modulus, args.parts)
+    convert(
+        args.source,
+        decoded_dir(args.source),
+        args.workers,
+        args.holdout_modulus,
+        args.parts,
+    )
 
 
 if __name__ == "__main__":
