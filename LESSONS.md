@@ -19,6 +19,54 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Offline export sliced per history edge; batch 1 — 2026-09-16
+
+**Export (a678310).** `service/src/scripts/offlineWorker.ts` now emits one
+EnvironmentState per committed history edge instead of one per `|turn|`. An
+edge commits inside the handler of the NEXT major arg (`|move|`, `|switch|`,
+`|drag|`, `|replace|`, `|cant|`, `|faint|`) or of the bare `|` block separator
+(the protocol's `|done|`, which follows every action's effect lines), or of
+`|turn|`; the worker takes the slice BEFORE the committing line (after it the
+state would already announce event k+1's move: a leak), labels it with the
+index of the edge whose effects it holds (`INFO_FEATURE__HISTORY_STEP_COUNT`,
+1-based; the feature was the windowed length and nothing in `rl/` read it), and
+takes the turn boundary's slice AFTER the `|turn|` line as the live request is,
+replacing a same-position slice; the terminal state stands for the last edge.
+`requestCount` still advances once per turn so the edge features keep the live
+distribution. Verified: 40 trajectories, labels exactly 1..N with the terminal
+last. Corpus: 98,512 trajectories, **8,110,894 states = one per history step**
+(2,760,044 per-turn before), 23 GB (9.3 before), 7 min at 4 workers, 4 replays
+failed; the pool decodes it in ~20 s on 4 workers (the trainer reads only the
+terminal state, so the store is unchanged at 3 GB). The per-turn export is at
+`replays/shards/gen9randombattle-turnslices-20260916` (not deleted).
+
+What an edge holds (traced on gen9randombattle-1090): edge k's block runs from
+the line after the previous commit to the line before the k-th committing
+line, so a `|turn|` line and the `|t:|` timestamp fold into the FOLLOWING
+edge (the first move of the turn), and a RESIDUAL edge is a genuine
+end-of-turn block (`|` … `|-status|brn` … `|upkeep`), not an artefact.
+
+**Why:** the world model's per-event states were rebuilt from first-touch cache
+snapshots (pre-effect for 10% of rows at a boundary); the exact slice is the
+clean target and unifies the offline and online state construction. Not yet
+consumed: the trainer's state source is still the scan's snapshots; switching
+it is the next step, with the Step 1 parity test as the check.
+
+**Batch 1 (31aac71).** One trajectory per step: the geometric bucket is the
+game's own length (no padding to the longest of eight) and the step is a
+sequential `lax.map` over trajectories anyway. Measured on the same trunk and
+data: batch 8 0.46 s/step (2.2 updates/s, 17 trajectories/s); batch 1
+**0.075 s/step at 99–100% GPU (13 updates/s, 13 trajectories/s)** — six
+times the update rate at three quarters of the throughput. The first minutes
+read 6% GPU: one compile per bucket shape (four at batch 1 where batch 8
+always hit 512) plus the concurrent re-export's four workers on the host. The
+epoch is the shuffled games flattened to trajectories (the game-wise cut,
+truncated to the batch, would have trained one perspective only at batch 1).
+Run heydhats resumed from the batch-8 run's step-3000 best (`ckpt_best_batch8_
+step3000`); intervals rescaled (240k steps, eval every 5000 over 256).
+
+---
+
 ## Removal ledger — 2026-09-16 offline tidy
 
 Everything below existed at tag **`pre-offline-tidy-2026-09-16`** (commit

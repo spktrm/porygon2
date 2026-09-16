@@ -16,7 +16,10 @@ from rl.offline.shards import check_shard_manifest, iter_shard_payloads, list_sh
 
 SOURCE = "replays/shards/gen9randombattle"
 # Trajectories the corpus decodes to, by export commit (the pool test).
-CORPUS_TRAJECTORIES = {"cc999c1979e635e5cde515e24da2f4f4b5556a90": 98_512}
+CORPUS_TRAJECTORIES = {
+    "cc999c1979e635e5cde515e24da2f4f4b5556a90": 98_512,
+    "a678310cca62ce60c921bb1d7d6f1ea93a070df5": 98_512,
+}
 
 
 def assert_same_example(stored, reference) -> None:
