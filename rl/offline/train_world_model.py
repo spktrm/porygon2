@@ -38,7 +38,8 @@ from rl.model.utils import get_num_params
 from rl.offline.config import Porygon2WorldModelConfig
 from rl.offline.event_labels import EventKind, EventLabels
 from rl.offline.train import _overlay_params
-from rl.offline.world_model_data import WorldModelBatch, WorldModelDataset
+from rl.offline.world_model_data import WorldModelBatch
+from rl.offline.world_model_shards import WorldModelShardStore
 
 Params = dict
 
@@ -612,10 +613,9 @@ def main() -> None:
         os.environ["WANDB_MODE"] = "disabled"
     model_cfg = world_model_config(config.joint)
     model = WorldModelTrainer(model_cfg)
-    dataset = WorldModelDataset(config)
-    shard_manifest = json.load(
-        open(os.path.join(config.dataset_dir, config.format_id, "manifest.json"))
-    )
+    dataset = WorldModelShardStore(config)
+    shard_manifest = dataset.manifest
+    print(f"{len(dataset)} trajectories, {len(dataset.train_games)} training games")
     first_batch = next(dataset.eval_batches())
     print("Initialising (traces the public encoder once)...")
     init_batch = jax.tree.map(lambda x: jnp.asarray(x[0]), first_batch)
