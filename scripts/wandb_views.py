@@ -1022,6 +1022,99 @@ def members(stem):
     return [f"{stem}_mean"] + [f"{stem}_m{k}" for k in range(4)]
 
 
+def world_model_sections():
+    """The event world model's offline trainer (rl/offline/train_world_model.py)."""
+    kinds = ["move", "switch", "drag", "cant", "faint", "residual", "end"]
+    return [
+        ws.Section(
+            name="0 · Grammar (held-out)",
+            is_open=True,
+            panels=[
+                lp("Nats per token", ["eval_nats_per_token", "nats_per_token"]),
+                lp("NLL by kind", [f"eval_nll_kind_{k}" for k in kinds]),
+                lp(
+                    "Position losses",
+                    [
+                        f"eval_loss_{p}"
+                        for p in ("kind", "actor", "move", "target", "touched")
+                    ],
+                ),
+                lp("Actor accuracy", ["eval_actor_acc_mine", "eval_actor_acc_theirs"]),
+                lp(
+                    "Move accuracy (side x revealed)",
+                    [
+                        "eval_move_acc_mine_revealed",
+                        "eval_move_acc_mine_unrevealed",
+                        "eval_move_acc_theirs_revealed",
+                        "eval_move_acc_theirs_unrevealed",
+                    ],
+                ),
+                lp(
+                    "Touched F1 / new-turn accuracy",
+                    ["eval_touched_f1", "eval_new_turn_acc"],
+                ),
+            ],
+        ),
+        ws.Section(
+            name="1 · Latent flow vs mean control",
+            is_open=True,
+            panels=[
+                lp("Flow loss (copy = 1)", ["eval_loss_flow", "loss_flow"]),
+                lp(
+                    "Mean control loss (copy = 1)",
+                    ["eval_loss_mean_control", "loss_mean_control"],
+                ),
+                lp("Flow loss by group", [], regex="^eval_flow_loss_"),
+                lp("Untouched delta fraction", ["eval_untouched_delta_frac"]),
+                lp(
+                    "Untouched delta fraction by kind",
+                    [],
+                    regex="^eval_untouched_delta_frac_",
+                ),
+                lp("Delta scale by group", [], regex="^delta_scale_", log_y=True),
+                lp("out_proj RMS", ["out_proj_rms"], log_y=True),
+            ],
+        ),
+        ws.Section(
+            name="2 · Value reads",
+            is_open=True,
+            panels=[
+                lp(
+                    "Imagined value R2 (sample mean vs real next)",
+                    [
+                        "eval_imagined_value_r2",
+                        "eval_imagined_value_r2_faint",
+                        "eval_imagined_value_r2_nonfaint",
+                    ],
+                ),
+                lp(
+                    "Value CRPS (flow) vs |err| (control)",
+                    ["eval_value_crps", "eval_value_crps_mean_control"],
+                ),
+                lp(
+                    "Public critic R2 (all / boundary / mid-turn)",
+                    [
+                        "eval_public_value_r2",
+                        "eval_public_value_r2_boundary",
+                        "eval_public_value_r2_midturn",
+                    ],
+                ),
+                lp(
+                    "Public value loss / terminal loss",
+                    ["eval_loss_public_value", "eval_loss_terminal"],
+                ),
+            ],
+        ),
+        ws.Section(
+            name="3 · Train side",
+            panels=[
+                lp("Train loss", ["loss"]),
+                lp("Gradient norm", ["gradient_norm"], log_y=True),
+            ],
+        ),
+    ]
+
+
 def offline_sections():
     return [
         ws.Section(
@@ -1165,9 +1258,9 @@ def main():
     parser.add_argument("--entity", default="jtwin")
     parser.add_argument(
         "--project",
-        choices=("rl", "offline", "both"),
+        choices=("rl", "offline", "world_model", "both"),
         default="both",
-        help="Select saved views to refresh; defaults to both projects.",
+        help="Select saved views to refresh; defaults to every project.",
     )
     parser.add_argument("--update-rl-url", default=None)
     parser.add_argument("--update-offline-url", default=None)
@@ -1197,6 +1290,17 @@ def main():
                 "Critic health",
                 offline_sections(),
                 args.update_offline_url,
+                None,
+                None,
+            )
+        )
+    if args.project in ("world_model", "both"):
+        requests.append(
+            (
+                "pokemon-rl-offline",
+                "Event world model",
+                world_model_sections(),
+                None,
                 None,
                 None,
             )

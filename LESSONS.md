@@ -19,6 +19,101 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Public event world model, Steps 3–4: the offline trainer and the search read — 2026-09-16
+
+Step 3 (`rl/offline/world_model_data.py`, `rl/offline/train_world_model.py`,
+`Porygon2WorldModelConfig`, wandb view "Event world model"):
+- One example per trajectory from the TERMINAL state only (its caches are
+  the whole event stream); the per-|turn| states are not decoded. The
+  history clip windows the (B, H) leaves to one geometric bucket and every
+  (H,) label follows the same window. Batch dataclasses are `chex`
+  dataclasses -- a plain `@dataclass` is not a pytree and `jax.tree.map`
+  treats it as a leaf (the first smoke failure).
+- `WorldModelTrainer` names its submodules `encoder` / `public_v_head` /
+  `world_model` so `merge_params` resumes them by path; the encoder is
+  overlaid from the learner checkpoint and frozen by `optax.multi_transform`
+  (`set_to_zero`, so adamw's weight decay never touches a frozen leaf);
+  `joint` flips the encoder label. `model.apply` takes `{"params": ...}`,
+  not the bare tree (the second smoke failure: "collection params is
+  empty in /encoder").
+- Every metric is a ratio of POOLED sums over the batch (never a mean of
+  per-trajectory ratios); the flow and control losses go through
+  `pooled_group_loss` on the scaled difference (copy = 1); the EMA group
+  scale lives in the trainer state and is written into the
+  `world_model/delta_scale` parameter at save time, a parameter in name
+  only (frozen label) so the actor's params view carries it.
+- Eval-only reads sample `eval_samples` imagined next states per step:
+  imagined-value R2 (sample mean vs the real next value) and CRPS of the
+  sampled values, beside the mean control's |error|.
+
+Step 4 (`rl/model/event_search.py`, the binding in `player_model.py`,
+`harness.play_games(search_arm=...)`, `rl/offline/search_ablation.py`):
+- The rollout samples one event in five decoder passes with a growing
+  teacher-forced prefix; our own execution event carries the declared
+  move once (`own_executed`); a newly revealed actor slot is ours only for
+  our unplayed declared switch; the stop rule is a sampled new-turn bit,
+  an own-side faint with a reserve, or END; padded scan steps carry the
+  state. The root's active slots stand in for the whole rollout (the
+  target-row rule after an imagined switch is approximate).
+- The searching actor keeps POLICY_READABLE_ROWS + PUBLIC_CLS
+  (`encoder.with_public_cls`; PUBLIC_CLS reads public rows only and has
+  out-degree 0, so the policy's information set is unchanged), enumerates
+  legal cells statically (`max_cells` 16, overflow zeroes the bonus),
+  maps a switch cell to its private row's public slot (an unrevealed mon
+  is the next slot to be revealed) and a move cell to its move id, and
+  adds Q / temp to the readout's legal logits; the value-blind arm runs
+  the same rollouts and adds 0. Contract (test_search_binding): at init
+  the flow is the copy predictor, every leaf is the root's public value,
+  Q is equal across cells and the root KL is exactly 0; opening the flow
+  moves it.
+- The service exposes no simulator or team seeds, so the search read's
+  arms are INDEPENDENT games: Wilson intervals per arm and a
+  two-proportion test, 400 games per arm to resolve ~7 pp. The plan's
+  "paired seeds" wording was wrong and is corrected.
+
+## Public event world model, Steps 1–2: the per-event public state and the model — 2026-09-16
+
+Step 1 (72541ee, structure-only): `PUBLIC_SEQUENCE_ROWS` = the public
+tier prefix + PUBLIC_CLS (55 rows, closed under the read mask);
+`Encoder.encode_events` builds the trunk input at EVERY history step
+from the scan's own products (`node_snapshots` as the public rows, the
+slot's side/position/fainted read off the cache row via the scan's new
+`node_row_index`, the step's field rows, the slot/field/register
+snapshots as the history rows; a MOVE request with every target legal --
+the replay convention) through the SAME `_public_parts` /
+`_finish_sequence` the request path uses. Bit-check: the encoder forward
+on the bundled trajectory (f32, highest precision, GPU) is identical to
+cc999c1 over all 13 output leaves -- a check that took four attempts
+because the live learner held 11.5 of 12.3 GB; a bit-check needs ~0.6 GB
+and a learner-free window is the reliable way to run it (the CPU
+platform is hook-banned even for a paired comparison).
+
+Step 2 (`rl/model/world_model.py`, 02fc269), decisions not in the plan text:
+- Seven KINDs, not six: DRAG is its own kind (a forced switch is not the
+  owner's choice, and the search must not treat a dragged own mon as our
+  declared execution). REPLACE (Illusion) maps to SWITCH, DETAILSCHANGE
+  to RESIDUAL.
+- The declared token is KEY-ONLY at position 0 of a six-token decoder
+  sequence; the self-attention mask lets KIND and ACTOR read it always
+  and MOVE / TARGET / TOUCHED only when `actor_is_mine` -- one mask, one
+  invariant, pinned by `test_opponent_move_query_cannot_read_the_declared_token`
+  with the own-side query as the control.
+- Endpoint (x1) parameterisation, not velocity: with `out_proj` at zero
+  the Euler sampler's last step lands exactly on the last endpoint
+  prediction, so every sample is the copy predictor bit for bit at init
+  for every step count (`test_every_sample_is_the_copy_predictor_at_init`).
+  A velocity head at zero would leave the sample at the noise.
+- The Euler loop is a LIFTED `nn.scan` over a function of the module:
+  the endpoint net's params are created on first call, which a raw
+  `lax.scan` body would trace (UnexpectedTracerError in `init`).
+- The flow's normaliser is the pooled masked energy of the SCALED
+  difference (copy = 1 whatever the EMA scale reads); the EMA group scale
+  only sets the unit the flow works in and lives in the trainer state,
+  saved as a scalar in the artifact.
+- The two-mode contract test: a 16-wide 1-block model trained 300 steps
+  on +-u differences -- the flow's 32 samples show both signs and sit
+  within .35 of +-u on average while the mean control sits within .35 of 0.
+
 ## Public event world model, Step 0: event labels and the re-export — 2026-09-16
 
 Plan approved 2026-09-16 (branch `public-event-world-model`, plan file

@@ -422,6 +422,12 @@ class EventWorldModel(nn.Module):
             "declared_kind_table", init, (NUM_DECLARED_KINDS, width)
         )
         self.start_token = self.param("start_token", init, (width,))
+        # The per-group RMS difference the flow is scaled by: a parameter
+        # in name only (the optimiser never touches it) so the actor's
+        # params view carries it; the trainer writes its EMA here.
+        self.delta_scale = self.param(
+            "delta_scale", nn.initializers.ones, (NUM_PUBLIC_GROUPS,)
+        )
         self.decoder = MajorArgDecoder(self.cfg.decoder, name="decoder")
         self.flow = LatentFlow(self.cfg.flow, name="flow")
         self.mean_step = MeanStep(self.cfg.flow, name="mean_step")

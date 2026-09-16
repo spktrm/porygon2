@@ -144,3 +144,50 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
 
 def get_offline_config() -> Porygon2OfflineConfig:
     return Porygon2OfflineConfig()
+
+
+@chex.dataclass(frozen=True)
+class Porygon2WorldModelConfig(BaseTrainingConfig):
+    """The event world model's offline trainer (rl/offline/train_world_model.py):
+    the player model's public path frozen from a learner checkpoint, the
+    world model and the public critic trained on the replay shards."""
+
+    dataset_dir: str = "replays/shards"
+    holdout_modulus: int = 20
+    shuffle_buffer_size: int = 128
+    batch_size: int = 8
+    min_history_length: int = 64
+    # Trailing window over the event stream per trajectory (NUM_HISTORY 512
+    # is the whole game on this corpus); a smaller cap trades early events
+    # for memory when the GPU is shared.
+    max_history_steps: int = 512
+    # The learner checkpoint whose encoder + public critic are the frozen
+    # substrate (required); resume_from restarts a world-model run.
+    trunk_ckpt: str | None = None
+    resume_from: str | None = None
+    # Joint: the next-event losses also train the encoder (Step 6 of the
+    # plan); off = observer, the trunk never moves.
+    joint: bool = False
+    num_steps: int = 30000
+    learning_rate: float = 3e-4
+    lr_final_fraction: float = 0.1
+    clip_gradient: float = 10.0
+    adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-2)
+    kind_loss_weight: float = 1.0
+    actor_loss_weight: float = 1.0
+    move_loss_weight: float = 1.0
+    target_loss_weight: float = 1.0
+    touched_loss_weight: float = 1.0
+    flow_loss_weight: float = 1.0
+    mean_loss_weight: float = 1.0
+    terminal_loss_weight: float = 1.0
+    public_value_loss_weight: float = 1.0
+    # EMA of the per-group RMS difference the flow is scaled by.
+    scale_momentum: float = 0.99
+    # Samples per state for the eval-only imagined-value reads.
+    eval_samples: int = 8
+    log_interval_steps: int = 50
+    eval_interval_steps: int = 1000
+    eval_batches: int = 32
+    save_interval_steps: int = 5000
+    artifact_root: str = "ckpts/world_model"

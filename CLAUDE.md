@@ -152,7 +152,14 @@ TypeScript game service speaking protobuf over websockets.
   PBRS potential channel of the actor advantage (`player_potential_strength`,
   default 0), bootstrapped by a stop_gradient head that learns it away —
   policy-invariant at convergence, never a loss the policy or trunk must
-  agree with (LESSONS "PBRS potential channel").
+  agree with (LESSONS "PBRS potential channel"). SECOND scoped exception
+  (user, 2026-09-16): human replays MAY train the event world model, the
+  public critic (`public_v_head`) and the public action model
+  (`rl/offline/train_world_model.py` on the replay shards); those
+  parameters are read by the searching EVAL actor only and by
+  `public_v_head`, which feeds no policy target — the self-play policy's
+  losses never see a human-derived signal (LESSONS "Public event world
+  model", plan Step 4 is a read, not a training path).
 - Checkpoint writes are atomic; a step>0 checkpoint with no league file
   refuses to load.
 
