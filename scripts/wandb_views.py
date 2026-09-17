@@ -608,9 +608,21 @@ def rl_sections():
                     ["player_history_gate_mean"],
                 ),
                 lp(
-                    # Fresh-row calibration, the V-fresh reading.
-                    "Value R2 calibration (fresh rows)",
+                    # Pooled over 5000 first-use rows on the host
+                    # (workers.pool_fresh_value_r2): a batch's one fresh
+                    # chunk is one game, no target variance to divide by.
+                    "Value R2 on first-use rows (pooled)",
                     ["player_value_r2_fresh"],
+                    smooth=0,
+                    range_y=(-1, 1),
+                ),
+                lp(
+                    # The overfit gap: first-use error above replayed error
+                    # is the critic memorising its buffer; a flat fresh
+                    # error is a critic not improving on unseen games.
+                    "Value sq error · first-use vs replayed chunks",
+                    ["plasticity_fresh_value_err", "plasticity_replay_value_err"],
+                    smooth=0.98,
                 ),
                 lp(
                     # R2 of expectations vs v-trace targets. Also shown
@@ -1048,6 +1060,28 @@ def rl_sections():
                         "player_switch_logit_grad_uniform_kl",
                         "player_switch_logit_grad_actor_total",
                     ],
+                ),
+                lp(
+                    "Sharpening force by term · all legal cells (positive = descent flattens)",
+                    [
+                        "player_sharpen_logit_grad_pg",
+                        "player_sharpen_logit_grad_entropy",
+                        "player_sharpen_logit_grad_magnet",
+                        "player_sharpen_logit_grad_uniform_kl",
+                        "player_sharpen_logit_grad_actor_total",
+                    ],
+                    smooth=0.98,
+                ),
+                lp(
+                    "Sharpening force by term · among legal moves (positive = descent flattens)",
+                    [
+                        "player_move_sharpen_logit_grad_pg",
+                        "player_move_sharpen_logit_grad_entropy",
+                        "player_move_sharpen_logit_grad_magnet",
+                        "player_move_sharpen_logit_grad_uniform_kl",
+                        "player_move_sharpen_logit_grad_actor_total",
+                    ],
+                    smooth=0.98,
                 ),
             ],
         ),

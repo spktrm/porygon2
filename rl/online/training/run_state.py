@@ -72,8 +72,9 @@ class RunState:
     replay_pi: PILogController | None = None
     replay_ctrl_ess_sum: float = 0.0
     replay_ctrl_ess_count: int = 0
-    fresh_switch_pool: int = 0
-    fresh_decision_pool: int = 0
+    # workers.pooled_sums: running sums of sparse first-use counters, keyed
+    # by the counter that weighs each pool.
+    metric_pools: dict = dataclasses.field(default_factory=dict)
     replay_ctrl_prev_adds: int = 0
     replay_ctrl_prev_samples: int = 0
     replay_realised_ratio: float = float("nan")

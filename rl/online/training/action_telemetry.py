@@ -84,6 +84,8 @@ def switch_loss_telemetry(
     legal_mask,
     switch_cells,
     taken_switch,
+    move_cells,
+    taken_move,
     policy_mask,
     choice_mask,
     taken_log_prob,
@@ -92,11 +94,19 @@ def switch_loss_telemetry(
     advantages,
     config,
 ):
-    """dL/ds for adding s to every switch logit, holding features fixed.
+    """dL/ds along three logit directions, holding features fixed, split by
+    the loss term that exerts it.
 
-    Positive means gradient descent suppresses switch odds. Terms include
-    their training coefficients and share the actual policy-row denominator.
-    This does not attribute shared-feature updates or Adam momentum.
+    `switch`: s added to every switch logit; positive means gradient descent
+    suppresses switch odds. `sharpen`: every legal logit scaled by (1 + s)
+    about the row's policy-mean logit, the inverse-temperature direction;
+    `move_sharpen`: the same over the legal move cells alone about their
+    conditional mean, which leaves the move mass where it is. Positive on
+    either means gradient descent FLATTENS.
+
+    Terms include their training coefficients and share the actual
+    policy-row denominator. This does not attribute shared-feature updates
+    or Adam momentum.
     """
     log_policy = jax.lax.stop_gradient(log_policy.astype(jnp.float32))
     policy = masked_policy(log_policy, legal_mask)
@@ -130,25 +140,49 @@ def switch_loss_telemetry(
     def uniform_kl_loss(log_probs):
         return average(uniform_kl_rows(log_probs, legal_mask), policy_mask)
 
-    gradients = {}
-    gradients["pg"] = (
-        config.player_pg_coef * jax.jvp(pg_loss, (taken_log_prob,), (taken_tangent,))[1]
+    def direction_forces(direction_log_tangent, direction_taken_tangent):
+        forces = {
+            "pg": config.player_pg_coef
+            * jax.jvp(pg_loss, (taken_log_prob,), (direction_taken_tangent,))[1]
+        }
+        for name, objective, coefficient in (
+            ("entropy", entropy_loss, config.player_ent_coef),
+            ("magnet", magnet_loss, config.player_mag_coef),
+            ("uniform_kl", uniform_kl_loss, config.player_uniform_kl_coef),
+        ):
+            forces[name] = (
+                config.player_pg_coef
+                * coefficient
+                * jax.jvp(objective, (log_policy,), (direction_log_tangent,))[1]
+            )
+        return forces
+
+    # Both sharpen tangents are policy-mean zero by construction, so the
+    # logit tangent IS the log-policy tangent.
+    legal_log_policy = jnp.where(legal_mask, log_policy, 0.0)
+    row_mean = (policy * legal_log_policy).sum(-1)
+    legal_moves = legal_mask & move_cells
+    move_mass = (policy * legal_moves).sum(-1)
+    move_mean = (policy * legal_moves * legal_log_policy).sum(-1) / jnp.maximum(
+        move_mass, 1e-8
     )
-    for name, objective, coefficient in (
-        ("entropy", entropy_loss, config.player_ent_coef),
-        ("magnet", magnet_loss, config.player_mag_coef),
-        ("uniform_kl", uniform_kl_loss, config.player_uniform_kl_coef),
-    ):
-        gradients[name] = (
-            config.player_pg_coef
-            * coefficient
-            * jax.jvp(objective, (log_policy,), (log_tangent,))[1]
-        )
-    logs = {
-        f"player_switch_logit_grad_{name}": gradient
-        for name, gradient in gradients.items()
+    directions = {
+        "switch": (log_tangent, taken_tangent),
+        "sharpen": (
+            jnp.where(legal_mask, log_policy - row_mean[..., None], 0.0),
+            taken_log_prob - row_mean,
+        ),
+        "move_sharpen": (
+            jnp.where(legal_moves, log_policy - move_mean[..., None], 0.0),
+            jnp.where(taken_move, taken_log_prob - move_mean, 0.0),
+        ),
     }
-    logs["player_switch_logit_grad_actor_total"] = sum(gradients.values())
+    logs = {}
+    for direction, tangents in directions.items():
+        forces = direction_forces(*tangents)
+        for name, force in forces.items():
+            logs[f"player_{direction}_logit_grad_{name}"] = force
+        logs[f"player_{direction}_logit_grad_actor_total"] = sum(forces.values())
     logs["player_switch_mass_choice"] = average(switch_mass, choice_mask)
     for name, taken_mask in (
         ("switch", taken_switch),

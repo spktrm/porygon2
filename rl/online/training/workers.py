@@ -93,6 +93,7 @@ def wandb_log_worker(run_state: RunState, config: Porygon2LearnerConfig):
             run_state.player_replay.record_decision_accounting(host_logs)
             update_replay_controller(run_state, config, host_logs)
             pool_fresh_switch_rate(run_state, host_logs)
+            pool_fresh_value_r2(run_state, host_logs)
             run_state.wandb_run.log(host_logs)
         except Exception:
             logger.exception("wandb logging failed")
@@ -129,26 +130,69 @@ def checkpoint_writer_worker(run_state: RunState):
             )
 
 
+def pooled_sums(
+    run_state: RunState, host_logs: dict, weight_key: str, keys: tuple, threshold: int
+) -> dict | None:
+    """Sum `keys` across log ticks until `weight_key`'s sum reaches
+    `threshold`, then hand the sums back and start over. First-use rows are
+    one chunk every other batch at the nominal reuse: a per-batch ratio over
+    them is NaN half the time and one game's worth of rows the rest."""
+    if host_logs.get(weight_key) is None:
+        return None
+    pool = run_state.metric_pools.setdefault(weight_key, dict.fromkeys(keys, 0.0))
+    for key in keys:
+        pool[key] += float(host_logs[key])
+    if pool[weight_key] < threshold:
+        return None
+    return run_state.metric_pools.pop(weight_key)
+
+
 # Binomial standard error ~0.6% at the ~8% rates the run reads.
 FRESH_SWITCH_POOL_DECISIONS = 2000
+# ~100 first-use chunks, so the target variance is across games.
+FRESH_VALUE_POOL_ROWS = 5000
 
 
 def pool_fresh_switch_rate(run_state: RunState, host_logs: dict) -> None:
-    """`player_fresh_voluntary_switch_rate`: the fresh switch counters summed
-    until FRESH_SWITCH_POOL_DECISIONS decisions, then divided. The per-batch
-    fraction is one chunk's ~40 decisions at best and NaN on a batch with no
-    first-use chunk, every other batch at the nominal reuse."""
-    decisions = host_logs.get("player_fresh_move_or_switch_count")
-    if decisions is None:
-        return
-    run_state.fresh_switch_pool += int(host_logs["player_fresh_voluntary_switch_count"])
-    run_state.fresh_decision_pool += int(decisions)
-    if run_state.fresh_decision_pool >= FRESH_SWITCH_POOL_DECISIONS:
+    sums = pooled_sums(
+        run_state,
+        host_logs,
+        "player_fresh_move_or_switch_count",
+        ("player_fresh_move_or_switch_count", "player_fresh_voluntary_switch_count"),
+        FRESH_SWITCH_POOL_DECISIONS,
+    )
+    if sums is not None:
         host_logs["player_fresh_voluntary_switch_rate"] = (
-            run_state.fresh_switch_pool / run_state.fresh_decision_pool
+            sums["player_fresh_voluntary_switch_count"]
+            / sums["player_fresh_move_or_switch_count"]
         )
-        run_state.fresh_switch_pool = 0
-        run_state.fresh_decision_pool = 0
+
+
+def pool_fresh_value_r2(run_state: RunState, host_logs: dict) -> None:
+    sums = pooled_sums(
+        run_state,
+        host_logs,
+        "player_value_fresh_count",
+        (
+            "player_value_fresh_count",
+            "player_value_fresh_target_sum",
+            "player_value_fresh_target_sq_sum",
+            "player_value_fresh_sq_err_sum",
+        ),
+        FRESH_VALUE_POOL_ROWS,
+    )
+    if sums is not None:
+        count = sums["player_value_fresh_count"]
+        total_sq = (
+            sums["player_value_fresh_target_sq_sum"]
+            - sums["player_value_fresh_target_sum"] ** 2 / count
+        )
+        host_logs["player_value_r2_fresh"] = (
+            1.0 - sums["player_value_fresh_sq_err_sum"] / total_sq
+        )
+        host_logs["player_value_mse_fresh"] = (
+            sums["player_value_fresh_sq_err_sum"] / count
+        )
 
 
 def update_replay_controller(

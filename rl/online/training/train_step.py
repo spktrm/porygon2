@@ -19,6 +19,7 @@ from rl.environment.interfaces import Batch, BuilderActorInput, PlayerActorInput
 from rl.environment.protos.features_pb2 import (
     FieldFeature,
 )
+from rl.environment.protos.service_pb2 import ModalityEnum
 from rl.model.constants import (
     SequenceGroup,
 )
@@ -391,20 +392,21 @@ def train_step(
         )
     if not isinstance(batch.reuse_count, tuple):
         fresh_cols = batch.reuse_count[0] == 0
-        ~fresh_cols
         vm_fresh = value_mask & fresh_cols[None, :]
-        training_logs["player_value_r2_fresh"] = jnp.where(
-            vm_fresh.any(),
-            calculate_r2(
-                value_prediction=player_estimate.value_head.expectation.astype(
-                    jnp.float32
-                ),
-                value_target=(player_targets.win_returns @ cat_vf_support).astype(
-                    jnp.float32
-                ),
-                mask=vm_fresh,
+        fresh_prediction = player_estimate.value_head.expectation.astype(jnp.float32)
+        fresh_target = (player_targets.win_returns @ cat_vf_support).astype(jnp.float32)
+        # Sufficient statistics, pooled on the host into player_value_r2_fresh
+        # (workers.pool_fresh_value_r2): a batch holds one first-use chunk at
+        # best, one game, and an R2 inside one game divides by ~no variance.
+        training_logs.update(
+            player_value_fresh_count=vm_fresh.sum(),
+            player_value_fresh_target_sum=jnp.sum(fresh_target, where=vm_fresh),
+            player_value_fresh_target_sq_sum=jnp.sum(
+                jnp.square(fresh_target), where=vm_fresh
             ),
-            0.0,
+            player_value_fresh_sq_err_sum=jnp.sum(
+                jnp.square(fresh_target - fresh_prediction), where=vm_fresh
+            ),
         )
 
     def player_loss_fn(params: Params):
@@ -600,6 +602,8 @@ def train_step(
                 flat_action_mask,
                 switch_actions,
                 axis.taken_switch,
+                axis.move_cells,
+                axis.taken_modality == ModalityEnum.MODALITY_ENUM__MOVE,
                 policy_mask,
                 switch_choice_mask,
                 learner_log_prob,

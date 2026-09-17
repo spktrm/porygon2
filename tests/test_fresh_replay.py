@@ -215,7 +215,7 @@ def test_fresh_switch_rate_pools_counts_before_dividing() -> None:
         pool_fresh_switch_rate,
     )
 
-    run_state = SimpleNamespace(fresh_switch_pool=0, fresh_decision_pool=0)
+    run_state = SimpleNamespace(metric_pools={})
     half = FRESH_SWITCH_POOL_DECISIONS // 2
     batches = [(half, half // 2), (0, 0), (half, 0)]
     published = []
@@ -228,7 +228,28 @@ def test_fresh_switch_rate_pools_counts_before_dividing() -> None:
         published.append(host_logs.get("player_fresh_voluntary_switch_rate"))
     # Per-batch fractions read 0.5, NaN, 0; the pooled rate is 0.25, once.
     assert published == [None, None, 0.25]
-    assert run_state.fresh_decision_pool == 0
+    assert run_state.metric_pools == {}
+
+
+def test_fresh_value_r2_pools_across_games() -> None:
+    from rl.online.training.workers import FRESH_VALUE_POOL_ROWS, pool_fresh_value_r2
+
+    run_state = SimpleNamespace(metric_pools={})
+    half = FRESH_VALUE_POOL_ROWS // 2
+    # Two one-game chunks, targets +1 and -1, the critic off by 0.5 on both:
+    # inside either game the target variance is 0 and R2 is undefined; pooled
+    # it is 1 - 0.25 / 1.
+    published = []
+    for target in (1.0, -1.0):
+        host_logs = {
+            "player_value_fresh_count": half,
+            "player_value_fresh_target_sum": half * target,
+            "player_value_fresh_target_sq_sum": half * target**2,
+            "player_value_fresh_sq_err_sum": half * 0.25,
+        }
+        pool_fresh_value_r2(run_state, host_logs)
+        published.append(host_logs.get("player_value_r2_fresh"))
+    assert published == [None, 0.75]
 
 
 def replay_controller_cap(ess: float, forward_kl: float) -> int:
