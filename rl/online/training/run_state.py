@@ -72,6 +72,8 @@ class RunState:
     replay_pi: PILogController | None = None
     replay_ctrl_ess_sum: float = 0.0
     replay_ctrl_ess_count: int = 0
+    fresh_switch_pool: int = 0
+    fresh_decision_pool: int = 0
     replay_ctrl_prev_adds: int = 0
     replay_ctrl_prev_samples: int = 0
     replay_realised_ratio: float = float("nan")

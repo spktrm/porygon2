@@ -1021,7 +1021,10 @@ def rl_sections():
                 ),
                 lp(
                     "Fresh voluntary switches / move-or-switch decisions (ceiling 16.155%)",
-                    ["player_fresh_voluntary_switch_frac"],
+                    # Pooled over 2000 fresh decisions on the host; the
+                    # per-batch _frac is one chunk at best.
+                    ["player_fresh_voluntary_switch_rate"],
+                    smooth=0,
                     range_y=(0, 0.25),
                 ),
                 lp(

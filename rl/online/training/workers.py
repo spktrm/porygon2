@@ -92,6 +92,7 @@ def wandb_log_worker(run_state: RunState, config: Porygon2LearnerConfig):
             host_logs = jax.device_get(logs)
             run_state.player_replay.record_decision_accounting(host_logs)
             update_replay_controller(run_state, config, host_logs)
+            pool_fresh_switch_rate(run_state, host_logs)
             run_state.wandb_run.log(host_logs)
         except Exception:
             logger.exception("wandb logging failed")
@@ -126,6 +127,28 @@ def checkpoint_writer_worker(run_state: RunState):
                 "again.",
                 payload.get("step_count"),
             )
+
+
+# Binomial standard error ~0.6% at the ~8% rates the run reads.
+FRESH_SWITCH_POOL_DECISIONS = 2000
+
+
+def pool_fresh_switch_rate(run_state: RunState, host_logs: dict) -> None:
+    """`player_fresh_voluntary_switch_rate`: the fresh switch counters summed
+    until FRESH_SWITCH_POOL_DECISIONS decisions, then divided. The per-batch
+    fraction is one chunk's ~40 decisions at best and NaN on a batch with no
+    first-use chunk, every other batch at the nominal reuse."""
+    decisions = host_logs.get("player_fresh_move_or_switch_count")
+    if decisions is None:
+        return
+    run_state.fresh_switch_pool += int(host_logs["player_fresh_voluntary_switch_count"])
+    run_state.fresh_decision_pool += int(decisions)
+    if run_state.fresh_decision_pool >= FRESH_SWITCH_POOL_DECISIONS:
+        host_logs["player_fresh_voluntary_switch_rate"] = (
+            run_state.fresh_switch_pool / run_state.fresh_decision_pool
+        )
+        run_state.fresh_switch_pool = 0
+        run_state.fresh_decision_pool = 0
 
 
 def update_replay_controller(

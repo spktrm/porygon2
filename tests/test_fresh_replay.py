@@ -209,6 +209,28 @@ def test_log_worker_publishes_accounting_without_replay_controller() -> None:
     assert published[0]["player_decisions_applied_session"] == 2
 
 
+def test_fresh_switch_rate_pools_counts_before_dividing() -> None:
+    from rl.online.training.workers import (
+        FRESH_SWITCH_POOL_DECISIONS,
+        pool_fresh_switch_rate,
+    )
+
+    run_state = SimpleNamespace(fresh_switch_pool=0, fresh_decision_pool=0)
+    half = FRESH_SWITCH_POOL_DECISIONS // 2
+    batches = [(half, half // 2), (0, 0), (half, 0)]
+    published = []
+    for decisions, switches in batches:
+        host_logs = {
+            "player_fresh_move_or_switch_count": decisions,
+            "player_fresh_voluntary_switch_count": switches,
+        }
+        pool_fresh_switch_rate(run_state, host_logs)
+        published.append(host_logs.get("player_fresh_voluntary_switch_rate"))
+    # Per-batch fractions read 0.5, NaN, 0; the pooled rate is 0.25, once.
+    assert published == [None, None, 0.25]
+    assert run_state.fresh_decision_pool == 0
+
+
 def replay_controller_cap(ess: float, forward_kl: float) -> int:
     from rl.online.training.controllers import PILogController
     from rl.online.training.workers import update_replay_controller
