@@ -64,7 +64,8 @@ def carry_params(
     The normalised residual's alphas are the same kind of gate: at their
     init each sub-layer moves a row by a sixth, so history reaches the
     policy rows too faintly for the controls (a shifted carry moved the
-    fresh policy 0.025 against the 0.05 bar; the plain trunk's ~2.0). At a
+    fresh policy 0.025 against the 0.05 bar; the plain trunk ~2.0 per the
+    older note above). At a
     third the controls bite and the replay drift stays inside the bar
     (0.027 policy / 0.041 value); at a half the drift is already 0.056."""
     params = open_zero_init_paths(real_model_and_trajectory[1], ["action_head"])

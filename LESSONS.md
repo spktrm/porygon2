@@ -9983,10 +9983,12 @@ residual (Loshchilov et al. 2024, arXiv 2410.01131, eq. 10-11):
 `row = unit_rms(row + alpha * (unit_rms(sublayer_out) - row))` per
 sub-layer, alpha a per-block per-channel f32 leaf at 1/num_blocks = 1/6
 (nGPT's stated rule "of order 1/n_layers"; their literal 0.05 is the 24-36
-layer value). **At init the normalised trunk is ~80x less history-sensitive
+layer value). **At init the normalised trunk is far less history-sensitive
 than the plain one**: in `tests/test_history_carry.py` a one-request-shifted
-carry moves the fresh policy 0.025 (0.008 at alpha 0.05) where the plain
-trunk read ~2.0, because each sub-layer write is a sixth of an RMS-1 row
+carry moves the fresh policy 0.025 (0.008 at alpha 0.05), where the test's
+own comment records ~2.0 for the plain trunk (that figure was NOT
+re-measured on the current code; the plain control is only known to clear
+the 0.05 bar), because each sub-layer write is a sixth of an RMS-1 row
 rather than an unbounded add. The carry fixture therefore opens the alphas
 to 1/3 for its controls, as it opens the readout's zero paths (drift 0.027
 policy / 0.041 value inside the 0.05 bf16 bar; 0.056 at 1/2).
