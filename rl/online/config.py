@@ -323,7 +323,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # (cos 0.009). False = today's forward, bit for bit. Reaches the ACTOR
     # through artifact.player_model_config_for as well -- the two sides must
     # agree or the actor runs plain residuals over alpha-trained weights.
-    player_trunk_normalised_residual: bool = False
+    player_trunk_normalised_residual: bool = True
     # PBRS as a potential channel: eta, the scale on the
     # service's unit position potential Phi (INFO_FEATURE__STATE_POTENTIAL,
     # the human-replay outcome fit). > 0 runs a second v-trace channel beside
@@ -358,7 +358,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_old_policy_snap_steps: int = 8
     # FootsiesGym's fixed EMAgnet example; these are numerical defaults, not
     # a reward-scale conversion to our game (see the 2026-09-14 source audit).
-    player_mag_coef: float = 0.05
+    player_mag_coef: float = 0.025
     player_ent_coef: float = 0.01
     # KL(uniform over legal cells || policy), the one force on a cell that
     # does not vanish with its mass: the entropy and magnet floors are
@@ -371,7 +371,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # .16 against a .03-.10 band 30k steps on, with the league winrate
     # against the 206k snapshot .55 -> .33, so the pre-registered rule
     # (above .10, halve) applies. 0 removes the term.
-    player_uniform_kl_coef: float = 0.05
+    player_uniform_kl_coef: float = 0.01
     # Evaluation only: prune low-probability actions in the thresholded slot.
     # Training actors and V-trace always use the full legal distribution.
     player_prune_threshold: float = 0.005
