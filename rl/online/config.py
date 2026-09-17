@@ -366,7 +366,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # FootsiesGym's fixed EMAgnet example; these are numerical defaults, not
     # a reward-scale conversion to our game (see the 2026-09-14 source audit).
     player_mag_coef: float = 0.025
-    player_ent_coef: float = 0.01
+    # Off: beside the uniform-KL floor below it only flattens. Its logit force
+    # carries the action's own mass, so it cannot hold a floor, and per unit
+    # of flattening among moves it held switching up half as well as the
+    # floor does (LESSONS "Entropy bonus off — 2026-09-18").
+    player_ent_coef: float = 0.0
     # KL(uniform over legal cells || policy), the one force on a cell that
     # does not vanish with its mass: the entropy and magnet floors are
     # exponential in the advantage gap and closed on switching at 0.005

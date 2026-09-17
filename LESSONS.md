@@ -19,6 +19,75 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Entropy bonus off — 2026-09-18
+
+*(live)* `player_ent_coef` 0.01 -> 0 on the normalised-residual lineage
+(5esmkxl1), from `ckpt_00303473`. Floor (`player_uniform_kl_coef` 0.01) and
+magnet (0.025) unchanged.
+
+**Problem.** The policy stopped sharpening at ~60k: normalised action entropy
+0.80 -> 0.76 and within-modality entropy 0.90 -> 0.84 over 60k-290k, win rate
+at T=1 0.15 -> 0.19, against the control ijk4nyi4's 0.84 -> 0.63 entropy over
+the same steps (bought with a switch-mass collapse to 0.016).
+
+**Diagnosis, measured.** New panels `player_{sharpen,move_sharpen}_logit_grad_*`
+(commit `d1aee9e`): the loss's gradient along "scale the logits about their
+policy mean", split by term, coefficients included, positive = descent
+flattens. Means over 12k steps from 291k (standard error of the pg mean
+0.0002-0.0003, the others under 0.00003):
+
+| term | all legal cells | among legal moves | switch direction |
+|---|---|---|---|
+| pg | -0.0160 | -0.0064 | +0.0028 |
+| uniform-KL floor (0.01) | +0.0103 | +0.0028 | -0.0025 |
+| entropy (0.01) | +0.0057 | +0.0025 | -0.0012 |
+| magnet (0.025) | +0.0016 | +0.0011 | +0.0002 |
+| net | +0.0015 | -0.00002 | -0.0007 |
+
+The policy sits at a regularised equilibrium: among moves the three
+regularisers cancel the policy gradient to the fourth decimal, the two halves
+of the window agreeing. Sharpness is set by the ratio of the advantage signal
+to the coefficients, not by training time. An earlier back-of-envelope in the
+session ("a 0.01 floor is too weak to flatten moves") was wrong — the floor is
+the largest single flattening force on the whole policy.
+
+**Why entropy and not the floor.** Entropy's logit force is
+$-c\,\pi_i(\log\pi_i + H)$: it carries the action's own mass, so it vanishes
+on a dying action and cannot hold a floor (section 4, and the 08-31 ledger's
+algebra; yhnfmjc7 ran entropy 0.01 with no floor and closed on switching at
+0.005). The floor's force is $c\,(1/N - \pi_i)$. Per unit of flattening among
+moves the floor holds switching up 0.0025/0.0028 = 0.88 against entropy's
+0.0012/0.0025 = 0.47. Entropy came with the APPO reference, which has no floor;
+the floor was added because entropy failed at the one job that matters here.
+
+**Not the cause (measured the same day).** Replay overfitting: first-use vs
+replayed value squared error 0.106 vs 0.096 at 280k (5% apart at reuse 4, ~12%
+at reuse 8, steady; control the same), 0.106 vs 0.107 over 291k-303k; pooled
+first-use value R2 0.72 (38 windows, 0.58-0.82). The normalised trunk: in/out
+cosine 0.5-0.65 on every group, the control equally flat at matched steps to
+60k. Reuse: the control also ran at cap ~7.8.
+
+**Expected.** Flattening among moves falls ~39% (0.0064 -> 0.0039), switch
+support ~32% (0.0037 -> 0.0025). The floor's own band for switch mass is
+0.03-0.10 and the run sits at 0.107, so the floor is NOT raised to compensate.
+
+**Acceptance, pre-registered, read at +20k and held to +40k.**
+`player_entropy_micro_taken` below 0.82 (from 0.842) and
+`player_move_sharpen_logit_grad_actor_total` back within 0.0005 of zero at the
+new level; `player_switch_mass_choice` >= 0.05; T=1 win rate not below 0.17
+(uninterrupted 200-game average). Control: this run's own 291k-303k window and
+the banked ijk4nyi4 curve.
+
+**Fallback.** Switch mass under 0.05: `player_uniform_kl_coef` 0.01 -> 0.015,
+which restores the 0.0037 switch support at ~17% less move flattening than
+today. Entropy is not restored — it is the inefficient half of that job.
+
+**Declined.** Cutting the floor (it is what holds switching; three lineages
+collapsed without it). Cutting the magnet first (smallest flattening term, and
+it is the self-play anti-cycling piece). Lower reuse (no overfit gap to fix).
+
+Revert: `player_ent_coef = 0.01`.
+
 ## Replay controller: actor KL 0.045 -> ESS floor 0.75 — 2026-09-17
 
 *(live)* The reuse-cap PI loop now holds `player_learner_actor_ess` (normalised
