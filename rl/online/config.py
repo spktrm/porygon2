@@ -95,7 +95,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
 
     # Dynamic replay-ratio control: a PI loop (PID-Lagrangian style — the
     # reuse cap plays the dual variable of a staleness constraint) holds the
-    # measured learner-vs-behaviour KL on replayed batches at a setpoint by
+    # effective sample size of the learner/behaviour importance ratios on
+    # replayed batches (player_learner_actor_ess) above a floor by
     # adjusting the store's per-trajectory reuse cap between the bounds
     # below. player_replay_ratio above is only the initial cap. The
     # controller runs off the critical path in the wandb log worker and
@@ -103,23 +104,29 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # inherently anti-windup. Buffer capacity independently bounds sample
     # age (state-distribution staleness), which no ratio control fixes.
     player_replay_ctrl_enabled: bool = True
-    # Ceiling: the actor-KL level that marks the healthy/stale boundary.
-    # This is a pathology threshold, NOT a desirable operating point — hence the asymmetric
-    # bounds below: the controller throttles the cap below the nominal
-    # player_replay_ratio when KL exceeds this, and recovers back to
-    # nominal when it drops, but never raises reuse above nominal chasing
-    # the ceiling (staler data per learner step is never a win under a
-    # strength-per-step objective).
-    player_replay_kl_target: float = 0.045
+    # Floor: a replayed batch worth this fraction of a fresh one. ESS rather
+    # than a KL because it is driven by the LARGE ratios, the rows v-trace's
+    # truncation and the behaviour-ratio clip distort, where the sampled
+    # forward KL is driven by ratios near 0, rows that merely carry a small
+    # weight. A judgement call, not a calibrated boundary (LESSONS "Replay
+    # controller: actor KL 0.045 -> ESS floor"). A pathology threshold, NOT
+    # a desirable operating point — hence the asymmetric bounds below: the
+    # controller throttles the cap below the nominal player_replay_ratio
+    # when ESS falls under this, and recovers back to nominal when it
+    # rises, but never raises reuse above nominal chasing the floor (staler
+    # data per learner step is never a win under a strength-per-step
+    # objective).
+    player_replay_ess_floor: float = 0.75
     player_replay_ratio_min: int = 1
     # Upper bound of the controlled cap. Kept at the nominal ratio so the
     # controller is purely protective; raise above player_replay_ratio
     # only if learner throughput (not strength-per-step) is the priority.
     player_replay_ratio_max: int = 8
     # Velocity-form PI gains on log(cap) per controller tick, applied to the
-    # normalised error (kl_target − kl)/kl_target. At ki=0.02 and one tick
-    # per player_replay_ctrl_interval steps, a sustained 2× KL overshoot
-    # halves the cap in ~35 ticks.
+    # normalised error (ess − floor)/(1 − floor): the lost fraction 1 − ess
+    # against its ceiling 1 − floor. At ki=0.02 and one tick per
+    # player_replay_ctrl_interval steps, a sustained 2× overshoot of the
+    # lost fraction halves the cap in ~35 ticks.
     player_replay_ctrl_kp: float = 0.1
     player_replay_ctrl_ki: float = 0.02
     player_replay_ctrl_interval: int = 100
@@ -280,7 +287,7 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # less Monte-Carlo variance.
     player_lambda: float = 0.95
 
-    # The replay KL target is fixed at player_replay_kl_target; the
+    # The replay ESS floor is fixed at player_replay_ess_floor; the
     # worst-matchup win-rate lives on in _should_add_new_player's
     # "dominant" gate, which actuates nothing.
     #

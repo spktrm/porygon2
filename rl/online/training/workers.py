@@ -131,22 +131,23 @@ def checkpoint_writer_worker(run_state: RunState):
 def update_replay_controller(
     run_state: RunState, config: Porygon2LearnerConfig, host_logs: dict
 ) -> None:
-    """Velocity-form PI loop holding the replayed-batch actor KL at
-    run_state.replay_kl_target by adjusting the reuse
-    cap."""
+    """Velocity-form PI loop holding the replayed-batch learner/actor
+    effective sample size above config.player_replay_ess_floor by
+    adjusting the reuse cap."""
     if not config.player_replay_ctrl_enabled:
         return
-    kl = host_logs.get("player_learner_actor_forward_kl")
-    if kl is not None and np.isfinite(kl):
-        run_state.replay_ctrl_kl_sum += float(kl)
-        run_state.replay_ctrl_kl_count += 1
+    ess = host_logs.get("player_learner_actor_ess")
+    if ess is not None and np.isfinite(ess):
+        run_state.replay_ctrl_ess_sum += float(ess)
+        run_state.replay_ctrl_ess_count += 1
 
-    if run_state.replay_ctrl_kl_count >= config.player_replay_ctrl_interval:
-        kl_mean = run_state.replay_ctrl_kl_sum / run_state.replay_ctrl_kl_count
-        run_state.replay_ctrl_kl_sum = 0.0
-        run_state.replay_ctrl_kl_count = 0
+    if run_state.replay_ctrl_ess_count >= config.player_replay_ctrl_interval:
+        ess_mean = run_state.replay_ctrl_ess_sum / run_state.replay_ctrl_ess_count
+        run_state.replay_ctrl_ess_sum = 0.0
+        run_state.replay_ctrl_ess_count = 0
 
-        err = (run_state.replay_kl_target - kl_mean) / run_state.replay_kl_target
+        ess_floor = config.player_replay_ess_floor
+        err = (ess_mean - ess_floor) / (1.0 - ess_floor)
         run_state.replay_pi.step(err)
 
         cap = int(round(np.exp(run_state.replay_pi.log)))

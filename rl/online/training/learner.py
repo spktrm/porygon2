@@ -215,7 +215,6 @@ class Learner:
                 kp=config.player_replay_ctrl_kp,
                 ki=config.player_replay_ctrl_ki,
             ),
-            replay_kl_target=float(config.player_replay_kl_target),
             consumer_progress=tqdm(
                 desc="consumer", smoothing=0.1, position=next_tqdm_position()
             ),

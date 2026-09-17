@@ -209,6 +209,49 @@ def test_log_worker_publishes_accounting_without_replay_controller() -> None:
     assert published[0]["player_decisions_applied_session"] == 2
 
 
+def replay_controller_cap(ess: float, forward_kl: float) -> int:
+    from rl.online.training.controllers import PILogController
+    from rl.online.training.workers import update_replay_controller
+
+    config = SimpleNamespace(
+        player_replay_ctrl_enabled=True,
+        player_replay_ctrl_interval=1,
+        player_replay_ess_floor=0.75,
+    )
+    run_state = SimpleNamespace(
+        player_replay=fresh_store(size=1),
+        replay_ctrl_ess_sum=0.0,
+        replay_ctrl_ess_count=0,
+        replay_ctrl_prev_adds=0,
+        replay_ctrl_prev_samples=0,
+        replay_realised_ratio=float("nan"),
+        replay_pi=PILogController(
+            initial_log=float(np.log(8)),
+            log_min=0.0,
+            log_max=float(np.log(8)),
+            kp=0.1,
+            ki=0.02,
+        ),
+    )
+    for _ in range(200):
+        update_replay_controller(
+            run_state,
+            config,
+            {
+                "player_learner_actor_ess": ess,
+                "player_learner_actor_forward_kl": forward_kl,
+            },
+        )
+    return run_state.player_replay.max_reuses
+
+
+def test_replay_controller_cuts_reuse_on_ess_below_floor_only() -> None:
+    assert replay_controller_cap(ess=0.5, forward_kl=0.001) < 8
+    # The retired signal alone moves nothing: a KL ten times the old 0.045
+    # ceiling under a healthy ESS leaves the cap at nominal.
+    assert replay_controller_cap(ess=0.9, forward_kl=0.45) == 8
+
+
 @pytest.mark.parametrize("fraction", [-0.1, 1.1, np.nan, np.inf])
 def test_invalid_fresh_fraction_rejected(fraction: float) -> None:
     with pytest.raises(ValueError, match="fresh_fraction"):

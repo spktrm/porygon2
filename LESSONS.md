@@ -19,6 +19,61 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Replay controller: actor KL 0.045 -> ESS floor 0.75 — 2026-09-17
+
+*(live)* The reuse-cap PI loop now holds `player_learner_actor_ess` (normalised
+effective sample size of the live-learner / behaviour importance ratios on the
+replayed batch) above `player_replay_ess_floor = 0.75`, in place of holding
+`player_learner_actor_forward_kl` under `player_replay_kl_target = 0.045`.
+Still one-sided: it cuts reuse below the nominal 8 and recovers to it, never
+above. Error is the lost fraction against its ceiling,
+$(\mathrm{ESS} - f)/(1 - f)$, the same normalised form the KL error had, so the
+gains carry over unchanged.
+
+**Where 0.045 came from.** $\varepsilon^2/2$ at the July 2026 trust-region clip
+$\varepsilon = 0.3$: for close policies $\mathrm{KL} \approx
+\tfrac12\,\mathbb{E}[(r-1)^2]$, so 0.045 was the KL at which the typical
+replayed sample sat on the clip edge and had its gradient zeroed. The
+2026-09-14 provenance check (below, "Exact target provenance") found no
+derivation in commit `ae2c1c3`; the ruler was recorded only in a session note.
+It was never calibrated against strength.
+
+**Why it stopped meaning anything.** The clip it was derived from is gone: SPO's
+quadratic at eps 0.4 has an optimum at the band edge, not a zeroed gradient.
+The sampled forward KL $(r-1) - \log r$ is driven by $r \to 0$ (actions the
+learner has since dropped, which merely carry a small weight), while the rows
+that distort the estimator are the LARGE ratios that v-trace truncates and the
+behaviour-ratio clip at 2 caps; ESS $= \mathbb{E}[r]^2/\mathbb{E}[r^2]$ is
+driven by exactly those, and is bounded, so one batch cannot throw a 3x error at
+the loop the way the KL's 0.13 spikes did. For close policies the two carry the
+same information, $\mathrm{ESS} \approx 1/(1 + 2\,\mathrm{KL})$: 0.045 is an
+ESS floor of ~0.92.
+
+**Reference numbers, normalised-residual run, 35k-71k, under the KL ceiling.**
+Actor forward KL 0.03-0.07 with spikes to 0.11-0.13; the controller held the
+cap at 4 of the nominal 8; `player_learner_actor_ess` 0.89-0.95;
+`player_learner_actor_ratio_tail_gt2` 0-2%. The loop was halving reuse to
+protect a ~10% effective-sample loss. Earlier lineages recorded actor KL
+0.005-0.006 (section 6); behaviour age is still not logged per chunk, so
+policy speed and lag are not separable as the cause of the 10x.
+
+**0.75 is a judgement call, not a calibrated boundary** (user, 2026-09-17). The
+accounting reuse x ESS puts the break-even for halving reuse near ESS 0.5; it
+ignores truncation bias, the falling worth of a repeated pass over the same
+chunk and the optimism of batch ESS under heavy tails, all of which argue
+higher. The July plateau (capacity 2048, age ~2048 steps) has no recorded ESS,
+so the one known failure does not calibrate it. The grounded number is owed:
+strength-per-step against realised reuse across banked runs.
+
+Expected on relaunch: ESS near 0.9 is above the floor, so the cap recovers to 8
+(the PI state is not checkpointed — it restarts at nominal) and stays there
+unless ESS at reuse 8 falls under 0.75. Watch `player_replay_max_reuses`,
+`player_learner_actor_ess`, `player_learner_actor_ratio_tail_gt2`; actor KL
+stays on its panel as a smoke alarm, not a set-point.
+
+Revert: `git revert` this commit restores the KL signal and
+`player_replay_kl_target`.
+
 ## Offline export sliced per history edge; batch 1 — 2026-09-16
 
 **Export (a678310).** `service/src/scripts/offlineWorker.ts` now emits one

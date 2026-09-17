@@ -70,10 +70,8 @@ class RunState:
     run_gate: "threading.Event" = None
     eval_snapshot: EvalSnapshot | None = None
     replay_pi: PILogController | None = None
-    # Fixed at config.player_replay_kl_target; nothing scales it.
-    replay_kl_target: float = 0.045
-    replay_ctrl_kl_sum: float = 0.0
-    replay_ctrl_kl_count: int = 0
+    replay_ctrl_ess_sum: float = 0.0
+    replay_ctrl_ess_count: int = 0
     replay_ctrl_prev_adds: int = 0
     replay_ctrl_prev_samples: int = 0
     replay_realised_ratio: float = float("nan")

@@ -640,8 +640,8 @@ def rl_sections():
             # Does the switch modality's signal actually reach the
             # learner, and is the trust region behaving. Both readouts
             # exist because the global staleness instruments are
-            # structurally blind to a rare modality: the actor-KL feeding
-            # the replay reuse controller is an expectation over the
+            # structurally blind to a rare modality: the importance-ratio
+            # ESS feeding the replay reuse controller is a moment over the
             # policy, and the capacity probe grades VALUE error, not
             # action-distribution fidelity.
             name="5 · Staleness, ISR & trust region",
@@ -678,7 +678,7 @@ def rl_sections():
                     range_y=(0, 1),
                 ),
                 lp(
-                    "Actor KL (ceiling 0.045)",
+                    "Actor KL",
                     [
                         "player_learner_actor_backward_kl",
                         "player_learner_actor_forward_kl",
@@ -693,8 +693,11 @@ def rl_sections():
                     ["player_rho_clip_frac"],
                 ),
                 lp(
-                    "Learner/behaviour importance-ratio ESS",
-                    ["player_isr_ess"],
+                    # _learner_actor_ is live vs behaviour, what the reuse
+                    # controller holds above its floor; _isr_ is pi_old vs
+                    # behaviour, the ratio v-trace truncates.
+                    "Learner/behaviour importance-ratio ESS (controller floor 0.75)",
+                    ["player_learner_actor_ess", "player_isr_ess"],
                     range_y=(0, 1),
                 ),
                 lp(
