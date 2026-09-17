@@ -24,6 +24,7 @@ from rl.model.constants import (
 )
 from rl.model.heads import HeadParams
 from rl.model.history_encoder import major_arg_step_mask
+from rl.model.trunk import project_trunk_kernels
 from rl.model.utils import Params
 from rl.online.artifact import Porygon2BuilderTrainState, Porygon2PlayerTrainState
 from rl.online.config import Porygon2LearnerConfig
@@ -67,18 +68,24 @@ from rl.utils import average
 logger = logging.getLogger(__name__)
 
 
-def trunk_group_l2_logs(pred, value_mask) -> dict[str, jax.Array]:
-    """player_trunk_out_row_l2_<group>: the trunk output's mean row L2 per
-    SequenceGroup over the valid rows of the valid steps (the per-step sums
-    and counts come from trunk.group_row_l2, so each row weighs once)."""
+def trunk_group_row_logs(pred, value_mask) -> dict[str, jax.Array]:
+    """player_trunk_out_row_l2_<group> and player_trunk_in_out_cosine_<group>:
+    the trunk output's mean row L2 and the mean input-to-output row cosine
+    per SequenceGroup over the valid rows of the valid steps (the per-step
+    sums and counts come from trunk.group_row_l2 / group_row_cosine, so
+    each row weighs once)."""
     step = value_mask[..., None]
     l2_sum = jnp.where(step, pred.trunk_out_group_l2_sum, 0).sum(axis=(0, 1))
-    rows = jnp.where(step, pred.trunk_out_group_rows, 0).sum(axis=(0, 1))
-    mean_l2 = l2_sum / rows.clip(min=1)
-    return {
-        f"player_trunk_out_row_l2_{group.name.lower()}": mean_l2[int(group)]
-        for group in SequenceGroup
-    }
+    cosine_sum = jnp.where(step, pred.trunk_in_out_cosine_sum, 0).sum(axis=(0, 1))
+    rows = jnp.where(step, pred.trunk_out_group_rows, 0).sum(axis=(0, 1)).clip(min=1)
+    logs = {}
+    for group in SequenceGroup:
+        name = group.name.lower()
+        logs[f"player_trunk_out_row_l2_{name}"] = l2_sum[int(group)] / rows[int(group)]
+        logs[f"player_trunk_in_out_cosine_{name}"] = (
+            cosine_sum[int(group)] / rows[int(group)]
+        )
+    return logs
 
 
 def advantage_statistics(
@@ -100,6 +107,7 @@ def apply_player_gradients(
     frames: jax.Array,
     reference_rate: float,
     old_policy_snap_steps: int,
+    project_kernels: bool = False,
 ) -> tuple[Porygon2PlayerTrainState, jax.Array, jax.Array]:
     """Commit the pre-update-parameter EMA and the old-policy snapshot
     together with accepted optimiser steps.
@@ -116,6 +124,11 @@ def apply_player_gradients(
         raise ValueError("old_policy_snap_steps must be at least one")
     next_step_count = player_state.step_count + 1
     next_state = player_state.apply_gradients(grads=gradients)
+    if project_kernels:
+        # nGPT: the trunk kernels back onto the unit sphere after every
+        # step. The reference and old-policy trees are copies of projected
+        # params, so they are left alone.
+        next_state = next_state.replace(params=project_trunk_kernels(next_state.params))
     snap = (next_step_count % old_policy_snap_steps == 0).astype(jnp.float32)
     next_state = next_state.replace(
         step_count=next_step_count,
@@ -631,7 +644,7 @@ def train_step(
             # enter at RMS 1 = L2 16 at width 256, so this is what the six
             # blocks wrote onto each group; a group sitting at its input
             # norm is one the trunk does not revise.
-            **trunk_group_l2_logs(learner_player_pred, value_mask),
+            **trunk_group_row_logs(learner_player_pred, value_mask),
             # The history encoder's step GAT and write gate
             # (history_encoder.history_step_stats): per-trajectory scalars
             # broadcast over T, so this is the valid-step-weighted batch mean.
@@ -727,6 +740,7 @@ def train_step(
         player_valid.sum(),
         config.player_reg_ema_rate,
         config.player_old_policy_snap_steps,
+        config.player_trunk_normalised_residual,
     )
     training_logs.update(player_logs)
     training_logs.update(

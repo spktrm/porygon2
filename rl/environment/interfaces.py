@@ -157,6 +157,11 @@ class PlayerActorOutput:
     # what the blocks wrote, taken BEFORE the output norm.
     trunk_out_group_l2_sum: ArrayLike = ()
     trunk_out_group_rows: ArrayLike = ()
+    # Per-group sum of the cosine between each row entering the trunk and
+    # leaving it (trunk.group_row_cosine), over the same rows: the read of
+    # whether the residual path still carries the input, which the L2 above
+    # cannot give once the normalised residual pins every row at RMS 1.
+    trunk_in_out_cosine_sum: ArrayLike = ()
     # History-encoder telemetry (history_encoder.history_step_stats), one
     # per-trajectory scalar broadcast over T: the step GAT's normalised
     # attention entropy, the mass non-source rows place on source rows

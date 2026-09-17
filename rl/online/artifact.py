@@ -37,6 +37,7 @@ from rl.environment.interfaces import (
 from rl.environment.utils import get_ex_builder_step, get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.heads import HeadParams
+from rl.model.trunk import project_trunk_kernels
 from rl.model.utils import Params, ParamsContainer
 from rl.online.config import Porygon2LearnerConfig
 from rl.online.league import MAIN_KEY, League
@@ -67,6 +68,9 @@ def _model_capabilities(learner_config: Porygon2LearnerConfig) -> dict:
         # precisely to stop that, and it only works if the literal moves
         # with the head.
         pi_head="flat_bilinear_readout",
+        # The normalised residual adds param leaves and changes the forward;
+        # a checkpoint from the other setting must not restore onto it.
+        trunk_normalised_residual=bool(learner_config.player_trunk_normalised_residual),
     )
 
 
@@ -140,14 +144,26 @@ class Porygon2BuilderTrainState(train_state.TrainState):
     frame_count: int = 0
 
 
-def player_model_config_for(learner_config: Porygon2LearnerConfig):
-    """The learner's player model config with every learner-config toggle
-    applied: main.py builds the learner network from this, and so do the
-    offline screens, so a screen replays a checkpoint-mode relaunch exactly."""
+def player_model_config_for(
+    learner_config: Porygon2LearnerConfig, train: bool = True, dtype=None
+):
+    """The player model config with every learner-config toggle applied:
+    main.py builds the learner network from this (train=True), the actor
+    network too (train=False, the actor dtype), and so do the offline
+    screens, so a screen replays a checkpoint-mode relaunch exactly. ONE
+    place, so a trunk flag cannot reach the learner and miss the actor."""
     from rl.model.config import get_player_model_config
 
-    model_config = get_player_model_config(learner_config.generation, train=True)
+    if dtype is None:
+        model_config = get_player_model_config(learner_config.generation, train=train)
+    else:
+        model_config = get_player_model_config(
+            learner_config.generation, train=train, dtype=dtype
+        )
     model_config.potential_head.enabled = learner_config.player_potential_strength > 0
+    model_config.encoder.trunk.normalised_residual = (
+        learner_config.player_trunk_normalised_residual
+    )
     return model_config
 
 
@@ -175,6 +191,10 @@ def create_train_state(
         actor_output=ex_player_actor_out,
     )
     initial_player_params = player_params_init_fn(rng)
+    if config.player_trunk_normalised_residual:
+        # nGPT normalises the matrices before the first step as well as
+        # after every update.
+        initial_player_params = project_trunk_kernels(initial_player_params)
     player_optimizer = optax.chain(
         optax.clip_by_global_norm(config.player_clip_gradient),
         optax.adamw(

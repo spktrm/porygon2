@@ -70,9 +70,9 @@ def test_actor_forward_matches_the_learner_forward_on_the_kept_rows(
         nn.Module, dict, PlayerActorInput, PlayerActorOutput
     ],
 ) -> None:
-    from rl.model.config import get_player_model_config
     from rl.model.player_model import get_player_model
     from rl.model.utils import open_zero_init_paths
+    from tests.conftest import session_player_model_config
 
     _, params, actor_input, actor_output = real_model_and_trajectory
     params = open_zero_init_paths(params, ["action_head"])
@@ -81,10 +81,10 @@ def test_actor_forward_matches_the_learner_forward_on_the_kept_rows(
     # difference left is the sequence length -- a GEMM leading-dim change,
     # ~1e-6 relative here against the 0.05 the bf16 forward is allowed.
     learner = get_player_model(
-        get_player_model_config(generation=9, train=True, dtype=jnp.float32)
+        session_player_model_config(train=True, dtype=jnp.float32)
     )
     actor = get_player_model(
-        get_player_model_config(generation=9, train=False, dtype=jnp.float32)
+        session_player_model_config(train=False, dtype=jnp.float32)
     )
     with jax.default_matmul_precision("highest"):
         learner_out = jax.jit(learner.apply)(

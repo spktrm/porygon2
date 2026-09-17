@@ -329,6 +329,25 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # The normalised residual's per-block step size, mean
+                    # over width (0.05 at init; absent with the flag off).
+                    # Late blocks opening while early ones close is the
+                    # depth reading the stacked-leaf rms would average away.
+                    "Trunk residual alpha per block",
+                    [],
+                    regex="^player_trunk_alpha_",
+                ),
+                lp(
+                    # Mean L2 of the embedding-space vectors of two trunk
+                    # kernels: 1 by construction under the projection, the
+                    # spectral-growth read on a plain trunk.
+                    "Trunk kernel column norms",
+                    [
+                        "player_trunk_kernel_col_norm_attention_q",
+                        "player_trunk_kernel_col_norm_ffw_up",
+                    ],
+                ),
+                lp(
                     "Trunk and action-head gradient norms",
                     ["player_action_head_grad_norm", "player_trunk_grad_norm"],
                 ),
@@ -354,6 +373,17 @@ def rl_sections():
                     [],
                     regex="^player_trunk_out_row_l2_",
                     log_y=True,
+                ),
+                lp(
+                    # Cosine between each row entering the trunk and leaving
+                    # it, per group: under the normalised residual every row
+                    # leaves at RMS 1 (L2 pinned at 16), so this is the read
+                    # of whether the residual path still carries the input.
+                    # 1 = a group the trunk leaves untouched.
+                    "Trunk input-output row cosine per group",
+                    [],
+                    regex="^player_trunk_in_out_cosine_",
+                    range_y=(-1, 1),
                 ),
                 lp(
                     # The input norm's per-group channel scale, zero at init

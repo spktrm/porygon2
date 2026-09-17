@@ -248,10 +248,10 @@ def test_real_actor_parameter_view_is_bit_identical(
         nn.Module, dict, PlayerActorInput, PlayerActorOutput
     ],
 ) -> None:
-    from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import actor_params_view, get_player_model
     from rl.model.utils import open_zero_init_paths
+    from tests.conftest import session_player_model_config
 
     _, variables, actor_input, actor_output = real_model_and_trajectory
     variables = open_zero_init_paths(variables, ["action_head"])
@@ -259,7 +259,7 @@ def test_real_actor_parameter_view_is_bit_identical(
         env=jax.tree.map(lambda leaf: leaf[:1], actor_input.env)
     )
     actor_output = jax.tree.map(lambda leaf: leaf[:1], actor_output)
-    config = get_player_model_config(9, train=False)
+    config = session_player_model_config(train=False)
     apply_model = jax.jit(get_player_model(config).apply)
     arguments = (actor_input, actor_output, HeadParams())
     rngs = {"sampling": jax.random.key(9)}

@@ -27,7 +27,7 @@ from rl.environment.interfaces import Trajectory
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.environment.utils import acted_rows
 from rl.model.builder_model import get_builder_model
-from rl.model.config import get_builder_model_config, get_player_model_config
+from rl.model.config import get_builder_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.utils import ParamsContainer, get_num_params
@@ -497,8 +497,8 @@ def main(args: argparse.Namespace):
         learner_config.generation, train=True
     )
     actor_device, actor_dtype = resolve_actor_device(learner_config.player_actor_device)
-    actor_player_model_config = get_player_model_config(
-        learner_config.generation, train=False, dtype=actor_dtype
+    actor_player_model_config = player_model_config_for(
+        learner_config, train=False, dtype=actor_dtype
     )
     actor_builder_model_config = get_builder_model_config(
         learner_config.generation, train=False, dtype=actor_dtype

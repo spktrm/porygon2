@@ -487,7 +487,7 @@ class Porygon2PlayerModel(nn.Module):
         self,
         sequence: jax.Array,
         row_valid: jax.Array,
-        trunk_out_group_l2: tuple[jax.Array, jax.Array] | None,
+        trunk_group_stats: tuple[jax.Array, jax.Array, jax.Array] | None,
         env_step: PlayerEnvOutput,
         actor_output: PlayerActorOutput,
         head_params: HeadParams,
@@ -522,7 +522,7 @@ class Porygon2PlayerModel(nn.Module):
             # phase-1 support-anchor shape -- so it gets its own reading.
             # Offline twin: rl/probes/trunk_homogeneity.py, per block.
             row_cosine, row_participation = row_homogeneity(sequence)
-            group_l2_sum, group_rows = trunk_out_group_l2
+            group_l2_sum, group_rows, in_out_cosine_sum = trunk_group_stats
             learner_only = {
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
@@ -531,6 +531,7 @@ class Porygon2PlayerModel(nn.Module):
                 "trunk_row_participation": row_participation,
                 "trunk_out_group_l2_sum": group_l2_sum,
                 "trunk_out_group_rows": group_rows,
+                "trunk_in_out_cosine_sum": in_out_cosine_sum,
                 # The History panels: the step GAT's read and the
                 # backbone's write gate (history_encoder.history_step_stats).
                 "history_step_attn_entropy": history_stats["step_attn_entropy"],
@@ -565,7 +566,7 @@ class Porygon2PlayerModel(nn.Module):
         (
             sequence,
             row_valid,
-            trunk_out_group_l2,
+            trunk_group_stats,
             history_stats,
             history_carry,
         ) = self.encoder(
@@ -585,7 +586,7 @@ class Porygon2PlayerModel(nn.Module):
         )(
             sequence,
             row_valid,
-            trunk_out_group_l2,
+            trunk_group_stats,
             actor_input.env,
             actor_output,
         )

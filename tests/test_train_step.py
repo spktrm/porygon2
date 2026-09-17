@@ -18,6 +18,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from rl.model.constants import SequenceGroup
+
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 
@@ -155,9 +157,26 @@ def test_train_step_smoke() -> None:
         "player_state_kernel_rms_status",
         "player_state_kernel_rms_boosts",
         "player_state_kernel_rms_other",
+        "player_trunk_kernel_col_norm_attention_q",
+        "player_trunk_kernel_col_norm_ffw_up",
+        *(
+            f"player_trunk_in_out_cosine_{group.name.lower()}"
+            for group in SequenceGroup
+        ),
     ):
         assert key in logs, key
         assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
+    # The normalised residual's alpha panel exists exactly when the flag is
+    # on: this pins "flag off logs nothing" today and becomes the presence
+    # test the day the launch default flips, without a second compile.
+    alpha_keys = [key for key in logs if key.startswith("player_trunk_alpha_")]
+    if config.player_trunk_normalised_residual:
+        assert "player_trunk_alpha_attention_b0" in alpha_keys
+        assert "player_trunk_alpha_ffw_b0" in alpha_keys
+        for key in alpha_keys:
+            assert np.isfinite(np.asarray(logs[key], dtype=np.float32)).all(), key
+    else:
+        assert alpha_keys == []
 
     # Step-1 panels: present (NaN allowed where this one-game batch has no
     # rows in a slice), support counts finite.

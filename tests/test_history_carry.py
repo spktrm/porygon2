@@ -60,8 +60,21 @@ def carry_params(
     """The flat readout is zero-init (every logit exactly 0 at step 0), so
     on fresh params log_policy is uniform whatever the history says and a
     "the carry moves the policy" control passes or fails vacuously. Open
-    the readout's zero paths so the pathway is live and the controls bite."""
-    return open_zero_init_paths(real_model_and_trajectory[1], ["action_head"])
+    the readout's zero paths so the pathway is live and the controls bite.
+    The normalised residual's alphas are the same kind of gate: at their
+    init each sub-layer moves a row by a sixth, so history reaches the
+    policy rows too faintly for the controls (a shifted carry moved the
+    fresh policy 0.025 against the 0.05 bar; the plain trunk's ~2.0). At a
+    third the controls bite and the replay drift stays inside the bar
+    (0.027 policy / 0.041 value); at a half the drift is already 0.056."""
+    params = open_zero_init_paths(real_model_and_trajectory[1], ["action_head"])
+
+    def open_alpha(path, leaf):
+        if getattr(path[-1], "key", None) in ("attention_alpha", "ffw_alpha"):
+            return jnp.full_like(leaf, 1 / 3)
+        return leaf
+
+    return jax.tree_util.tree_map_with_path(open_alpha, params)
 
 
 def _width(params: dict) -> int:

@@ -90,10 +90,10 @@ def test_real_actor_default_head_params_are_bit_identical(
         nn.Module, dict, PlayerActorInput, PlayerActorOutput
     ],
 ) -> None:
-    from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model
     from rl.model.utils import open_zero_init_paths
+    from tests.conftest import session_player_model_config
 
     _, variables, actor_input, actor_output = real_model_and_trajectory
     variables = open_zero_init_paths(variables, ["action_head"])
@@ -102,7 +102,7 @@ def test_real_actor_default_head_params_are_bit_identical(
     )
     actor_output = jax.tree.map(lambda leaf: leaf[:4], actor_output)
     apply_model = jax.jit(
-        get_player_model(get_player_model_config(9, train=False)).apply
+        get_player_model(session_player_model_config(train=False)).apply
     )
     rngs = {"sampling": jax.random.key(9)}
     plain = apply_model(variables, actor_input, actor_output, HeadParams(), rngs=rngs)

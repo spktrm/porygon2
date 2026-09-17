@@ -108,7 +108,7 @@ from rl.model.state_features import (
     public_persistent_features,
     public_transient_features,
 )
-from rl.model.trunk import Trunk, group_row_l2
+from rl.model.trunk import Trunk, group_row_cosine, group_row_l2
 
 # Typed action-slot groups (canonical partition lives in
 # rl/environment/data.py next to the modality masks): move slots are
@@ -1125,17 +1125,23 @@ class Encoder(nn.Module):
         )
         kept_rows = self.kept_rows()
         read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
+        trunk_in = sequence
         trunk_out = self.trunk(sequence, row_valid, read_mask)
-        # The panel's read of which rows the blocks WRITE, taken before the
-        # output norm puts every row back at RMS 1. Learner-only.
+        # The panels' read of which rows the blocks WRITE (L2, taken before
+        # the output norm puts every row back at RMS 1) and by how much they
+        # TURN each row (input-output cosine). Learner-only.
         if self.cfg.train:
-            trunk_out_group_l2 = group_row_l2(
+            group_l2_sum, group_rows = group_row_l2(
                 trunk_out, row_valid, self.group_ids(), NUM_SEQUENCE_GROUPS
             )
+            in_out_cosine_sum = group_row_cosine(
+                trunk_in, trunk_out, row_valid, self.group_ids(), NUM_SEQUENCE_GROUPS
+            )
+            trunk_group_stats = (group_l2_sum, group_rows, in_out_cosine_sum)
         else:
-            trunk_out_group_l2 = None
+            trunk_group_stats = None
         sequence = self.output_normalisation(trunk_out, row_valid, self.group_ids())
-        return sequence, row_valid, trunk_out_group_l2
+        return sequence, row_valid, trunk_group_stats
 
     def _event_inputs(
         self,
@@ -1498,13 +1504,13 @@ class Encoder(nn.Module):
         *history_inputs, history_output = self._history_inputs(
             env_step, packed_history_step, history_step, carry
         )
-        sequence, row_valid, trunk_out_group_l2 = _forward_vmap()(
+        sequence, row_valid, trunk_group_stats = _forward_vmap()(
             self, env_step, *history_inputs
         )
         return (
             sequence,
             row_valid,
-            trunk_out_group_l2,
+            trunk_group_stats,
             history_step_stats(history_output),
             history_carry_from(history_output),
         )

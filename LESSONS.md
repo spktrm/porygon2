@@ -9951,3 +9951,104 @@ fix and 0.72 after, so the retain bias did not cause the shrink — the rewrite
 did. Worth its own read: the carry moves the policy about a THIRD as much at
 init as it used to, which for a rewrite premised on memories reading each
 other is the opposite of the intended direction.
+
+## Trunk feature-norm growth and the nGPT normalised residual — 2026-09-17
+
+**Measurement (run ijk4nyi4, the public-tier lineage from step 0).** The
+plain pre-RMSNorm residual stream grows without bound over the run.
+`player_trunk_out_row_l2_{private_entity,public_entity,cls}`, read before
+the output norm, went 266 / 211 / 319 at 99k to 1129 / 1191 / 1637 at 557k,
+linear, no plateau. On the 5,643-state switch cohort at `ckpt_00513639`
+(the graceful-stop checkpoint) a sheet row enters the trunk at RMS 1.0,
+leaves block 1 at 36 and block 6 at 76; per-block update RMS
+`[35.9, 9.6, 17.5, 21.9, 9.6, 23.9]`; cos(input row, block-6 row) = 0.009,
+the final row 0.96 aligned with the block-5 row and 0.58 with block 1's
+write. Weights: trunk Frobenius norm 145 → 167 over 20k → 514k (+15%,
+linear, block 1 carrying most of it), but top singular values x2.5-3
+(block-1 ffw up-projection 4.0 → 8.6 at 280k → 11.1 at 514k;
+`player_trunk_attn_out_rms` 0.063 → 0.079, `player_trunk_mlp_out_rms`
+0.032 → 0.043). SwiGLU is cubic in weight scale, so a 2.5x spectral growth
+is a 20x feature growth. The norm scales `(1+scale)` all sit at ~1, so
+pre-norm absorbs the scale functionally; the cost is that the residual path
+no longer carries the input -- block 1 is the de facto embedding (matches
+the 2026-09-10 first-block causal test) -- and bf16 at RMS 76 has no
+resolution for input-scale content. Cross-lineage, suggestive only: the
+previous lineage's 280k checkpoint (older layout) read depth RMS
+`[1.0, 1.7, 2.2, 2.8, 3.3, 5.4, 3.5]` and cosine 0.32. Scripts and raw
+numbers: `runtime/type-probe-switch/attention/ckpt_00513639/`.
+
+**Mechanism (branch `normalised-residual`, flag
+`player_trunk_normalised_residual`, default OFF = bit-identical).** nGPT's
+residual (Loshchilov et al. 2024, arXiv 2410.01131, eq. 10-11):
+`row = unit_rms(row + alpha * (unit_rms(sublayer_out) - row))` per
+sub-layer, alpha a per-block per-channel f32 leaf at 1/num_blocks = 1/6
+(nGPT's stated rule "of order 1/n_layers"; their literal 0.05 is the 24-36
+layer value). **At init the normalised trunk is ~80x less history-sensitive
+than the plain one**: in `tests/test_history_carry.py` a one-request-shifted
+carry moves the fresh policy 0.025 (0.008 at alpha 0.05) where the plain
+trunk read ~2.0, because each sub-layer write is a sixth of an RMS-1 row
+rather than an unbounded add. The carry fixture therefore opens the alphas
+to 1/3 for its controls, as it opens the readout's zero paths (drift 0.027
+policy / 0.041 value inside the 0.05 bf16 bar; 0.056 at 1/2).
+(`encoder/trunk/blocks/{attention,ffw}_alpha`), RMS-1 rather than unit-L2
+so the stream shares the row convention every row enters at and the
+zeros-init pre-norms stay identity at init; PLUS nGPT's
+`normalize_matrices`: every embedding-space vector of the six block kernels
+projected to unit L2 at init and after every optimiser step
+(`trunk.project_trunk_kernels`, called from `apply_player_gradients`;
+`reg_params` / `old_policy_params` left alone). Deviations from nGPT,
+deliberate: pre-RMSNorms kept (identity at init; their gain is the
+per-input scale), no `s_qk` (QK-norm is on), no `s_u`/`s_nu`/`s_z` (nGPT's
+ablation prices fixed scales at +0.11% loss), biases kept, no alpha scale
+trick (the fallback if alphas stall). Panels: `player_trunk_alpha_*` (per
+block), `player_trunk_kernel_col_norm_*`, and
+`player_trunk_in_out_cosine_<group>` -- the replacement read once the L2
+panel pins at sqrt(width) by construction. The flag reaches the ACTOR
+through `artifact.player_model_config_for` (main.py and harness build the
+actor config through it now); a learner-only flag would have run the
+actor with plain residuals over alpha-trained weights.
+
+**Test lesson.** `tests/test_public_sequence.py`'s request-vs-event parity
+compared bf16 rows from two separately compiled programs at 1e-3, below
+bf16's ulp at the values compared (0.02 at magnitude 4). It passed only
+while the two programs' autotuned kernels agreed bit for bit; the flag's
+program broke that for 22% of elements although the pre-trunk rows are
+provably identical between flag on and off (params and both paths'
+pre-trunk outputs bit-equal in a direct check). Under pytest the
+persistent XLA kernel cache is off (`conftest.py`), which is why a direct
+script passed and pytest failed. The test now reads the parity through an
+f32 forward over the same f32 params, the `test_actor_sequence.py`
+pattern. A bf16 cross-program equality test needs either f32 or a
+tolerance at bf16's ulp.
+
+**Instrument verified offline (Step 1, no run).** `harness.forward` over
+the tactical cohort at `ckpt_00513639` (flag off) reads the new
+`player_trunk_in_out_cosine_<group>` panel as private_entity 0.012 /
+public_entity 0.119 / cls 0.071 / move_slot 0.113 / value_cls 0.132 /
+prev_action 0.000; the probe's 0.009 was the switch-legal candidates'
+sheet rows only, the panel is all six sheet rows over every valid step.
+These are the control's banked cosine values.
+
+**Pre-registered acceptance (scratch lineage, flag ON, launch config
+uniform-KL 0.01 / magnet 0.025 / world model off; user 2026-09-17).**
+By construction: `player_trunk_out_row_l2_*` = 16 ± 0.1, kernel column
+norms 1.0, no non-finite gate trips. Mechanism: private-entity in/out
+cosine ≥ 0.3 at 100k and not decaying by 200k (control 0.009); alphas off
+0.05 by 33k, none collapsing to 0 unexplained. Claim: wr-t1 heuristic ≥
+the ijk4nyi4 row at 100k (0.108) and 200k (0.172), expected parity at
+100k and a lead at 200k; `player_switch_mass_choice` ≥ 0.05 at 200k
+(ijk4nyi4 0.019). Offline at 200k: switch-readout `candidate_post`
+balanced accuracy above ijk4nyi4's 200k checkpoint. **Control: the banked
+lineages only (user decision) -- ijk4nyi4 ran 0-320k with no uniform-KL
+floor, then 0.05, then 0.025, at magnet 0.05 throughout, so the
+behavioural gap is the trunk change PLUS those objective changes; the
+construction and cosine reads are within-run and need no control.**
+Fallbacks: instability in the first 5k → `residual_alpha_init` 1/6, once;
+cosine restored but wr-t1 below the control by > 0.03 at 200k → record
+and retire; alphas → 0 with cosine at 1 → the nGPT alpha scale trick.
+Declined: checkpoint-mode resume of 513639 (the trained blocks write 36x
+the input; alpha 0.05 would make the trunk near-identity at step 1 and the
+hold would judge recovery); LayerNorm Scaling (the signature is block-1
+dominance, not inert deep blocks); skip paths (moot if the cosine
+recovers); weight decay as the control (superseded by the reference
+mechanism). Local plan: `docs/normalised-residual-2026-09-17.md`.

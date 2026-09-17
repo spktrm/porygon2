@@ -3,7 +3,11 @@
 No gates. `RMSNorm` is `normed * (1 + scale)` with `scale` zeros-init, i.e.
 exactly identity at step 0, and the residual adds are ungated -- so the
 trunk is live at init by construction and an "is it wired" test needs no
-gate opening.
+gate opening. Under `cfg.normalised_residual` the adds become nGPT's step on
+the RMS-1 sphere (Loshchilov et al. 2024, eq. 10-11) with a per-block,
+per-channel alpha at 0.05: not identity at init, but bounded -- the plain
+residual stream grew 20x over run ijk4nyi4 (LESSONS 2026-09-17) and the
+input's direction was gone from the output by 514k steps.
 """
 
 import jax
@@ -20,8 +24,19 @@ from rl.model.modules import (
 )
 
 
+def unit_rms(x: jax.Array) -> jax.Array:
+    """Each row rescaled to RMS 1 in `modules.RMSNorm`'s arithmetic (variance
+    in f32, the rsqrt cast back to the row's dtype) without its scale: the
+    normalised residual stream then shares the RMS-1 convention every row
+    enters at (modules.SequenceNormalisation), so the zeros-init pre-norms
+    stay identity at init. A zero row stays zero."""
+    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    return x * jax.lax.rsqrt(variance + 1e-6).astype(x.dtype)
+
+
 class TrunkBlock(nn.Module):
-    """Pre-norm self-attention, pre-norm SwiGLU MLP, both plain residual.
+    """Pre-norm self-attention, pre-norm SwiGLU MLP, both plain residual --
+    or, under `cfg.normalised_residual`, both a step on the RMS-1 sphere.
 
     ONE MLP for every row -- deliberately not a per-token-type expert. Where
     a genuinely per-modality parameter is wanted it lives in the action
@@ -30,9 +45,25 @@ class TrunkBlock(nn.Module):
 
     cfg: ConfigDict
 
+    def _normalised_update(
+        self, sequence: jax.Array, sublayer_out: jax.Array, alpha_name: str
+    ) -> jax.Array:
+        # nGPT eq. 10-11: stream and sub-layer output both at RMS 1, alpha
+        # the per-channel step. Stored f32 like every leaf, cast at use.
+        alpha = self.param(
+            alpha_name,
+            nn.initializers.constant(self.cfg.get("residual_alpha_init", 0.05)),
+            (sequence.shape[-1],),
+            jnp.float32,
+        ).astype(sequence.dtype)
+        return unit_rms(sequence + alpha * (unit_rms(sublayer_out) - sequence))
+
     @nn.compact
     def __call__(self, carry: tuple[jax.Array, jax.Array], read_mask: jax.Array):
         sequence, row_valid = carry
+        # .get: the world-model flow block and the hand-rolled test trunks
+        # build this ConfigDict without the key.
+        normalised_residual = self.cfg.get("normalised_residual", False)
         # Validity AND the static leak partition (rl/model/constants.py
         # SEQUENCE_READ_MASK, or its policy-readable sub-block on the actor's
         # shorter sequence): policy-readable rows have no in-edge from the
@@ -52,11 +83,18 @@ class TrunkBlock(nn.Module):
             dtype=sequence.dtype,
             collect_intermediates=COLLECT_INTERMEDIATES,
         )(q=RMSNorm()(sequence), kv=RMSNorm()(sequence), mask=mask)
-        sequence = sequence + attended
+        if normalised_residual:
+            sequence = self._normalised_update(sequence, attended, "attention_alpha")
+        else:
+            sequence = sequence + attended
 
-        sequence = sequence + FFWMLP(
+        ffw_out = FFWMLP(
             hidden_size=self.cfg.hidden_size, use_bias=self.cfg.use_bias, name="ffw"
         )(RMSNorm()(sequence))
+        if normalised_residual:
+            sequence = self._normalised_update(sequence, ffw_out, "ffw_alpha")
+        else:
+            sequence = sequence + ffw_out
 
         # Hard-zero invalid rows so a padded row never accumulates content.
         sequence = jnp.where(row_valid[..., None], sequence, 0)
@@ -119,6 +157,72 @@ def group_row_l2(
     l2_sum = jnp.einsum("...r,rg->...g", l2 * valid, membership, precision=highest)
     rows = jnp.einsum("...r,rg->...g", valid, membership, precision=highest)
     return l2_sum, rows
+
+
+def group_row_cosine(
+    sequence_in: jax.Array,
+    sequence_out: jax.Array,
+    row_valid: jax.Array,
+    group_ids: jax.Array,
+    num_groups: int,
+) -> jax.Array:
+    """Per-group sum over valid rows of the cosine between a row as it
+    enters the trunk and the same row as it leaves, (..., num_groups) over
+    the trailing (rows, dim) axes. Under the normalised residual every row
+    leaves at RMS 1, so the L2 read (group_row_l2) is blind by construction
+    and this is what the blocks turned each row by. Summed for
+    group_row_l2's reason; the caller divides by its row count."""
+    inputs = sequence_in.astype(jnp.float32)
+    outputs = sequence_out.astype(jnp.float32)
+    dot = jnp.sum(inputs * outputs, axis=-1)
+    norms = jnp.linalg.norm(inputs, axis=-1) * jnp.linalg.norm(outputs, axis=-1)
+    cosine = dot / jnp.maximum(norms, 1e-12)
+    membership = jax.nn.one_hot(group_ids, num_groups, dtype=jnp.float32)
+    valid = row_valid.astype(jnp.float32)
+    highest = jax.lax.Precision.HIGHEST
+    return jnp.einsum("...r,rg->...g", cosine * valid, membership, precision=highest)
+
+
+# nGPT's normalize_matrices (train.py): every vector that lives in embedding
+# space is unit-L2 after each optimiser step. Flax kernels are (in, out),
+# stacked (blocks, in, out) under the scan: the projections INTO a block's
+# heads or hidden layer hold one embedding-space vector per column (the
+# input axis), the projections back out hold one per row (the output axis).
+_TRUNK_BLOCKS_PATH = ("params", "encoder", "trunk", "blocks")
+_INPUT_AXIS_KERNELS = frozenset(
+    {
+        ("attention", "q_proj", "kernel"),
+        ("attention", "k_proj", "kernel"),
+        ("attention", "v_proj", "kernel"),
+        ("ffw", "Dense_0", "kernel"),
+    }
+)
+_OUTPUT_AXIS_KERNELS = frozenset(
+    {("attention", "out_proj", "kernel"), ("ffw", "Dense_1", "kernel")}
+)
+
+
+def project_trunk_kernels(variables):
+    """The trunk block kernels with their embedding-space vectors rescaled to
+    unit L2; every other leaf (biases, norm scales, alphas, every module
+    outside the trunk) returned untouched."""
+
+    def project(path, leaf):
+        keys = tuple(getattr(entry, "key", None) for entry in path)
+        if keys[: len(_TRUNK_BLOCKS_PATH)] != _TRUNK_BLOCKS_PATH:
+            return leaf
+        tail = keys[-3:]
+        if tail in _INPUT_AXIS_KERNELS:
+            axis = -2
+        elif tail in _OUTPUT_AXIS_KERNELS:
+            axis = -1
+        else:
+            return leaf
+        kernel = leaf.astype(jnp.float32)
+        norm = jnp.linalg.norm(kernel, axis=axis, keepdims=True)
+        return (kernel / jnp.maximum(norm, 1e-12)).astype(leaf.dtype)
+
+    return jax.tree_util.tree_map_with_path(project, variables)
 
 
 def row_homogeneity(sequence: jax.Array) -> tuple[jax.Array, jax.Array]:

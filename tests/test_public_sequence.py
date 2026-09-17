@@ -21,7 +21,9 @@ from rl.model.constants import (
     PUBLIC_TIER_ROWS,
     SEQUENCE_READ_MASK,
 )
+from rl.model.player_model import get_player_model
 from rl.model.trunk import Trunk
+from tests.conftest import session_player_model_config
 
 
 def test_public_sequence_rows_are_the_layout_prefix_plus_public_cls() -> None:
@@ -68,7 +70,12 @@ def test_trunk_on_the_public_sequence_reproduces_the_full_public_rows() -> None:
 def test_encode_events_matches_the_request_path_where_the_snapshot_is_current(
     real_model_and_trajectory,
 ) -> None:
-    model, params, actor_input, _ = real_model_and_trajectory
+    _, params, actor_input, _ = real_model_and_trajectory
+    # The two paths are two programs: in bf16 their separately autotuned
+    # kernels leave matched rows one ulp apart (0.02 at magnitude 4), which
+    # is above the tolerance below, so the parity is read through an f32
+    # forward over the same (f32-stored) params.
+    model = get_player_model(session_player_model_config(dtype=jnp.float32))
     packed = actor_input.packed_history
     history = actor_input.history
     env = actor_input.env

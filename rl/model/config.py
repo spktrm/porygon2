@@ -84,6 +84,15 @@ def get_player_model_config(
     cfg.encoder.trunk.hidden_size = encoder_hidden_size
     cfg.encoder.trunk.use_bias = encoder_use_bias
     cfg.encoder.trunk.qk_layer_norm = encoder_qk_layer_norm
+    # nGPT-style normalised residual (trunk.TrunkBlock): each sub-layer step
+    # is a per-channel-alpha move on the RMS-1 sphere rather than a plain
+    # add, and train_step projects the block kernels back onto the unit
+    # sphere after every update. Off = today's forward, bit for bit. The
+    # alpha init follows nGPT's stated rule, "of order 1/n_layers" (their
+    # 0.05 at 24-36 layers); at six blocks that is 1/6. Set from the learner
+    # config (artifact.player_model_config_for), never here.
+    cfg.encoder.trunk.normalised_residual = False
+    cfg.encoder.trunk.residual_alpha_init = 1 / cfg.encoder.trunk.num_blocks
 
     # The action readout. Three small heads over named trunk rows -- a
     # scalar per sheet row for switching, ONE bilinear for moves x targets,

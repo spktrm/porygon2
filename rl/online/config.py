@@ -315,6 +315,15 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # run continues on the deployable estimator without a lineage break and
     # the privileged head stays an observer.
     player_privileged_targets: bool = True
+    # nGPT normalised residual in the trunk (rl/model/trunk.py): each block's
+    # two sub-layer steps become alpha-weighted moves on the RMS-1 sphere and
+    # the block kernels are projected back to unit embedding-space vectors
+    # after every update. The plain residual stream grew 20x over ijk4nyi4
+    # and the input's direction was gone from the trunk output by 514k
+    # (cos 0.009). False = today's forward, bit for bit. Reaches the ACTOR
+    # through artifact.player_model_config_for as well -- the two sides must
+    # agree or the actor runs plain residuals over alpha-trained weights.
+    player_trunk_normalised_residual: bool = False
     # PBRS as a potential channel: eta, the scale on the
     # service's unit position potential Phi (INFO_FEATURE__STATE_POTENTIAL,
     # the human-replay outcome fit). > 0 runs a second v-trace channel beside
@@ -358,7 +367,10 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # with the run's own k and Delta gives ~.015 and the measured
     # calibration (0.07 held 0.02-0.03 on the March lineage, 0.005 held
     # nothing) gives ~.05, the gap being the shared-feature and momentum
-    # routes the formula omits. 0 removes the term.
+    # routes the formula omits. On this lineage .05 overshot: switch mass
+    # .16 against a .03-.10 band 30k steps on, with the league winrate
+    # against the 206k snapshot .55 -> .33, so the pre-registered rule
+    # (above .10, halve) applies. 0 removes the term.
     player_uniform_kl_coef: float = 0.05
     # Evaluation only: prune low-probability actions in the thresholded slot.
     # Training actors and V-trace always use the full legal distribution.

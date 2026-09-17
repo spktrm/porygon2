@@ -39,17 +39,24 @@ from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
 from rl.model.utils import open_zero_init_paths  # noqa: F401
 
 
-def session_player_model_config():
+def session_player_model_config(train: bool = True, dtype=None):
     """The session model's config, written once: the fixture builds from it,
     and so does any test that builds a second network to compare against
-    the fixture's params (a differing head set misaligns the output trees).
+    the fixture's params (a differing head set misaligns the output trees),
+    including the ACTOR-side network (train=False), which must carry the
+    same trunk flags as the learner it shares params with.
     The PBRS channel's potential head (2026-09-11) is on, as it is whenever
-    the channel runs, so the slot-invariance and gradient-reach tests read it.
+    the channel runs, so the slot-invariance and gradient-reach tests read it;
+    the normalised residual is on so the dtype and train-step tests cover it.
     """
     from rl.model.config import get_player_model_config
 
-    config = get_player_model_config(generation=9, train=True)
+    if dtype is None:
+        config = get_player_model_config(generation=9, train=train)
+    else:
+        config = get_player_model_config(generation=9, train=train, dtype=dtype)
     config.potential_head.enabled = True
+    config.encoder.trunk.normalised_residual = True
     return config
 
 

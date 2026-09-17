@@ -359,6 +359,47 @@ _TRUNK_LEAVES = {
 _NORM_ENDS = ("input", "output")
 
 
+_TRUNK_ALPHA_SUBLAYERS = ("attention", "ffw")
+_TRUNK_KERNEL_COLUMNS = {
+    "player_trunk_kernel_col_norm_attention_q": (
+        ("encoder", "trunk", "blocks", "attention", "q_proj", "kernel"),
+        -2,
+    ),
+    "player_trunk_kernel_col_norm_ffw_up": (
+        ("encoder", "trunk", "blocks", "ffw", "Dense_0", "kernel"),
+        -2,
+    ),
+}
+
+
+def trunk_alpha_telemetry(param_tree) -> dict[str, jax.Array]:
+    """player_trunk_alpha_{attention,ffw}_b<i>: mean over width of each
+    block's residual step size under the normalised residual
+    (trunk.TrunkBlock); the leaves exist only with the flag on, so the off
+    path logs nothing. Per block rather than one rms over the stacked leaf
+    (the _TRUNK_LEAVES note): the step sizes drifting apart across depth is
+    the reading. player_trunk_kernel_col_norm_*: the mean L2 of two
+    representative kernels' embedding-space vectors -- 1 by construction
+    under the projection, the spectral-growth read on a plain trunk."""
+    logs = {}
+    for sublayer in _TRUNK_ALPHA_SUBLAYERS:
+        path = ("encoder", "trunk", "blocks", f"{sublayer}_alpha")
+        if not _has(param_tree, path):
+            continue
+        alpha = jnp.asarray(_get(param_tree, path), jnp.float32)
+        block_mean = jnp.mean(alpha, axis=-1)
+        for block_index in range(alpha.shape[0]):
+            logs[f"player_trunk_alpha_{sublayer}_b{block_index}"] = block_mean[
+                block_index
+            ]
+    for key, (path, axis) in _TRUNK_KERNEL_COLUMNS.items():
+        if not _has(param_tree, path):
+            continue
+        kernel = jnp.asarray(_get(param_tree, path), jnp.float32)
+        logs[key] = jnp.mean(jnp.linalg.norm(kernel, axis=axis))
+    return logs
+
+
 def norm_scale_telemetry(param_tree) -> dict[str, jax.Array]:
     """player_{input,output}_norm_scale_rms_<group>: rms of each SequenceGroup's
     row of the channel scale of the norm at either end of the trunk
@@ -488,6 +529,7 @@ def head_param_telemetry(params, grads) -> dict[str, jax.Array]:
         logs[key] = optax.global_norm(_get(grad_tree, path))
     logs.update(state_kernel_telemetry(param_tree))
     logs.update(norm_scale_telemetry(param_tree))
+    logs.update(trunk_alpha_telemetry(param_tree))
     return logs
 
 

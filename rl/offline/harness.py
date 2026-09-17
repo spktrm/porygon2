@@ -56,6 +56,7 @@ from rl.model.heads import HeadParams
 from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent, resolve_actor_device
+from rl.online.artifact import player_model_config_for
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.player_actor import PlayerActor
 from rl.online.training.batching import stack_batch
@@ -164,7 +165,14 @@ def play_games(
     if device is None:
         device = ctx.config.player_actor_device
     actor_device, actor_dtype = resolve_actor_device(device)
-    actor_config = get_player_model_config(generation, train=False, dtype=actor_dtype)
+    actor_config = player_model_config_for(ctx.config, train=False, dtype=actor_dtype)
+    if generation != ctx.config.generation:
+        actor_config = get_player_model_config(
+            generation, train=False, dtype=actor_dtype
+        )
+        actor_config.encoder.trunk.normalised_residual = (
+            ctx.config.player_trunk_normalised_residual
+        )
     if search_arm is not None:
         # The searching actor (plan Step 4): `params` must carry the
         # world-model artifact's subtrees (load_search_params); "blind"
@@ -336,7 +344,11 @@ def forward(
     host numpy-able jax arrays; read the action cells with
     decode_log_policy(pred, flat_action_mask) and V as
     pred.value_head.expectation.""" ""
-    net = get_player_model(get_player_model_config(generation, train=True))
+    learner_config = get_learner_config()
+    if generation == learner_config.generation:
+        net = get_player_model(player_model_config_for(learner_config))
+    else:
+        net = get_player_model(get_player_model_config(generation, train=True))
     apply = jax.jit(
         jax.vmap(
             net.apply,
