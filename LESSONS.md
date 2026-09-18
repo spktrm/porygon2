@@ -63,10 +63,24 @@ and over the full window differ at ~2e-4 — the contracts run under
 --fresh-subtrees encoder/history_encoder --trunk-ckpt ckpts/gen9/ckpt_00036634
 --history-recurrence {loop,stacked} --num-steps 20000`, seeds 0 and 1,
 sequential (the decoded store needs ~23 GB), logs `runtime/ablation-history/`.
-Δ = eval_loss_public_value(stacked) − (loop) at 20k against the loop arm's
-seed spread s: Δ ≤ s → stacked wins; Δ > s → Δ nats is what the loop was
-worth, read beside the event losses, the actor-forward throughput and the
-divergence probe. Also threaded: the offline trainer's model config now carries
+Deciding number, AMENDED before any comparison was read (the loop arm's own
+eval at 5k showed why): Δ = eval_nats_per_token(stacked) − (loop) at 20k,
+with eval_loss_flow beside it, against the loop arm's seed spread s: Δ ≤ s →
+stacked wins; Δ > s → Δ nats is what the loop was worth, read beside the
+actor-forward throughput and the divergence probe. `eval_loss_public_value`
+was the plan's primary and is demoted: it sits at ln 2 (0.686 at 5k, R² 0.014)
+for the offline public critic in EVERY run to date (heydhats 30-45k: -0.03 to
++0.01; LESSONS 09-16: .016 at 3k), so it cannot separate the arms.
+
+**The offline public critic does not learn outcomes — open, not the labels.**
+400 perspectives from `gen9randombattle-turnslices-20260916` shard 0: each
+record's two sides carry opposite outcomes (0 of 200 the same), wins 50%, and
+the final state's own STATE_POTENTIAL correlates with the outcome at 0.865, so
+a critic reading the final state alone should reach R² ~0.75; the eval reads
+0.01 after `--joint` training. The 09-16 candidates (head learning rate,
+longer training, joint) are not it — joint is on here. The train-side
+`public_value_r2*` panels are additionally a per-batch artefact (batch = one
+game, outcome variance 0 → R² ≈ -1e8) and should pool like the eval does. Also threaded: the offline trainer's model config now carries
 the trunk's `normalised_residual` (it ran the plain trunk before, silently).
 
 ## Removal ledger — 2026-09-18 history tidy (structure-only, bit-identical)
