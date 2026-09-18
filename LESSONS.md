@@ -98,7 +98,67 @@ batch size 1 (one game, one label sign, its mirror next) slows Adam on the head
 (unmeasured; batch-8 runs scored no better). Baseline script: the second
 session's scratchpad `ceiling.py`. The train-side `public_value_r2*` panels
 are additionally a per-batch artefact (batch = one game, outcome variance 0 →
-R² ≈ −1e8) and should pool like the eval does.
+R² ≈ −1e8) and should pool like the eval does. The phase buckets landed
+2026-09-18 evening (`critic_buckets`, b58aad4): first half / second half /
+final step beside the turn-boundary split, each R² against its own bucket's
+outcome variance — the per-phase read against the HP reader is now one
+offline run away.
+
+**VERDICT (Step 3 read, 2026-09-18 18:30) — stacked wins on the
+pre-registered rule.** Eval at 20k, four arms:
+
+| | loop s0 | loop s1 | stacked s0 | stacked s1 |
+|---|---|---|---|---|
+| nats/token (deciding) | 0.300 | 0.256 | 0.331 | 0.244 |
+| loss_flow | 0.010 | 0.010 | 0.006 | 0.010 |
+| public value R² | 0.064 | 0.098 | 0.083 | 0.106 |
+| imagined R² | 0.924 | 0.886 | 0.896 | 0.865 |
+| train nats/token | 0.295 | 0.313 | 0.265 | 0.343 |
+| wall / 20k, H 512 | 42 min* | 33 min | 29 min | 22 min |
+
+Δ = mean(stacked) − mean(loop) = 0.2875 − 0.278 = +0.010 nats against a loop
+seed spread s = 0.044 → Δ ≤ s. Seed noise (0.044 loop, 0.087 stacked) is 4-8x
+the form difference: the honest reading is "nothing measurable lost at this
+budget", not "stacked is better". Public R² leans stacked (0.095 vs 0.081
+mean), imagined R² leans loop (0.880 vs 0.905), flow is a tie. *loop-s0
+overlapped a GPU diagnostic; the s1 pair is the clean throughput read, 1.5x.
+
+Actor-forward bench (`rl/probes/history_bench.py`, bf16, fresh params,
+median of 50, `runtime/ablation-history/bench.json`): H256 B1 20.0 → 1.66 ms
+(12x), B16 28.5 → 7.65 (3.7x); H512 B1 37.4 → 2.02 ms (18x), B16 54.5 → 12.5
+(4.4x). The loop's cost is sequential in H (doubling H doubles it); the
+stacked form's barely moves with H and scales with B. Stacked compiles in
+8-14 s per shape against the loop's cache hit — one-off.
+
+Carry replay divergence on each arm's TRAINED encoder
+(`PORYGON_TEST_CARRY_CKPT`, ex.bin game, worst policy / value log-prob diff
+of carry-resumed vs full-window, bound 0.05): loop-s0 0.0208 / 0.0175;
+stacked-s1 0.0144 / 0.0125 — both in class, the stacked with NO retain bias
+(decision (c) of the plan, done by construction). Fresh params: stacked
+passes, loop fails at value 0.0521 (the pre-existing 09-13 failure).
+
+**Two findings the rule does not score, recorded before the deletion:**
+
+1. *The stacked-trained trunk reads less of the long history.* Policy
+   log-prob diff between the suffix-alone forward (last 32 steps, no carry)
+   and the full-window forward, per request over the ex.bin game: loop-s0
+   mean 0.39 / max 1.63; stacked-s1 mean 0.069 / max 0.22 — 5x less
+   dependence on events older than the suffix, at the same event loss. Two
+   readings, not separated: the loop's chaotic map amplifies any difference
+   in memory content into O(1) output differences whether or not it carries
+   predictive information (equal nats/token says the extra sensitivity
+   bought no prediction); or the stacked form's long memory is harder to
+   read as trained. The launch acceptance's history-attention panels and the
+   100k pair probe are the next instruments.
+2. *The stacked states are unbounded and large.* At 20k offline steps the
+   carried layer-1 states read RMS 8.6 (max 60), layer-2 slot states RMS 4.8
+   (max 29), against the loop's tanh-bounded (−1, 1). Harmless to the forward
+   (`input_norm` before the attention, `SequenceNormalisation` at the trunk
+   door) and to the f32 carry; it is why the carry test's state check and
+   its control went RELATIVE (58cae1a): a fixed +1 shift moved the trained
+   stacked policy 0.011 at the last request — a nudge on an RMS-9 state, not
+   a deaf network. A bound on the cell's candidate (the layer is a convex
+   combination, so |state| ≤ max |candidate|) is one line if it ever matters.
 
 ## Removal ledger — 2026-09-18 history tidy (structure-only, bit-identical)
 
