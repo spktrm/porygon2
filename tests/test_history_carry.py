@@ -95,16 +95,22 @@ def carry_params(
         return leaf
 
     params = jax.tree_util.tree_map_with_path(open_alpha, params)
-    # PORYGON_TEST_CARRY_CKPT: a checkpoint whose encoder replaces the fresh
-    # one -- the 2026-09-18 ablation's divergence probe reads the replay
-    # bound on each arm's TRAINED history encoder through this test.
+    # PORYGON_TEST_CARRY_CKPT: a checkpoint whose encoder leaves overlay the
+    # fresh ones (an offline artifact carries the public path only) -- the
+    # 2026-09-18 ablation's divergence probe reads the replay bound on each
+    # arm's TRAINED history encoder through this test.
     trained = os.environ.get("PORYGON_TEST_CARRY_CKPT")
     if trained:
         from rl import checkpoint as checkpoint_lib
+        from rl.online.artifact import merge_params
 
         restored = checkpoint_lib.load_component(trained, "player", "params")["params"]
+        encoder, kept_fresh, _ = merge_params(
+            params["params"]["encoder"], restored["encoder"]
+        )
+        assert not any("history_encoder" in path for path in kept_fresh), kept_fresh
         params = dict(params)
-        params["params"] = dict(params["params"], encoder=restored["encoder"])
+        params["params"] = dict(params["params"], encoder=encoder)
     return params
 
 
@@ -257,6 +263,13 @@ def _window_at(full_window: PlayerActorInput, request_count: int) -> PlayerActor
     )
 
 
+def _shifted_by_rms(state):
+    state = np.asarray(state, np.float32)
+    if state.ndim < 2:
+        return state
+    return state + np.sqrt(np.mean(np.square(state)))
+
+
 def _squeeze_request(output: PlayerActorOutput) -> PlayerActorOutput:
     return jax.tree.map(lambda x: np.asarray(x)[0], output)
 
@@ -338,6 +351,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
     worst_value = 0.0
     floor_policy = 0.0
     floor_value = 0.0
+    control_policy = 0.0
     for request_count in range(num_requests):
         window = _window_at(full_window, request_count)
         full = forward(
@@ -365,6 +379,17 @@ def test_suffix_carry_replays_the_game_within_bf16(
         resumed = forward(resumed_input, request_count)
         worst_policy = max(worst_policy, policy_diff(full, resumed))
         worst_value = max(worst_value, value_diff(full, resumed))
+        if carry is not None:
+            # Control: the tolerance can fail -- every carried state
+            # shifted by its own RMS moves the policy somewhere in the game.
+            # A fixed +1 is scale-blind (the loop's GRU states sit in (-1,
+            # 1), the stacked form's linear accumulators reach RMS 5-9
+            # trained, where +1 is a nudge), and the last request alone is
+            # one point on a curve that peaks mid-game (stacked-s1: 0.017
+            # at the last request, 0.22 at its peak).
+            shifted = jax.tree.map(_shifted_by_rms, carry)
+            moved = forward(suffix.replace(history_carry=shifted), request_count)
+            control_policy = max(control_policy, policy_diff(moved, resumed))
         carry = resumed.history_carry
         last_step_index = _last_step_index(window)
     # The floor is ONE draw of the bf16 leading-dim class (the 256-row
@@ -375,7 +400,8 @@ def test_suffix_carry_replays_the_game_within_bf16(
     value_bound = max(0.05, 1.5 * floor_value)
     print(
         f"carry replay {SESSION_FORM}: worst policy {worst_policy:.4f} "
-        f"value {worst_value:.4f} (floors {floor_policy:.4f} / {floor_value:.4f})"
+        f"value {worst_value:.4f} (floors {floor_policy:.4f} / {floor_value:.4f}, "
+        f"control {control_policy:.4f})"
     )
     assert worst_policy <= policy_bound, (worst_policy, floor_policy)
     assert worst_value <= value_bound, (worst_value, floor_value)
@@ -383,42 +409,23 @@ def test_suffix_carry_replays_the_game_within_bf16(
     final_full = forward(
         window.replace(history_carry=_invalid_carry(width)), request_count
     )
-    np.testing.assert_allclose(
-        np.asarray(carry.slot_states),
-        np.asarray(final_full.history_carry.slot_states),
-        atol=0.05,
-    )
-    np.testing.assert_allclose(
-        np.asarray(carry.field_states),
-        np.asarray(final_full.history_carry.field_states),
-        atol=0.05,
-    )
-    np.testing.assert_allclose(
-        np.asarray(carry.node_snapshots, np.float32),
-        np.asarray(final_full.history_carry.node_snapshots, np.float32),
-        atol=0.05,
-    )
-
-    np.testing.assert_allclose(
-        np.asarray(carry.register_states),
-        np.asarray(final_full.history_carry.register_states),
-        atol=0.05,
-    )
-    if SESSION_FORM == "stacked":
+    # The carried f32 states are the full scan's to within the bf16
+    # coefficient noise the suffix bucket's GEMM shapes add. The stacked
+    # layer-2 memory is an un-normalised accumulator whose entries reach
+    # ~6, so that noise is relative to the entry (2% on the offline
+    # stacked-s1 artifact); the loop's RMS-normed memory sits under atol.
+    carried_leaves, _ = jax.tree_util.tree_flatten_with_path(carry)
+    full_leaves = jax.tree_util.tree_leaves(final_full.history_carry)
+    for (path, carried), full_state in zip(carried_leaves, full_leaves, strict=True):
         np.testing.assert_allclose(
-            np.asarray(carry.inner_states),
-            np.asarray(final_full.history_carry.inner_states),
+            np.asarray(carried, np.float32),
+            np.asarray(full_state, np.float32),
             atol=0.05,
+            rtol=0.05,
+            err_msg=jax.tree_util.keystr(path),
         )
 
-    # Control: the tolerance can fail -- a shifted carry moves what the
-    # test compares.
-    shifted = carry.replace(slot_states=np.asarray(carry.slot_states) + 1.0)
-    moved = forward(suffix.replace(history_carry=shifted), request_count)
-    assert policy_diff(moved, resumed) > policy_bound, (
-        policy_diff(moved, resumed),
-        policy_bound,
-    )
+    assert control_policy > policy_bound, (control_policy, policy_bound)
 
 
 def test_server_mixed_group_matches_single_forwards(
