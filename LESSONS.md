@@ -19,6 +19,48 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Switch logit over both teams from the public rows; every layer named — 2026-09-18
+
+*(live, new lineage)* Two commits. `31f0af9`: every flax layer named
+(memory `parameter-naming-convention`; the table is in the plan doc) — not
+loadable against earlier checkpoints, so a scratch start. `b573d87`: the
+switch block pairs the candidate with every mon on the field from the PUBLIC
+rows — my active it replaces, my other active if present (doubles), and the
+opponent's TEAM under a learned belief about who stands opposite next turn
+(`OpponentTeamPairing`); the move block adds the same opponent-team term per
+move, and its every-turn gradient trains the shared keys the one-in-eight
+switch block reads through. Presence, life and being on the field come from
+each entity's own public row, never the action mask, so the terms are live on
+a forced switch and at team preview, where no enemy TARGET row is valid.
+
+**Why (the 2026-09-10 probes, still the evidence).** The trunk computes
+move-vs-opponent into the move row (post-trunk matchup read 0.66) and nothing
+of candidate-vs-opponent into the sheet row (0.63 pre-trunk, 0.54 = floor post,
+at every depth): the move readout multiplies the move row against the row it
+would hit, the switch readout never had the opponent's row. The 09-11 pair
+(sheet x the ally row it replaces) reached the opponent only through what
+that row attended to; unmeasured on the lineage it ran on.
+
+**Pre-registered.** Offline: `type_probe.py` switch-pair block +
+`switch_readout_probe.py` on the 240-game heuristic cohort — the post-trunk
+candidate x ENEMY_1 read off the 0.54 floor toward the raw pair's 0.63 by
+100k; read beside `player_switch_opponent_query_rms`: flat while
+`player_move_opponent_query_rms` climbs = the switch signal is not arriving
+(credit is the bound, not routing). Strength: the advantage audit's
+switch-minus-stay realised-outcome gap at matched horizon narrows from ~-0.07
+toward 0 by 200k; switch mass >= 0.05; T=1 win rate >= the 5esmkxl1 curve at
+matched lifetime steps (0.154 at 100k, 0.165 at 200k), confounded by the
+fresh start and the entropy setting. Fallback if the read moves but the gap
+does not: hypothetical-state evaluation (assemble the observation with
+candidate c active). If the read does not move: revert to the 09-11 form and
+reopen the depth probe on this lineage.
+
+**Declined.** Sum over the four active TARGET rows (the plan's first draft:
+invalid on forced switches and at preview). Sharing the opponent key with the
+move x target pair (different rows post-trunk). Pairing against my own bench
+(no dense gradient, the belief has no meaning on my side). Hand-coded
+matchup features (game effects change them).
+
 ## PBRS information screen: the service potential adds ~nothing the critic lacks — 2026-09-18
 
 `rl/probes/potential_information.py` on `ckpt_00320354` (the normalised-residual
