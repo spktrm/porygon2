@@ -72,16 +72,33 @@ was the plan's primary and is demoted: it sits at ln 2 (0.686 at 5k, R² 0.014)
 for the offline public critic in EVERY run to date (heydhats 30-45k: -0.03 to
 +0.01; LESSONS 09-16: .016 at 3k), so it cannot separate the arms.
 
-**The offline public critic does not learn outcomes — open, not the labels.**
-400 perspectives from `gen9randombattle-turnslices-20260916` shard 0: each
-record's two sides carry opposite outcomes (0 of 200 the same), wins 50%, and
-the final state's own STATE_POTENTIAL correlates with the outcome at 0.865, so
-a critic reading the final state alone should reach R² ~0.75; the eval reads
-0.01 after `--joint` training. The 09-16 candidates (head learning rate,
-longer training, joint) are not it — joint is on here. The train-side
-`public_value_r2*` panels are additionally a per-batch artefact (batch = one
-game, outcome variance 0 → R² ≈ -1e8) and should pool like the eval does. Also threaded: the offline trainer's model config now carries
-the trunk's `normalised_residual` (it ran the plain trunk before, silently).
+**The offline public critic's pooled R² is near its ceiling — the claim
+"the critic path is defective" is WITHDRAWN (second session, 2026-09-18).**
+`critic_terms` pools one outcome label over every event step of a game (up to
+512), and most of those steps are early-game states nobody can call. A
+four-number logistic HP/faint-difference reader fitted on 400 games of shard
+0 (held out every fifth game) reads, on held-out slices: every event step
+(the trainer's weighting) loss 0.645 / R² 0.087; final step only 0.242 /
+0.751; first half 0.687 / 0.012; second half 0.603 / 0.161. So the pooled
+number's ceiling from raw HP is ~0.09 and the final-step 0.75 (my label check:
+final-state potential r 0.865 with the outcome; the two perspectives of a
+record carry opposite outcomes) is a different quantity. The joint loop-s0 arm
+evaluates at 0.658 / 0.066 — about level with that reader; its train loss is
+~0.644 from step 0 (the restored learner head already reads replay states
+that well) and 20k joint steps moved held-out loss only 0.686 → 0.658. The
+FROZEN-trunk runs (R² −0.03 to 0.02) sit BELOW the HP reader — that shortfall
+is real and open. Checked in the path: label indexing per trajectory under
+lax.map, inputs (the two perspectives' public caches differ only in SIDE and
+about half the field rows), loss weight 1.0, the head trainable. Snapshots are
+LATEST-touch (the 09-16 candidate list above calls them first-touch — stale).
+Open: whether the model beats the HP reader per phase (final step vs 0.75,
+second half vs 0.16) — needs phase-bucketed residuals in `critic_terms`, a
+trainer change parked until the ablation's arms have all launched; and whether
+batch size 1 (one game, one label sign, its mirror next) slows Adam on the head
+(unmeasured; batch-8 runs scored no better). Baseline script: the second
+session's scratchpad `ceiling.py`. The train-side `public_value_r2*` panels
+are additionally a per-batch artefact (batch = one game, outcome variance 0 →
+R² ≈ −1e8) and should pool like the eval does.
 
 ## Removal ledger — 2026-09-18 history tidy (structure-only, bit-identical)
 
