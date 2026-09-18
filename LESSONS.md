@@ -19,6 +19,43 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## PBRS information screen: the service potential adds ~nothing the critic lacks — 2026-09-18
+
+`rl/probes/potential_information.py` on `ckpt_00320354` (the normalised-residual
+run, entropy off), 32 self-play games at T=1, 1,993 decision rows. Per row:
+$\Psi_t$, the $\lambda$-return (0.95, $\gamma$ 1) of the shaping rewards
+$\Phi_{t+1} - \Phi_t$ over the rest of the game — what the channel adds to the
+advantage at launch, times $\eta$ — against the critic's error to the realised
+outcome $e_t = G - V(s_t)$. Output `runtime/pbrs/info_00320354.json` (local).
+
+| rows | n | corr($\Psi$, e) | variance explained | $\eta^*$ | MSE ratio at $\eta$ .05 | at $\eta^*$ | mean $\Psi$ |
+|---|---|---|---|---|---|---|---|
+| all | 1993 | .14 | 1.9% | .36 | .995 | .981 | +.006 |
+| real choice | 1546 | .18 | 3.3% | .51 | .995 | .976 | -.042 |
+| taken switch | 128 | .27 | 7.4% | .86 | .994 | .998 | -.174 |
+| stayed | 1418 | .17 | 3.0% | .49 | .995 | .976 | -.030 |
+
+**Verdict: do not launch with this $\Phi$.** The potential's trace explains 2-3%
+of the critic's residual variance (7% on switch rows, n = 128); at the screened
+$\eta$ = .05 the shaped estimate is 0.5% better in squared error than the
+critic alone, and the best $\eta$ (~.4, ten times the perturbation budget) buys
+2%. Directionally it would move the switching problem the WRONG way: the HP /
+alive balance falls over the turns after a voluntary switch (mean $\Psi$ -.17
+on switch rows against -.03 on stays), so the channel would subtract ~.007 from
+switch advantages relative to stays, a tenth of the audit's -.07 gap, in the
+same direction. With $\gamma$ 1 the shaping telescopes, so this is not a
+per-turn damage credit; it is the potential's read of the position at the trace
+horizon, and after a switch that read is "less HP".
+
+Side reading: the critic is pessimistic by .13 on these positions (mean e
++.13; mirror games average G = 0), while the online audit reads it optimistic
+at long horizons — the online rows are league games, these are mirror.
+
+**What would change the verdict.** A $\Phi$ that sees position rather than
+HP: the offline trunk critic (a frozen forward, ~30% on the step, or an actor-
+side forward) — the screen is one flag away from reading it, and should be
+rerun on it before any plumbing.
+
 ## Entropy bonus off — 2026-09-18
 
 *(live)* `player_ent_coef` 0.01 -> 0 on the normalised-residual lineage
