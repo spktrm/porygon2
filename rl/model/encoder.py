@@ -79,8 +79,6 @@ from rl.model.features import (
 )
 from rl.model.heads import chosen_bank_rows
 from rl.model.history_encoder import (
-    HistoryAttentionPool,
-    NodeHistoryRead,
     PerSlotHistoryEncoder,
     history_carry_from,
     history_step_stats,
@@ -349,8 +347,6 @@ class Encoder(nn.Module):
         self.info_linear = nn.Dense(name="info_linear", use_bias=False, **dense_kwargs)
 
         self.history_encoder = PerSlotHistoryEncoder(self.cfg, name="history_encoder")
-        self.history_pool = HistoryAttentionPool(self.cfg, name="history_pool")
-        self.history_node_read = NodeHistoryRead(self.cfg, name="history_node_read")
 
         # The trunk. One sequence, `num_blocks` standard pre-RMSNorm blocks,
         # no gates and no block masks -- see rl/model/trunk.py.
@@ -1261,7 +1257,7 @@ class Encoder(nn.Module):
         """The public sequence through the trunk after EVERY history step:
         the event world model's states. Reads the packed caches and the
         field history only -- nothing a replay does not carry."""
-        history_output, _, _, step_field_embeddings = self._run_history_encoder(
+        history_output, step_field_embeddings = self._run_history_encoder(
             packed_history_step, history_step, carry
         )
         inputs, slot_valid, sides, positions, fainted = self._event_inputs(
@@ -1323,8 +1319,8 @@ class Encoder(nn.Module):
     ):
         """Shared front half of the history pathway: embeds the packed
         caches and field rows once and runs the recurrent scan from
-        `carry` (the learned h0 by default). Returns (scan output,
-        edge_slot_ids, node_sides, per-step field vectors)."""
+        `carry` (the learned h0 by default). Returns (scan output, per-step
+        field vectors)."""
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
         node_embedding_cache, _ = _lifted_entity_vmap(Encoder._embed_public_entity)(
@@ -1349,9 +1345,6 @@ class Encoder(nn.Module):
             _,
         ) = _lifted_entity_vmap(Encoder._embed_field)(self, history_step.field)
 
-        # The offline critic still reads raw snapshots independently of memory;
-        # the RL trunk reads only the recurrent states.
-        node_content_cache = node_embedding_cache
         node_identity_cache = self.side_bias(node_sides) + self.pos_bias(
             packed_history_step.public_cache[
                 :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
@@ -1360,7 +1353,6 @@ class Encoder(nn.Module):
         history_output = self.history_encoder(
             history_field=history_step.field,
             node_embedding_cache=node_embedding_cache,
-            node_content_cache=node_content_cache,
             edge_embedding_cache=edge_embedding_cache,
             edge_slot_ids=edge_slot_ids,
             edge_major_args=edge_major_args,
@@ -1371,12 +1363,7 @@ class Encoder(nn.Module):
             step_valid=step_valid.squeeze(-1),
             carry=carry,
         )
-        return (
-            history_output,
-            edge_slot_ids,
-            node_sides,
-            step_field_embeddings,
-        )
+        return history_output, step_field_embeddings
 
     def encode_history(
         self,
@@ -1399,7 +1386,7 @@ class Encoder(nn.Module):
         registers), and the whole
         per-step PerSlotHistoryOutput for the telemetry that reads it.
         """
-        history_output, *_ = self._run_history_encoder(
+        history_output, _ = self._run_history_encoder(
             packed_history_step, history_step, carry
         )
 
@@ -1412,46 +1399,6 @@ class Encoder(nn.Module):
             ),
             history_output,
         )
-
-    def read_history_into_nodes(
-        self,
-        node_states: jax.Array,
-        slot_states: jax.Array,
-        field_state: jax.Array,
-    ) -> jax.Array:
-        """Per request, enrich each slot's current snapshot with a gated
-        cross-read of the recurrent states: (T, 12, D) x (T, 12, D) x
-        (T, D) -> (T, 12, D)."""
-        return jax.vmap(self.history_node_read)(node_states, slot_states, field_state)
-
-    def pool_history(
-        self,
-        slot_states: jax.Array,
-        field_state: jax.Array,
-        token_mask: jax.Array | None = None,
-    ) -> jax.Array:
-        """Pools the per-request history states into learned latent
-        summaries: (T, 12, D), (T, 3, D) -> (T, num_latents, D). token_mask
-        (15,) optionally restricts which tokens are readable (constant
-        across T)."""
-        tokens = jnp.concatenate((slot_states, field_state), axis=-2)
-        if token_mask is None:
-            return jax.vmap(self.history_pool)(tokens)
-        return jax.vmap(self.history_pool, in_axes=(0, None))(tokens, token_mask)
-
-    def history_slot_sides(
-        self, packed_history_step: PlayerPackedHistoryOutput
-    ) -> jax.Array:
-        """Relative side of the entity occupying each history slot
-        (1 = mine, 0 = opponent's). Slots with no cache rows resolve to the
-        int minimum and match neither side's mask."""
-        slot_ids = packed_history_step.edge_cache[
-            :, EntityEdgeFeature.ENTITY_EDGE_FEATURE__ENTITY_IDX
-        ].clip(0, NUM_PUBLIC_SLOTS - 1)
-        sides = packed_history_step.public_cache[
-            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SIDE
-        ]
-        return jax.ops.segment_max(sides, slot_ids, num_segments=NUM_PUBLIC_SLOTS)
 
     def _history_inputs(
         self,

@@ -60,12 +60,6 @@ def get_player_model_config(
     encoder_use_bias = True
     encoder_qk_layer_norm = True
 
-    cfg.encoder.history_pool = ConfigDict()
-    cfg.encoder.history_pool.num_latents = 4
-    cfg.encoder.history_pool.num_heads = num_heads
-    cfg.encoder.history_pool.qk_size = encoder_qkv_size
-    cfg.encoder.history_pool.use_bias = encoder_use_bias
-
     cfg.encoder.history_step = ConfigDict()
     cfg.encoder.history_step.num_heads = 2
     cfg.encoder.history_step.qk_size = encoder_qkv_size // 2

@@ -12,6 +12,7 @@ from rl.model.constants import (
     HISTORY_REGISTER_ROWS,
     HISTORY_REGISTER_STATE_ROWS,
     HISTORY_SLOT_STATE_ROWS,
+    NUM_FIELD_ROWS,
     NUM_HISTORY_REGISTERS,
     NUM_HISTORY_STATE_ROWS,
     OPP_PRIVATE_ROWS,
@@ -22,7 +23,6 @@ from rl.model.constants import (
     VALUE_CLS_ROW,
 )
 from rl.model.history_encoder import (
-    NUM_FIELD_ROWS,
     PerSlotHistoryEncoder,
     history_carry_from,
 )
@@ -150,13 +150,14 @@ def history_case():
     inputs = dict(
         history_field=field,
         node_embedding_cache=content,
-        node_content_cache=content,
+        node_identity_cache=jnp.zeros_like(content),
         edge_embedding_cache=content * 2,
         edge_slot_ids=jnp.zeros(STEPS, jnp.int32),
         edge_major_args=jnp.zeros(STEPS, jnp.int32),
         field_row_embeddings=jnp.broadcast_to(
             content[:, None], (STEPS, NUM_FIELD_ROWS, WIDTH)
         ),
+        field_identities=jnp.zeros((NUM_FIELD_ROWS, WIDTH)),
         step_request_count=jnp.asarray([2, 4, 0, 8, 12]),
         step_valid=jnp.asarray([True, True, False, True, True]),
     )

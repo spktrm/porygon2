@@ -19,6 +19,35 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## Removal ledger — 2026-09-18 history tidy (structure-only, bit-identical)
+
+Tag `pre-history-tidy-2026-09-18`. The ex.bin forward with z1o4bx1m's
+ckpt_00036634 params before and after: log_policy, value and public-value
+log-probs `np.array_equal` (run-to-run floor 0.0 — the GPU `segment_sum`
+scatter is exact on this data). Plan: local
+`~/.claude/plans/can-you-plan-all-quiet-horizon.md`.
+
+| mechanism | why | revert |
+|---|---|---|
+| `HistoryAttentionPool` (`latent_queries`, `latent_cross`) + `Encoder.pool_history`, `cfg.encoder.history_pool` | the offline critic's pooled-latent probe; that critic was deleted 2026-09-16; instantiated in setup but never applied, so no params existed | `git checkout pre-history-tidy-2026-09-18 -- rl/model/history_encoder.py rl/model/encoder.py rl/model/config.py` |
+| `NodeHistoryRead` (`diary_cross`, zero-init gate) + `Encoder.read_history_into_nodes` | the "photos query the diaries" read from before the flat trunk; no caller | same |
+| `Encoder.history_slot_sides` | no caller | same |
+| `PerSlotHistoryOutput.step_touched`, `.step_row_mask` | written, never read / a constant all-True whose two `&` were no-ops (`step_valid` stands in) | same |
+| `_run_history_encoder`'s `edge_slot_ids`, `node_sides` returns | discarded by both callers | same |
+| `node_content_cache` argument | always `== node_embedding_cache` | same |
+| the `None` branches for `node_identity_cache` / `field_identities`, the second `scatter_step` vmap over the identity cache | one path, one scatter (content and identity concatenated, split after); tests pass zeros where they passed None | same |
+| `resolve_initial`'s `register_states` tuple branch | unreachable — every constructor sets registers | same |
+| `NUM_FIELD_ROWS` / `FIELD_ROW_*` / `SIDE_MINE` duplicates in history_encoder.py | `constants.py` / `identity.py` own them | same |
+
+Side reading while here: `tests/test_history_carry.py::test_suffix_carry_
+replays_the_game_within_bf16` FAILS on the tagged baseline too — the carry-vs-
+window log-policy divergence reads 0.066 (0.051 after the tidy, same code
+path, GEMM noise) against the 0.05 bound, on the current 19-row memory-in-the-
+loop form with retain bias 4.0. LESSONS 09-13 set the bias on a 0.0215 slot-
+memory read; the policy-level bound is not held on this lineage. This is the
+number the stacked recurrence (plan Step 2) has to bring under the bound with
+no bias at all.
+
 ## Switch logit over both teams from the public rows; every layer named — 2026-09-18
 
 *(live, new lineage)* Two commits. `31f0af9`: every flax layer named

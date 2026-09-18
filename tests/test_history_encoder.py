@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from ml_collections import ConfigDict
 
+from rl.model.constants import NUM_FIELD_ROWS
 from rl.model.history_encoder import (
-    NUM_FIELD_ROWS,
     PerSlotHistoryEncoder,
     StepAttention,
 )
@@ -120,7 +120,6 @@ def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
         node_embedding_cache=content,
         node_identity_cache=jnp.ones_like(content),
         field_identities=jnp.ones((NUM_FIELD_ROWS, ENTITY_SIZE)),
-        node_content_cache=content,
         edge_embedding_cache=jnp.zeros_like(content),
         edge_slot_ids=jnp.zeros(1, jnp.int32),
         edge_major_args=jnp.zeros(1, jnp.int32),
@@ -150,7 +149,7 @@ def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
     np.testing.assert_array_equal(base.node_snapshots[0, 0], content[0])
     np.testing.assert_array_equal(base.node_snapshots, moved.node_snapshots)
     assert not np.allclose(base.slot_snapshots, moved.slot_snapshots)
-    changed_content = apply(params, **dict(inputs, node_content_cache=content + 2))
+    changed_content = apply(params, **dict(inputs, node_embedding_cache=content + 2))
     np.testing.assert_allclose(changed_content.node_snapshots[0, 0], content[0] + 2)
     carried = apply(
         params,

@@ -19,27 +19,17 @@ from rl.model.constants import (
     HISTORY_REGISTER_STATE_ROWS,
     HISTORY_SLOT_STATE_ROWS,
     HISTORY_STATE_GROUP_IDS,
+    NUM_FIELD_ROWS,
     NUM_HISTORY_REGISTERS,
     NUM_HISTORY_STATE_ROWS,
     NUM_PUBLIC_SLOTS,
     RELEVANT_ENTITY_FEATURES,
 )
-from rl.model.modules import MultiHeadAttention, create_attention_mask, layer_norm
 
 # Measured on the carry-vs-full-window divergence: 1.0 (the published LSTM
 # forget-bias) still decorrelates, 3.0 is the first value under the bound, and
 # this carries the margin. LESSONS 2026-09-13 has the sweep.
 HISTORY_RETAIN_BIAS = 4.0
-
-# The field history carries THREE states, mirroring the env-step field triple
-# that _embed_field already produces (2026-08-28). Hazards are side-differenced
-# — spikes on my side and spikes on theirs are opposite facts — and collapsing
-# them into one vector with a Dense meant the recurrent field memory could only
-# hold their mixture. Row order matches _embed_field's stack.
-NUM_FIELD_ROWS = 3
-FIELD_ROW_GLOBAL, FIELD_ROW_MINE, FIELD_ROW_THEIRS = 0, 1, 2
-# ENTITY_PUBLIC_NODE_FEATURE__SIDE == 1 is mine (service isMySide).
-SIDE_MINE = 1
 
 
 def relevant_edges(history_field: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -97,13 +87,11 @@ class PerSlotHistoryOutput:
     step_valid: ArrayLike = ()
     step_request_count: ArrayLike = ()
     # The step GAT's read, for telemetry: (H, heads, K, K) attention
-    # probabilities (zero on padded keys), the (H, K) live-row mask and
-    # the (H, K) source-row mask they are read against.
+    # probabilities (zero on padded keys) and the (H, K) source-row mask
+    # they are read against.
     step_attention_probs: ArrayLike = ()
-    step_row_mask: ArrayLike = ()
     step_source_rows: ArrayLike = ()
     step_slot_gate: ArrayLike = ()
-    step_touched: ArrayLike = ()
 
 
 def invalid_history_carry(width: int) -> HistoryCarry:
@@ -156,7 +144,9 @@ def history_step_stats(output: PerSlotHistoryOutput) -> dict[str, jax.Array]:
     the collapse shape.
     """
     probs = output.step_attention_probs.astype(jnp.float32)  # (H, heads, K, K)
-    row_mask = output.step_row_mask & output.step_valid[:, None]  # (H, K)
+    row_mask = jnp.broadcast_to(
+        output.step_valid[:, None], probs.shape[:1] + probs.shape[-1:]
+    )
     num_live = row_mask.sum(-1)  # (H,)
     # Padded keys carry exactly 0 mass, so the clip only guards the log.
     entropy = -(probs * jnp.log(probs.clip(min=1e-9))).sum(-1)  # (H, heads, K)
@@ -166,9 +156,7 @@ def history_step_stats(output: PerSlotHistoryOutput) -> dict[str, jax.Array]:
     to_src = (probs * source[:, None, None, :]).sum(-1)  # (H, heads, K)
     src_weight = (row_mask & ~source & source.any(-1)[:, None])[:, None, :]
     src_share = source.sum(-1) / num_live.clip(min=1)  # (H,)
-    gate_weight = (
-        output.step_row_mask[:, HISTORY_SLOT_STATE_ROWS] & output.step_valid[:, None]
-    )  # (H, 12)
+    gate_weight = row_mask[:, HISTORY_SLOT_STATE_ROWS]  # (H, 12)
     return {
         "step_attn_entropy": _masked_mean(normalised_entropy, entropy_weight),
         "step_attn_to_src": _masked_mean(to_src, src_weight),
@@ -177,95 +165,6 @@ def history_step_stats(output: PerSlotHistoryOutput) -> dict[str, jax.Array]:
         ),
         "gate_mean": _masked_mean(output.step_slot_gate, gate_weight),
     }
-
-
-class HistoryAttentionPool(nn.Module):
-    """Cross-attention pooling of the recurrent history states into a fixed
-    bank of learned latent summaries.
-
-    A set of num_latents learned queries attends over the 15 history tokens
-    (12 slot states + the 3 field states), yielding (num_latents, D) latents.
-    The offline critic reads the flattened latents through its linear probe.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(
-        self, tokens: jax.Array, token_mask: jax.Array | None = None
-    ) -> jax.Array:
-        """(S, D) history tokens -> (num_latents, D) latent summaries.
-        token_mask (S,) restricts which tokens are readable — e.g. the
-        offline critic pools my-side and opponent-side slots separately
-        (shared params) for its antisymmetric outcome readout."""
-        pcfg = self.cfg.history_pool
-        if token_mask is None:
-            token_mask = jnp.ones(tokens.shape[0], dtype=jnp.bool_)
-        queries = self.param(
-            "latent_queries",
-            nn.initializers.normal(0.02),
-            (pcfg.num_latents, self.cfg.entity_size),
-        ).astype(tokens.dtype)
-        attended = MultiHeadAttention(
-            name="latent_cross",
-            num_heads=pcfg.num_heads,
-            qk_size=pcfg.qk_size,
-            v_size=pcfg.qk_size,
-            model_size=self.cfg.entity_size,
-            use_bias=pcfg.use_bias,
-            dtype=tokens.dtype,
-        )(
-            q=layer_norm(queries),
-            kv=layer_norm(tokens),
-            mask=create_attention_mask(
-                jnp.ones(queries.shape[0], dtype=jnp.bool_),
-                token_mask,
-            ),
-        )
-        return queries + attended
-
-
-class NodeHistoryRead(nn.Module):
-    """Residual cross-read of the diaries by the photos.
-
-    Each slot's current snapshot (node state) queries the recurrent slot
-    states + field state. The residual gate is zero-init, so at
-    initialisation the output IS the raw snapshots (hand-rule parity is the
-    floor) and history context blends in only as training finds it useful.
-    """
-
-    cfg: ConfigDict
-
-    @nn.compact
-    def __call__(
-        self,
-        node_states: jax.Array,
-        slot_states: jax.Array,
-        field_state: jax.Array,
-    ) -> jax.Array:
-        """(12, D) snapshots, (12, D) slot states, (3, D) field -> (12, D)."""
-        pcfg = self.cfg.history_pool
-        kv = jnp.concatenate((slot_states, field_state), axis=0)
-        gate = self.param("gate", nn.initializers.zeros_init(), (1,)).astype(
-            node_states.dtype
-        )
-        attended = MultiHeadAttention(
-            name="diary_cross",
-            num_heads=pcfg.num_heads,
-            qk_size=pcfg.qk_size,
-            v_size=pcfg.qk_size,
-            model_size=self.cfg.entity_size,
-            use_bias=pcfg.use_bias,
-            dtype=node_states.dtype,
-        )(
-            q=layer_norm(node_states),
-            kv=layer_norm(kv),
-            mask=create_attention_mask(
-                jnp.ones(node_states.shape[0], dtype=jnp.bool_),
-                jnp.ones(kv.shape[0], dtype=jnp.bool_),
-            ),
-        )
-        return node_states + gate * attended
 
 
 class StepAttention(nn.Module):
@@ -472,12 +371,8 @@ class PerSlotHistoryEncoder(nn.Module):
         node0 = jnp.zeros((NUM_PUBLIC_SLOTS, self.cfg.entity_size), self.cfg.dtype)
         if isinstance(carry.valid, tuple):
             return self.initial_memory, node0
-        if isinstance(carry.register_states, tuple):
-            registers = self.initial_memory[HISTORY_REGISTER_STATE_ROWS]
-        else:
-            registers = carry.register_states
         carried = jnp.concatenate(
-            (carry.slot_states, carry.field_states, registers), axis=0
+            (carry.slot_states, carry.field_states, carry.register_states), axis=0
         ).astype(jnp.float32)
         return (
             jnp.where(carry.valid, carried, self.initial_memory),
@@ -503,16 +398,15 @@ class PerSlotHistoryEncoder(nn.Module):
         self,
         history_field: jax.Array,
         node_embedding_cache: jax.Array,
-        node_content_cache: jax.Array,
+        node_identity_cache: jax.Array,
         edge_embedding_cache: jax.Array,
         edge_slot_ids: jax.Array,
         edge_major_args: jax.Array,
         field_row_embeddings: jax.Array,
+        field_identities: jax.Array,
         step_request_count: jax.Array,
         step_valid: jax.Array,
         carry: HistoryCarry = HistoryCarry(),
-        node_identity_cache: jax.Array | None = None,
-        field_identities: jax.Array | None = None,
     ) -> PerSlotHistoryOutput:
         initial_memory, node0 = self.resolve_initial(carry)
         relevant, edge_mask = relevant_edges(history_field)
@@ -563,15 +457,23 @@ class PerSlotHistoryEncoder(nn.Module):
             )
             return summed, counts, node_means, sources, latest_row
 
+        # One scatter carries the node content and its identity side by side.
         slot_messages, counts, node_means, slot_sources, step_rows = jax.vmap(
             scatter_step
         )(
             messages,
-            jnp.take(node_content_cache, relevant, axis=0),
+            jnp.concatenate(
+                (
+                    jnp.take(node_embedding_cache, relevant, axis=0),
+                    jnp.take(node_identity_cache, relevant, axis=0),
+                ),
+                axis=-1,
+            ),
             is_source,
             segments,
             relevant.astype(jnp.int32),
         )
+        node_means, slot_identities = jnp.split(node_means, 2, axis=-1)
         touched = counts > 0
         # Packed rows are appended in step order, so the running maximum is
         # each slot's latest row as of every step.
@@ -596,24 +498,13 @@ class PerSlotHistoryEncoder(nn.Module):
             ),
             axis=1,
         )
-        if node_identity_cache is None:
-            slot_identities = jnp.zeros_like(slot_messages)
-        else:
-            _, _, slot_identities, _, _ = jax.vmap(scatter_step)(
-                messages,
-                jnp.take(node_identity_cache, relevant, axis=0),
-                is_source,
-                segments,
-                relevant.astype(jnp.int32),
-            )
         attention_identities = jnp.zeros_like(event_rows)
         attention_identities = attention_identities.at[:, HISTORY_SLOT_STATE_ROWS].set(
             slot_identities
         )
-        if field_identities is not None:
-            attention_identities = attention_identities.at[
-                :, HISTORY_FIELD_STATE_ROWS
-            ].set(field_identities)
+        attention_identities = attention_identities.at[:, HISTORY_FIELD_STATE_ROWS].set(
+            field_identities
+        )
         states, probabilities, gates, final_memory = self._recur(
             event_rows, step_valid, initial_memory, attention_identities
         )
@@ -634,12 +525,8 @@ class PerSlotHistoryEncoder(nn.Module):
             step_valid=step_valid,
             step_request_count=step_request_count,
             step_attention_probs=probabilities,
-            step_row_mask=jnp.ones(
-                (step_valid.shape[0], NUM_HISTORY_STATE_ROWS), jnp.bool_
-            ),
             step_source_rows=source_mask,
             step_slot_gate=gates[:, HISTORY_SLOT_STATE_ROWS],
-            step_touched=touched,
         )
 
     def state_at_requests(
