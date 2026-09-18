@@ -7,6 +7,7 @@ and get the same function with no select in the trace). The positive
 control is the same garbage under `valid=True`, which must move the policy.
 """
 
+import os
 from collections.abc import Callable
 
 import flax.linen as nn
@@ -93,7 +94,18 @@ def carry_params(
             return jnp.full_like(leaf, 1 / 3)
         return leaf
 
-    return jax.tree_util.tree_map_with_path(open_alpha, params)
+    params = jax.tree_util.tree_map_with_path(open_alpha, params)
+    # PORYGON_TEST_CARRY_CKPT: a checkpoint whose encoder replaces the fresh
+    # one -- the 2026-09-18 ablation's divergence probe reads the replay
+    # bound on each arm's TRAINED history encoder through this test.
+    trained = os.environ.get("PORYGON_TEST_CARRY_CKPT")
+    if trained:
+        from rl import checkpoint as checkpoint_lib
+
+        restored = checkpoint_lib.load_component(trained, "player", "params")["params"]
+        params = dict(params)
+        params["params"] = dict(params["params"], encoder=restored["encoder"])
+    return params
 
 
 def _width(params: dict) -> int:
@@ -361,6 +373,10 @@ def test_suffix_carry_replays_the_game_within_bf16(
     # sits ~2.0 away, so the margin costs the test nothing.
     policy_bound = max(0.05, 1.5 * floor_policy)
     value_bound = max(0.05, 1.5 * floor_value)
+    print(
+        f"carry replay {SESSION_FORM}: worst policy {worst_policy:.4f} "
+        f"value {worst_value:.4f} (floors {floor_policy:.4f} / {floor_value:.4f})"
+    )
     assert worst_policy <= policy_bound, (worst_policy, floor_policy)
     assert worst_value <= value_bound, (worst_value, floor_value)
 
