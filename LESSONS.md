@@ -19,6 +19,56 @@ the tree; the rest describe code that is gone.
 training box — never cite it as a public reference, and do not assume a fresh
 clone has it.
 
+## History recurrence: the stacked associative form beside the loop — 2026-09-18
+
+*(live behind `cfg.encoder.history_recurrence`, default `loop`; one survives
+the ablation)* Commit `a4e632d`, plan
+`~/.claude/plans/can-you-plan-all-quiet-horizon.md`.
+
+**Problem.** `player_history_step_attn_grad_norm` 22 at 19k on z1o4bx1m (12 on
+5esmkxl1) against the global clip of 10 — every module's update scaled by
+~0.26 until the write gate opened (0.03 → 0.10 at ~30k). Mechanism: the step
+attention's parameters are shared across every step AND read the memory they
+feed, so their gradient is a coherent sum over the memory window (~50 steps at
+retain 0.982) times the loop gain. The same loop was chaotic at init (09-13,
+held by `HISTORY_RETAIN_BIAS = 4.0`), and `test_suffix_carry_replays_the_game_
+within_bf16` fails on it at 0.052–0.066 against the 0.05 bound.
+
+**The stacked form.** Layer 1: an input-gated associative scan (minGRU,
+`GatedLinearCell` + `gated_linear_scan` restored from `c9a96c6`) over the 15
+event rows. Attention: the step attention reads layer 1's states for all H
+steps at once, addressed by the identities as before; the register rows carry
+no state at the read, so their row is the learned register identity — a FIXED
+QUERY, masked out of the keys (the 09-13 assessment declined register keys) —
+a latent history-summary token. Layer 2: the same scan over event rows plus the
+attended result, all 19 rows. No attention reads its own layer's memory: both
+scans are `lax.associative_scan` (depth O(log H)), there is no loop to
+contract, and the form runs with NO retain bias. Attention between hidden
+states survives — layer 2 accumulates a read over layer-1 states that already
+integrate every event up to the step — what is gone is the same-layer
+memory → attention → memory loop.
+
+**Measured at landing.** The `loop` arm is the old encoder: f32 forward
+bit-identical to `9af2d58` on the ex.bin game (bf16 one ulp apart at step 0,
+XLA refusing the restructured program). The `stacked` arm PASSES the carry
+suite including the 0.05 replay bound, with no bias. Registers: a row's
+layer-2 memory moves only that row at step 0 (isolation), its layer-1 memory
+moves every group (the attention still reads across rows); registers are
+queries only, a slot's layer-1 memory reaches the registers. Test-side:
+f32 dots at the GPU default (TF32) make the associative scan over a prefix
+and over the full window differ at ~2e-4 — the contracts run under
+`jax.default_matmul_precision("float32")`.
+
+**Ablation (Step 3), pre-registered.** `rl/offline/train.py --joint
+--fresh-subtrees encoder/history_encoder --trunk-ckpt ckpts/gen9/ckpt_00036634
+--history-recurrence {loop,stacked} --num-steps 20000`, seeds 0 and 1,
+sequential (the decoded store needs ~23 GB), logs `runtime/ablation-history/`.
+Δ = eval_loss_public_value(stacked) − (loop) at 20k against the loop arm's
+seed spread s: Δ ≤ s → stacked wins; Δ > s → Δ nats is what the loop was
+worth, read beside the event losses, the actor-forward throughput and the
+divergence probe. Also threaded: the offline trainer's model config now carries
+the trunk's `normalised_residual` (it ran the plain trunk before, silently).
+
 ## Removal ledger — 2026-09-18 history tidy (structure-only, bit-identical)
 
 Tag `pre-history-tidy-2026-09-18`. The ex.bin forward with z1o4bx1m's
