@@ -33,18 +33,14 @@ WIDTH = 16
 STEPS = 5
 
 
-def history_config(form: str = "loop"):
+def history_config():
     return ConfigDict(
         dict(
             entity_size=WIDTH,
             dtype=jnp.float32,
-            history_recurrence=form,
             history_step=dict(num_heads=2, qk_size=4),
         )
     )
-
-
-FORMS = ("loop", "stacked")
 
 
 def _recur_call(module, tree, rows, valid, memory, inner):
@@ -71,24 +67,19 @@ def _recur_apply(module, tree, rows, touched, valid, memory, inner):
     )
 
 
-@pytest.fixture(scope="module", params=FORMS)
-def recurrence(request):
-    form = request.param
-    module = PerSlotHistoryEncoder(history_config(form))
+@pytest.fixture(scope="module")
+def recurrence():
+    module = PerSlotHistoryEncoder(history_config())
     rows = jax.random.normal(jax.random.key(35), (STEPS, NUM_HISTORY_STATE_ROWS, WIDTH))
     rows = rows.at[:, HISTORY_REGISTER_STATE_ROWS].set(0)
     valid = jnp.asarray([True, True, False, True, True])
     initial = (
         jax.random.normal(jax.random.key(36), (NUM_HISTORY_STATE_ROWS, WIDTH)) * 0.02
     )
-    inner = ()
-    if form == "stacked":
-        inner = (
-            jax.random.normal(
-                jax.random.key(39), (HISTORY_EVENT_STATE_ROWS.stop, WIDTH)
-            )
-            * 0.02
-        )
+    inner = (
+        jax.random.normal(jax.random.key(39), (HISTORY_EVENT_STATE_ROWS.stop, WIDTH))
+        * 0.02
+    )
     touched = jnp.ones((STEPS, NUM_PUBLIC_SLOTS), jnp.bool_)
     params = jax.jit(
         lambda: module.init(
@@ -106,7 +97,7 @@ def recurrence(request):
     def apply(tree, rows, valid, memory, inner=inner):
         return _recur_call(module, tree, rows, valid, memory, inner)
 
-    return form, params, jax.jit(apply), rows, valid, initial, inner
+    return params, jax.jit(apply), rows, valid, initial, inner
 
 
 @pytest.mark.parametrize(
@@ -117,13 +108,14 @@ def recurrence(request):
         HISTORY_REGISTER_STATE_ROWS.start,
     ],
 )
-def test_every_modality_reads_previous_memory_from_every_other(recurrence, source_row):
-    """`loop`: any row's initial memory moves EVERY group at step 0 (the
-    attention reads memory). `stacked`: a row's initial LAYER-2 memory moves
-    only that row -- no attention reads it (the isolation that removes the
-    chaos) -- while a row's initial layer-1 memory moves every group, the
-    control that the attention still reads across rows."""
-    form, params, apply, rows, valid, initial, inner = recurrence
+def test_layer_two_memory_is_isolated_and_layer_one_is_read_by_every_row(
+    recurrence, source_row
+):
+    """A row's initial LAYER-2 memory moves only that row -- no attention
+    reads it (the isolation that removes the 2026-09-13 loop's chaos) --
+    while a row's initial layer-1 memory moves every group, the control
+    that the attention still reads across rows."""
+    params, apply, rows, valid, initial, inner = recurrence
     states, probs, _, final, _ = apply(params, rows, valid, initial)
     assert probs.shape == (STEPS, 2, 19, 19)
     assert states.shape == (STEPS, NUM_HISTORY_STATE_ROWS, WIDTH)
@@ -137,10 +129,6 @@ def test_every_modality_reads_previous_memory_from_every_other(recurrence, sourc
     changed = initial.at[source_row].add(jnp.arange(WIDTH) / WIDTH + 1)
     moved, _, _, _, _ = apply(params, rows, valid, changed)
     row_moved = np.max(np.abs(np.asarray(moved[0] - states[0])), axis=-1) > 1e-5
-    if form == "loop":
-        for target_rows in groups:
-            assert row_moved[target_rows].all()
-        return
     expected = np.zeros(NUM_HISTORY_STATE_ROWS, bool)
     expected[source_row] = True
     np.testing.assert_array_equal(row_moved, expected)
@@ -154,7 +142,7 @@ def test_every_modality_reads_previous_memory_from_every_other(recurrence, sourc
 
 
 def test_sequence_carry_matches_full_history_and_padding_holds_exactly(recurrence):
-    _, params, apply, rows, valid, initial, inner = recurrence
+    params, apply, rows, valid, initial, inner = recurrence
     full, _, _, full_final, full_inner = apply(params, rows, valid, initial)
     _, _, _, prefix_final, prefix_inner = apply(params, rows[:2], valid[:2], initial)
     suffix, _, _, suffix_final, suffix_inner = apply(
@@ -178,10 +166,10 @@ def test_sequence_carry_matches_full_history_and_padding_holds_exactly(recurrenc
 
 
 def test_register_identity_and_shared_attention_have_live_gradients(recurrence):
-    form, params, apply, rows, valid, initial, inner = recurrence
+    params, apply, rows, valid, initial, inner = recurrence
 
-    # Every row of the final state: under `stacked` the registers are read
-    # by the trunk alone (queries only), so a slot-only loss would leave
+    # Every row of the final state: the registers are read by the trunk
+    # alone (queries only), so a slot-only loss would leave
     # `register_identity` untouched by design.
     def loss(tree):
         states, _, _, _, _ = apply(tree, rows, valid, initial)
@@ -195,19 +183,10 @@ def test_register_identity_and_shared_attention_have_live_gradients(recurrence):
         assert (
             np.linalg.norm(np.asarray(gradients["attention"][projection]["kernel"])) > 0
         )
-    if form == "loop":
-        cells = {
-            f"{token_type}_gru": ("ir", "hr", "iz", "hz", "in", "hn")
-            for token_type in ("entity", "field", "register")
-        }
-    else:
-        cells = {
-            **{f"{t}_inner_cell": ("gate", "candidate") for t in ("entity", "field")},
-            **{
-                f"{t}_cell": ("gate", "candidate")
-                for t in ("entity", "field", "register")
-            },
-        }
+    cells = {
+        **{f"{t}_inner_cell": ("gate", "candidate") for t in ("entity", "field")},
+        **{f"{t}_cell": ("gate", "candidate") for t in ("entity", "field", "register")},
+    }
     for cell, projections in cells.items():
         for projection in projections:
             assert (
@@ -215,11 +194,11 @@ def test_register_identity_and_shared_attention_have_live_gradients(recurrence):
             ), (cell, projection)
 
 
-def test_stacked_registers_are_queries_only():
-    """Under `stacked` a register row is read by no one (its column of the
-    attention is masked) and its memory reaches no slot; the control is
-    that a slot's layer-1 memory reaches the registers."""
-    module = PerSlotHistoryEncoder(history_config("stacked"))
+def test_registers_are_queries_only():
+    """A register row is read by no one (its column of the attention is
+    masked) and its memory reaches no slot; the control is that a slot's
+    layer-1 memory reaches the registers."""
+    module = PerSlotHistoryEncoder(history_config())
     rows = jax.random.normal(jax.random.key(40), (STEPS, NUM_HISTORY_STATE_ROWS, WIDTH))
     rows = rows.at[:, HISTORY_REGISTER_STATE_ROWS].set(0)
     valid = jnp.ones(STEPS, jnp.bool_)
@@ -254,9 +233,9 @@ def test_stacked_registers_are_queries_only():
     )
 
 
-@pytest.fixture(scope="module", params=FORMS)
-def history_case(request):
-    module = PerSlotHistoryEncoder(history_config(request.param))
+@pytest.fixture(scope="module")
+def history_case():
+    module = PerSlotHistoryEncoder(history_config())
     field = jnp.zeros((STEPS, len(FieldFeature.keys())), jnp.int32)
     field = field.at[:, FieldFeature.FIELD_FEATURE__NUM_RELEVANT].set(1)
     field = field.at[:, FieldFeature.FIELD_FEATURE__RELEVANT_ENTITY_IDX0].set(

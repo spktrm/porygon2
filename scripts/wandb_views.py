@@ -427,7 +427,7 @@ def rl_sections():
                     [
                         "player_history_step_attn_out_rms",
                         "player_history_step_attn_qk_rms",
-                        "player_history_slot_gate_rms",
+                        "player_history_slot_write_gate_rms",
                         "player_history_step_attn_grad_norm",
                     ],
                 ),

@@ -79,11 +79,10 @@ from rl.model.features import (
 )
 from rl.model.heads import chosen_bank_rows
 from rl.model.history_encoder import (
+    STEP_KEY_MASK,
     PerSlotHistoryEncoder,
     history_carry_from,
     history_step_stats,
-    recurrence_form,
-    step_key_mask,
 )
 from rl.model.identity import (
     BENCH_POSITION,
@@ -1475,8 +1474,6 @@ class Encoder(nn.Module):
             sequence,
             row_valid,
             trunk_group_stats,
-            history_step_stats(
-                history_output, step_key_mask(recurrence_form(self.cfg))
-            ),
+            history_step_stats(history_output, STEP_KEY_MASK),
             history_carry_from(history_output),
         )

@@ -1,6 +1,6 @@
-"""One recurrent attention sequence over entity, field and register memories."""
+"""Two input-gated associative scans over the entity, field and register
+memories with the step attention between them."""
 
-import functools
 from collections.abc import Callable
 
 import chex
@@ -26,11 +26,6 @@ from rl.model.constants import (
     NUM_PUBLIC_SLOTS,
     RELEVANT_ENTITY_FEATURES,
 )
-
-# Measured on the carry-vs-full-window divergence: 1.0 (the published LSTM
-# forget-bias) still decorrelates, 3.0 is the first value under the bound, and
-# this carries the margin. LESSONS 2026-09-13 has the sweep.
-HISTORY_RETAIN_BIAS = 4.0
 
 
 def relevant_edges(history_field: jax.Array) -> tuple[jax.Array, jax.Array]:
@@ -74,7 +69,7 @@ class PerSlotHistoryOutput:
     field_snapshots: ArrayLike = ()
     register_snapshots: ArrayLike = ()
     # Latest raw node embedding per slot as of each step (H, 12, D): the
-    # entity's current snapshot, unmixed by GRU gating — what a hand
+    # entity's current snapshot, unmixed by the recurrence — what a hand
     # evaluator reads. Parameter-free carry.
     node_snapshots: ArrayLike = ()
     # The packed cache row that snapshot came from, (H, 12), -1 never
@@ -85,8 +80,7 @@ class PerSlotHistoryOutput:
     final_slot_state: ArrayLike = ()
     final_field_state: ArrayLike = ()
     final_register_state: ArrayLike = ()
-    # Layer-1 memory under `stacked`; () under `loop`. Carry-only: the trunk
-    # reads layer 2.
+    # Layer-1 memory, carry-only: the trunk reads layer 2.
     final_inner_state: ArrayLike = ()
     step_valid: ArrayLike = ()
     step_request_count: ArrayLike = ()
@@ -98,20 +92,15 @@ class PerSlotHistoryOutput:
     step_slot_gate: ArrayLike = ()
 
 
-def invalid_history_carry(width: int, form: str = "loop") -> HistoryCarry:
+def invalid_history_carry(width: int) -> HistoryCarry:
     """The actor's full-window request: leaves PRESENT, so a batch of
     requests stacks whether or not each one resumes, and `valid` False, so
-    the encoder starts from its learned h0 -- the from-scratch forward.
-    `form` is the recurrence (`recurrence_form`): `stacked` carries a
-    layer-1 state too."""
-    inner_states = ()
-    if form == "stacked":
-        inner_states = np.zeros((HISTORY_EVENT_STATE_ROWS.stop, width), np.float32)
+    the encoder starts from its learned h0 -- the from-scratch forward."""
     return HistoryCarry(
         slot_states=np.zeros((NUM_PUBLIC_SLOTS, width), np.float32),
         field_states=np.zeros((NUM_FIELD_ROWS, width), np.float32),
         register_states=np.zeros((NUM_HISTORY_REGISTERS, width), np.float32),
-        inner_states=inner_states,
+        inner_states=np.zeros((HISTORY_EVENT_STATE_ROWS.stop, width), np.float32),
         node_snapshots=np.zeros((NUM_PUBLIC_SLOTS, width), np.float32),
         valid=np.zeros((), np.bool_),
     )
@@ -236,76 +225,12 @@ class StepAttention(nn.Module):
         return out, probs
 
 
-class HistoryGRUCell(nn.Module):
-    """Flax's reset-after GRU equations with f32 activations and memory mixing."""
-
-    features: int
-    dtype: jnp.dtype
-    # sigmoid(retain_bias) is how much memory survives one event. 0 is Flax's
-    # init and leaves the recurrence CHAOTIC once attention feeds memory back:
-    # the loop expands, so the actor's carry and the learner's full window
-    # separate from a rounding difference into different policies within one
-    # game. Contraction is what bounds that, and it has to beat the attention
-    # branch's gain -- the published forget-bias 1.0 does not (LESSONS
-    # 2026-09-13). Deviates from HistoryGRUCell's Flax-reference default,
-    # which is why it is set here and not in the cell.
-    retain_bias: float = 0.0
-
-    @nn.compact
-    def __call__(
-        self, memory: jax.Array, inputs: jax.Array
-    ) -> tuple[jax.Array, jax.Array]:
-        input_dense = functools.partial(
-            nn.Dense,
-            features=self.features,
-            use_bias=True,
-            dtype=self.dtype,
-            kernel_init=nn.initializers.lecun_normal(),
-        )
-        recurrent_dense = functools.partial(
-            nn.Dense,
-            features=self.features,
-            use_bias=False,
-            dtype=self.dtype,
-            kernel_init=nn.initializers.orthogonal(),
-        )
-        reset_gate = nn.sigmoid(
-            input_dense(name="ir")(inputs).astype(jnp.float32)
-            + recurrent_dense(name="hr")(memory).astype(jnp.float32)
-        )
-        retain_gate = nn.sigmoid(
-            input_dense(
-                name="iz", bias_init=nn.initializers.constant(self.retain_bias)
-            )(inputs).astype(jnp.float32)
-            + recurrent_dense(name="hz")(memory).astype(jnp.float32)
-        )
-        candidate = nn.tanh(
-            input_dense(name="in")(inputs).astype(jnp.float32)
-            + reset_gate
-            * recurrent_dense(name="hn", use_bias=True)(memory).astype(jnp.float32)
-        )
-        write_gate = 1 - retain_gate
-        updated = write_gate * candidate + retain_gate * memory.astype(jnp.float32)
-        return updated, write_gate
-
-
-def recurrence_form(cfg: ConfigDict) -> str:
-    """`loop` (the 2026-09-13 memory-in-the-loop GRU) or `stacked` (two
-    input-gated scans with the step attention between them). `.get`: the
-    hand-rolled test configs and the world-model flow block build this
-    ConfigDict without the key."""
-    return cfg.get("history_recurrence", "loop")
-
-
-def step_key_mask(form: str) -> np.ndarray:
-    """Which of the 19 rows a step's attention may READ. Under `stacked` the
-    register rows carry no state at the read (their content is zero, their
-    row is the learned identity alone), so they are queries only -- the
-    2026-09-13 assessment declined register keys as a static sink."""
-    mask = np.ones(NUM_HISTORY_STATE_ROWS, dtype=bool)
-    if form == "stacked":
-        mask[HISTORY_REGISTER_STATE_ROWS] = False
-    return mask
+# Which of the 19 rows a step's attention may READ: the register rows carry
+# no state at the read (their content is zero, their row is the learned
+# identity alone), so they are queries only -- the 2026-09-13 assessment
+# declined register keys as a static sink.
+STEP_KEY_MASK = np.ones(NUM_HISTORY_STATE_ROWS, dtype=bool)
+STEP_KEY_MASK[HISTORY_REGISTER_STATE_ROWS] = False
 
 
 class GatedLinearCell(nn.Module):
@@ -354,23 +279,15 @@ def gated_linear_scan(
 
 
 class HistorySequenceStep(nn.Module):
-    """The recurrence over the 19 history rows, in one of two forms.
-
-    `loop` (2026-09-13): one chronological scan; each valid event RMS-norms
-    previous memory plus its event input, runs the step attention over the
-    19 rows and feeds the result to three GRUs (entity / field / register
-    weights), whose memory the next step's attention reads. Attention
-    inside the loop is what made the recurrence chaotic at init (retain
-    bias 4.0 holds it) and what makes the attention weights' gradient a
-    coherent sum over the memory window.
-
-    `stacked` (2026-09-18): layer 1 is an input-gated scan over the 15
-    event rows; the step attention then reads layer 1's states (which
-    already integrate every event up to this step) for all steps at once;
-    layer 2 is an input-gated scan over event rows plus what attention
-    returned, over all 19 rows. No attention reads the memory of its own
-    layer, so both scans are associative and there is no loop to contract.
-    The register rows have no event input, so their attention row is the
+    """The recurrence over the 19 history rows (2026-09-18). Layer 1 is an
+    input-gated scan over the 15 event rows; the step attention then reads
+    layer 1's states (which already integrate every event up to this step)
+    for all steps at once; layer 2 is an input-gated scan over event rows
+    plus what attention returned, over all 19 rows. No attention reads the
+    memory of its own layer, so both scans are associative and there is no
+    loop to contract (the 2026-09-13 memory-in-the-loop GRU needed a retain
+    bias of 4.0 against its own chaos; LESSONS 09-18 has the ablation). The
+    register rows have no event input, so their attention row is the
     learned register identity -- a fixed query whose read layer 2
     accumulates: a latent history-summary token.
     """
@@ -396,30 +313,18 @@ class HistorySequenceStep(nn.Module):
             output_init=nn.initializers.lecun_normal(),
             name="attention",
         )
-        self.form = recurrence_form(self.cfg)
-        if self.form == "loop":
-            self.cells = {
-                token_type: HistoryGRUCell(
-                    width,
-                    dtype=self.cfg.dtype,
-                    retain_bias=HISTORY_RETAIN_BIAS,
-                    name=f"{token_type}_gru",
-                )
-                for token_type in ("entity", "field", "register")
-            }
-        else:
-            self.inner_cells = {
-                token_type: GatedLinearCell(
-                    width, dtype=self.cfg.dtype, name=f"{token_type}_inner_cell"
-                )
-                for token_type in ("entity", "field")
-            }
-            self.cells = {
-                token_type: GatedLinearCell(
-                    width, dtype=self.cfg.dtype, name=f"{token_type}_cell"
-                )
-                for token_type in ("entity", "field", "register")
-            }
+        self.inner_cells = {
+            token_type: GatedLinearCell(
+                width, dtype=self.cfg.dtype, name=f"{token_type}_inner_cell"
+            )
+            for token_type in ("entity", "field")
+        }
+        self.cells = {
+            token_type: GatedLinearCell(
+                width, dtype=self.cfg.dtype, name=f"{token_type}_cell"
+            )
+            for token_type in ("entity", "field", "register")
+        }
 
     def read(
         self, content: jax.Array, identities: jax.Array, key_mask: jax.Array
@@ -452,50 +357,12 @@ class HistorySequenceStep(nn.Module):
         ):
             if token_type not in cells:
                 continue
-            if state_rows.start >= rows.shape[1]:
-                continue
             gate, candidate = cells[token_type](rows[:, state_rows])
             gates.append(gate)
             candidates.append(candidate)
         return jnp.concatenate(gates, axis=1), jnp.concatenate(candidates, axis=1)
 
     def __call__(
-        self,
-        memory: jax.Array,
-        inputs: tuple[jax.Array, jax.Array, jax.Array],
-    ) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
-        """One `loop` step (the scan body)."""
-        event_rows, attention_identities, valid = inputs
-        attended, probabilities = self.read(
-            (memory.astype(self.cfg.dtype) + event_rows)[None],
-            attention_identities[None],
-            jnp.asarray(step_key_mask("loop")),
-        )
-        # Normalisation and row identities address attention; the GRU also
-        # reads raw event features and its own unnormalised previous memory.
-        gru_inputs = event_rows + attended[0]
-        updated_groups = []
-        gate_groups = []
-        for token_type, state_rows in (
-            ("entity", HISTORY_SLOT_STATE_ROWS),
-            ("field", HISTORY_FIELD_STATE_ROWS),
-            ("register", HISTORY_REGISTER_STATE_ROWS),
-        ):
-            updated_group, group_gate = self.cells[token_type](
-                memory[state_rows], gru_inputs[state_rows]
-            )
-            updated_groups.append(updated_group)
-            gate_groups.append(group_gate)
-        updated = jnp.concatenate(updated_groups, axis=0)
-        write_gate = jnp.concatenate(gate_groups, axis=0)
-        memory = jnp.where(valid, updated, memory)
-        return memory, (
-            memory.astype(self.cfg.dtype),
-            probabilities[0],
-            write_gate.mean(-1),
-        )
-
-    def stacked(
         self,
         event_rows: jax.Array,
         attention_identities: jax.Array,
@@ -529,7 +396,7 @@ class HistorySequenceStep(nn.Module):
             axis=1,
         )
         attended, probabilities = self.read(
-            content, attention_identities, jnp.asarray(step_key_mask("stacked"))
+            content, attention_identities, jnp.asarray(STEP_KEY_MASK)
         )
         gate, candidate = self._per_group(self.cells, event_rows + attended)
         write = jnp.broadcast_to(step_valid[:, None], gate.shape[:2])
@@ -552,50 +419,29 @@ class PerSlotHistoryEncoder(nn.Module):
             dtype=self.cfg.dtype,
             name="event_projection",
         )
-        self.form = recurrence_form(self.cfg)
-        if self.form == "loop":
-            # Cross-row reads of previous memory require a chronological scan.
-            step = nn.remat(
-                HistorySequenceStep, policy=jax.checkpoint_policies.nothing_saveable
-            )
-            self.sequence_step = nn.scan(
-                step,
-                variable_broadcast="params",
-                split_rngs={"params": False},
-                in_axes=0,
-                out_axes=0,
-            )(self.cfg, name="sequence_step")
-        else:
-            self.initial_inner_memory = self.param(
-                "initial_inner_memory",
-                nn.initializers.normal(0.02),
-                (HISTORY_EVENT_STATE_ROWS.stop, self.cfg.entity_size),
-            )
-            self.sequence_step = HistorySequenceStep(self.cfg, name="sequence_step")
+        self.initial_inner_memory = self.param(
+            "initial_inner_memory",
+            nn.initializers.normal(0.02),
+            (HISTORY_EVENT_STATE_ROWS.stop, self.cfg.entity_size),
+        )
+        self.sequence_step = HistorySequenceStep(self.cfg, name="sequence_step")
 
     def resolve_initial(
         self, carry: HistoryCarry
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        """(19, D) f32 memory, layer-1 memory ((15, D) f32 under `stacked`,
-        () under `loop`) and (12, D) node snapshots the window starts from:
-        the learned h0, or the carry where it is valid."""
+        """(19, D) f32 memory, (15, D) f32 layer-1 memory and (12, D) node
+        snapshots the window starts from: the learned h0, or the carry where
+        it is valid."""
         node0 = jnp.zeros((NUM_PUBLIC_SLOTS, self.cfg.entity_size), self.cfg.dtype)
-        inner0 = ()
-        if self.form == "stacked":
-            inner0 = self.initial_inner_memory
+        inner0 = self.initial_inner_memory
         if isinstance(carry.valid, tuple):
             return self.initial_memory, inner0, node0
         carried = jnp.concatenate(
             (carry.slot_states, carry.field_states, carry.register_states), axis=0
         ).astype(jnp.float32)
-        inner = inner0
-        if self.form == "stacked":
-            inner = jnp.where(
-                carry.valid, carry.inner_states.astype(jnp.float32), inner0
-            )
         return (
             jnp.where(carry.valid, carried, self.initial_memory),
-            inner,
+            jnp.where(carry.valid, carry.inner_states.astype(jnp.float32), inner0),
             jnp.where(carry.valid, carry.node_snapshots.astype(self.cfg.dtype), node0),
         )
 
@@ -610,14 +456,8 @@ class PerSlotHistoryEncoder(nn.Module):
     ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
         """(H, 19, D) states in the compute dtype, (H, heads, 19, 19)
         probabilities, (H, 12) slot write gates, the final (19, D) f32
-        memory and the final layer-1 memory (() under `loop`)."""
-        if self.form == "loop":
-            final_memory, (states, probabilities, gates) = self.sequence_step(
-                initial_memory.astype(jnp.float32),
-                (event_rows, attention_identities, step_valid),
-            )
-            return states, probabilities, gates, final_memory, ()
-        states, inner, probabilities, gates = self.sequence_step.stacked(
+        memory and the final (15, D) f32 layer-1 memory."""
+        states, inner, probabilities, gates = self.sequence_step(
             event_rows,
             attention_identities,
             touched,

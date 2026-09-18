@@ -15,7 +15,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import session_player_model_config
 
 from rl.environment.interfaces import (
     HistoryCarry,
@@ -30,11 +29,7 @@ from rl.model.constants import (
     NUM_PUBLIC_SLOTS,
 )
 from rl.model.heads import HeadParams
-from rl.model.history_encoder import (
-    PerSlotHistoryOutput,
-    invalid_history_carry,
-    recurrence_form,
-)
+from rl.model.history_encoder import PerSlotHistoryOutput, invalid_history_carry
 from rl.model.utils import open_zero_init_paths
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
@@ -42,22 +37,16 @@ pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 NUM_FIELD_ROWS = 3
 
 
-SESSION_FORM = recurrence_form(session_player_model_config().encoder)
-
-
-def _invalid_carry(width: int) -> HistoryCarry:
-    return invalid_history_carry(width, SESSION_FORM)
+_invalid_carry = invalid_history_carry
 
 
 def _garbage_carry(width: int, valid: bool) -> HistoryCarry:
     key_slots, key_field, key_nodes, key_registers, key_inner = jax.random.split(
         jax.random.key(7), 5
     )
-    inner_states = ()
-    if SESSION_FORM == "stacked":
-        inner_states = jax.random.normal(
-            key_inner, (NUM_PUBLIC_SLOTS + NUM_FIELD_ROWS, width)
-        )
+    inner_states = jax.random.normal(
+        key_inner, (NUM_PUBLIC_SLOTS + NUM_FIELD_ROWS, width)
+    )
     return HistoryCarry(
         slot_states=jax.random.normal(key_slots, (NUM_PUBLIC_SLOTS, width)),
         field_states=jax.random.normal(key_field, (NUM_FIELD_ROWS, width)),
@@ -399,7 +388,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
     policy_bound = max(0.05, 1.5 * floor_policy)
     value_bound = max(0.05, 1.5 * floor_value)
     print(
-        f"carry replay {SESSION_FORM}: worst policy {worst_policy:.4f} "
+        f"carry replay: worst policy {worst_policy:.4f} "
         f"value {worst_value:.4f} (floors {floor_policy:.4f} / {floor_value:.4f}, "
         f"control {control_policy:.4f})"
     )

@@ -160,6 +160,25 @@ passes, loop fails at value 0.0521 (the pre-existing 09-13 failure).
    a deaf network. A bound on the cell's candidate (the layer is a convex
    combination, so |state| ≤ max |candidate|) is one line if it ever matters.
 
+## Removal ledger — 2026-09-18 loop recurrence (NEW LINEAGE — param tree changes)
+
+Tag `pre-history-loop-removal-2026-09-18`. The stacked form is the one
+history recurrence after the ablation above; the loop and its knob go
+together (a flag with no meaningful off is a comment with a runtime cost).
+Every `history_encoder/sequence_step/*_gru` leaf is gone and
+`initial_inner_memory` + `*_inner_cell` / `*_cell` are new, so no checkpoint
+before this commit loads through `merge_params` with a trained history
+encoder: scratch lineage.
+
+| mechanism | why | revert |
+|---|---|---|
+| `HistoryGRUCell` (reset-after GRU, `{ir,hr,iz,hz,in,hn}` per token type) and the loop scan body `HistorySequenceStep.__call__(memory, inputs)` under `nn.scan(nn.remat(...))` | the memory-in-the-loop recurrence: chaotic without a retain bias (09-13), attention gradient a coherent sum over the memory window (the 22 / 12 grad hump), sequential in H (20 → 37 ms per doubling); the ablation priced it at +0.010 nats inside a 0.044 seed spread | `git show pre-history-loop-removal-2026-09-18:rl/model/history_encoder.py` |
+| `HISTORY_RETAIN_BIAS = 4.0` | the constant that held the loop's chaos down; the stacked form replays the carry within bound with none (0.014 / 0.013 trained) | same |
+| `cfg.encoder.history_recurrence`, `player_history_recurrence`, `Porygon2OfflineConfig.history_recurrence`, `--history-recurrence`, `recurrence_form()`, `step_key_mask(form)` → `STEP_KEY_MASK`, `invalid_history_carry(width, form)` → `(width)` | one form survives; the offline run name drops the form | same, plus `rl/offline/train.py`, `rl/online/{config,artifact,main}.py` at the tag |
+| `player_history_slot_gate_rms` telemetry leaf (the GRU `iz`/`hz` kernels) | `player_history_slot_write_gate_rms` (the `entity_cell/gate` kernel) is the one gate panel; `scripts/wandb_views.py` follows | same |
+| `tests/test_history_gru.py` | three of its contracts ported to `tests/test_history_cell.py` against the stacked step (norm and identities reach memory only through attention; cell weights separate by type, shared within type; identity changes reach memory only through the attention weights), the GRU-vs-Flax-reference and retain-bias tests deleted with the cell | same |
+| `PORYGON_TEST_HISTORY_RECURRENCE`, `SESSION_FORM`, the `FORMS` fixture params | the test suite runs one form | same |
+
 ## Removal ledger — 2026-09-18 history tidy (structure-only, bit-identical)
 
 Tag `pre-history-tidy-2026-09-18`. The ex.bin forward with z1o4bx1m's

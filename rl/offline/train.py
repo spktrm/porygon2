@@ -61,12 +61,10 @@ class BatchTerms(NamedTuple):
 def trainer_model_config(
     joint: bool,
     world_model: bool,
-    history_recurrence: str = "loop",
     trunk_normalised_residual: bool = True,
 ) -> ConfigDict:
     cfg = get_player_model_config(generation=9, train=True)
     cfg.encoder.public_only = True
-    cfg.encoder.history_recurrence = history_recurrence
     cfg.encoder.trunk.normalised_residual = trunk_normalised_residual
     cfg.world_model.enabled = world_model
     cfg.world_model.joint = joint
@@ -723,9 +721,6 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--max-history-steps", type=int, default=None)
     parser.add_argument(
-        "--history-recurrence", choices=["loop", "stacked"], default=None
-    )
-    parser.add_argument(
         "--fresh-subtrees",
         action="append",
         default=[],
@@ -746,7 +741,6 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
         "batch_size",
         "learning_rate",
         "max_history_steps",
-        "history_recurrence",
     ):
         value = getattr(args, name)
         if value is not None:
@@ -765,7 +759,6 @@ def main() -> None:
     model_cfg = trainer_model_config(
         config.joint,
         config.world_model,
-        config.history_recurrence,
         config.trunk_normalised_residual,
     )
     model = OfflineTrainer(model_cfg)
@@ -835,7 +828,7 @@ def main() -> None:
     evaluate = make_eval_step(config, model, model_cfg)
     wandb.init(
         project="pokemon-rl-offline",
-        name=f"offline-{config.format_id}-{config.history_recurrence}-s{seed}",
+        name=f"offline-{config.format_id}-s{seed}",
         config=dict(
             offline_config=dataclasses.asdict(config),
             num_params=get_num_params(params),

@@ -29,7 +29,7 @@ from rl.environment.utils import acted_rows
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config
 from rl.model.heads import HeadParams
-from rl.model.history_encoder import invalid_history_carry, recurrence_form
+from rl.model.history_encoder import invalid_history_carry
 from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.utils import ParamsContainer, get_num_params
 from rl.online.agent import Agent, resolve_actor_device
@@ -513,8 +513,7 @@ def main(args: argparse.Namespace):
     history_carry_template = None
     if learner_config.player_actor_history_carry:
         history_carry_template = invalid_history_carry(
-            actor_player_model_config.entity_size,
-            recurrence_form(actor_player_model_config.encoder),
+            actor_player_model_config.entity_size
         )
 
     player_state, builder_state = create_train_state(

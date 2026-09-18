@@ -33,8 +33,6 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # Joint: the offline losses also train the encoder (Step 6 of the
     # world-model plan); off = observer, the trunk never moves.
     joint: bool = False
-    # rl/model/config.py cfg.encoder.history_recurrence; the ablation's arm.
-    history_recurrence: str = "loop"
     # The trunk form the checkpoint was trained under (the learner's
     # player_trunk_normalised_residual); the model config's default is off.
     trunk_normalised_residual: bool = True

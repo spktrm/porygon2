@@ -1,8 +1,9 @@
-"""Actor-forward wall-clock per history recurrence form (LESSONS 09-02's
-bench, kept): the actor network (train=False, bf16) on the ex.bin request
-broadcast to B requests at history length H, median of `--repeats` timed
-calls after a warm-up. Fresh params -- the timing is the program's, not the
-weights'. Run with nothing else on the GPU; `kill -USR1` dumps the stacks.
+"""Actor-forward wall-clock (LESSONS 09-02's bench, kept; the 09-18
+recurrence ablation's numbers are in LESSONS): the actor network
+(train=False, bf16) on the ex.bin request broadcast to B requests at history
+length H, median of `--repeats` timed calls after a warm-up. Fresh params --
+the timing is the program's, not the weights'. Run with nothing else on the
+GPU; `kill -USR1` dumps the stacks.
 
     env/bin/python -m rl.probes.history_bench --out runtime/ablation-history/bench.json
 """
@@ -44,9 +45,8 @@ def last_request(history_length: int):
     return actor_input, actor_output
 
 
-def bench_form(form: str, history_lengths, batches, repeats: int) -> dict:
+def bench(history_lengths, batches, repeats: int) -> dict:
     config = player_model_config_for(get_learner_config(), train=False)
-    config.encoder.history_recurrence = form
     network = get_player_model(config)
     actor_input, actor_output = last_request(history_lengths[0])
     started = time.perf_counter()
@@ -54,7 +54,7 @@ def bench_form(form: str, history_lengths, batches, repeats: int) -> dict:
         jax.random.key(0), actor_input, actor_output, HeadParams()
     )
     jax.block_until_ready(params)
-    print(f"{form}: init {time.perf_counter() - started:.1f}s", flush=True)
+    print(f"init {time.perf_counter() - started:.1f}s", flush=True)
 
     def one(params, key, actor_input, actor_output):
         return network.apply(
@@ -80,7 +80,7 @@ def bench_form(form: str, history_lengths, batches, repeats: int) -> dict:
                 started = time.perf_counter()
                 jax.block_until_ready(apply(params, keys, *batched))
                 samples.append((time.perf_counter() - started) * 1e3)
-            key = f"{form}/H{history_length}/B{batch}"
+            key = f"H{history_length}/B{batch}"
             report[key] = statistics.median(samples)
             print(
                 f"{key:>20} {report[key]:8.2f} ms (compile {compile_seconds:.1f}s)",
@@ -92,17 +92,12 @@ def bench_form(form: str, history_lengths, batches, repeats: int) -> dict:
 def main(argv=None):
     faulthandler.register(signal.SIGUSR1, all_threads=True)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--forms", nargs="+", default=["loop", "stacked"])
     parser.add_argument("--history", nargs="+", type=int, default=[256, 512])
     parser.add_argument("--batch", nargs="+", type=int, default=[1, 4, 8, 16])
     parser.add_argument("--repeats", type=int, default=50)
     parser.add_argument("--out", required=True)
     arguments = parser.parse_args(argv)
-    report = {}
-    for form in arguments.forms:
-        report.update(
-            bench_form(form, arguments.history, arguments.batch, arguments.repeats)
-        )
+    report = bench(arguments.history, arguments.batch, arguments.repeats)
     Path(arguments.out).parent.mkdir(parents=True, exist_ok=True)
     Path(arguments.out).write_text(json.dumps(report, indent=2))
 

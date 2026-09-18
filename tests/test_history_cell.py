@@ -1,11 +1,24 @@
-"""Contracts of the stacked recurrence's pieces: the input-gated cell, the
+"""Contracts of the history recurrence's pieces: the input-gated cell, the
 associative scan, and what the step attention does and does not carry."""
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from ml_collections import ConfigDict
 
-from rl.model.history_encoder import GatedLinearCell, gated_linear_scan
+from rl.model.constants import (
+    HISTORY_EVENT_STATE_ROWS,
+    HISTORY_FIELD_STATE_ROWS,
+    HISTORY_REGISTER_STATE_ROWS,
+    HISTORY_SLOT_STATE_ROWS,
+    NUM_HISTORY_STATE_ROWS,
+    NUM_PUBLIC_SLOTS,
+)
+from rl.model.history_encoder import (
+    GatedLinearCell,
+    HistorySequenceStep,
+    gated_linear_scan,
+)
 
 WIDTH = 8
 STEPS = 7
@@ -65,3 +78,124 @@ def test_bf16_gate_and_candidate_keep_a_small_update_in_the_f32_carry() -> None:
     np.testing.assert_array_equal(
         states[0].astype(jnp.bfloat16), jnp.full((UNITS, WIDTH), 100.0, jnp.bfloat16)
     )
+
+
+def _step_module():
+    cfg = ConfigDict(
+        dict(
+            entity_size=WIDTH,
+            dtype=jnp.float32,
+            history_step=dict(num_heads=2, qk_size=4),
+        )
+    )
+    module = HistorySequenceStep(cfg)
+    events = jax.random.normal(
+        jax.random.key(77), (STEPS, NUM_HISTORY_STATE_ROWS, WIDTH)
+    )
+    events = events.at[:, HISTORY_REGISTER_STATE_ROWS].set(0)
+    identities = jnp.ones_like(events)
+    touched = jnp.ones((STEPS, NUM_PUBLIC_SLOTS), jnp.bool_)
+    valid = jnp.ones(STEPS, jnp.bool_)
+    inner0 = jax.random.normal(
+        jax.random.key(78), (HISTORY_EVENT_STATE_ROWS.stop, WIDTH)
+    )
+    memory0 = jax.random.normal(jax.random.key(79), (NUM_HISTORY_STATE_ROWS, WIDTH))
+    arguments = (events, identities, touched, valid, inner0, memory0)
+    params = jax.jit(module.init)(jax.random.key(80), *arguments)
+    jitted = jax.jit(module.apply)
+
+    def apply(tree, *overrides):
+        replaced = list(arguments)
+        for index, value in overrides:
+            replaced[index] = value
+        return jitted(tree, *replaced)
+
+    return params, apply, arguments
+
+
+def _copy(tree):
+    return jax.tree.map(lambda leaf: leaf, tree)
+
+
+def test_norm_and_identities_reach_memory_only_through_attention() -> None:
+    params, apply, (events, identities, *_) = _step_module()
+    muted = _copy(params)
+    muted["params"]["attention"]["out_proj"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
+
+    def change_read_branch(tree):
+        changed = _copy(tree)
+        changed["params"]["group_identity"] += 10
+        changed["params"]["register_identity"] += 20
+        changed["params"]["input_norm"]["scale"] *= 3
+        return changed
+
+    base = apply(muted)[0]
+    np.testing.assert_array_equal(base, apply(change_read_branch(muted))[0])
+    # Controls: the same changes move memory through a live out_proj, and
+    # the event rows reach memory without it.
+    assert not np.allclose(apply(params)[0], apply(change_read_branch(params))[0])
+    assert not np.allclose(base, apply(muted, (0, events * 3))[0])
+
+
+def test_cell_weights_are_separate_by_type_and_shared_within_type() -> None:
+    params, apply, (events, identities, touched, valid, inner0, memory0) = (
+        _step_module()
+    )
+    params = _copy(params)
+    params["params"]["attention"]["out_proj"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
+    uniform = (
+        (0, jnp.full_like(events, 0.2).at[:, HISTORY_REGISTER_STATE_ROWS].set(0)),
+        (4, jnp.full_like(inner0, 0.4)),
+        (5, jnp.full_like(memory0, 0.4)),
+    )
+    baseline = apply(params, *uniform)[0]
+    groups = (
+        ("entity", HISTORY_SLOT_STATE_ROWS),
+        ("field", HISTORY_FIELD_STATE_ROWS),
+        ("register", HISTORY_REGISTER_STATE_ROWS),
+    )
+    for token_type, state_rows in groups:
+        np.testing.assert_allclose(
+            baseline[:, state_rows],
+            jnp.broadcast_to(
+                baseline[:, state_rows][:, :1], baseline[:, state_rows].shape
+            ),
+            atol=1e-6,
+        )
+        changed = _copy(params)
+        changed["params"][f"{token_type}_cell"]["candidate"]["bias"] += 5
+        updated = apply(changed, *uniform)[0]
+        assert not np.allclose(updated[:, state_rows], baseline[:, state_rows])
+        for other_type, other_rows in groups:
+            if other_type != token_type:
+                np.testing.assert_array_equal(
+                    updated[:, other_rows], baseline[:, other_rows]
+                )
+
+
+def test_identity_changes_reach_memory_only_through_attention_weights() -> None:
+    params, apply, (events, identities, *_) = _step_module()
+
+    def move_identities(tree):
+        changed = _copy(tree)
+        changed["params"]["group_identity"] += 1.0
+        changed["params"]["register_identity"] += 1.0
+        return changed
+
+    moved_identities = (1, identities + 2.0)
+    baseline, _, baseline_probs, _ = apply(params)
+    moved, _, moved_probs, _ = apply(move_identities(params), moved_identities)
+    assert not np.allclose(baseline_probs, moved_probs)
+    assert not np.allclose(baseline, moved)
+    # A zero query fixes the attention weights; the value path stays live,
+    # so identity-valued writes would still show.
+    fixed = _copy(params)
+    fixed["params"]["attention"]["query"]["kernel"] = jnp.zeros_like(
+        fixed["params"]["attention"]["query"]["kernel"]
+    )
+    fixed_baseline, _, fixed_probs, _ = apply(fixed)
+    fixed_moved, _, fixed_moved_probs, _ = apply(
+        move_identities(fixed), moved_identities
+    )
+    np.testing.assert_array_equal(fixed_probs, fixed_moved_probs)
+    np.testing.assert_array_equal(fixed_baseline, fixed_moved)

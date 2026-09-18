@@ -126,13 +126,7 @@ def test_history_telemetry_paths_match_shared_sequence(abstract_forward):
     from rl.online.training.telemetry import _GRAD_SUBTREES, _HISTORY_LEAVES
 
     params, _ = abstract_forward
-    gate_keys = ("player_history_slot_gate_rms", "player_history_slot_write_gate_rms")
-    paths = [
-        path
-        for key, entries in _HISTORY_LEAVES.items()
-        if key not in gate_keys
-        for path in entries
-    ]
+    paths = [path for entries in _HISTORY_LEAVES.values() for path in entries]
     paths.append(_GRAD_SUBTREES["player_history_step_attn_grad_norm"])
 
     def resolves(path):
@@ -145,8 +139,3 @@ def test_history_telemetry_paths_match_shared_sequence(abstract_forward):
 
     for path in paths:
         assert resolves(path), path
-    # Exactly one gate entry belongs to the session's recurrence form.
-    assert (
-        sum(all(resolves(path) for path in _HISTORY_LEAVES[key]) for key in gate_keys)
-        == 1
-    )

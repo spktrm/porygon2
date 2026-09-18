@@ -164,7 +164,6 @@ def player_model_config_for(
     model_config.encoder.trunk.normalised_residual = (
         learner_config.player_trunk_normalised_residual
     )
-    model_config.encoder.history_recurrence = learner_config.player_history_recurrence
     return model_config
 
 

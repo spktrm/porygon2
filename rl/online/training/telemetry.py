@@ -462,12 +462,6 @@ _HISTORY_LEAVES = {
         ("encoder", "history_encoder", "sequence_step", "attention", "query", "kernel"),
         ("encoder", "history_encoder", "sequence_step", "attention", "key", "kernel"),
     ),
-    # The slot write gate's kernels: the GRU's under "loop", the input-only
-    # cell's under "stacked" (one of the two resolves; the other is absent).
-    "player_history_slot_gate_rms": (
-        ("encoder", "history_encoder", "sequence_step", "entity_gru", "iz", "kernel"),
-        ("encoder", "history_encoder", "sequence_step", "entity_gru", "hz", "kernel"),
-    ),
     "player_history_slot_write_gate_rms": (
         (
             "encoder",
