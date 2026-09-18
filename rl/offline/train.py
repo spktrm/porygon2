@@ -625,7 +625,10 @@ def overlay_whole(
         path
         for path in kept_fresh
         if path.split("/")[1] in loaded
-        and not any(path.startswith(f"/{subtree}/") for subtree in fresh_subtrees)
+        and not any(
+            path == f"/{subtree}" or path.startswith(f"/{subtree}/")
+            for subtree in fresh_subtrees
+        )
     ]
     if misses:
         raise ValueError(
@@ -817,7 +820,7 @@ def main() -> None:
     evaluate = make_eval_step(config, model, model_cfg)
     wandb.init(
         project="pokemon-rl-offline",
-        name=f"offline-{config.format_id}",
+        name=f"offline-{config.format_id}-{config.history_recurrence}-s{seed}",
         config=dict(
             offline_config=dataclasses.asdict(config),
             num_params=get_num_params(params),
