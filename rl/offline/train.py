@@ -73,6 +73,23 @@ def trainer_model_config(
     return cfg
 
 
+def critic_buckets(
+    step_valid: jax.Array, new_turn: jax.Array, order: jax.Array, num_valid: jax.Array
+) -> dict[str, jax.Array]:
+    """The step subsets the public critic is read over, keyed by metric
+    suffix ("" = every valid step). `order` is the valid step's 1-based
+    position in the window."""
+    buckets = {
+        "": step_valid,
+        "_boundary": step_valid & new_turn,
+        "_midturn": step_valid & ~new_turn,
+        "_first_half": step_valid & (order <= 0.5 * num_valid),
+        "_second_half": step_valid & (order > 0.5 * num_valid),
+        "_final": step_valid & (order == num_valid),
+    }
+    return buckets
+
+
 class OfflineTrainer(nn.Module):
     cfg: ConfigDict
 
@@ -109,7 +126,7 @@ class OfflineTrainer(nn.Module):
             sums[name] = jnp.sum(jnp.where(mask, value, 0.0))
             counts[name] = jnp.sum(mask.astype(jnp.float32))
 
-        self.critic_terms(add, counts, states, events.step_valid, labels, batch)
+        self.critic_terms(add, states, events.step_valid, labels, batch)
         if self.cfg.world_model.enabled:
             self.world_model_terms(
                 add,
@@ -126,34 +143,32 @@ class OfflineTrainer(nn.Module):
             )
         return BatchTerms(sums=sums, counts=counts)
 
-    def critic_terms(self, add, counts, states, step_valid, labels, batch) -> None:
+    def critic_terms(self, add, states, step_valid, labels, batch) -> None:
         """The public critic on real states, every valid step."""
         value = self.public_value_head(states[:, PUBLIC_CLS_LOCAL_ROW])
         outcome_bin = jnp.argmax(batch.win_reward)
         value_nll = -value.log_probs[:, outcome_bin]
         outcome_value = jnp.asarray([-1.0, 0.0, 1.0])[outcome_bin]
         add("loss_public_value", value_nll, step_valid)
-        add("value_residual", jnp.square(value.expectation - outcome_value), step_valid)
-        add(
-            "value_residual_boundary",
-            jnp.square(value.expectation - outcome_value),
-            step_valid & labels.new_turn,
-        )
-        add(
-            "value_residual_midturn",
-            jnp.square(value.expectation - outcome_value),
-            step_valid & ~labels.new_turn,
-        )
-        add(
-            "outcome_value", jnp.full_like(value.expectation, outcome_value), step_valid
-        )
-        add(
-            "outcome_value_sq",
-            jnp.full_like(value.expectation, outcome_value**2),
-            step_valid,
-        )
-        counts["value_residual_boundary_n"] = counts["value_residual_boundary"]
-        counts["value_residual_midturn_n"] = counts["value_residual_midturn"]
+        squared_error = jnp.square(value.expectation - outcome_value)
+        # The window is the game's tail, so "first half" is the first half
+        # of the window: the whole game when it fits in max_history_steps.
+        order = jnp.cumsum(step_valid.astype(jnp.float32))
+        num_valid = order[-1]
+        for bucket, mask in critic_buckets(
+            step_valid, labels.new_turn, order, num_valid
+        ).items():
+            add(f"value_residual{bucket}", squared_error, mask)
+            add(
+                f"outcome_value{bucket}",
+                jnp.full_like(squared_error, outcome_value),
+                mask,
+            )
+            add(
+                f"outcome_value_sq{bucket}",
+                jnp.full_like(squared_error, outcome_value**2),
+                mask,
+            )
 
     def world_model_terms(
         self,
@@ -170,7 +185,6 @@ class OfflineTrainer(nn.Module):
         num_samples: int,
     ) -> None:
         num_steps = states.shape[0]
-        events.step_valid
         pair_valid = labels.valid & ~labels.terminal
         next_states = jnp.roll(states, -1, axis=0)
 
@@ -391,17 +405,18 @@ def pooled_metrics(pooled: BatchTerms, scale: jax.Array, floor: float) -> dict:
     scalar_keys = [key for key, value in sums.items() if jnp.ndim(value) == 0]
     for key in scalar_keys:
         metrics[key] = sums[key] / jnp.maximum(counts[key], 1.0)
-    n = jnp.maximum(counts["outcome_value"], 1.0)
-    outcome_var = sums["outcome_value_sq"] / n - jnp.square(sums["outcome_value"] / n)
-    metrics["public_value_r2"] = 1.0 - metrics["value_residual"] / jnp.maximum(
-        outcome_var, 1e-8
-    )
-    metrics["public_value_r2_boundary"] = 1.0 - metrics[
-        "value_residual_boundary"
-    ] / jnp.maximum(outcome_var, 1e-8)
-    metrics["public_value_r2_midturn"] = 1.0 - metrics[
-        "value_residual_midturn"
-    ] / jnp.maximum(outcome_var, 1e-8)
+    buckets = [
+        key.removeprefix("value_residual")
+        for key in sums
+        if key.startswith("value_residual")
+    ]
+    for bucket in buckets:
+        outcome_var = metrics[f"outcome_value_sq{bucket}"] - jnp.square(
+            metrics[f"outcome_value{bucket}"]
+        )
+        metrics[f"public_value_r2{bucket}"] = 1.0 - metrics[
+            f"value_residual{bucket}"
+        ] / jnp.maximum(outcome_var, 1e-8)
     if "flow_error" in sums:
         world_model_metrics(metrics, sums, counts, scale, floor)
     return metrics
@@ -858,6 +873,7 @@ def main() -> None:
             print(
                 f"eval step {step}: public value R2 "
                 f"{eval_metrics.get('eval_public_value_r2', float('nan')):.3f} "
+                f"(final {eval_metrics.get('eval_public_value_r2_final', float('nan')):.3f}) "
                 f"nats/token {eval_metrics.get('eval_nats_per_token', float('nan')):.3f} "
                 f"flow {eval_metrics.get('eval_loss_flow', float('nan')):.3f} "
                 f"imagined R2 {eval_metrics.get('eval_imagined_value_r2', float('nan')):.3f}"

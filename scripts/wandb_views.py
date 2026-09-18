@@ -1187,6 +1187,14 @@ def offline_sections():
                     ],
                 ),
                 lp(
+                    "Public critic R2 by phase (first half / second half / final step)",
+                    [
+                        "eval_public_value_r2_first_half",
+                        "eval_public_value_r2_second_half",
+                        "eval_public_value_r2_final",
+                    ],
+                ),
+                lp(
                     "Public value loss / terminal loss",
                     ["eval_loss_public_value", "eval_loss_terminal"],
                 ),
