@@ -29,6 +29,7 @@ from rl.environment.utils import acted_rows
 from rl.model.builder_model import get_builder_model
 from rl.model.config import get_builder_model_config
 from rl.model.heads import HeadParams
+from rl.model.history_encoder import invalid_history_carry, recurrence_form
 from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.utils import ParamsContainer, get_num_params
 from rl.online.agent import Agent, resolve_actor_device
@@ -509,9 +510,12 @@ def main(args: argparse.Namespace):
     actor_builder_network = get_builder_model(actor_builder_model_config)
     # Every PlayerActor (training and eval) carries history across a game's
     # requests when the flag is on; None is the full-window path.
-    history_carry_width = None
+    history_carry_template = None
     if learner_config.player_actor_history_carry:
-        history_carry_width = actor_player_model_config.entity_size
+        history_carry_template = invalid_history_carry(
+            actor_player_model_config.entity_size,
+            recurrence_form(actor_player_model_config.encoder),
+        )
 
     player_state, builder_state = create_train_state(
         learner_player_network,
@@ -748,7 +752,7 @@ def main(args: argparse.Namespace):
                         learner=learner,
                         rng_seed=len(new_threads) + salt + slot,
                         inference_client=inference_server,
-                        history_carry_width=history_carry_width,
+                        history_carry_template=history_carry_template,
                         pinned_opponent=pinned_opponent,
                         stats=actor_stats,
                     )
@@ -788,7 +792,7 @@ def main(args: argparse.Namespace):
                 learner=learner,
                 rng_seed=len(new_threads) + salt,
                 is_eval=True,
-                history_carry_width=history_carry_width,
+                history_carry_template=history_carry_template,
             )
             new_threads.append(
                 threading.Thread(

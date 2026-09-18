@@ -67,7 +67,7 @@ from rl.environment.utils import (
     pad_history_to_level,
 )
 from rl.model.heads import HeadParams
-from rl.model.history_encoder import invalid_history_carry
+from rl.model.history_encoder import invalid_history_carry_like
 from rl.model.utils import Params, ParamsContainer
 from rl.online.agent import DeviceParamsCache
 
@@ -92,17 +92,13 @@ def _stack_history_carries(carries: "list[HistoryCarry]") -> HistoryCarry:
     does gets an invalid carry of the same width, so the group still
     stacks and that request still computes from h0; a group with no carry
     leaves at all keeps the empty carry (the encoder's static h0 branch)."""
-    widths = [
-        carry.slot_states.shape[-1]
-        for carry in carries
-        if not isinstance(carry.slot_states, tuple)
-    ]
-    if not widths:
+    present = [carry for carry in carries if not isinstance(carry.slot_states, tuple)]
+    if not present:
         return HistoryCarry()
     filled = []
     for carry in carries:
         if isinstance(carry.slot_states, tuple):
-            filled.append(invalid_history_carry(widths[0]))
+            filled.append(invalid_history_carry_like(present[0]))
         else:
             filled.append(carry)
     return jax.tree.map(lambda *xs: np.stack(xs), *filled)

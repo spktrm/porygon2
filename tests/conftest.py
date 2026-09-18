@@ -57,6 +57,12 @@ def session_player_model_config(train: bool = True, dtype=None):
         config = get_player_model_config(generation=9, train=train, dtype=dtype)
     config.potential_head.enabled = True
     config.encoder.trunk.normalised_residual = True
+    # The history recurrence under test; both forms exist during the
+    # 2026-09-18 ablation. PORYGON_TEST_HISTORY_RECURRENCE=stacked runs the
+    # session model on the other form.
+    config.encoder.history_recurrence = os.environ.get(
+        "PORYGON_TEST_HISTORY_RECURRENCE", "loop"
+    )
     return config
 
 

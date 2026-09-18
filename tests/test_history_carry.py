@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import session_player_model_config
 
 from rl.environment.interfaces import (
     HistoryCarry,
@@ -28,7 +29,11 @@ from rl.model.constants import (
     NUM_PUBLIC_SLOTS,
 )
 from rl.model.heads import HeadParams
-from rl.model.history_encoder import PerSlotHistoryOutput
+from rl.model.history_encoder import (
+    PerSlotHistoryOutput,
+    invalid_history_carry,
+    recurrence_form,
+)
 from rl.model.utils import open_zero_init_paths
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
@@ -36,10 +41,22 @@ pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 NUM_FIELD_ROWS = 3
 
 
+SESSION_FORM = recurrence_form(session_player_model_config().encoder)
+
+
+def _invalid_carry(width: int) -> HistoryCarry:
+    return invalid_history_carry(width, SESSION_FORM)
+
+
 def _garbage_carry(width: int, valid: bool) -> HistoryCarry:
-    key_slots, key_field, key_nodes, key_registers = jax.random.split(
-        jax.random.key(7), 4
+    key_slots, key_field, key_nodes, key_registers, key_inner = jax.random.split(
+        jax.random.key(7), 5
     )
+    inner_states = ()
+    if SESSION_FORM == "stacked":
+        inner_states = jax.random.normal(
+            key_inner, (NUM_PUBLIC_SLOTS + NUM_FIELD_ROWS, width)
+        )
     return HistoryCarry(
         slot_states=jax.random.normal(key_slots, (NUM_PUBLIC_SLOTS, width)),
         field_states=jax.random.normal(key_field, (NUM_FIELD_ROWS, width)),
@@ -47,6 +64,7 @@ def _garbage_carry(width: int, valid: bool) -> HistoryCarry:
         register_states=jax.random.normal(
             key_registers, (NUM_HISTORY_REGISTERS, width)
         ),
+        inner_states=inner_states,
         valid=jnp.asarray(valid),
     )
 
@@ -264,7 +282,6 @@ def test_suffix_carry_replays_the_game_within_bf16(
     calibrated on value log-probs alone, which is why the floor is
     recomputed here rather than reused."""
     from rl.environment.utils import clip_history_suffix, clip_history_windows_tail
-    from rl.model.history_encoder import invalid_history_carry
     from rl.online.config import get_learner_config
     from rl.online.player_actor import _last_step_index
 
@@ -312,7 +329,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
     for request_count in range(num_requests):
         window = _window_at(full_window, request_count)
         full = forward(
-            window.replace(history_carry=invalid_history_carry(width)), request_count
+            window.replace(history_carry=_invalid_carry(width)), request_count
         )
         tail_history, tail_packed = clip_history_windows_tail(
             window.history, window.packed_history, stored_history_length
@@ -321,7 +338,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
             window.replace(
                 history=tail_history,
                 packed_history=tail_packed,
-                history_carry=invalid_history_carry(width),
+                history_carry=_invalid_carry(width),
             ),
             request_count,
         )
@@ -330,7 +347,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
         suffix, _ = clip_history_suffix(window, last_step_index)
         assert suffix is not None
         if carry is None:
-            resumed_input = suffix.replace(history_carry=invalid_history_carry(width))
+            resumed_input = suffix.replace(history_carry=_invalid_carry(width))
         else:
             resumed_input = suffix.replace(history_carry=carry)
         resumed = forward(resumed_input, request_count)
@@ -348,7 +365,7 @@ def test_suffix_carry_replays_the_game_within_bf16(
     assert worst_value <= value_bound, (worst_value, floor_value)
 
     final_full = forward(
-        window.replace(history_carry=invalid_history_carry(width)), request_count
+        window.replace(history_carry=_invalid_carry(width)), request_count
     )
     np.testing.assert_allclose(
         np.asarray(carry.slot_states),
@@ -371,6 +388,12 @@ def test_suffix_carry_replays_the_game_within_bf16(
         np.asarray(final_full.history_carry.register_states),
         atol=0.05,
     )
+    if SESSION_FORM == "stacked":
+        np.testing.assert_allclose(
+            np.asarray(carry.inner_states),
+            np.asarray(final_full.history_carry.inner_states),
+            atol=0.05,
+        )
 
     # Control: the tolerance can fail -- a shifted carry moves what the
     # test compares.
@@ -395,7 +418,6 @@ def test_server_mixed_group_matches_single_forwards(
     import threading
 
     from rl.environment.utils import clip_history_suffix
-    from rl.model.history_encoder import invalid_history_carry
     from rl.model.utils import ParamsContainer
     from rl.online.inference import InferenceServer, _InferenceRequest
     from rl.online.player_actor import _last_step_index
@@ -448,9 +470,7 @@ def test_server_mixed_group_matches_single_forwards(
 
     before = _window_at(full_window, 20)
     window = _window_at(full_window, 21)
-    (primed,) = run(
-        [request(0, before.replace(history_carry=invalid_history_carry(width)))]
-    )
+    (primed,) = run([request(0, before.replace(history_carry=_invalid_carry(width)))])
     suffix, suffix_steps = clip_history_suffix(window, _last_step_index(before))
     assert suffix_steps > 0
     carrying = suffix.replace(history_carry=primed.history_carry)
@@ -484,7 +504,7 @@ def test_server_mixed_group_matches_single_forwards(
     # The fill is the from-scratch forward: the plain request equals the
     # same window sent with an explicit invalid carry ...
     (explicit_invalid,) = run(
-        [request(2, suffix.replace(history_carry=invalid_history_carry(width)))]
+        [request(2, suffix.replace(history_carry=_invalid_carry(width)))]
     )
     np.testing.assert_allclose(
         np.asarray(single_plain.action_head.log_policy, np.float32),

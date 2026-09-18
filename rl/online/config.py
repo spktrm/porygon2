@@ -331,6 +331,8 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # through artifact.player_model_config_for as well -- the two sides must
     # agree or the actor runs plain residuals over alpha-trained weights.
     player_trunk_normalised_residual: bool = True
+    # rl/model/config.py cfg.encoder.history_recurrence: "loop" | "stacked".
+    player_history_recurrence: str = "loop"
     # PBRS as a potential channel: eta, the scale on the
     # service's unit position potential Phi (INFO_FEATURE__STATE_POTENTIAL,
     # the human-replay outcome fit). > 0 runs a second v-trace channel beside

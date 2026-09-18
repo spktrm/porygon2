@@ -54,6 +54,8 @@ class HistoryCarry:
     slot_states: ArrayLike = ()
     field_states: ArrayLike = ()
     register_states: ArrayLike = ()
+    # Layer-1 memory of the stacked recurrence (15, D) f32; () under loop.
+    inner_states: ArrayLike = ()
     node_snapshots: ArrayLike = ()
     valid: ArrayLike = ()
 

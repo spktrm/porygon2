@@ -58,9 +58,16 @@ class BatchTerms(NamedTuple):
     counts: dict
 
 
-def trainer_model_config(joint: bool, world_model: bool) -> ConfigDict:
+def trainer_model_config(
+    joint: bool,
+    world_model: bool,
+    history_recurrence: str = "loop",
+    trunk_normalised_residual: bool = True,
+) -> ConfigDict:
     cfg = get_player_model_config(generation=9, train=True)
     cfg.encoder.public_only = True
+    cfg.encoder.history_recurrence = history_recurrence
+    cfg.encoder.trunk.normalised_residual = trunk_normalised_residual
     cfg.world_model.enabled = world_model
     cfg.world_model.joint = joint
     return cfg
@@ -591,12 +598,35 @@ def param_labels(params: Params, joint: bool) -> Params:
     return labels
 
 
-def overlay_whole(params: Params, loaded: Params, source: str) -> Params:
+def without_subtrees(loaded: Params, subtrees: tuple[str, ...]) -> Params:
+    """`loaded` with each "a/b" subtree removed, so overlay_whole leaves the
+    fresh init there instead of refusing a shape that no longer matches
+    (a history encoder of the other recurrence form)."""
+    loaded = dict(loaded)
+    for subtree in subtrees:
+        keys = subtree.split("/")
+        node = loaded
+        for key in keys[:-1]:
+            node[key] = dict(node[key])
+            node = node[key]
+        node.pop(keys[-1])
+    return loaded
+
+
+def overlay_whole(
+    params: Params, loaded: Params, source: str, fresh_subtrees: tuple[str, ...] = ()
+) -> Params:
     """merge_params, refusing a loaded subtree that did not land leaf for
     leaf: a missing or reshaped leaf under a loaded top-level key means the
-    checkpoint is not this model's, not a resume across a change."""
+    checkpoint is not this model's, not a resume across a change -- except
+    under a `fresh_subtrees` entry, which stays at init by request."""
     merged, kept_fresh, dropped = merge_params(params, loaded)
-    misses = [path for path in kept_fresh if path.split("/")[1] in loaded]
+    misses = [
+        path
+        for path in kept_fresh
+        if path.split("/")[1] in loaded
+        and not any(path.startswith(f"/{subtree}/") for subtree in fresh_subtrees)
+    ]
     if misses:
         raise ValueError(
             f"{source}: {len(misses)} leaves did not overlay: {misses[:5]}"
@@ -674,6 +704,15 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--max-history-steps", type=int, default=None)
+    parser.add_argument(
+        "--history-recurrence", choices=["loop", "stacked"], default=None
+    )
+    parser.add_argument(
+        "--fresh-subtrees",
+        action="append",
+        default=[],
+        help="a param subtree kept at its fresh init, e.g. encoder/history_encoder",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--debug", action="store_true", help="wandb disabled")
     args = parser.parse_args()
@@ -682,8 +721,15 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
         resume_from=args.resume_from,
         joint=args.joint,
         world_model=args.world_model,
+        fresh_subtrees=tuple(args.fresh_subtrees),
     )
-    for name in ("num_steps", "batch_size", "learning_rate", "max_history_steps"):
+    for name in (
+        "num_steps",
+        "batch_size",
+        "learning_rate",
+        "max_history_steps",
+        "history_recurrence",
+    ):
         value = getattr(args, name)
         if value is not None:
             overrides[name] = value
@@ -698,7 +744,12 @@ def main() -> None:
     config, seed, debug = parse_args()
     if debug:
         os.environ["WANDB_MODE"] = "disabled"
-    model_cfg = trainer_model_config(config.joint, config.world_model)
+    model_cfg = trainer_model_config(
+        config.joint,
+        config.world_model,
+        config.history_recurrence,
+        config.trunk_normalised_residual,
+    )
     model = OfflineTrainer(model_cfg)
     dataset = load_replay_store(config)
     shard_manifest = dataset.manifest
@@ -721,10 +772,12 @@ def main() -> None:
     restored = checkpoint_lib.load_component(config.trunk_ckpt, "player", "params")[
         "params"
     ]
+    restored = without_subtrees(restored, config.fresh_subtrees)
     params = overlay_whole(
         params,
         {key: restored[key] for key in ("encoder", "public_value_head")},
         config.trunk_ckpt,
+        config.fresh_subtrees,
     )
     scale = jnp.ones(wm.NUM_PUBLIC_GROUPS, jnp.float32)
     if config.resume_from is not None:

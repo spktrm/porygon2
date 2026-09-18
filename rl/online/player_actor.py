@@ -26,7 +26,6 @@ from rl.environment.utils import (
     split_rng,
 )
 from rl.model.builder_model import get_packed_team_string
-from rl.model.history_encoder import invalid_history_carry
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent
 from rl.online.guards import should_push_trajectory
@@ -89,7 +88,7 @@ class PlayerActor:
         inference_client: InferenceServer | None = None,
         pinned_opponent: ParamsContainer | None = None,
         stats: ActorStats | None = None,
-        history_carry_width: int | None = None,
+        history_carry_template: HistoryCarry | None = None,
     ):
         self._agent = agent
         # Width of the encoder's history state (cfg.entity_size). None =
@@ -98,7 +97,7 @@ class PlayerActor:
         # resumes each request from the carried post-window state over
         # the steps since the last one (clip_history_suffix), falling back
         # to the full window whenever it cannot (see unroll).
-        self._history_carry_width = history_carry_width
+        self._history_carry_template = history_carry_template
         self._env = env
         # The env polls this while blocked on the game server so a game
         # whose other side has already unwound can't pin this thread.
@@ -173,7 +172,7 @@ class PlayerActor:
                 )
         if reason is not None:
             return self.clip_actor_history(actor_input).replace(
-                history_carry=invalid_history_carry(self._history_carry_width)
+                history_carry=self._history_carry_template
             )
         if self._stats is not None:
             self._stats.record("actor_history_suffix_steps", float(suffix_steps))
@@ -279,7 +278,7 @@ class PlayerActor:
         # at — one per chunk boundary, plus the final step's.
         window_snapshots: dict[int, tuple] = {}
 
-        # History carry (history_carry_width set): the encoder's post-window
+        # History carry (history_carry_template set): the encoder's post-window
         # state after the previous request, plus the absolute index of the
         # last field step it consumed and the service's rewrite count at
         # the time. A step whose window continues from `last_step_index`
@@ -306,7 +305,7 @@ class PlayerActor:
                     self._stats.record(STEP_TOTAL, (now - iteration_start) * 1e3)
                 iteration_start = now
             with timed(self._stats, "actor_time_history_clip"):
-                if self._history_carry_width is None:
+                if self._history_carry_template is None:
                     player_actor_input_clipped = self.clip_actor_history(
                         player_actor_input
                     )
@@ -328,7 +327,7 @@ class PlayerActor:
                         player_actor_input_clipped,
                         stats=self._stats,
                     )
-            if self._history_carry_width is not None:
+            if self._history_carry_template is not None:
                 carry = player_agent_output.actor_output.history_carry
                 last_step_index = _last_step_index(player_actor_input)
                 last_rewrite_count = self._env.history_rewrite_count

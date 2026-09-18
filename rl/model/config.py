@@ -60,6 +60,10 @@ def get_player_model_config(
     encoder_use_bias = True
     encoder_qk_layer_norm = True
 
+    # The history recurrence: "loop" (2026-09-13, memory-in-the-loop GRU) or
+    # "stacked" (2026-09-18, two input-gated associative scans with the step
+    # attention between them). One form survives the offline ablation.
+    cfg.encoder.history_recurrence = "loop"
     cfg.encoder.history_step = ConfigDict()
     cfg.encoder.history_step.num_heads = 2
     cfg.encoder.history_step.qk_size = encoder_qkv_size // 2

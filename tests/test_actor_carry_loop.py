@@ -37,7 +37,7 @@ def _actor(stats: ActorStats | None) -> PlayerActor:
         unroll_length=1,
         learner=None,
         stats=stats,
-        history_carry_width=WIDTH,
+        history_carry_template=invalid_history_carry(WIDTH),
     )
 
 
@@ -152,7 +152,7 @@ def test_no_carry_width_never_records_carry_stats(
     actor = PlayerActor(
         agent=_StubAgent(), env=_StubEnv(), unroll_length=1, learner=None, stats=stats
     )
-    assert actor._history_carry_width is None
+    assert actor._history_carry_template is None
     assert "actor_history_recompute_frac" not in stats.drain()
 
 
