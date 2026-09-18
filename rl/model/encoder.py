@@ -227,7 +227,7 @@ class Encoder(nn.Module):
         bias_init = nn.initializers.zeros_init()
 
         self.side_bias = nn.Embed(2, name="side_bias", **embed_kwargs)
-        self.pos_bias = nn.Embed(3, name="pos_bias", **embed_kwargs)
+        self.pos_bias = nn.Embed(3, name="position_bias", **embed_kwargs)
 
         # One learned identity per target slot. Pass, the structural slots
         # and the four entity-derived targets are all ways of saying "a
@@ -315,10 +315,25 @@ class Encoder(nn.Module):
         )
 
         self.action_sum = SumEmbeddings(
-            output_size=entity_size, dtype=self.cfg.dtype, name="action_sum"
+            output_size=entity_size,
+            dtype=self.cfg.dtype,
+            names=("move", "flags"),
+            name="action_sum",
         )
         self.entity_edge_sum = SumEmbeddings(
-            output_size=entity_size, dtype=self.cfg.dtype, name="entity_edge_sum"
+            output_size=entity_size,
+            dtype=self.cfg.dtype,
+            names=(
+                "minor_args",
+                "flags",
+                "stats",
+                "ability",
+                "item",
+                "move",
+                "effect_source",
+                "from_type",
+            ),
+            name="entity_edge_sum",
         )
         self.field_linear = nn.Dense(
             name="field_linear", use_bias=False, **dense_kwargs

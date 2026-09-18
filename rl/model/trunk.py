@@ -82,7 +82,11 @@ class TrunkBlock(nn.Module):
             use_bias=self.cfg.use_bias,
             dtype=sequence.dtype,
             collect_intermediates=COLLECT_INTERMEDIATES,
-        )(q=RMSNorm()(sequence), kv=RMSNorm()(sequence), mask=mask)
+        )(
+            q=RMSNorm(name="attention_query_norm")(sequence),
+            kv=RMSNorm(name="attention_key_value_norm")(sequence),
+            mask=mask,
+        )
         if normalised_residual:
             sequence = self._normalised_update(sequence, attended, "attention_alpha")
         else:
@@ -90,7 +94,7 @@ class TrunkBlock(nn.Module):
 
         ffw_out = FFWMLP(
             hidden_size=self.cfg.hidden_size, use_bias=self.cfg.use_bias, name="ffw"
-        )(RMSNorm()(sequence))
+        )(RMSNorm(name="ffw_norm")(sequence))
         if normalised_residual:
             sequence = self._normalised_update(sequence, ffw_out, "ffw_alpha")
         else:
@@ -194,11 +198,11 @@ _INPUT_AXIS_KERNELS = frozenset(
         ("attention", "q_proj", "kernel"),
         ("attention", "k_proj", "kernel"),
         ("attention", "v_proj", "kernel"),
-        ("ffw", "Dense_0", "kernel"),
+        ("ffw", "gate_up", "kernel"),
     }
 )
 _OUTPUT_AXIS_KERNELS = frozenset(
-    {("attention", "out_proj", "kernel"), ("ffw", "Dense_1", "kernel")}
+    {("attention", "out_proj", "kernel"), ("ffw", "down", "kernel")}
 )
 
 

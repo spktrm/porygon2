@@ -38,7 +38,7 @@ def test_search_is_a_no_op_at_init_and_moves_the_policy_once_opened() -> None:
             jax.random.key(0), actor_input, actor_output, HeadParams()
         )
         view = actor_params_view(params)
-        assert "world_model" in view["params"] and "public_v_head" in view["params"]
+        assert "world_model" in view["params"] and "public_value_head" in view["params"]
         # The action head at zero init is uniform; open it so the base policy
         # has structure the bonus could move.
         params = open_zero_init_paths(params, ["action_head"])

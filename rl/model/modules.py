@@ -110,10 +110,10 @@ def activation_fn(array: jax.Array) -> jax.Array:
     return nn.gelu(array)
 
 
-def layer_norm(array: jax.Array) -> jax.Array:
+def layer_norm(array: jax.Array, name: str | None = None) -> jax.Array:
     """Apply layer normalisation. (Named for the operation, not the class:
     this is nn.LayerNorm, not the RMSNorm above.)"""
-    return nn.LayerNorm(dtype=array.dtype)(array)
+    return nn.LayerNorm(dtype=array.dtype, name=name)(array)
 
 
 def softcap(array: jax.Array, max_value: int = 50) -> jax.Array:
@@ -195,8 +195,8 @@ class MultiHeadAttention(nn.Module):
         )(kv).reshape((*kv_leading_dims, self.num_heads, v_size))
 
         if self.qk_layer_norm:
-            query_heads = layer_norm(query_heads)
-            key_heads = layer_norm(key_heads)
+            query_heads = layer_norm(query_heads, name="query_norm")
+            key_heads = layer_norm(key_heads, name="key_norm")
 
         if self.need_pos:
             if q_positions is None or kv_positions is None:
@@ -436,13 +436,14 @@ class MLP(nn.Module):
             if self.final_kernel_init is not None and index == len(layer_sizes) - 1:
                 kernel_init = self.final_kernel_init
             if self.use_layer_norm:
-                x = layer_norm(x)
+                x = layer_norm(x, name=f"norm_{index}")
             x = activation_fn(x)
             x = nn.Dense(
                 size,
                 kernel_init=kernel_init,
                 dtype=x.dtype,
                 use_bias=self.use_bias,
+                name=f"layer_{index}",
             )(x)
         return x
 
@@ -459,10 +460,13 @@ class FFWMLP(nn.Module):
         inp_size = x.shape[-1]
 
         gating_layer = nn.Dense(
-            2 * self.hidden_size, dtype=x.dtype, use_bias=self.use_bias
+            2 * self.hidden_size, dtype=x.dtype, use_bias=self.use_bias, name="gate_up"
         )
         output_layer = nn.Dense(
-            self.output_size or inp_size, dtype=x.dtype, use_bias=self.use_bias
+            self.output_size or inp_size,
+            dtype=x.dtype,
+            use_bias=self.use_bias,
+            name="down",
         )
 
         gate = gating_layer(x)
@@ -508,18 +512,28 @@ class SumEmbeddings(nn.Module):
     dtype: jnp.dtype = jnp.float32
     aggregating_mode: Literal["simple_sum", "sum", "sum_ln"] = "simple_sum"
     use_bias: bool = True
+    # One name per operand, in call order; each names its projection.
+    names: tuple[str, ...] | None = None
 
     @nn.compact
     def __call__(self, *embeddings: list[jax.Array] | tuple[jax.Array]) -> jax.Array:
         num_embeddings = len(embeddings)
         if num_embeddings == 0:
             raise ValueError("No embeddings provided")
+        names = self.names
+        if names is None:
+            names = (None,) * num_embeddings
+        if len(names) != num_embeddings:
+            raise ValueError(f"{len(names)} names for {num_embeddings} operands")
 
         embeddings = [
             nn.Dense(
-                self.hidden_size or self.output_size, dtype=self.dtype, use_bias=False
+                self.hidden_size or self.output_size,
+                dtype=self.dtype,
+                use_bias=False,
+                name=name,
             )(emb)
-            for emb in embeddings
+            for emb, name in zip(embeddings, names)
         ]
 
         # simple_sum alone divides by sqrt(N) to hold the variance; the
@@ -563,8 +577,8 @@ class PointerLogits(nn.Module):
         )(k).reshape((*kv_leading_dims, self.num_heads, qk_size))
 
         if self.qk_layer_norm:
-            query_heads = layer_norm(query_heads)
-            key_heads = layer_norm(key_heads)
+            query_heads = layer_norm(query_heads, name="query_norm")
+            key_heads = layer_norm(key_heads, name="key_norm")
 
         attn_logits = jnp.einsum("...thd,...Thd->...tTh", query_heads, key_heads)
 

@@ -124,13 +124,13 @@ def load_params(ckpt_dir: str, which: str = "params"):
 
 def load_search_params(ckpt_dir: str, world_model_dir: str):
     """The learner checkpoint's params with the world-model artifact's
-    `world_model` and `public_v_head` subtrees in place of its own -- the
+    `world_model` and `public_value_head` subtrees in place of its own -- the
     public critic the artifact trained on replays is the one the
     rollouts price with."""
     variables = load_params(ckpt_dir)
     artifact = checkpoint.load_component(world_model_dir, "player", "params")
     params = dict(variables["params"])
-    for name in ("world_model", "public_v_head"):
+    for name in ("world_model", "public_value_head"):
         params[name] = artifact["params"][name]
     return {**variables, "params": params}
 

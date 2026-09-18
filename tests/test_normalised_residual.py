@@ -198,7 +198,7 @@ def test_projection_puts_every_embedding_space_vector_on_the_unit_sphere() -> No
     fresh_blocks = fresh["params"]["encoder"]["trunk"]["blocks"]
     # Positive control: the fresh init is not on the sphere.
     assert not np.allclose(
-        _vector_norms(fresh_blocks, "ffw", "Dense_0", axis=-2), 1.0, atol=1e-3
+        _vector_norms(fresh_blocks, "ffw", "gate_up", axis=-2), 1.0, atol=1e-3
     )
 
     projected = project_trunk_kernels(fresh)
@@ -207,12 +207,12 @@ def test_projection_puts_every_embedding_space_vector_on_the_unit_sphere() -> No
         ("attention", "q_proj"),
         ("attention", "k_proj"),
         ("attention", "v_proj"),
-        ("ffw", "Dense_0"),
+        ("ffw", "gate_up"),
     ):
         np.testing.assert_allclose(
             _vector_norms(blocks, sublayer, layer, axis=-2), 1.0, atol=1e-5
         )
-    for sublayer, layer in (("attention", "out_proj"), ("ffw", "Dense_1")):
+    for sublayer, layer in (("attention", "out_proj"), ("ffw", "down")):
         np.testing.assert_allclose(
             _vector_norms(blocks, sublayer, layer, axis=-1), 1.0, atol=1e-5
         )
@@ -224,8 +224,8 @@ def test_projection_puts_every_embedding_space_vector_on_the_unit_sphere() -> No
         ("attention", "k_proj"),
         ("attention", "v_proj"),
         ("attention", "out_proj"),
-        ("ffw", "Dense_0"),
-        ("ffw", "Dense_1"),
+        ("ffw", "gate_up"),
+        ("ffw", "down"),
     }
     for path, leaf in jax.tree_util.tree_leaves_with_path(fresh):
         keys = tuple(entry.key for entry in path)

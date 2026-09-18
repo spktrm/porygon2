@@ -33,7 +33,7 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # Joint: the offline losses also train the encoder (Step 6 of the
     # world-model plan); off = observer, the trunk never moves.
     joint: bool = False
-    # Off = the critic alone: public_v_head on every valid event state.
+    # Off = the critic alone: public_value_head on every valid event state.
     world_model: bool = True
     num_steps: int = 240000
     learning_rate: float = 3e-4

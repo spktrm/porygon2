@@ -27,8 +27,8 @@ def _fresh_tree() -> dict:
         "params": {
             "encoder": {"w": np.full((2, 3), 0.1, dtype=np.float32)},
             "action_head": {
-                "query": np.zeros((3,), dtype=np.float32),
-                "key": np.full((3,), 0.0625, dtype=np.float32),
+                "move_query": np.zeros((3,), dtype=np.float32),
+                "move_key": np.full((3,), 0.0625, dtype=np.float32),
             },
         }
     }
@@ -39,8 +39,8 @@ def _merged_tree() -> dict:
         "params": {
             "encoder": {"w": np.full((2, 3), 0.9, dtype=np.float32)},
             "action_head": {
-                "query": np.full((3,), 0.7, dtype=np.float32),
-                "key": np.full((3,), -0.3, dtype=np.float32),
+                "move_query": np.full((3,), 0.7, dtype=np.float32),
+                "move_key": np.full((3,), -0.3, dtype=np.float32),
             },
         }
     }
@@ -96,17 +96,17 @@ def test_head_reset_grafts_fresh_readout_only() -> None:
     merged = _merged_tree()
     # Positive control: the graft must actually change something.
     assert not np.array_equal(
-        merged["params"]["action_head"]["query"],
-        fresh["params"]["action_head"]["query"],
+        merged["params"]["action_head"]["move_query"],
+        fresh["params"]["action_head"]["move_query"],
     )
     out = apply_br_init(merged, _recording_init_fn([]), _config(br_init="head-reset"))
     np.testing.assert_array_equal(
-        out["params"]["action_head"]["query"],
-        fresh["params"]["action_head"]["query"],
+        out["params"]["action_head"]["move_query"],
+        fresh["params"]["action_head"]["move_query"],
     )
     np.testing.assert_array_equal(
-        out["params"]["action_head"]["key"],
-        fresh["params"]["action_head"]["key"],
+        out["params"]["action_head"]["move_key"],
+        fresh["params"]["action_head"]["move_key"],
     )
     np.testing.assert_array_equal(
         out["params"]["encoder"]["w"], merged["params"]["encoder"]["w"]
@@ -138,7 +138,7 @@ def test_shrink_perturb_interpolates_every_leaf() -> None:
         rtol=1e-6,
     )
     np.testing.assert_allclose(
-        np.asarray(out["params"]["action_head"]["query"]),
+        np.asarray(out["params"]["action_head"]["move_query"]),
         0.25 * 0.7,
         rtol=1e-6,
     )

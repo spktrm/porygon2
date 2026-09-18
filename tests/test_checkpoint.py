@@ -22,7 +22,10 @@ def tree_equal(a: dict | np.ndarray, b: dict | np.ndarray) -> None:
 def params() -> dict:
     rng = np.random.default_rng(0)
     return {
-        "params": {"encoder": rng.normal(size=(4, 4)), "v_head": rng.normal(size=(4,))}
+        "params": {
+            "encoder": rng.normal(size=(4, 4)),
+            "value_head": rng.normal(size=(4,)),
+        }
     }
 
 

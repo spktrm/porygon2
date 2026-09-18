@@ -124,7 +124,7 @@ def test_register_identity_and_shared_attention_have_live_gradients(recurrence):
     assert np.all(
         np.linalg.norm(np.asarray(gradients["register_identity"]), axis=-1) > 0
     )
-    for projection in ("query", "key", "value", "attn_out"):
+    for projection in ("query", "key", "value", "out_proj"):
         assert (
             np.linalg.norm(np.asarray(gradients["attention"][projection]["kernel"])) > 0
         )

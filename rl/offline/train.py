@@ -71,7 +71,7 @@ class OfflineTrainer(nn.Module):
 
     def setup(self):
         self.encoder = Encoder(self.cfg.encoder)
-        self.public_v_head = CategoricalValueLogitHead(self.cfg.public_v_head)
+        self.public_value_head = CategoricalValueLogitHead(self.cfg.public_value_head)
         if self.cfg.world_model.enabled:
             self.world_model = wm.EventWorldModel(
                 self.cfg.world_model, name="world_model"
@@ -121,7 +121,7 @@ class OfflineTrainer(nn.Module):
 
     def critic_terms(self, add, counts, states, step_valid, labels, batch) -> None:
         """The public critic on real states, every valid step."""
-        value = self.public_v_head(states[:, PUBLIC_CLS_LOCAL_ROW])
+        value = self.public_value_head(states[:, PUBLIC_CLS_LOCAL_ROW])
         outcome_bin = jnp.argmax(batch.win_reward)
         value_nll = -value.log_probs[:, outcome_bin]
         outcome_value = jnp.asarray([-1.0, 0.0, 1.0])[outcome_bin]
@@ -336,9 +336,9 @@ class OfflineTrainer(nn.Module):
         if with_samples:
             # Imagined next states from the teacher-forced tokens; the value
             # of each sample against the value of the real next state.
-            frozen_head = self.public_v_head.clone()
+            frozen_head = self.public_value_head.clone()
             frozen_params = jax.lax.stop_gradient(
-                self.public_v_head.variables["params"]
+                self.public_value_head.variables["params"]
             )
             real_next = frozen_head.apply(
                 {"params": frozen_params}, next_states[:, PUBLIC_CLS_LOCAL_ROW]
@@ -574,7 +574,7 @@ def make_eval_step(config: Porygon2OfflineConfig, model, model_cfg):
 
 
 def param_labels(params: Params, joint: bool) -> Params:
-    trained = {"public_v_head"}
+    trained = {"public_value_head"}
     if "world_model" in params:
         trained.add("world_model")
     if joint:
@@ -668,7 +668,7 @@ def parse_args() -> tuple[Porygon2OfflineConfig, int, bool]:
         "--world-model",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="off = the critic alone: public_v_head on every event state",
+        help="off = the critic alone: public_value_head on every event state",
     )
     parser.add_argument("--num-steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -723,7 +723,7 @@ def main() -> None:
     ]
     params = overlay_whole(
         params,
-        {key: restored[key] for key in ("encoder", "public_v_head")},
+        {key: restored[key] for key in ("encoder", "public_value_head")},
         config.trunk_ckpt,
     )
     scale = jnp.ones(wm.NUM_PUBLIC_GROUPS, jnp.float32)

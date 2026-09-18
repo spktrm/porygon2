@@ -317,10 +317,10 @@ def _has(tree, path) -> bool:
 #   key          lecun 0.0625 at fan-in 256; its gradient is proportional to
 #                query, so it is frozen for exactly one step and must then
 #                drift. Still 0.0625 at 2k = the stall.
-#   local_src    0, must leave 0 from step 1. This is also where a per-
-#   local_tgt    MODALITY force lives now that the macro head is gone
+#   move_score   0, must leave 0 from step 1. This is also where a per-
+#   move_target_score  MODALITY force lives now that the macro head is gone
 #                (modality is a function of the src half), so a flat
-#                local_src beside a failing entropy_macro floor is the
+#                move_score beside a failing entropy_macro floor is the
 #                signal to promote it to an MLP.
 #   switch/other 0, single-factor, must leave 0 from step 1.
 #
@@ -328,15 +328,17 @@ def _has(tree, path) -> bool:
 # cell of a row, so the two grow at different rates and a shared panel would
 # hide it.
 _ACTION_HEAD_LEAVES = {
-    "player_pointer_query_rms": (("action_head", "query", "kernel"),),
-    "player_pointer_key_rms": (("action_head", "key", "kernel"),),
-    "player_pointer_local_src_rms": (("action_head", "local_src", "kernel"),),
-    "player_pointer_local_tgt_rms": (("action_head", "local_tgt", "kernel"),),
-    "player_switch_head_rms": (("action_head", "switch", "kernel"),),
+    "player_move_query_rms": (("action_head", "move_query", "kernel"),),
+    "player_move_key_rms": (("action_head", "move_key", "kernel"),),
+    "player_move_score_rms": (("action_head", "move_score", "kernel"),),
+    "player_move_target_score_rms": (("action_head", "move_target_score", "kernel"),),
+    "player_switch_score_rms": (("action_head", "switch_score", "kernel"),),
     "player_switch_query_rms": (("action_head", "switch_query", "kernel"),),
     "player_switch_key_rms": (("action_head", "switch_key", "kernel"),),
-    "player_switch_local_tgt_rms": (("action_head", "switch_local_tgt", "kernel"),),
-    "player_other_head_rms": (("action_head", "other", "kernel"),),
+    "player_switch_target_score_rms": (
+        ("action_head", "switch_target_score", "kernel"),
+    ),
+    "player_other_score_rms": (("action_head", "other_score", "kernel"),),
 }
 # Trunk leaves carry a leading axis of cfg.trunk.num_blocks (nn.scan stacks
 # them), so an rms over the whole leaf is the across-block mean by
@@ -347,7 +349,7 @@ _TRUNK_LEAVES = {
         ("encoder", "trunk", "blocks", "attention", "out_proj", "kernel"),
     ),
     "player_trunk_mlp_out_rms": (
-        ("encoder", "trunk", "blocks", "ffw", "Dense_1", "kernel"),
+        ("encoder", "trunk", "blocks", "ffw", "down", "kernel"),
     ),
     # The trunk registers, two per tier: RMS-normalised on the way in like
     # every row, so only their DIRECTION reaches the trunk -- rms drift says
@@ -366,7 +368,7 @@ _TRUNK_KERNEL_COLUMNS = {
         -2,
     ),
     "player_trunk_kernel_col_norm_ffw_up": (
-        ("encoder", "trunk", "blocks", "ffw", "Dense_0", "kernel"),
+        ("encoder", "trunk", "blocks", "ffw", "gate_up", "kernel"),
         -2,
     ),
 }
@@ -428,7 +430,7 @@ _HISTORY_LEAVES = {
             "history_encoder",
             "sequence_step",
             "attention",
-            "attn_out",
+            "out_proj",
             "kernel",
         ),
     ),
@@ -445,7 +447,7 @@ _GRAD_SUBTREES = {
     "player_action_head_grad_norm": ("action_head",),
     # The gradient into the deployable value head (its real-row CE); read
     # beside player_loss_v_win / player_value_head_r2.
-    "player_value_head_grad_norm": ("v_head",),
+    "player_value_head_grad_norm": ("value_head",),
     "player_trunk_grad_norm": ("encoder", "trunk"),
     "player_history_step_attn_grad_norm": (
         "encoder",
@@ -457,18 +459,18 @@ _GRAD_SUBTREES = {
 
 
 # A target column is read by every legal move cell of a row, making
-# key/local_tgt projections a high-gain route for policy regularisation.
+# key/target_score projections a high-gain route for policy regularisation.
 _APPLIED_DELTA_LEAVES = {
     "player_applied_delta_rms_switch_query": (
         ("action_head", "switch_query", "kernel"),
     ),
-    "player_applied_delta_rms_switch_local_tgt": (
-        ("action_head", "switch_local_tgt", "kernel"),
+    "player_applied_delta_rms_switch_target_score": (
+        ("action_head", "switch_target_score", "kernel"),
     ),
     "player_applied_delta_rms_pointer_query": (("action_head", "query", "kernel"),),
     "player_applied_delta_rms_pointer_key": (("action_head", "key", "kernel"),),
-    "player_applied_delta_rms_pointer_local_tgt": (
-        ("action_head", "local_tgt", "kernel"),
+    "player_applied_delta_rms_move_target_score": (
+        ("action_head", "move_target_score", "kernel"),
     ),
 }
 

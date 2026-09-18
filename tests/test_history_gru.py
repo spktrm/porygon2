@@ -114,7 +114,7 @@ def test_norm_and_identities_do_not_bypass_attention_into_gru():
     params = jax.jit(module.init)(jax.random.key(78), memory, inputs)
     apply = jax.jit(module.apply)
     muted = jax.tree.map(lambda leaf: leaf, params)
-    muted["params"]["attention"]["attn_out"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
+    muted["params"]["attention"]["out_proj"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
 
     def change_read_branch(tree):
         changed = jax.tree.map(lambda leaf: leaf, tree)
@@ -146,7 +146,7 @@ def test_gru_weights_are_separate_by_type_and_shared_within_type():
     events = jnp.full_like(memory, 0.2)
     inputs = (events, jnp.zeros_like(events), jnp.asarray(True))
     params = jax.jit(module.init)(jax.random.key(79), memory, inputs)
-    params["params"]["attention"]["attn_out"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
+    params["params"]["attention"]["out_proj"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
     apply = jax.jit(module.apply)
     baseline = apply(params, memory, inputs)[0]
     groups = (

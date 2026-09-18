@@ -107,18 +107,20 @@ def test_zero_init_query_gets_live_gradient_and_the_key_unfreezes() -> None:
         return jnp.sum(head.apply(p, *rows))
 
     grads = jax.grad(total)(params)["params"]
-    assert np.abs(np.asarray(grads["query"]["kernel"])).max() > 0
-    assert np.abs(np.asarray(grads["local_src"]["kernel"])).max() > 0
-    assert np.abs(np.asarray(grads["local_tgt"]["kernel"])).max() > 0
-    assert np.abs(np.asarray(grads["switch"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["move_query"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["move_score"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["move_target_score"]["kernel"])).max() > 0
+    assert np.abs(np.asarray(grads["switch_score"]["kernel"])).max() > 0
     assert np.abs(np.asarray(grads["switch_query"]["kernel"])).max() > 0
-    assert np.abs(np.asarray(grads["switch_local_tgt"]["kernel"])).max() > 0
-    np.testing.assert_array_equal(np.asarray(grads["key"]["kernel"]), 0.0)
+    assert np.abs(np.asarray(grads["switch_target_score"]["kernel"])).max() > 0
+    np.testing.assert_array_equal(np.asarray(grads["move_key"]["kernel"]), 0.0)
     np.testing.assert_array_equal(np.asarray(grads["switch_key"]["kernel"]), 0.0)
 
     nudged = jax.tree.map(lambda x: x, params)
-    nudged["params"]["query"]["kernel"] = nudged["params"]["query"]["kernel"] + 1e-2
-    key_grad = jax.grad(total)(nudged)["params"]["key"]["kernel"]
+    nudged["params"]["move_query"]["kernel"] = (
+        nudged["params"]["move_query"]["kernel"] + 1e-2
+    )
+    key_grad = jax.grad(total)(nudged)["params"]["move_key"]["kernel"]
     assert np.abs(np.asarray(key_grad)).max() > 0
 
     nudged["params"]["switch_query"]["kernel"] = (
@@ -133,8 +135,8 @@ def test_the_pointer_is_not_symmetric() -> None:
     query and key must not share one projection."""
     head, params, rows = _init()
     p = jax.tree.map(lambda x: x, params)
-    p["params"]["query"]["kernel"] = jax.random.normal(
-        jax.random.key(3), p["params"]["query"]["kernel"].shape
+    p["params"]["move_query"]["kernel"] = jax.random.normal(
+        jax.random.key(3), p["params"]["move_query"]["kernel"].shape
     )
     _, move_rows, target_rows = rows
     logits = np.asarray(head.apply(p, rows[0], move_rows, target_rows))

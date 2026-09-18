@@ -58,12 +58,12 @@ def actor_params_view(variables):
     setup-time parameters) and the value output.
     Indexing required modules deliberately fails on incompatible snapshots.
     """
-    required = ["encoder", "action_head", "v_head"]
+    required = ["encoder", "action_head", "value_head"]
     # The optional doubles readout is an actor consumer too.
     if "slot_conditioning" in variables["params"]:
         required.append("slot_conditioning")
     # The searching eval actor reads the world model and the public critic.
-    for name in ("world_model", "public_v_head"):
+    for name in ("world_model", "public_value_head"):
         if name in variables["params"]:
             required.append(name)
     return {"params": {name: variables["params"][name] for name in required}}
@@ -76,20 +76,22 @@ class Porygon2PlayerModel(nn.Module):
         """Three modules: the trunk, the action readout, the critic.
 
         The action readout scores the block cells from the rows it owns;
-        `v_head` reads the CLS row and nothing else.
+        `value_head` reads the CLS row and nothing else.
         """
         self.encoder = Encoder(self.cfg.encoder)
         self.action_head = FlatActionReadout(self.cfg.action_head, name="action_head")
-        self.v_head = CategoricalValueLogitHead(self.cfg.v_head)
+        self.value_head = CategoricalValueLogitHead(self.cfg.value_head)
         # The privileged critic (2026-09-01): architecturally identical to
-        # v_head, reading VALUE_CLS -- the one row that attends over the
+        # value_head, reading VALUE_CLS -- the one row that attends over the
         # opponent-truth partition. Called only under cfg.train, so its
         # params exist in the learner-initialised tree and an actor apply
         # never visits them; nothing at deploy consumes its output.
-        self.priv_v_head = CategoricalValueLogitHead(self.cfg.priv_v_head)
+        self.privileged_value_head = CategoricalValueLogitHead(
+            self.cfg.privileged_value_head
+        )
         # The public critic (2026-09-15): the same head over PUBLIC_CLS, a
         # value of the common-knowledge state alone. Learner-only likewise.
-        self.public_v_head = CategoricalValueLogitHead(self.cfg.public_v_head)
+        self.public_value_head = CategoricalValueLogitHead(self.cfg.public_value_head)
         # The PBRS potential channel's value (2026-09-11): learner-only, and
         # absent unless the channel runs, so strength 0 keeps today's tree.
         if self.cfg.potential_head.enabled:
@@ -413,7 +415,7 @@ class Porygon2PlayerModel(nn.Module):
                 self.make_rng("sampling"),
             )
             world.terminal_outcome(public_rows)
-            self.public_v_head(public_rows[PUBLIC_CLS_LOCAL_ROW])
+            self.public_value_head(public_rows[PUBLIC_CLS_LOCAL_ROW])
 
         def search_fns(module) -> event_search.EventSearchFns:
             """The readers bound to `module` -- the transformed module
@@ -421,7 +423,7 @@ class Porygon2PlayerModel(nn.Module):
             model = module.world_model
 
             def value_fn(rows):
-                return module.public_v_head(rows[PUBLIC_CLS_LOCAL_ROW]).expectation
+                return module.public_value_head(rows[PUBLIC_CLS_LOCAL_ROW]).expectation
 
             def terminal_fn(rows):
                 probs = jax.nn.softmax(model.terminal_outcome(rows))
@@ -525,8 +527,8 @@ class Porygon2PlayerModel(nn.Module):
             group_l2_sum, group_rows, in_out_cosine_sum = trunk_group_stats
             learner_only = {
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
-                "priv_value_head": self.priv_v_head(sequence[VALUE_CLS_ROW]),
-                "public_value_head": self.public_v_head(sequence[PUBLIC_CLS_ROW]),
+                "priv_value_head": self.privileged_value_head(sequence[VALUE_CLS_ROW]),
+                "public_value_head": self.public_value_head(sequence[PUBLIC_CLS_ROW]),
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
                 "trunk_out_group_l2_sum": group_l2_sum,
@@ -551,7 +553,7 @@ class Porygon2PlayerModel(nn.Module):
         return PlayerActorOutput(
             action_head=action_head,
             # The CLS row, and only the CLS row.
-            value_head=self.v_head(sequence[CLS_ROW]),
+            value_head=self.value_head(sequence[CLS_ROW]),
             history_carry=history_carry,
             **search_outputs,
             **learner_only,

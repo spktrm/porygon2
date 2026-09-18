@@ -198,9 +198,9 @@ class SlotConditioning(nn.Module):
         )
 
 
-def zero_scalar(rows: jax.Array, name: str) -> jax.Array:
-    """A zero-init single-factor scalar over live rows, (..., rows, 1): no
-    stall mode (one zero factor over a live input moves at step 1)."""
+def row_score(rows: jax.Array, name: str) -> jax.Array:
+    """A zero-init linear score of each row alone, (..., rows, 1): no stall
+    mode (one zero factor over a live input moves at step 1)."""
     return nn.Dense(
         1,
         kernel_init=nn.initializers.zeros_init(),
@@ -211,19 +211,14 @@ def zero_scalar(rows: jax.Array, name: str) -> jax.Array:
 
 
 def bilinear_pair(
-    src_rows: jax.Array,
-    tgt_rows: jax.Array,
-    *,
-    qk_size: int,
-    query_name: str,
-    key_name: str,
-    src_name: str | None = None,
-    tgt_name: str | None = None,
+    src_rows: jax.Array, tgt_rows: jax.Array, *, qk_size: int, block: str
 ) -> jax.Array:
-    """A zero query over live keys avoids the two-factor gradient stall.
+    """(..., src, tgt) pair logits: a zero-init query over live keys plus a
+    zero-init score of each source row and of each target row. The zero
+    query over live keys avoids the two-factor gradient stall.
 
-    Names register each projection on the calling compact module, preserving
-    the action readout's checkpoint parameter tree.
+    `block` names the four projections on the calling compact module:
+    `{block}_query`, `{block}_key`, `{block}_score`, `{block}_target_score`.
     """
     dtype = src_rows.dtype
     query = nn.Dense(
@@ -231,15 +226,12 @@ def bilinear_pair(
         kernel_init=nn.initializers.zeros_init(),
         use_bias=False,
         dtype=dtype,
-        name=query_name,
+        name=f"{block}_query",
     )(src_rows)
-    key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=key_name)(tgt_rows)
+    key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=f"{block}_key")(tgt_rows)
     logits = jnp.einsum("...sq,...tq->...st", query, key) / math.sqrt(qk_size)
-    if src_name is not None:
-        logits = logits + zero_scalar(src_rows, src_name)
-    if tgt_name is not None:
-        logits = logits + zero_scalar(tgt_rows, tgt_name)[..., 0][..., None, :]
-    return logits
+    logits = logits + row_score(src_rows, f"{block}_score")
+    return logits + row_score(tgt_rows, f"{block}_target_score")[..., 0][..., None, :]
 
 
 class FlatActionReadout(nn.Module):
@@ -278,12 +270,12 @@ class FlatActionReadout(nn.Module):
         init and its Jacobian goes as 1/sqrt(eps), i.e. ~1e3, straight into
         the zero-init kernel. The trunk's final pre-norm conditions these rows
         already.
-      * `local_src` / `local_tgt` and the two scalar heads are zero-init
-        single-factor routes over live rows, which have no stall mode.
-        `local_src` is also where a per-MODALITY force can live: modality is a
-        function of the src half alone, so it is the flat design's answer to
-        the macro head's dedicated per-modality parameter, and it is the
-        pre-decided place to add depth if the macro entropy floor cannot hold.
+      * The `*_score` heads are zero-init single-factor routes over live
+        rows, which have no stall mode. `move_score` / `switch_score` are
+        also where a per-MODALITY force can live: modality is a function of
+        the source row alone, so they are the flat design's answer to the
+        macro head's dedicated per-modality parameter, and the pre-decided
+        place to add depth if the macro entropy floor cannot hold.
     """
 
     cfg: ConfigDict
@@ -300,32 +292,18 @@ class FlatActionReadout(nn.Module):
         qk_size = self.cfg.qk_size
 
         # The switch block is sheet rows x the ALLY row of the active slot a
-        # switch replaces (2026-09-11). `switch` keeps its name as the
-        # sheet-side scalar, so a merge carries it; `switch_local_tgt`, a
-        # scalar on the ally row, is the whether-to-switch level -- one that
-        # reads the state, replacing the context-free `switch_bias`.
+        # switch replaces (2026-09-11); `switch_target_score` on that row is
+        # the whether-to-switch level, one that reads the state.
         ally_row = jnp.take(
             target_rows, ALLY_TARGET_ROWS[decision_slot : decision_slot + 1], axis=-2
         )
         switch_logit = bilinear_pair(
-            private_rows,
-            ally_row,
-            qk_size=qk_size,
-            query_name="switch_query",
-            key_name="switch_key",
-            src_name="switch",
-            tgt_name="switch_local_tgt",
+            private_rows, ally_row, qk_size=qk_size, block="switch"
         )[..., 0]
         move_target = bilinear_pair(
-            move_rows,
-            target_rows,
-            qk_size=qk_size,
-            query_name="query",
-            key_name="key",
-            src_name="local_src",
-            tgt_name="local_tgt",
+            move_rows, target_rows, qk_size=qk_size, block="move"
         )
-        other_logit = zero_scalar(target_rows, "other")[..., 0]
+        other_logit = row_score(target_rows, "other_score")[..., 0]
 
         cells = jnp.concatenate(
             (

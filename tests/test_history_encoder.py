@@ -40,7 +40,7 @@ def step_attention() -> tuple[Callable, dict, dict, jax.Array, jax.Array]:
     params = jax.jit(module.init)(key_params, rows, row_mask, value_rows=rows)
     live_out = jax.random.normal(key_out, (ENTITY_SIZE, ENTITY_SIZE)) * 0.1
     live_params = jax.tree_util.tree_map(lambda leaf: leaf, params)
-    live_params["params"]["attn_out"]["kernel"] = live_out
+    live_params["params"]["out_proj"]["kernel"] = live_out
     apply = jax.jit(
         lambda tree, inputs, mask: module.apply(tree, inputs, mask, value_rows=inputs)
     )
@@ -69,7 +69,7 @@ def test_attn_out_has_gradient_at_init(
         return (out * weights).sum()
 
     grads = jax.grad(objective)(params)
-    assert jnp.any(grads["params"]["attn_out"]["kernel"] != 0)
+    assert jnp.any(grads["params"]["out_proj"]["kernel"] != 0)
 
 
 def test_padded_row_places_no_mass_and_moves_nothing(
@@ -138,7 +138,7 @@ def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
     )
     moved = apply(params, **changed_identities)
     muted = jax.tree.map(lambda leaf: leaf, params)
-    muted["params"]["sequence_step"]["attention"]["attn_out"]["kernel"] = jnp.zeros(
+    muted["params"]["sequence_step"]["attention"]["out_proj"]["kernel"] = jnp.zeros(
         (ENTITY_SIZE, ENTITY_SIZE)
     )
     muted_base = apply(muted, **inputs)

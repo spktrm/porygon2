@@ -173,14 +173,14 @@ def test_actor_parameter_view_preserves_required_branches() -> None:
         for name in (
             "encoder",
             "action_head",
-            "v_head",
-            "priv_v_head",
+            "value_head",
+            "privileged_value_head",
             "retired_learner_branch",
         )
     }
     variables = {"params": branches}
     plain = actor_params_view(variables)
-    assert set(plain["params"]) == {"encoder", "action_head", "v_head"}
+    assert set(plain["params"]) == {"encoder", "action_head", "value_head"}
     assert plain["params"]["encoder"] is branches["encoder"]
     assert "retired_learner_branch" in variables["params"]
     branches["slot_conditioning"] = {"weight": np.ones(2)}
@@ -209,7 +209,7 @@ def test_actor_jit_shared_across_agents_and_historical_params(
         rngs: dict[str, jax.Array],
     ) -> jax.Array:
         traces.append(1)
-        return (params["params"]["v_head"]["weight"] * head_params.temp)[None]
+        return (params["params"]["value_head"]["weight"] * head_params.temp)[None]
 
     request = _raw_lengths(full_window, 5, 9)
     agents = [
@@ -225,10 +225,10 @@ def test_actor_jit_shared_across_agents_and_historical_params(
         variables = {
             "params": {
                 name: {"weight": np.ones(2, np.float32)}
-                for name in ("encoder", "action_head", "v_head")
+                for name in ("encoder", "action_head", "value_head")
             }
         }
-        variables["params"]["v_head"]["weight"] *= index + 2
+        variables["params"]["value_head"]["weight"] *= index + 2
         variables["params"][f"retired_{index}"] = {"unused": np.ones(index + 1)}
         result = agent.step_player(jax.random.key(0), _container(variables), request)
         np.testing.assert_array_equal(
@@ -236,7 +236,7 @@ def test_actor_jit_shared_across_agents_and_historical_params(
         )
     assert len(traces) == 1
     # Positive control: a genuinely different required parameter shape retraces.
-    variables["params"]["v_head"]["weight"] = np.ones(3, np.float32)
+    variables["params"]["value_head"]["weight"] = np.ones(3, np.float32)
     agents[0].step_player(jax.random.key(0), _container(variables), request)
     assert len(traces) == 2
 

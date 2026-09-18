@@ -312,7 +312,7 @@ class StepAttention(nn.Module):
             use_bias=False,
             dtype=self.dtype,
             kernel_init=self.output_init,
-            name="attn_out",
+            name="out_proj",
         )(attended)
         return out, probs
 

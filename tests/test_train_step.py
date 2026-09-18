@@ -138,12 +138,12 @@ def test_train_step_smoke() -> None:
         # The flat readout's drift-from-init panels. These are the ONLY
         # forensics on the two-factor stall, so a rename that silently drops
         # them must fail here.
-        "player_pointer_query_rms",
-        "player_pointer_key_rms",
-        "player_pointer_local_src_rms",
-        "player_pointer_local_tgt_rms",
-        "player_switch_head_rms",
-        "player_other_head_rms",
+        "player_move_query_rms",
+        "player_move_key_rms",
+        "player_move_score_rms",
+        "player_move_target_score_rms",
+        "player_switch_score_rms",
+        "player_other_score_rms",
         "player_trunk_attn_out_rms",
         "player_trunk_mlp_out_rms",
         "player_action_head_grad_norm",

@@ -21,7 +21,7 @@ SOURCE = "replays/shards/gen9randombattle"
 def _params(world_model: bool) -> dict:
     params = {
         "encoder": {"kernel": jnp.zeros(2)},
-        "public_v_head": {"kernel": jnp.zeros(2)},
+        "public_value_head": {"kernel": jnp.zeros(2)},
     }
     if world_model:
         params["world_model"] = {
@@ -35,7 +35,7 @@ def test_param_labels_follow_the_params_tree_and_joint() -> None:
     labels = train.param_labels(_params(False), joint=False)
     assert labels == {
         "encoder": {"kernel": "frozen"},
-        "public_v_head": {"kernel": "train"},
+        "public_value_head": {"kernel": "train"},
     }
     labels = train.param_labels(_params(True), joint=True)
     assert labels["encoder"] == {"kernel": "train"}
@@ -116,7 +116,7 @@ def test_critic_only_reaches_public_v_head_alone() -> None:
     params, metrics, total = _init_and_terms(config, batch)
     assert "world_model" not in params
     labels = train.param_labels(params, joint=False)
-    assert set(jax.tree.leaves(labels["public_v_head"])) == {"train"}
+    assert set(jax.tree.leaves(labels["public_value_head"])) == {"train"}
     assert set(jax.tree.leaves(labels["encoder"])) == {"frozen"}
     assert "loss_flow" not in metrics
     assert np.isfinite(total)
@@ -134,6 +134,10 @@ def test_critic_only_reaches_public_v_head_alone() -> None:
     assert "train" in set(jax.tree.leaves(labels_on["world_model"]))
     assert labels_on["world_model"]["delta_scale"] == "frozen"
     assert "loss_flow" in metrics_on
+    # bf16 forward: the two arms are the same program over the same
+    # parameters (a leaf-by-leaf check finds no difference), but the extra
+    # world-model rows change what XLA autotunes, and that lands under
+    # bf16's ulp (3.9e-3), not under 1e-5.
     np.testing.assert_allclose(
-        metrics_on["loss_public_value"], metrics["loss_public_value"], rtol=1e-5
+        metrics_on["loss_public_value"], metrics["loss_public_value"], rtol=5e-3
     )
