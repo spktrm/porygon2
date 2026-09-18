@@ -453,7 +453,9 @@ class CategoricalValueLogitHead(nn.Module):
         # f32 from the head outwards: a handful of bins, and the main
         # critic's CE, the v-trace bootstrap probs and the expectation all
         # read them.
-        logits = MLP(**self.cfg.mlp.to_dict())(embedding).astype(jnp.float32)
+        logits = MLP(**self.cfg.mlp.to_dict(), name="mlp")(embedding).astype(
+            jnp.float32
+        )
 
         log_probs = nn.log_softmax(logits, axis=-1)
         probs = jnp.exp(log_probs)
@@ -487,7 +489,7 @@ class RegressionValueLogitHead(nn.Module):
             # A head whose output must start at a known point: zero last
             # kernel, and Dense biases start at zero, so it reads exactly 0.
             mlp_config["final_kernel_init"] = nn.initializers.zeros
-        x = MLP(**mlp_config)(x).astype(jnp.float32)
+        x = MLP(**mlp_config, name="mlp")(x).astype(jnp.float32)
         if getattr(self.cfg, "output_activation", None) is not None:
             x = self.cfg.output_activation(x)
         return RegressionValueHeadOutput(logits=x.squeeze(-1))
