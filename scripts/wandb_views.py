@@ -319,6 +319,22 @@ def rl_sections():
                     ],
                 ),
                 lp(
+                    # Shared keys move from step 2 through the move block;
+                    # the switch queries are the sparse block's own factor.
+                    # switch_opponent_query flat while move_opponent_query
+                    # climbs = the switch signal is not arriving.
+                    "Opponent-team pairing: drift from init",
+                    [
+                        "player_opponent_key_rms",
+                        "player_belief_key_rms",
+                        "player_move_opponent_query_rms",
+                        "player_switch_opponent_query_rms",
+                        "player_move_belief_query_rms",
+                        "player_switch_belief_query_rms",
+                        "player_partner_query_rms",
+                    ],
+                ),
+                lp(
                     "Trunk projection parameter RMS",
                     [
                         "player_trunk_attn_out_rms",
@@ -864,8 +880,8 @@ def rl_sections():
                     [
                         "player_applied_delta_rms_switch_query",
                         "player_applied_delta_rms_switch_target_score",
-                        "player_applied_delta_rms_pointer_query",
-                        "player_applied_delta_rms_pointer_key",
+                        "player_applied_delta_rms_move_query",
+                        "player_applied_delta_rms_move_key",
                         "player_applied_delta_rms_move_target_score",
                     ],
                     log_y=True,

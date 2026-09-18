@@ -23,6 +23,7 @@ from rl.environment.interfaces import (
     PlayerPolicyHeadOutput,
     PolicyHeadOutput,
 )
+from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.environment.utils import get_ex_player_step
 from rl.model import event_search
 from rl.model.config import get_player_model_config
@@ -32,6 +33,7 @@ from rl.model.constants import (
     PRIVATE_ROWS,
     PUBLIC_CLS_LOCAL_ROW,
     PUBLIC_CLS_ROW,
+    PUBLIC_ROWS,
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
@@ -40,6 +42,7 @@ from rl.model.heads import (
     CategoricalValueLogitHead,
     FlatActionReadout,
     HeadParams,
+    ReadoutRows,
     RegressionValueLogitHead,
     SlotConditioning,
     compute_policy_metrics,
@@ -150,7 +153,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_action_head(
         self,
-        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
+        sequence_rows: ReadoutRows,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -172,7 +175,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def _legal_logits(
         self,
-        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
+        sequence_rows: ReadoutRows,
         valid_mask: jax.Array,
         temp: float,
         decision_slot: int = 0,
@@ -181,15 +184,12 @@ class Porygon2PlayerModel(nn.Module):
         `-inf * 0` in a vjp): the one form the sampler reads.
         `decision_slot` picks the ally row the switch
         block reads -- 0 in singles, 1 for doubles stage 2."""
-        private_rows, move_rows, target_rows = sequence_rows
-        logits = self.action_head(
-            private_rows, move_rows, target_rows, temp=temp, decision_slot=decision_slot
-        )
+        logits = self.action_head(sequence_rows, temp=temp, decision_slot=decision_slot)
         return jnp.where(valid_mask, logits, -1e9)
 
     def _score_and_sample(
         self,
-        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
+        sequence_rows: ReadoutRows,
         valid_mask: jax.Array,
         given_index: jax.Array | None,
         temp: float,
@@ -229,7 +229,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_single_slot(
         self,
-        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
+        sequence_rows: ReadoutRows,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -281,7 +281,7 @@ class Porygon2PlayerModel(nn.Module):
 
     def _forward_two_slots(
         self,
-        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
+        sequence_rows: ReadoutRows,
         valid_mask: jax.Array,
         head: PolicyHeadOutput,
         train: bool,
@@ -474,9 +474,7 @@ class Porygon2PlayerModel(nn.Module):
         )
         bonus = jnp.where(overflow, 0.0, bonus)
         base = self._legal_logits(
-            (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
-            legal,
-            1.0,
+            self.readout_rows(sequence, row_valid, env_step), legal, 1.0
         )
         diagnostics = event_search.search_diagnostics(base, bonus, legal)
         return bonus, {
@@ -484,6 +482,36 @@ class Porygon2PlayerModel(nn.Module):
             "search_bonus_gap": diagnostics["search_bonus_gap"],
             "search_overflow": overflow,
         }
+
+    @staticmethod
+    def readout_rows(
+        sequence: jax.Array, row_valid: jax.Array, env_step: PlayerEnvOutput
+    ) -> ReadoutRows:
+        """The action readout's rows, sliced by name. Presence, life and
+        being on the field are read from each entity's own public row, so
+        the pair terms are live on a forced switch and at team preview,
+        where no enemy TARGET row is valid."""
+        fainted = (
+            env_step.public_team[
+                :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__FAINTED
+            ]
+            != 0
+        )
+        active = (
+            env_step.public_team[
+                :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+            ]
+            > 0
+        )
+        public_valid = row_valid[PUBLIC_ROWS]
+        return ReadoutRows(
+            private=sequence[PRIVATE_ROWS],
+            move=sequence[MOVE_ROWS],
+            target=sequence[TARGET_ROWS],
+            public=sequence[PUBLIC_ROWS],
+            public_alive=public_valid & ~fainted,
+            public_active=public_valid & active,
+        )
 
     def get_head_outputs(
         self,
@@ -509,7 +537,7 @@ class Porygon2PlayerModel(nn.Module):
                 sequence, row_valid, env_step
             )
         action_head = self._forward_action_head(
-            (sequence[PRIVATE_ROWS], sequence[MOVE_ROWS], sequence[TARGET_ROWS]),
+            self.readout_rows(sequence, row_valid, env_step),
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,

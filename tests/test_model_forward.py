@@ -231,7 +231,7 @@ def test_row_identity_is_added_after_the_input_norm(
     network, params, actor_input, _ = real_model_and_trajectory
     content_params = jax.tree.map(lambda value: value, params)
     encoder_params = content_params["params"]["encoder"]
-    for name in ("side_bias", "pos_bias"):
+    for name in ("side_bias", "position_bias"):
         encoder_params[name]["embedding"] = jnp.zeros_like(
             encoder_params[name]["embedding"]
         )
@@ -323,7 +323,7 @@ def test_current_and_remembered_field_share_side_only(
     network, params, actor_input, _ = real_model_and_trajectory
     base = _assembled_rows(network, params, actor_input)
     moved_pos = _assembled_rows(
-        network, _perturbed(params, ("pos_bias", "embedding")), actor_input
+        network, _perturbed(params, ("position_bias", "embedding")), actor_input
     )
     moved_side = _assembled_rows(
         network, _perturbed(params, ("side_bias", "embedding")), actor_input
@@ -406,7 +406,7 @@ def test_private_position_follows_public_key(real_model_and_trajectory) -> None:
     base = _assembled_step_rows(network, params, benched)
     moved = _assembled_step_rows(network, params, active)
     position_table = np.asarray(
-        params["params"]["encoder"]["pos_bias"]["embedding"], np.float32
+        params["params"]["encoder"]["position_bias"]["embedding"], np.float32
     )
     assert np.any(base[PRIVATE_ROWS][0])
     expected = position_table[2] - position_table[0]
@@ -468,7 +468,7 @@ def test_history_rows_are_normalised_memory_plus_side_position_and_group(
             :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
         ]
     )
-    expected += np.asarray(encoder_params["pos_bias"]["embedding"], np.float32)[
+    expected += np.asarray(encoder_params["position_bias"]["embedding"], np.float32)[
         positions
     ]
     expected += np.asarray(encoder_params["sequence_group_bias"], np.float32)[

@@ -12,9 +12,45 @@ from rl.environment.interfaces import (
     PolicyHeadOutput,
     RegressionValueHeadOutput,
 )
-from rl.model.constants import ALLY_TARGET_ROWS, CELL_BANK_SRC, CELL_BANK_TGT
+from rl.model.constants import (
+    CELL_BANK_SRC,
+    CELL_BANK_TGT,
+    MY_ACTIVE_PUBLIC_ROWS,
+    OPP_ACTIVE_PUBLIC_ROWS,
+)
 from rl.model.modules import MLP, PointerLogits
 from rl.model.utils import legal_log_policy, legal_policy
+
+
+class ReadoutRows(NamedTuple):
+    """The trunk rows the action readout scores, sliced by name once
+    (`PlayerModel.readout_rows`). `public` is every public entity row, mine
+    then theirs, actives first on each side (`MY_ACTIVE_PUBLIC_ROWS`,
+    `OPP_ACTIVE_PUBLIC_ROWS`); `public_alive` whether each exists and is
+    alive and `public_active` whether it is on the field -- the entity's own
+    state, never the action mask."""
+
+    private: jax.Array
+    move: jax.Array
+    target: jax.Array
+    public: jax.Array
+    public_alive: jax.Array
+    public_active: jax.Array
+
+    @property
+    def opponent(self) -> jax.Array:
+        return self.public[..., OPP_ACTIVE_PUBLIC_ROWS[0] :, :]
+
+    @property
+    def opponent_alive(self) -> jax.Array:
+        return self.public_alive[..., OPP_ACTIVE_PUBLIC_ROWS[0] :]
+
+    def my_active(self, slot: int) -> tuple[jax.Array, jax.Array]:
+        """My active in `slot` (a (..., 1, width) row) and whether one is
+        there: on the field and alive."""
+        row = MY_ACTIVE_PUBLIC_ROWS[slot]
+        present = self.public_active[..., row] & self.public_alive[..., row]
+        return self.public[..., row : row + 1, :], present
 
 
 class HeadParams(NamedTuple):
@@ -173,12 +209,8 @@ class SlotConditioning(nn.Module):
     """
 
     @nn.compact
-    def __call__(
-        self,
-        sequence_rows: tuple[jax.Array, jax.Array, jax.Array],
-        action_cell: jax.Array,
-    ):
-        private_rows, move_rows, target_rows = sequence_rows
+    def __call__(self, rows: ReadoutRows, action_cell: jax.Array) -> ReadoutRows:
+        private_rows, move_rows, target_rows = rows.private, rows.move, rows.target
         width = private_rows.shape[-1]
         chosen = jnp.concatenate(
             chosen_bank_rows(private_rows, move_rows, target_rows, action_cell),
@@ -191,10 +223,10 @@ class SlotConditioning(nn.Module):
             dtype=private_rows.dtype,
             name="condition",
         )(chosen)
-        return (
-            private_rows + delta,
-            move_rows + delta,
-            target_rows + delta,
+        return rows._replace(
+            private=private_rows + delta,
+            move=move_rows + delta,
+            target=target_rows + delta,
         )
 
 
@@ -213,25 +245,84 @@ def row_score(rows: jax.Array, name: str) -> jax.Array:
 def bilinear_pair(
     src_rows: jax.Array, tgt_rows: jax.Array, *, qk_size: int, block: str
 ) -> jax.Array:
-    """(..., src, tgt) pair logits: a zero-init query over live keys plus a
-    zero-init score of each source row and of each target row. The zero
-    query over live keys avoids the two-factor gradient stall.
-
-    `block` names the four projections on the calling compact module:
+    """(..., src, tgt): the pair logits plus a zero-init score of each source
+    row and of each target row. `block` names the four projections:
     `{block}_query`, `{block}_key`, `{block}_score`, `{block}_target_score`.
     """
+    logits = pair_logits(
+        src_rows, tgt_rows, qk_size=qk_size, query=f"{block}_query", key=f"{block}_key"
+    )
+    logits = logits + row_score(src_rows, f"{block}_score")
+    return logits + row_score(tgt_rows, f"{block}_target_score")[..., 0][..., None, :]
+
+
+def pair_logits(
+    src_rows: jax.Array, tgt_rows: jax.Array, *, qk_size: int, query: str, key: str
+) -> jax.Array:
+    """(..., src, tgt): q(src)·k(tgt)/√d with a zero-init query over live
+    keys, the one bilinear every pair in the readout is built from."""
     dtype = src_rows.dtype
-    query = nn.Dense(
+    queries = nn.Dense(
         qk_size,
         kernel_init=nn.initializers.zeros_init(),
         use_bias=False,
         dtype=dtype,
-        name=f"{block}_query",
+        name=query,
     )(src_rows)
-    key = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=f"{block}_key")(tgt_rows)
-    logits = jnp.einsum("...sq,...tq->...st", query, key) / math.sqrt(qk_size)
-    logits = logits + row_score(src_rows, f"{block}_score")
-    return logits + row_score(tgt_rows, f"{block}_target_score")[..., 0][..., None, :]
+    keys = nn.Dense(qk_size, use_bias=False, dtype=dtype, name=key)(tgt_rows)
+    return jnp.einsum("...sq,...tq->...st", queries, keys) / math.sqrt(qk_size)
+
+
+class OpponentTeamPairing(nn.Module):
+    """A candidate's expected pair score against the opponent's TEAM, under
+    the readout's own belief about who stands opposite next turn:
+
+        term[c]        = sum_j  belief[c, j] * matchup[c, j]
+        matchup[c, j]  = q_block(c) · k(their_j) / √d  +  score(their_j)
+        belief[c, ·]   = softmax over their ALIVE rows of
+                         q_belief_block(c) · k_belief(their_j) / √d
+
+    j runs over every opponent public row, revealed or not; a fainted or
+    absent row is masked out of the belief and so out of the term. One
+    instance serves every block: the keys `opponent_key`, `belief_key` and
+    the row score `opponent_score` are shared, so the move block's
+    every-turn gradient trains the factors the sparse switch block reads
+    through; the two queries are per block and zero-init, so the term is
+    exactly 0 at init with the belief uniform over the alive rows.
+    """
+
+    qk_size: int
+
+    @nn.compact
+    def __call__(
+        self,
+        candidates: jax.Array,
+        opponent: jax.Array,
+        opponent_alive: jax.Array,
+        *,
+        block: str,
+    ) -> jax.Array:
+        matchup = pair_logits(
+            candidates,
+            opponent,
+            qk_size=self.qk_size,
+            query=f"{block}_opponent_query",
+            key="opponent_key",
+        )
+        matchup = matchup + row_score(opponent, "opponent_score")[..., 0][..., None, :]
+
+        belief_logits = pair_logits(
+            candidates,
+            opponent,
+            qk_size=self.qk_size,
+            query=f"{block}_belief_query",
+            key="belief_key",
+        )
+        alive = opponent_alive[..., None, :]
+        belief = jax.nn.softmax(jnp.where(alive, belief_logits, -1e9), axis=-1)
+        belief = jnp.where(alive, belief, 0.0)
+
+        return jnp.sum(belief * matchup, axis=-1)
 
 
 class FlatActionReadout(nn.Module):
@@ -241,15 +332,24 @@ class FlatActionReadout(nn.Module):
     of ActionMask's fields -- proto/service.proto `Action`), emitted directly
     since 2026-08-31; the 41x41 scatter they used to land in is gone:
 
-      switch   sheet rows x the ALLY row of the active slot being replaced
-               (2026-09-11): the same pair form as moves x targets, so a
-               candidate's logit reads what that row attended to -- the
-               field, the opponent's active -- where a scalar per sheet row
-               could only read the candidate. One block serves the battle
-               switch and the team-preview lead alike; `kind` only matters
-               to the service's decoder.
+      switch   the candidate's sheet row paired with every mon on the field,
+               all from the PUBLIC rows (2026-09-18): my active it replaces
+               (what it gives up), my other active that stays (doubles; the
+               term masks itself out in singles), and the opponent's TEAM --
+               every alive public row of theirs, revealed or not, weighted
+               by a learned belief about who is opposite next turn
+               (`OpponentTeamPairing`). Presence is the entity's own state,
+               not the action mask, so every term is live on a forced switch
+               (no legal move, hence no valid enemy TARGET row) and the
+               opponent term at team preview (six enemy rows, no actives).
+               One block serves the battle switch and the team-preview lead
+               alike; `kind` only matters to the service's decoder.
       move     16 candidate move rows against the 17 target rows, four of
-               which carry the actual mon they would hit.
+               which carry the actual mon they would hit, plus the same
+               opponent-team term per move (who the move actually lands on
+               after their response) -- and the move block's every-turn
+               gradient is what trains the shared opponent key and belief
+               key the switch block reads through.
       other    one logit per target row for the standalone actions -- pass,
                default.
 
@@ -282,27 +382,48 @@ class FlatActionReadout(nn.Module):
 
     @nn.compact
     def __call__(
-        self,
-        private_rows: jax.Array,
-        move_rows: jax.Array,
-        target_rows: jax.Array,
-        temp: float = 1.0,
-        decision_slot: int = 0,
+        self, rows: ReadoutRows, temp: float = 1.0, decision_slot: int = 0
     ) -> jax.Array:
+        private_rows, move_rows, target_rows = rows.private, rows.move, rows.target
         qk_size = self.cfg.qk_size
+        opponent_team = OpponentTeamPairing(qk_size, name="opponent_team")
 
-        # The switch block is sheet rows x the ALLY row of the active slot a
-        # switch replaces (2026-09-11); `switch_target_score` on that row is
-        # the whether-to-switch level, one that reads the state.
-        ally_row = jnp.take(
-            target_rows, ALLY_TARGET_ROWS[decision_slot : decision_slot + 1], axis=-2
+        def against_their_team(candidates: jax.Array, block: str) -> jax.Array:
+            return opponent_team(
+                candidates, rows.opponent, rows.opponent_alive, block=block
+            )
+
+        # switch(c) = pair(c, my active it replaces)
+        #           + [partner present] pair(c, my active that stays)
+        #           + E_belief[pair(c, their team)]
+        leaving_row, _ = rows.my_active(decision_slot)
+        partner_row, partner_present = rows.my_active(1 - decision_slot)
+        leaving = bilinear_pair(
+            private_rows, leaving_row, qk_size=qk_size, block="switch"
         )
-        switch_logit = bilinear_pair(
-            private_rows, ally_row, qk_size=qk_size, block="switch"
-        )[..., 0]
+        partner = pair_logits(
+            private_rows,
+            partner_row,
+            qk_size=qk_size,
+            query="partner_query",
+            key="partner_key",
+        )
+        partner = (
+            partner + row_score(partner_row, "partner_score")[..., 0][..., None, :]
+        )
+        partner = jnp.where(partner_present[..., None, None], partner, 0.0)
+        switch_logit = (
+            leaving[..., 0]
+            + partner[..., 0]
+            + against_their_team(private_rows, "switch")
+        )
+
+        # move(m, t) = pair(m, target t) + E_belief[pair(m, their team)]
         move_target = bilinear_pair(
             move_rows, target_rows, qk_size=qk_size, block="move"
         )
+        move_target = move_target + against_their_team(move_rows, "move")[..., None]
+
         other_logit = row_score(target_rows, "other_score")[..., 0]
 
         cells = jnp.concatenate(

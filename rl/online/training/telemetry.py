@@ -339,6 +339,30 @@ _ACTION_HEAD_LEAVES = {
         ("action_head", "switch_target_score", "kernel"),
     ),
     "player_other_score_rms": (("action_head", "other_score", "kernel"),),
+    # The opponent-team term: shared keys (trained every turn through the
+    # move block) and the per-block zero-init queries. A switch query
+    # flat at init while the move query moves is the sparse switch signal
+    # never arriving, the read that separates "routing fixed, credit still
+    # the bound" from "routing not fixed" (docs plan 2026-09-18 step 2).
+    "player_opponent_key_rms": (
+        ("action_head", "opponent_team", "opponent_key", "kernel"),
+    ),
+    "player_belief_key_rms": (
+        ("action_head", "opponent_team", "belief_key", "kernel"),
+    ),
+    "player_move_opponent_query_rms": (
+        ("action_head", "opponent_team", "move_opponent_query", "kernel"),
+    ),
+    "player_switch_opponent_query_rms": (
+        ("action_head", "opponent_team", "switch_opponent_query", "kernel"),
+    ),
+    "player_move_belief_query_rms": (
+        ("action_head", "opponent_team", "move_belief_query", "kernel"),
+    ),
+    "player_switch_belief_query_rms": (
+        ("action_head", "opponent_team", "switch_belief_query", "kernel"),
+    ),
+    "player_partner_query_rms": (("action_head", "partner_query", "kernel"),),
 }
 # Trunk leaves carry a leading axis of cfg.trunk.num_blocks (nn.scan stacks
 # them), so an rms over the whole leaf is the across-block mean by
@@ -467,8 +491,8 @@ _APPLIED_DELTA_LEAVES = {
     "player_applied_delta_rms_switch_target_score": (
         ("action_head", "switch_target_score", "kernel"),
     ),
-    "player_applied_delta_rms_pointer_query": (("action_head", "query", "kernel"),),
-    "player_applied_delta_rms_pointer_key": (("action_head", "key", "kernel"),),
+    "player_applied_delta_rms_move_query": (("action_head", "move_query", "kernel"),),
+    "player_applied_delta_rms_move_key": (("action_head", "move_key", "kernel"),),
     "player_applied_delta_rms_move_target_score": (
         ("action_head", "move_target_score", "kernel"),
     ),
