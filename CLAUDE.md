@@ -34,7 +34,8 @@ TypeScript game service speaking protobuf over websockets.
   (`play_games` / `forward`). Usernames must be unique per LIVE game.
 - Stuck learner: `kill -USR1 <pid>` dumps every thread's stack (faulthandler).
 - Launch training: `bash start.sh` → tmux session `train` (pane 0 service,
-  pane 1 learner). Graceful stop = Ctrl-C the learner pane (writes a full
+  pane 1 learner). It stops the previous session's wandb runs and kills the
+  old tmux session first — never a smoke test while a run is live. Graceful stop = Ctrl-C the learner pane (writes a full
   synchronous checkpoint).
 
 ## Map
@@ -50,9 +51,11 @@ TypeScript game service speaking protobuf over websockets.
 - `rl/environment/` — `interfaces.py` (all pytree dataclasses),
   `utils.py` (`process_state` proto→numpy decode, geometric buckets for the
   inference path, `clip_history_windows_tail` joint tail-windowing).
-- `rl/model/` — ONE sequence of 61 rows, one row per THING (2026-08-29).
+- `rl/model/` — ONE sequence of 91 rows, one row per THING (2026-08-29),
+  ordered by read tier (2026-09-15).
   `constants.py`: the layout — `SEQUENCE_LAYOUT` is the single source, every
-  offset and named slice derives from it, and a head never carries a literal.
+  offset and named slice derives from it, and a head never carries a literal;
+  `SEQUENCE_READ_MASK` and the comment above it define the four read tiers.
   `encoder.py`: the feature embedders, the entity-local pools (the same ones
   the packed history cache uses), `SequenceNormalisation` at BOTH ends of
   the trunk (rows enter and leave at RMS 1 x a per-group scale; the
@@ -62,8 +65,13 @@ TypeScript game service speaking protobuf over websockets.
   identity a row carries is additive and applied there. `trunk.py`: N
   unshared pre-RMSNorm blocks over that sequence, no gates and no block
   masks; `RMSNorm`'s zeros-init scale makes it identity at step 0, so it is
-  live at init by construction. `history_encoder.py`: per-slot GRU scan over
-  history, aligned to requests by REQUEST_COUNT VALUE (trailing windows are
+  live at init by construction; under `cfg.normalised_residual` each add
+  becomes nGPT's step on the RMS-1 sphere (`TrunkBlock._normalised_update`).
+  `history_encoder.py`: `HistorySequenceStep` — two input-gated minGRU layers
+  (`GatedLinearCell`) with the step attention between them; no attention
+  reads its own layer's memory, so both are `lax.associative_scan`s and
+  there is no loop recurrence (deleted 2026-09-18). History is
+  aligned to requests by REQUEST_COUNT VALUE (trailing windows are
   therefore safe). `player_model.py`: three modules — encoder, action
   readout, critic. `heads.py`: `FlatActionReadout` — ONE pair form (bilinear
   plus a scalar per side) for sheet rows x the ally row a switch replaces AND
@@ -72,8 +80,12 @@ TypeScript game service speaking protobuf over websockets.
   factor's gradient is a rank-1 outer product of live rows rather than the
   two-factor stall. The critic reads the CLS row and nothing else; the
   privileged critic reads VALUE_CLS, whose learner-only partition carries
-  the opponent's sheet latents from the same private embedder.
-  The latent world model (`transition.py`, `search.py`, `mcts.py`), the
+  the opponent's sheet latents from the same private embedder; the public
+  critic (`public_v_head`) reads PUBLIC_CLS, a value of the public tier alone.
+  `world_model.py` + `event_search.py`: the public event world model
+  (2026-09-16) and its depth-1 sampled event rollouts, built only under
+  `cfg.world_model.enabled` and trained offline (`rl/offline/train.py`).
+  The LATENT world model (`transition.py`, `search.py`, `mcts.py`), the
   opponent discrete code + belief SSL and the dynamics target rows were
   REMOVED 2026-09-12 as explored-but-premature (tag
   `pre-world-model-removal-2026-09-12`, LESSONS "Removal ledger —
@@ -136,17 +148,22 @@ TypeScript game service speaking protobuf over websockets.
   builder losses gate on terminal chunks (`win_reward[-1]` is only real there).
 - NO privileged info FOR THE POLICY (2026-08-25, AMENDED 2026-09-01): the
   policy's information set is exactly deploy time's, and that is enforced
-  by MASK, not convention — `SEQUENCE_READ_MASK` gives every policy-readable
-  row zero in-edges from the learner-only partition (the opponent-truth
-  rows + VALUE_CLS) at every trunk block, transitively leak-free by
-  induction and pinned by `tests/test_privileged_partition.py`. Privileged
+  by MASK, not convention — `SEQUENCE_READ_MASK` nests four tiers, each
+  reading itself and everything below it: PUBLIC (what both players see) <
+  PRIVATE (my request truth; PUBLIC | PRIVATE is the policy's information
+  set) < SECRET (the opponent's request truth + the privileged registers) <
+  VALUE_CLS, with PUBLIC_CLS reading the PUBLIC tier alone and both CLS rows
+  read by nothing. Every policy-readable row therefore has zero in-edges
+  from the learner-only partition (SECRET + VALUE_CLS) at every trunk block,
+  transitively leak-free by induction and pinned by
+  `tests/test_privileged_partition.py`. Privileged
   opponent state MAY enter that partition, feeding a privileged critic
   nothing at deploy consumes; v-trace targets and pg_advantages read it
   under `player_privileged_targets` (False = the exact deployable-head
   estimator). The 2026-08-25 falsification (team sheet worth 0.005 value
   units, privileged rung scoring *worse* in R² than the deployable one,
   `docs/qva-redesign-step0-reference.md`) is superseded ONLY under its
-  pre-registered gate: `player_priv_value_head_r2 >=
+  standing gate: `player_priv_value_head_r2 >=
   player_value_head_r2` from 20k on, else the premise fails on its own
   instrument and the flag flips back. The deployable V stays trained on
   the same labels as the matched control.
@@ -231,7 +248,8 @@ TypeScript game service speaking protobuf over websockets.
   converting one, REBIND in the branch; do not pre-assign a default and then
   reassign, which is more code than the ternary was.
 - No single-letter names. Where two exist only to form a product, define the
-  product — that is what the code uses.
+  product — that is what the code uses. (A regex rename near `jnp.einsum`
+  corrupts its subscript strings, which are bare letters.)
 - JAX code is written for XLA, not for the Python reader. Inside anything
   jitted, NO Python `for` loop over a DATA axis — time, batch, entities,
   history slots, league members. Vectorise it (`jax.vmap`) or sequence it
@@ -239,7 +257,7 @@ TypeScript game service speaking protobuf over websockets.
   of every op, N times the trace and compile, a longer program to schedule.
   The trunk's N unshared blocks go through `nn.scan` over a stacked param
   axis (`rl/model/trunk.py`) exactly so depth costs one compiled block; the
-  history encoder scans its per-slot recurrence the same way.
+  history encoder's recurrence is a `lax.associative_scan` over the step axis.
   A Python loop IS right over static heterogeneous structure — the named
   slices of `SEQUENCE_LAYOUT`, a fixed list of distinct feature embedders.
   The test is whether every iteration emits the SAME ops on a different
@@ -326,7 +344,7 @@ TypeScript game service speaking protobuf over websockets.
 - Singles slot-alignment has a ~1% Illusion/Zoroark false-positive class
   (vitest `retry: 2`).
 - **`packed_valid` is inferred from a species sentinel, not counted.**
-  `rl/environment/utils.py:220-227` derives the occupied packed-row count from
+  `packed_valid_rows` (`rl/environment/utils.py`) derives the occupied packed-row count from
   `revealed_cache[..., SPECIES] != UNSPECIFIED`. On the bundled fixture the
   heuristic is exact (289 == `sum(NUM_RELEVANT)` == `max(idx)+1`), but any live
   edge whose entity has an unknown species would undercount and silently DROP

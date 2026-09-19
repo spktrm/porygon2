@@ -282,9 +282,11 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # outcome and there is nothing to discount toward. Kept as a field
     # because it is a real RL knob, not because anything has moved it.
     player_gamma: float = 1.0
-    # Value-target lambda. AlphaStar's own choice: TD(lambda=0.8), a
-    # short (~5-step) bootstrap horizon. Lower = more bootstrapping and
-    # less Monte-Carlo variance.
+    # Value-target lambda. A deliberate deviation from AlphaStar's
+    # TD(lambda=0.8): 0.95 stretches the credit horizon from ~5 to ~20
+    # requests, so a switch row's trace reaches the realised outcome rather
+    # than V five steps out. Lower = more bootstrapping and less
+    # Monte-Carlo variance.
     player_lambda: float = 0.95
 
     # The replay ESS floor is fixed at player_replay_ess_floor; the
