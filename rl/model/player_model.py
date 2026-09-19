@@ -251,12 +251,15 @@ class Porygon2PlayerModel(nn.Module):
         )
         learner_only = {}
         if self.cfg.train:
+            modality_log_probs, valid_per_modality = self._modality_log_marginal(
+                metrics.log_policy, flat_valid
+            )
             learner_only = {
                 "log_policy": metrics.log_policy,
+                "normalized_modality_entropy": self._calculate_entropy_metrics(
+                    modality_log_probs, valid_per_modality
+                ),
             }
-        modality_log_probs, valid_per_modality = self._modality_log_marginal(
-            metrics.log_policy, flat_valid
-        )
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob,
@@ -264,9 +267,6 @@ class Porygon2PlayerModel(nn.Module):
             entropy=metrics.entropy,
             normalized_entropy=metrics.normalized_entropy,
             magnet_kl=metrics.magnet_kl,
-            normalized_modality_entropy=self._calculate_entropy_metrics(
-                modality_log_probs, valid_per_modality
-            ),
         )
 
     def _apply_choice_collision(self, valid_mask: jax.Array, action_index: jax.Array):
@@ -329,17 +329,6 @@ class Porygon2PlayerModel(nn.Module):
         )
 
         action_index = jnp.stack([index_1, index_2])
-        # Diagnostic average of the per-stage values (a true joint version
-        # would need raw/max modality entropies threaded out; not worth it
-        # for telemetry).
-        normalized_modality_entropy = (
-            self._calculate_entropy_metrics(
-                *self._modality_log_marginal(metrics_1.log_policy, flat_valid_1)
-            )
-            + self._calculate_entropy_metrics(
-                *self._modality_log_marginal(metrics_2.log_policy, flat_valid_2)
-            )
-        ) / 2.0
 
         # Joint normalised entropy: (H1 + H2) / (log N1 + log N2) — the
         # stage with the bigger branching factor carries proportionally
@@ -357,18 +346,30 @@ class Porygon2PlayerModel(nn.Module):
             denom > 0, entropy / jnp.maximum(denom, 1e-9), 0.0
         )
 
+        learner_only = {}
         if self.cfg.train:
-            log_policy = jnp.stack([metrics_1.log_policy, metrics_2.log_policy])
-        else:
-            log_policy = ()
+            # Diagnostic average of the per-stage values (a true joint version
+            # would need raw/max modality entropies threaded out; not worth it
+            # for telemetry).
+            normalized_modality_entropy = (
+                self._calculate_entropy_metrics(
+                    *self._modality_log_marginal(metrics_1.log_policy, flat_valid_1)
+                )
+                + self._calculate_entropy_metrics(
+                    *self._modality_log_marginal(metrics_2.log_policy, flat_valid_2)
+                )
+            ) / 2.0
+            learner_only = {
+                "log_policy": jnp.stack([metrics_1.log_policy, metrics_2.log_policy]),
+                "normalized_modality_entropy": normalized_modality_entropy,
+            }
         return PlayerPolicyHeadOutput(
             action_index=action_index,
             log_prob=log_prob_1 + log_prob_2,
-            log_policy=log_policy,
+            **learner_only,
             entropy=entropy,
             normalized_entropy=normalized_entropy,
             magnet_kl=metrics_1.magnet_kl + metrics_2.magnet_kl,
-            normalized_modality_entropy=normalized_modality_entropy,
         )
 
     def _search_bonus(
