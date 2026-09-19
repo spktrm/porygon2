@@ -19,7 +19,7 @@ from rl.model.constants import (
     OPP_ACTIVE_PUBLIC_ROWS,
 )
 from rl.model.modules import MLP, PointerLogits
-from rl.model.utils import legal_log_policy, legal_policy
+from rl.model.utils import legal_log_policy
 
 
 class ReadoutRows(NamedTuple):
@@ -79,7 +79,7 @@ def compute_policy_metrics(
     logits: jax.Array, valid_mask: jax.Array, prior: jax.Array = None
 ):
     log_policy = legal_log_policy(logits, valid_mask)
-    policy = legal_policy(logits, valid_mask)
+    policy = jnp.where(valid_mask, jnp.exp(log_policy), 0.0)
     entropy = -jnp.sum(policy * log_policy, axis=-1)
 
     valid_sum = valid_mask.sum(axis=-1)
