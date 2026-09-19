@@ -298,9 +298,33 @@ def dump(sides, path: str) -> None:
         pickle.dump(sides, f)
 
 
+class _Retired:
+    """Decodes a pickled instance of a class that no longer exists."""
+
+    def __setstate__(self, state):
+        pass
+
+
+class _CohortUnpickler(pickle.Unpickler):
+    # `SearchOutput` (removed 2026-09-12) was a diagnostics field of the
+    # actor output; cohorts pickled before then name it.
+    def find_class(self, module, name):
+        if module == "rl.environment.interfaces" and name == "SearchOutput":
+            return _Retired
+        return super().find_class(module, name)
+
+
 def load(path: str):
     with open(path, "rb") as f:
-        return pickle.load(f)
+        sides = _CohortUnpickler(f).load()
+    # The instance dict is what the pytree flatten walks, so a retired
+    # attribute would otherwise stack as a leaf.
+    for side in sides:
+        for chunk in side:
+            actor_output = chunk.player_transitions.agent_output.actor_output
+            if "search" in actor_output.__dict__:
+                object.__delattr__(actor_output, "search")
+    return sides
 
 
 def encode_policy_rows(module, actor_input, actor_output):
