@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import NUM_ACTION_CELLS, NUM_SWITCH_CELLS, OTHER_CELL_OFFSET
+from rl.environment.data import NUM_ACTION_CELLS
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PolicyHeadOutput,
@@ -344,8 +344,8 @@ class FlatActionReadout(nn.Module):
                opponent term at team preview (six enemy rows, no actives).
                One block serves the battle switch and the team-preview lead
                alike; `kind` only matters to the service's decoder.
-      move     16 candidate move rows against the 17 target rows, four of
-               which carry the actual mon they would hit, plus the same
+      move     16 candidate move rows against the 17 target rows (slot
+               identities; no pokemon content since 2026-09-21), plus the same
                opponent-team term per move (who the move actually lands on
                after their response) -- and the move block's every-turn
                gradient is what trains the shared opponent key and belief
@@ -379,38 +379,6 @@ class FlatActionReadout(nn.Module):
     """
 
     cfg: ConfigDict
-
-    def chosen_pair_features(self, rows: ReadoutRows, action_cell: jax.Array):
-        source, target = chosen_bank_rows(
-            rows.private, rows.move, rows.target, action_cell
-        )
-        leaving, _ = rows.my_active(0)
-
-        def features(block, target_row):
-            def projection(row, role):
-                params = self.get_variable("params", f"{block}_{role}")
-                return nn.Dense(
-                    params["kernel"].shape[-1],
-                    use_bias=False,
-                    dtype=row.dtype,
-                    parent=None,
-                ).apply({"params": params}, row)
-
-            interaction = projection(source, "query") * projection(target_row, "key")
-            return jnp.concatenate(
-                (
-                    interaction / math.sqrt(self.cfg.qk_size),
-                    projection(source, "score"),
-                    projection(target_row, "target_score"),
-                )
-            )
-
-        pair = jnp.where(
-            action_cell < NUM_SWITCH_CELLS,
-            features("switch", leaving[0]),
-            features("move", target),
-        )
-        return jnp.where(action_cell < OTHER_CELL_OFFSET, pair, 0)
 
     @nn.compact
     def __call__(

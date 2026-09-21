@@ -7,10 +7,12 @@ import numpy as np
 from ml_collections import ConfigDict
 
 from rl.model.constants import (
+    HISTORY_ACTIVE_STATE_ROWS,
     HISTORY_EVENT_STATE_ROWS,
     HISTORY_FIELD_STATE_ROWS,
     HISTORY_REGISTER_STATE_ROWS,
     HISTORY_SLOT_STATE_ROWS,
+    NUM_ACTIVE_SLOTS,
     NUM_HISTORY_STATE_ROWS,
     NUM_PUBLIC_SLOTS,
 )
@@ -95,12 +97,13 @@ def _step_module():
     events = events.at[:, HISTORY_REGISTER_STATE_ROWS].set(0)
     identities = jnp.ones_like(events)
     touched = jnp.ones((STEPS, NUM_PUBLIC_SLOTS), jnp.bool_)
+    active_touched = jnp.ones((STEPS, NUM_ACTIVE_SLOTS), jnp.bool_)
     valid = jnp.ones(STEPS, jnp.bool_)
     inner0 = jax.random.normal(
         jax.random.key(78), (HISTORY_EVENT_STATE_ROWS.stop, WIDTH)
     )
     memory0 = jax.random.normal(jax.random.key(79), (NUM_HISTORY_STATE_ROWS, WIDTH))
-    arguments = (events, identities, touched, valid, inner0, memory0)
+    arguments = (events, identities, touched, active_touched, valid, inner0, memory0)
     params = jax.jit(module.init)(jax.random.key(80), *arguments)
     jitted = jax.jit(module.apply)
 
@@ -138,20 +141,19 @@ def test_norm_and_identities_reach_memory_only_through_attention() -> None:
 
 
 def test_cell_weights_are_separate_by_type_and_shared_within_type() -> None:
-    params, apply, (events, identities, touched, valid, inner0, memory0) = (
-        _step_module()
-    )
+    params, apply, (events, identities, *_, inner0, memory0) = _step_module()
     params = _copy(params)
     params["params"]["attention"]["out_proj"]["kernel"] = jnp.zeros((WIDTH, WIDTH))
     uniform = (
         (0, jnp.full_like(events, 0.2).at[:, HISTORY_REGISTER_STATE_ROWS].set(0)),
-        (4, jnp.full_like(inner0, 0.4)),
-        (5, jnp.full_like(memory0, 0.4)),
+        (5, jnp.full_like(inner0, 0.4)),
+        (6, jnp.full_like(memory0, 0.4)),
     )
     baseline = apply(params, *uniform)[0]
     groups = (
         ("entity", HISTORY_SLOT_STATE_ROWS),
         ("field", HISTORY_FIELD_STATE_ROWS),
+        ("active", HISTORY_ACTIVE_STATE_ROWS),
         ("register", HISTORY_REGISTER_STATE_ROWS),
     )
     for token_type, state_rows in groups:

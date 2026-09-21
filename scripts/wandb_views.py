@@ -182,7 +182,6 @@ def rl_sections():
                         "player_value_head_r2",
                         "player_priv_value_head_r2",
                         "player_public_value_head_r2",
-                        "player_state_value_head_r2",
                     ],
                     range_y=(-1, 1),
                 ),
@@ -670,127 +669,6 @@ def rl_sections():
                 lp(
                     "Win returns",
                     ["player_win_returns_sum", "player_win_returns_min"],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="4b · Observable self-play consequences",
-            is_open=True,
-            panels=[
-                lp("Outcome prediction losses", [], regex="^player_observable_.*loss$"),
-                lp(
-                    "HP change error versus copy",
-                    ["player_observable_hp_mae", "player_observable_hp_copy_mae"],
-                ),
-                lp(
-                    "Execution and faint probability error",
-                    [],
-                    regex="^player_observable_.*brier$",
-                ),
-                lp("Recall by outcome class", [], regex="^player_observable_.*recall$"),
-                lp("Observed label counts", [], regex="^player_observable_.*count$"),
-                lp(
-                    "Shared policy-feature gradient ramp",
-                    ["player_observable_shared_grad_live"],
-                ),
-                lp(
-                    "Shared gradient norms",
-                    [
-                        "player_encoder_gradient_norm",
-                        "player_action_head_gradient_norm",
-                    ],
-                ),
-                lp(
-                    "Gradient clipping", ["player_clip_binds", "player_clip_multiplier"]
-                ),
-            ],
-        ),
-        ws.Section(
-            # The consequence model (rl/model/consequence.py). Both losses
-            # are over a FIXED per-group scale: an exact prediction scores 0
-            # and copying scores what the copy panel shows. Prediction gains are SUPPORTING evidence only: the target
-            # moves with the trunk, so usefulness is judged on the frozen
-            # tactical cohort and the fixed-label probes, never here.
-            name="4b · Consequence model",
-            is_open=True,
-            panels=[
-                lp(
-                    "Losses at a fixed scale (lower is better; compare to copy below)",
-                    [
-                        "player_consequence_mean_loss",
-                        "player_consequence_state_only_loss",
-                        "player_consequence_sampler_loss",
-                    ],
-                ),
-                lp("Mean head by group", [], regex="^player_consequence_mean_loss_"),
-                lp("Sampler by group", [], regex="^player_consequence_sampler_loss_"),
-                lp(
-                    # State-only loss minus the action-conditioned loss:
-                    # above 0 = the action's own rows carry the consequence.
-                    "Action-conditioned gain by group (higher is better)",
-                    [],
-                    regex="^player_consequence_action_gain_",
-                ),
-                lp(
-                    # 1 = calibrated dispersion, 0 = the sampler ignores its
-                    # noise (the under-dispersion fallback trigger is < 0.5).
-                    "Sampler spread / skill by group",
-                    [],
-                    regex="^player_consequence_spread_over_skill_",
-                    range_y=(0, 1.5),
-                ),
-                lp(
-                    # |V(predicted value row) - V(real next row)| for the
-                    # taken action; `copy` is |V(t+1) - V(t)|. Lower is better.
-                    "Imagined value gap: sampler / mean head / copy",
-                    [
-                        "player_consequence_value_gap_sampler",
-                        "player_consequence_value_gap_mean",
-                        "player_consequence_value_gap_copy",
-                    ],
-                ),
-                lp(
-                    "Imagined value gap by behaviour probability of the action",
-                    [],
-                    regex="^player_consequence_value_gap_sampler_p",
-                ),
-                lp(
-                    # The collapse watch: a trunk that makes its rows easier to
-                    # predict by moving them less shows up as a falling norm.
-                    "True change norm by group",
-                    [],
-                    regex="^player_consequence_change_norm_",
-                ),
-                lp(
-                    "Predicted / true change RMS by group (abort above 3)",
-                    [],
-                    regex="^player_consequence_predicted_rms_ratio_",
-                ),
-                lp(
-                    # What COPYING the current row scores under the same fixed
-                    # scale (about 1 before shaping). Rising = the trunk is
-                    # inflating its rows' step-to-step change.
-                    "Copy predictor's loss by group (the inflation gauge)",
-                    [],
-                    regex="^player_consequence_copy_loss_",
-                    log_y=True,
-                ),
-                lp("Transitions per batch", ["player_consequence_transitions"]),
-                lp(
-                    # 0 = the trunk is only observed, 1 = full shaping.
-                    "Trunk gradient scale (live, under its ramp)",
-                    ["player_consequence_trunk_grad_live"],
-                    range_y=(0, 1),
-                ),
-                lp(
-                    # The encoder's gradient with the consequence losses in it
-                    # once the ramp starts; its observer-phase median is 2.21.
-                    "Encoder / consequence-heads gradient norm",
-                    [
-                        "player_encoder_gradient_norm",
-                        "player_consequence_gradient_norm",
-                    ],
-                    log_y=True,
                 ),
             ],
         ),

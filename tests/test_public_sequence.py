@@ -45,13 +45,17 @@ def test_trunk_on_the_public_sequence_reproduces_the_full_public_rows() -> None:
     sub_mask = READ_MASK[np.ix_(PUBLIC_SEQUENCE_ROWS, PUBLIC_SEQUENCE_ROWS)]
 
     def both(sequence):
-        full_out = trunk.apply(params, sequence, valid, READ_MASK)
-        sub_out = trunk.apply(
-            params,
-            sequence[PUBLIC_SEQUENCE_ROWS],
-            valid[PUBLIC_SEQUENCE_ROWS],
-            sub_mask,
-        )
+        # f32 matmuls: the two row counts are different GEMM shapes, and the
+        # GPU's default TF32 rounding differs between them by more than the
+        # tolerance on a near-zero element.
+        with jax.default_matmul_precision("float32"):
+            full_out = trunk.apply(params, sequence, valid, READ_MASK)
+            sub_out = trunk.apply(
+                params,
+                sequence[PUBLIC_SEQUENCE_ROWS],
+                valid[PUBLIC_SEQUENCE_ROWS],
+                sub_mask,
+            )
         return np.asarray(full_out, np.float32), np.asarray(sub_out, np.float32)
 
     full_out, sub_out = both(full)

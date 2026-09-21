@@ -21,13 +21,16 @@ from rl.environment.interfaces import (
     PlayerActorOutput,
     PlayerEnvOutput,
 )
-from rl.environment.protos.features_pb2 import InfoFeature
+from rl.environment.protos.features_pb2 import EntityPublicNodeFeature, InfoFeature
 from rl.model.constants import (
+    ACTIVE_STATE_ROWS,
     MOVE_ROWS,
+    NUM_ACTIVE_SLOTS,
     NUM_FIELD_ROWS,
     NUM_HISTORY_REGISTERS,
     NUM_PUBLIC_SLOTS,
     PRIVATE_ROWS,
+    PUBLIC_ROWS,
     SEQUENCE_SLICES,
     TARGET_ROWS,
     SequenceGroup,
@@ -117,6 +120,7 @@ def _assembled_step_rows(
             jnp.zeros(NUM_PUBLIC_SLOTS, jnp.bool_),
             jnp.zeros((NUM_FIELD_ROWS, width), encoder.cfg.dtype),
             jnp.zeros((NUM_HISTORY_REGISTERS, width), encoder.cfg.dtype),
+            jnp.zeros((NUM_ACTIVE_SLOTS, width), encoder.cfg.dtype),
         )
         return sequence
 
@@ -441,6 +445,7 @@ def test_history_rows_are_normalised_memory_plus_side_position_and_group(
             valid,
             jnp.zeros((NUM_FIELD_ROWS, width), encoder.cfg.dtype),
             jnp.zeros((NUM_HISTORY_REGISTERS, width), encoder.cfg.dtype),
+            jnp.zeros((NUM_ACTIVE_SLOTS, width), encoder.cfg.dtype),
         )[0]
 
     rows = np.asarray(
@@ -476,3 +481,51 @@ def test_history_rows_are_normalised_memory_plus_side_position_and_group(
     ]
     np.testing.assert_allclose(rows[:-1], expected[:-1], atol=0.03)
     np.testing.assert_array_equal(rows[-1], 0)
+
+
+def test_active_only_state_is_its_slot_row_and_not_the_entity_row(
+    real_model_and_trajectory,
+) -> None:
+    """Boosts and volatiles move the ACTIVE_STATE row of the slot the entity
+    holds and leave its PUBLIC_ENTITY row bit-identical; on a benched entity
+    they are read by nothing."""
+    network, params, actor_input, _ = real_model_and_trajectory
+    active_column = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+    has_active = np.asarray(actor_input.env.public_team[:, 0, active_column]) > 0
+    env_step = jax.tree.map(
+        lambda x: x[int(np.flatnonzero(has_active)[0])], actor_input.env
+    )
+    bench_row = int(
+        np.flatnonzero(np.asarray(env_step.public_team[:, active_column]) == 0)[0]
+    )
+
+    def with_active_only_state(row: int) -> PlayerEnvOutput:
+        public = jnp.asarray(env_step.public_team)
+        public = public.at[
+            row, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__BOOST_ATK_VALUE
+        ].add(2)
+        public = public.at[
+            row, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__VOLATILES0
+        ].add(5)
+        return dataclasses.replace(env_step, public_team=public)
+
+    base = _assembled_step_rows(network, params, env_step)
+    boosted = _assembled_step_rows(network, params, with_active_only_state(0))
+    np.testing.assert_array_equal(base[PUBLIC_ROWS], boosted[PUBLIC_ROWS])
+    np.testing.assert_array_equal(base[TARGET_ROWS], boosted[TARGET_ROWS])
+    assert not np.allclose(base[ACTIVE_STATE_ROWS][0], boosted[ACTIVE_STATE_ROWS][0])
+    np.testing.assert_array_equal(
+        base[ACTIVE_STATE_ROWS][1:], boosted[ACTIVE_STATE_ROWS][1:]
+    )
+
+    benched = _assembled_step_rows(network, params, with_active_only_state(bench_row))
+    np.testing.assert_array_equal(base, benched)
+    # Control: the benched entity's persistent state still reaches its row.
+    hurt = dataclasses.replace(
+        env_step,
+        public_team=jnp.asarray(env_step.public_team)
+        .at[bench_row, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__HP_RATIO]
+        .add(-100),
+    )
+    moved = _assembled_step_rows(network, params, hurt)
+    assert not np.allclose(base[PUBLIC_ROWS][bench_row], moved[PUBLIC_ROWS][bench_row])

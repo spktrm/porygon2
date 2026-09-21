@@ -124,11 +124,6 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     # and is never optimised, published or used by actors.
     old_policy_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    # (params, ConsequenceInputs (T, B, ...), noise (draws, T, B, size)) ->
-    # ConsequenceOutput (draws, T, B, ...): the consequence model as an apply
-    # of its own, so the learner's other forwards carry no rng.
-    consequence_fn: Callable | None = struct.field(pytree_node=False, default=None)
-
     step_count: jax.Array = struct.field(
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
@@ -172,66 +167,6 @@ def player_model_config_for(
     return model_config
 
 
-CONSEQUENCE_PARTITION = "consequence"
-MODEL_PARTITION = "model"
-
-
-def optimiser_partitions(variables: Params) -> Params:
-    """Which optimiser chain owns each leaf: the consequence model's own, or
-    the model's."""
-
-    def label(path, _):
-        if any(getattr(key, "key", None) == CONSEQUENCE_PARTITION for key in path):
-            return CONSEQUENCE_PARTITION
-        return MODEL_PARTITION
-
-    return jax.tree_util.tree_map_with_path(label, variables)
-
-
-def player_optimiser(config: Porygon2LearnerConfig) -> optax.GradientTransformation:
-    """Two copies of the same chain over disjoint leaves. `clip_by_global_norm`
-    spans whatever it is given, so ONE chain over the whole tree would let the
-    consequence heads' gradients change the multiplier applied to the trunk --
-    an intervention on the trunk's update with zero gradient reach (the
-    coupling LESSONS records for PBRS and the removed transition model). In a
-    partition of their own they cannot; what their losses send INTO the trunk
-    (player_consequence_trunk_grad > 0) lands on the model's leaves and is
-    clipped with them, as it should be."""
-
-    def chain() -> optax.GradientTransformation:
-        return optax.chain(
-            optax.clip_by_global_norm(config.player_clip_gradient),
-            optax.adamw(
-                learning_rate=config.player_learning_rate,
-                b1=config.player_adam.b1,
-                b2=config.player_adam.b2,
-                eps=config.player_adam.eps,
-                weight_decay=config.player_adam.weight_decay,
-            ),
-        )
-
-    return optax.multi_transform(
-        {MODEL_PARTITION: chain(), CONSEQUENCE_PARTITION: chain()},
-        optimiser_partitions,
-    )
-
-
-def consequence_apply_fn(player_network: nn.Module) -> Callable:
-    """(params, ConsequenceInputs (T, B, ...), noise (draws, T, B, size)) ->
-    ConsequenceOutput (draws, T, B, ...). The mean heads do not depend on the
-    noise, so under the draw vmap they are computed once."""
-
-    def chunk_consequences(params, inputs, noise):
-        def one_step(step_inputs, step_noise):
-            return player_network.apply(
-                params, step_inputs, step_noise, method="consequences"
-            )
-
-        return jax.vmap(jax.vmap(one_step), in_axes=(None, 0))(inputs, noise)
-
-    return jax.vmap(chunk_consequences, in_axes=(None, 1, 2), out_axes=2)
-
-
 def create_train_state(
     player_network: nn.Module,
     builder_network: nn.Module,
@@ -260,7 +195,16 @@ def create_train_state(
         # nGPT normalises the matrices before the first step as well as
         # after every update.
         initial_player_params = project_trunk_kernels(initial_player_params)
-    player_optimizer = player_optimiser(config)
+    player_optimizer = optax.chain(
+        optax.clip_by_global_norm(config.player_clip_gradient),
+        optax.adamw(
+            learning_rate=config.player_learning_rate,
+            b1=config.player_adam.b1,
+            b2=config.player_adam.b2,
+            eps=config.player_adam.eps,
+            weight_decay=config.player_adam.weight_decay,
+        ),
+    )
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(
             player_network.apply,
@@ -272,7 +216,6 @@ def create_train_state(
         # Neither copy can alias the donated live parameters.
         reg_params=jax.tree.map(jnp.copy, initial_player_params),
         old_policy_params=jax.tree.map(jnp.copy, initial_player_params),
-        consequence_fn=consequence_apply_fn(player_network),
         tx=player_optimizer,
     )
 
@@ -717,12 +660,16 @@ def load_from_checkpoint(
     )
 
 
-# Leaves with one row per SequenceGroup. A group added to the layout grows
-# their leading axis, and the plain shape rule would then re-initialise the
-# trained row of EVERY group; these alone extend instead. Named, never
-# inferred: a grown `blocks` axis or embedding table half-loading silently
-# would be a different model. Sound only while new groups take the LAST enum
-# value (asserted in rl/model/constants.py), so old rows keep their index.
+# Leaves with one row per SequenceGroup. A group added to or removed from the
+# layout changes their leading axis, and the plain shape rule would then
+# re-initialise the trained row of EVERY group; these alone keep the rows the
+# two trees share. Named, never inferred: a resized `blocks` axis or embedding
+# table half-loading silently would be a different model. Sound only while
+# groups are added and removed at the LAST enum value, so the surviving rows
+# keep their index -- and only ONE of the two between a checkpoint and the
+# model loading it: remove a group and add one in the same step and the new
+# group takes the removed one's id, so it loads that group's trained row
+# (run 154dgogq: ACTIVE_STATE inherited STATE_VALUE_CLS's, LESSONS 2026-09-21).
 GROUP_AXIS_LEAVES = (
     "/encoder/sequence_group_bias",
     "/encoder/input_normalisation/group_scale",
@@ -739,10 +686,11 @@ def merge_params(
     (trained) value; keys only in the fresh tree (newly added modules) keep
     their random/zero init; keys only in the checkpoint (removed modules)
     are dropped; shape mismatches fall back to fresh init, except a
-    `GROUP_AXIS_LEAVES` leaf whose leading axis grew, which keeps its loaded
-    rows and takes fresh init for the new ones. Returns the merged tree plus
-    the paths that kept their fresh initialization, the paths dropped and
-    the paths extended, so a resume across architecture changes is auditable.
+    `GROUP_AXIS_LEAVES` leaf whose leading axis changed, which keeps the
+    loaded rows the two share and takes fresh init for any new ones. Returns
+    the merged tree plus the paths that kept their fresh initialization, the
+    paths dropped and the paths resized, so a resume across architecture
+    changes is auditable.
     """
     kept_fresh: list[str] = []
     dropped: list[str] = []
@@ -772,11 +720,14 @@ def merge_params(
             and loaded_shape is not None
             and fresh_shape is not None
             and loaded_shape[1:] == fresh_shape[1:]
-            and loaded_shape[0] < fresh_shape[0]
         ):
             extended.append(f"{path} (rows {loaded_shape[0]} -> {fresh_shape[0]})")
+            shared_rows = min(loaded_shape[0], fresh_shape[0])
             return np.concatenate(
-                (np.asarray(loaded_node), np.asarray(fresh_node)[loaded_shape[0] :]),
+                (
+                    np.asarray(loaded_node)[:shared_rows],
+                    np.asarray(fresh_node)[shared_rows:],
+                ),
                 axis=0,
             )
         kept_fresh.append(f"{path} (shape {loaded_shape} -> {fresh_shape})")
@@ -792,7 +743,7 @@ def _merged(label: str, fresh: Params, loaded: Params) -> Params:
     for verb, paths in (
         ("kept fresh init", kept_fresh),
         ("dropped", dropped),
-        ("extended along the group axis", extended),
+        ("resized along the group axis", extended),
     ):
         if paths:
             tqdm.write(f"{label}: {len(paths)} subtrees {verb}:")
@@ -805,8 +756,7 @@ def merge_opt_state(fresh, loaded, path=""):
     """Overlay a checkpoint optimiser state onto a fresh one by param path.
 
     optax states are (named) tuples whose param-shaped members are
-    Mappings: recurse through partition dictionaries as well as tuples;
-    param leaves merge by path -- a leaf
+    Mappings: every Mapping node merges exactly as params do -- a leaf
     added since the checkpoint keeps its fresh ZERO moments, a removed one
     is dropped -- and every other leaf (the step counts) is the
     checkpoint's. A container shape the two disagree on is a different

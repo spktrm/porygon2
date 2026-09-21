@@ -43,7 +43,6 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.model.constants import (
     ALLY_TARGET_ROWS,
-    ENEMY_TARGET_ROWS,
     IS_WILDCARD_MOVE_SLOT,
     MY_ACTIVE_PUBLIC_ROWS,
     NUM_FIELD_ROWS,
@@ -62,6 +61,7 @@ from rl.model.constants import (
     SEQUENCE_LAYOUT,
     SEQUENCE_READ_MASK,
     SequenceGroup,
+    TokenType,
 )
 from rl.model.features import (
     binary_scale_encoding,
@@ -89,6 +89,8 @@ from rl.model.identity import (
     SECOND_ACTIVE_POSITION,
     SIDE_MINE,
     SIDE_OPPONENT,
+    active_slot_identities,
+    active_slot_index,
     field_identities,
     public_identities,
     sequence_identities,
@@ -190,15 +192,15 @@ class PublicRowInputs(NamedTuple):
     public_valid: jax.Array  # (12,)
     public_sides: jax.Array  # (12,)
     public_positions: jax.Array  # (12,)
-    ally_active_rows: jax.Array  # (2,) public rows the ALLY target slots add
-    ally_active_valid: jax.Array  # (2,)
-    enemy_active_rows: jax.Array  # (2,)
-    enemy_active_valid: jax.Array  # (2,)
     field_rows: jax.Array  # (3, D)
     history_entity_rows: jax.Array  # (12, D)
     history_row_valid: jax.Array  # (12,)
     history_field_rows: jax.Array  # (3, D)
     history_register_rows: jax.Array  # (4, D)
+    # Per active slot, mine then theirs, first position then second.
+    active_state_rows: jax.Array  # (4, D)
+    active_state_valid: jax.Array  # (4,)
+    history_active_rows: jax.Array  # (4, D)
     info: jax.Array  # the request's info vector (REQUEST_TYPE, NUM_ACTIVE read)
     target_slot_valid: jax.Array  # (17,)
 
@@ -228,7 +230,7 @@ class Encoder(nn.Module):
         self.pos_bias = nn.Embed(3, name="position_bias", **embed_kwargs)
 
         # One learned identity per target slot. Pass, the structural slots
-        # and the four entity-derived targets are all ways of saying "a
+        # and the four active-slot targets are all ways of saying "a
         # thing a move can be aimed at", and the readout wants them as one
         # contiguous block it can score against.
         self.target_slot_embeddings = self.param(
@@ -241,9 +243,6 @@ class Encoder(nn.Module):
         )
         self.public_cls_embedding = self.param(
             "public_cls_embedding", embedding_init, (1, entity_size)
-        )
-        self.state_value_cls_embedding = self.param(
-            "state_value_cls_embedding", embedding_init, (1, entity_size)
         )
         register_shape = (NUM_TRUNK_REGISTERS_PER_TIER, entity_size)
         self.public_register_embeddings = self.param(
@@ -303,7 +302,7 @@ class Encoder(nn.Module):
         # token-type bias table; per-provenance input norms downstream keep
         # the two entity kinds separable.
         self.entity_pool = EntitySumPool(
-            num_token_types=NUM_TOKEN_TYPES, name="entity_pool"
+            num_token_types=NUM_TOKEN_TYPES, features=entity_size, name="entity_pool"
         )
         self.public_persistent_linear = nn.Dense(
             name="public_persistent_linear", use_bias=False, **dense_kwargs
@@ -423,7 +422,6 @@ class Encoder(nn.Module):
         persistent_features, _ = public_persistent_features(
             public, revealed, self.cfg.dtype
         )
-        transient_features, _ = public_transient_features(public, self.cfg.dtype)
 
         move_tokens = revealed[PUBLIC_MOVE_INDICES]
         is_valid_move = (move_tokens != MovesEnum.MOVES_ENUM___NULL) & (
@@ -455,7 +453,6 @@ class Encoder(nn.Module):
                     (
                         self._embed_learnset(species_token),
                         self.public_persistent_linear(persistent_features),
-                        self.public_transient_linear(transient_features),
                     )
                 ),
             ),
@@ -463,9 +460,6 @@ class Encoder(nn.Module):
         )
 
         mask = get_public_entity_mask(revealed)
-        is_active = (
-            public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE] > 0
-        )
         ability_valid = ~(
             (ability_token == AbilitiesEnum.ABILITIES_ENUM___UNSPECIFIED)
             | (ability_token == AbilitiesEnum.ABILITIES_ENUM___PAD)
@@ -480,7 +474,7 @@ class Encoder(nn.Module):
             (
                 jnp.stack((jnp.ones_like(mask), ability_valid, item_valid)),
                 is_valid_move & (move_tokens != MovesEnum.MOVES_ENUM___PAD),
-                jnp.stack((jnp.ones_like(mask), jnp.ones_like(mask), is_active)),
+                jnp.stack((jnp.ones_like(mask), jnp.ones_like(mask))),
             ),
             axis=0,
         )
@@ -492,6 +486,21 @@ class Encoder(nn.Module):
         tokens, token_mask, mask = self._public_entity_tokens(public, revealed)
         revealed_embedding = self.entity_pool(tokens, token_mask, PUBLIC_TOKEN_TYPES)
         return revealed_embedding, mask
+
+    def _embed_active_state(self, public: jax.Array):
+        """What a switch clears (volatiles, boosts, type change, trapped, ...)
+        as a row of its own: the same token the entity pool used to sum, with
+        the same field identity, and whether the entity holds an active slot.
+        One embedder for the current board and the packed history cache."""
+        transient_features, _ = public_transient_features(public, self.cfg.dtype)
+        is_active = (
+            public[EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE]
+            != BENCH_POSITION
+        )
+        token = self.entity_pool.typed(
+            self.public_transient_linear(transient_features), TokenType.ACTIVE_STATE
+        )
+        return token, is_active
 
     def _private_entity_tokens(self, private: jax.Array, num_stat_bands: int = 8):
         """The attribute-token half of a private entity -- see
@@ -872,6 +881,7 @@ class Encoder(nn.Module):
         history_row_valid: jax.Array,
         history_field_state: jax.Array,
         history_register_states: jax.Array,
+        history_active_states: jax.Array,
     ):
         """One row per thing -> (sequence, row_valid), BEFORE the trunk.
 
@@ -909,8 +919,14 @@ class Encoder(nn.Module):
             self, env_step.public_team, env_step.revealed_team
         )
         field_rows, *_ = self._embed_field(env_step.field)
-        # Public rows are per side, actives first, so the active rows the
-        # target slots add sit at fixed indices.
+        # Public rows are per side, actives first, so the active slots'
+        # occupants sit at fixed indices.
+        active_public_rows = np.concatenate(
+            (MY_ACTIVE_PUBLIC_ROWS, OPP_ACTIVE_PUBLIC_ROWS)
+        )
+        active_state_rows, is_active = _lifted_entity_vmap(Encoder._embed_active_state)(
+            self, env_step.public_team[active_public_rows]
+        )
         parts = self._public_parts(
             PublicRowInputs(
                 public_rows=public_rows,
@@ -921,15 +937,14 @@ class Encoder(nn.Module):
                 public_positions=env_step.public_team[
                     :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
                 ],
-                ally_active_rows=jnp.asarray(MY_ACTIVE_PUBLIC_ROWS),
-                ally_active_valid=jnp.ones(len(MY_ACTIVE_PUBLIC_ROWS), jnp.bool_),
-                enemy_active_rows=jnp.asarray(OPP_ACTIVE_PUBLIC_ROWS),
-                enemy_active_valid=jnp.ones(len(OPP_ACTIVE_PUBLIC_ROWS), jnp.bool_),
                 field_rows=field_rows,
                 history_entity_rows=history_row_states,
                 history_row_valid=history_row_valid,
                 history_field_rows=history_field_state,
                 history_register_rows=history_register_states,
+                active_state_rows=active_state_rows,
+                active_state_valid=is_active & public_valid[active_public_rows],
+                history_active_rows=history_active_states,
                 info=env_step.info,
                 target_slot_valid=target_slot_valid,
             )
@@ -1007,10 +1022,6 @@ class Encoder(nn.Module):
                         self.value_cls_embedding.astype(dtype),
                         jnp.ones(1, dtype=jnp.bool_),
                     ),
-                    SequenceGroup.STATE_VALUE_CLS: (
-                        self.state_value_cls_embedding.astype(dtype),
-                        jnp.ones(1, dtype=jnp.bool_),
-                    ),
                 }
             )
         identities = sequence_identities(
@@ -1025,23 +1036,12 @@ class Encoder(nn.Module):
     def _public_parts(
         self, inputs: PublicRowInputs
     ) -> dict[SequenceGroup, tuple[jax.Array, jax.Array]]:
-        """The eight public-tier groups as (rows, valid), keyed by group."""
+        """The ten public-tier groups as (rows, valid), keyed by group."""
         dtype = self.cfg.dtype
+        # No pokemon content: a target row is the slot's identity alone. Its
+        # occupant may not be who the move lands on, so who stands opposite
+        # reaches a move's logit through the readout's belief over their team.
         target_rows = jnp.zeros_like(self.target_slot_embeddings, dtype=dtype)
-        target_rows = target_rows.at[jnp.asarray(ALLY_TARGET_ROWS)].add(
-            jnp.where(
-                inputs.ally_active_valid[:, None],
-                inputs.public_rows[inputs.ally_active_rows],
-                0,
-            )
-        )
-        target_rows = target_rows.at[jnp.asarray(ENEMY_TARGET_ROWS)].add(
-            jnp.where(
-                inputs.enemy_active_valid[:, None],
-                inputs.public_rows[inputs.enemy_active_rows],
-                0,
-            )
-        )
         info_row = self.info_linear(
             one_hot_concat_jax(
                 [
@@ -1077,6 +1077,14 @@ class Encoder(nn.Module):
             SequenceGroup.HISTORY_REGISTER: (
                 inputs.history_register_rows.astype(dtype),
                 jnp.ones(NUM_HISTORY_REGISTERS, jnp.bool_),
+            ),
+            SequenceGroup.ACTIVE_STATE: (
+                inputs.active_state_rows.astype(dtype),
+                inputs.active_state_valid,
+            ),
+            SequenceGroup.HISTORY_ACTIVE_STATE: (
+                inputs.history_active_rows.astype(dtype),
+                inputs.active_state_valid,
             ),
             SequenceGroup.PUBLIC_REGISTER: (
                 self.public_register_embeddings.astype(dtype),
@@ -1123,6 +1131,7 @@ class Encoder(nn.Module):
         history_row_valid: jax.Array,
         history_field_state: jax.Array,
         history_register_states: jax.Array,
+        history_active_states: jax.Array,
     ):
         """The whole per-timestep forward: assemble, then run the trunk.
 
@@ -1138,6 +1147,7 @@ class Encoder(nn.Module):
             history_row_valid,
             history_field_state,
             history_register_states,
+            history_active_states,
         )
         kept_rows = self.kept_rows()
         read_mask = SEQUENCE_READ_MASK[np.ix_(kept_rows, kept_rows)]
@@ -1164,12 +1174,14 @@ class Encoder(nn.Module):
         history_output,
         step_field_embeddings: jax.Array,
         public_cache: jax.Array,
+        active_state_cache: jax.Array,
         num_active: int,
     ) -> tuple[PublicRowInputs, jax.Array, jax.Array, jax.Array, jax.Array]:
         """Per-step PublicRowInputs from the history scan's own products
         (leading axis H): the slot's latest snapshot as its public row, its
         side/position/fainted read off the cache row that snapshot came
-        from, the step's field rows, the scan states as the history rows.
+        from, each active slot's state token off its occupant's cache row,
+        the step's field rows, the scan states as the history rows.
         The request row is a MOVE request with `num_active` actives and
         every target legal -- the replay convention."""
         row_index = history_output.node_row_index
@@ -1197,6 +1209,8 @@ class Encoder(nn.Module):
         enemy_rows, enemy_found = active_slot_rows(
             slot_valid, sides, positions, SIDE_OPPONENT
         )
+        active_slots = jnp.concatenate((ally_rows, enemy_rows), axis=-1)
+        active_cache_rows = jnp.take_along_axis(row_index, active_slots, axis=-1)
         num_steps = row_index.shape[0]
         info = jnp.zeros((num_steps, len(InfoFeature.keys())), jnp.int32)
         info = info.at[:, InfoFeature.INFO_FEATURE__REQUEST_TYPE].set(
@@ -1208,15 +1222,14 @@ class Encoder(nn.Module):
             public_valid=slot_valid,
             public_sides=sides,
             public_positions=positions,
-            ally_active_rows=ally_rows,
-            ally_active_valid=ally_found,
-            enemy_active_rows=enemy_rows,
-            enemy_active_valid=enemy_found,
             field_rows=step_field_embeddings,
             history_entity_rows=history_output.slot_snapshots,
             history_row_valid=slot_valid,
             history_field_rows=history_output.field_snapshots,
             history_register_rows=history_output.register_snapshots,
+            active_state_rows=active_state_cache[active_cache_rows.clip(0)],
+            active_state_valid=jnp.concatenate((ally_found, enemy_found), axis=-1),
+            history_active_rows=history_output.active_snapshots,
             info=info,
             target_slot_valid=jnp.ones(
                 (num_steps, len(TARGET_SLOT_INDICES)), jnp.bool_
@@ -1262,13 +1275,14 @@ class Encoder(nn.Module):
         """The public sequence through the trunk after EVERY history step:
         the event world model's states. Reads the packed caches and the
         field history only -- nothing a replay does not carry."""
-        history_output, step_field_embeddings = self._run_history_encoder(
-            packed_history_step, history_step, carry
+        history_output, step_field_embeddings, active_state_cache = (
+            self._run_history_encoder(packed_history_step, history_step, carry)
         )
         inputs, slot_valid, sides, positions, fainted = self._event_inputs(
             history_output,
             step_field_embeddings,
             packed_history_step.public_cache,
+            active_state_cache,
             num_active,
         )
         states, pre_trunk, row_valid = jax.vmap(self._event_state)(inputs)
@@ -1315,7 +1329,7 @@ class Encoder(nn.Module):
         """Shared front half of the history pathway: embeds the packed
         caches and field rows once and runs the recurrent scan from
         `carry` (the learned h0 by default). Returns (scan output, per-step
-        field vectors)."""
+        field vectors, the packed rows' active-state tokens)."""
         # Embed the packed (entity snapshot, edge) cache once; both are shared
         # across every request of the trajectory.
         node_embedding_cache, _ = _lifted_entity_vmap(Encoder._embed_public_entity)(
@@ -1340,10 +1354,12 @@ class Encoder(nn.Module):
             _,
         ) = _lifted_entity_vmap(Encoder._embed_field)(self, history_step.field)
 
-        node_identity_cache = self.side_bias(node_sides) + self.pos_bias(
-            packed_history_step.public_cache[
-                :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
-            ]
+        node_positions = packed_history_step.public_cache[
+            :, EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__ACTIVE
+        ]
+        node_identity_cache = self.side_bias(node_sides) + self.pos_bias(node_positions)
+        active_state_cache, _ = _lifted_entity_vmap(Encoder._embed_active_state)(
+            self, packed_history_step.public_cache
         )
         history_output = self.history_encoder(
             history_field=history_step.field,
@@ -1352,13 +1368,18 @@ class Encoder(nn.Module):
             edge_slot_ids=edge_slot_ids,
             edge_major_args=edge_major_args,
             node_identity_cache=node_identity_cache,
+            active_state_cache=active_state_cache,
+            active_slot_ids=active_slot_index(node_sides, node_positions),
+            active_identities=active_slot_identities(
+                self.side_bias(jnp.arange(2)), self.pos_bias(jnp.arange(3))
+            ),
             field_identities=field_identities(self.side_bias(jnp.arange(2))),
             field_row_embeddings=step_field_embeddings,
             step_request_count=step_request_count,
             step_valid=step_valid.squeeze(-1),
             carry=carry,
         )
-        return history_output, step_field_embeddings
+        return history_output, step_field_embeddings, active_state_cache
 
     def encode_history(
         self,
@@ -1378,10 +1399,10 @@ class Encoder(nn.Module):
         Returns, per request: ((T, NUM_PUBLIC_SLOTS, D) slot states,
         (T, D) field state, (T, NUM_PUBLIC_SLOTS, D) latest raw node
         snapshot per slot, (T, NUM_HISTORY_REGISTERS, D) global history
-        registers), and the whole
+        registers, (T, NUM_ACTIVE_SLOTS, D) active-slot states), and the whole
         per-step PerSlotHistoryOutput for the telemetry that reads it.
         """
-        history_output, _ = self._run_history_encoder(
+        history_output, *_ = self._run_history_encoder(
             packed_history_step, history_step, carry
         )
 
@@ -1403,14 +1424,20 @@ class Encoder(nn.Module):
         carry: HistoryCarry = HistoryCarry(),
     ):
         """The history pathway's inputs to the sequence, in PUBLIC-ROW
-        order: (row_states, order_valid, field_state, register_states), plus
+        order: (row_states, order_valid, field_state, register_states,
+        active_states), plus
         the per-step PerSlotHistoryOutput they were read from. The one
         place the slot-to-row alignment is written; offline reads call it
         directly.
         """
-        slot_states, field_state, _, register_states, history_output = (
-            self.encode_history(env_step, packed_history_step, history_step, carry)
-        )
+        (
+            slot_states,
+            field_state,
+            _,
+            register_states,
+            active_states,
+            history_output,
+        ) = self.encode_history(env_step, packed_history_step, history_step, carry)
 
         # History-encoder slots are keyed by the stable entity index that
         # edges carry (revelation order across both sides), while public team
@@ -1426,7 +1453,14 @@ class Encoder(nn.Module):
         order_valid = (public_order >= 0) & (public_order < NUM_PUBLIC_SLOTS)
         aligned_order = public_order.clip(0, NUM_PUBLIC_SLOTS - 1)[..., None]
         row_states = jnp.take_along_axis(slot_states, aligned_order, axis=1)
-        return row_states, order_valid, field_state, register_states, history_output
+        return (
+            row_states,
+            order_valid,
+            field_state,
+            register_states,
+            active_states,
+            history_output,
+        )
 
     def assembled_sequence(
         self,

@@ -8,10 +8,11 @@ import numpy as np
 import pytest
 from ml_collections import ConfigDict
 
-from rl.model.constants import NUM_FIELD_ROWS
+from rl.model.constants import NUM_ACTIVE_SLOTS, NUM_FIELD_ROWS
 from rl.model.history_encoder import (
     PerSlotHistoryEncoder,
     StepAttention,
+    history_carry_from,
 )
 
 ENTITY_SIZE = 32
@@ -100,9 +101,9 @@ def test_one_row_step_is_its_own_value(
     assert jnp.all(probs[0, :, 0, 1:] == 0.0)
 
 
-def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
+def _single_event_case():
+    """One step, one event on slot 0, whose entity holds active slot 0."""
     from rl.environment.protos.features_pb2 import FieldFeature
-    from rl.model.history_encoder import history_carry_from
 
     cfg = ConfigDict(
         dict(
@@ -119,6 +120,9 @@ def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
         history_field=field,
         node_embedding_cache=content,
         node_identity_cache=jnp.ones_like(content),
+        active_state_cache=content * 3,
+        active_slot_ids=jnp.zeros(1, jnp.int32),
+        active_identities=jnp.ones((NUM_ACTIVE_SLOTS, ENTITY_SIZE)),
         field_identities=jnp.ones((NUM_FIELD_ROWS, ENTITY_SIZE)),
         edge_embedding_cache=jnp.zeros_like(content),
         edge_slot_ids=jnp.zeros(1, jnp.int32),
@@ -129,10 +133,16 @@ def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
     )
     params = jax.jit(module.init)(jax.random.key(19), **inputs)
     apply = jax.jit(module.apply)
+    return params, apply, inputs, content
+
+
+def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
+    params, apply, inputs, content = _single_event_case()
     base = apply(params, **inputs)
     changed_identities = dict(
         inputs,
         node_identity_cache=inputs["node_identity_cache"] + 10,
+        active_identities=inputs["active_identities"] + 30,
         field_identities=inputs["field_identities"] + 20,
     )
     moved = apply(params, **changed_identities)
@@ -142,7 +152,12 @@ def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
     )
     muted_base = apply(muted, **inputs)
     muted_moved = apply(muted, **changed_identities)
-    for state_name in ("slot_snapshots", "field_snapshots", "register_snapshots"):
+    for state_name in (
+        "slot_snapshots",
+        "field_snapshots",
+        "active_snapshots",
+        "register_snapshots",
+    ):
         np.testing.assert_array_equal(
             getattr(muted_base, state_name), getattr(muted_moved, state_name)
         )
@@ -157,3 +172,30 @@ def test_latest_snapshot_excludes_event_identity_and_carries_forward() -> None:
         carry=history_carry_from(base)
     )
     np.testing.assert_array_equal(carried.node_snapshots[0], base.node_snapshots[-1])
+
+
+def test_an_event_writes_the_active_slot_its_entity_holds_and_no_other() -> None:
+    params, apply, inputs, content = _single_event_case()
+    muted = jax.tree.map(lambda leaf: leaf, params)
+    muted["params"]["sequence_step"]["attention"]["out_proj"]["kernel"] = jnp.zeros(
+        (ENTITY_SIZE, ENTITY_SIZE)
+    )
+    their_first = dict(inputs, active_slot_ids=jnp.full(1, 2, jnp.int32))
+    base = apply(muted, **their_first)
+    moved = apply(muted, **dict(their_first, active_state_cache=content + 5))
+    assert not np.allclose(base.active_snapshots[:, 2], moved.active_snapshots[:, 2])
+    others = np.asarray([0, 1, 3])
+    np.testing.assert_array_equal(
+        base.active_snapshots[:, others], moved.active_snapshots[:, others]
+    )
+    np.testing.assert_array_equal(base.slot_snapshots, moved.slot_snapshots)
+    np.testing.assert_array_equal(
+        history_carry_from(moved).active_states, moved.final_active_state
+    )
+    # A benched entity's token is read by nothing, attention live.
+    benched = dict(inputs, active_slot_ids=jnp.full(1, NUM_ACTIVE_SLOTS, jnp.int32))
+    jax.tree.map(
+        np.testing.assert_array_equal,
+        apply(params, **benched),
+        apply(params, **dict(benched, active_state_cache=content + 5)),
+    )

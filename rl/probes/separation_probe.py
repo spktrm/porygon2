@@ -656,9 +656,11 @@ def run_probe_c(net, variables, chunks, batch_size: int, seed: int, alpha: float
     dev_variables = jax.device_put(variables)
 
     reserve = {"features": [], "hp": [], "fainted": [], "legal": [], "chunk": []}
-    # Controls are SEQUENCE rows that carry the named entity: my active's
-    # ally-target row and the opponent active's enemy-target row (the
-    # entity-derived target rows). The rows are named off rl/model/constants
+    # Controls were SEQUENCE rows that carried the named entity: my active's
+    # ally-target row and the opponent active's enemy-target row. Since
+    # 2026-09-21 a target row has no pokemon content at the trunk's input, so
+    # on later checkpoints these read only what attention wrote into them and
+    # are NOT an input-side control. The rows are named off rl/model/constants
     # like every head does.
     controls = {
         "ally_1_target": (

@@ -23,8 +23,10 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.features_pb2 import FieldFeature
 from rl.model.constants import (
+    HISTORY_EVENT_STATE_ROWS,
     HISTORY_REGISTER_STATE_ROWS,
     HISTORY_SLOT_STATE_ROWS,
+    NUM_ACTIVE_SLOTS,
     NUM_HISTORY_REGISTERS,
     NUM_PUBLIC_SLOTS,
 )
@@ -41,15 +43,14 @@ _invalid_carry = invalid_history_carry
 
 
 def _garbage_carry(width: int, valid: bool) -> HistoryCarry:
-    key_slots, key_field, key_nodes, key_registers, key_inner = jax.random.split(
-        jax.random.key(7), 5
+    key_slots, key_field, key_nodes, key_registers, key_inner, key_active = (
+        jax.random.split(jax.random.key(7), 6)
     )
-    inner_states = jax.random.normal(
-        key_inner, (NUM_PUBLIC_SLOTS + NUM_FIELD_ROWS, width)
-    )
+    inner_states = jax.random.normal(key_inner, (HISTORY_EVENT_STATE_ROWS.stop, width))
     return HistoryCarry(
         slot_states=jax.random.normal(key_slots, (NUM_PUBLIC_SLOTS, width)),
         field_states=jax.random.normal(key_field, (NUM_FIELD_ROWS, width)),
+        active_states=jax.random.normal(key_active, (NUM_ACTIVE_SLOTS, width)),
         node_snapshots=jax.random.normal(key_nodes, (NUM_PUBLIC_SLOTS, width)),
         register_states=jax.random.normal(
             key_registers, (NUM_HISTORY_REGISTERS, width)
@@ -171,7 +172,9 @@ def test_zero_new_steps_returns_the_carry_itself(
     @jax.jit
     def encode(
         carry: HistoryCarry,
-    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, PerSlotHistoryOutput]:
+    ) -> tuple[
+        jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, PerSlotHistoryOutput
+    ]:
         return network.apply(
             params,
             actor_input.env,
@@ -182,7 +185,7 @@ def test_zero_new_steps_returns_the_carry_itself(
         )
 
     carry = _garbage_carry(width, valid=True)
-    slots, field_states, nodes, registers, _ = encode(carry)
+    slots, field_states, nodes, registers, actives, _ = encode(carry)
     compute_dtype = slots.dtype
     for request_index in range(slots.shape[0]):
         np.testing.assert_array_equal(
@@ -202,11 +205,15 @@ def test_zero_new_steps_returns_the_carry_itself(
             np.asarray(registers[request_index]),
             np.asarray(carry.register_states.astype(compute_dtype)),
         )
+        np.testing.assert_array_equal(
+            np.asarray(actives[request_index]),
+            np.asarray(carry.active_states.astype(compute_dtype)),
+        )
 
     h0_slots = params["params"]["encoder"]["history_encoder"]["initial_memory"][
         HISTORY_SLOT_STATE_ROWS
     ]
-    slots, _, nodes, registers, _ = encode(_garbage_carry(width, valid=False))
+    slots, _, nodes, registers, _, _ = encode(_garbage_carry(width, valid=False))
     np.testing.assert_array_equal(
         np.asarray(slots[0]),
         np.asarray(h0_slots.astype(slots.dtype)),

@@ -47,18 +47,30 @@ RELEVANT_ENTITY_FEATURES = np.array(
 NUM_PRIVATE_SLOTS = 6
 # The field triple, mirrored by the history field triple: global, mine, theirs.
 NUM_FIELD_ROWS = 3
+NUM_ACTIVES_PER_SIDE = 2
+# One row per active SLOT, mine first then theirs, first position before
+# second: what a switch clears (volatiles, boosts, type change, trapped) is
+# the slot's state, not the entity's -- Baton Pass hands it to the next
+# occupant.
+NUM_ACTIVE_SLOTS = 2 * NUM_ACTIVES_PER_SIDE
 NUM_HISTORY_REGISTERS = 4
 HISTORY_SLOT_STATE_ROWS = slice(0, NUM_PUBLIC_SLOTS)
 HISTORY_FIELD_STATE_ROWS = slice(NUM_PUBLIC_SLOTS, NUM_PUBLIC_SLOTS + NUM_FIELD_ROWS)
-# The rows that receive event input (slots + field): the registers do not.
-HISTORY_EVENT_STATE_ROWS = slice(0, NUM_PUBLIC_SLOTS + NUM_FIELD_ROWS)
+HISTORY_ACTIVE_STATE_ROWS = slice(
+    HISTORY_FIELD_STATE_ROWS.stop, HISTORY_FIELD_STATE_ROWS.stop + NUM_ACTIVE_SLOTS
+)
+# The rows that receive event input (slots + field + active slots): the
+# registers do not.
+HISTORY_EVENT_STATE_ROWS = slice(0, HISTORY_ACTIVE_STATE_ROWS.stop)
 HISTORY_REGISTER_STATE_ROWS = slice(
-    HISTORY_FIELD_STATE_ROWS.stop, HISTORY_FIELD_STATE_ROWS.stop + NUM_HISTORY_REGISTERS
+    HISTORY_ACTIVE_STATE_ROWS.stop,
+    HISTORY_ACTIVE_STATE_ROWS.stop + NUM_HISTORY_REGISTERS,
 )
 NUM_HISTORY_STATE_ROWS = HISTORY_REGISTER_STATE_ROWS.stop
+NUM_HISTORY_STATE_GROUPS = 4
 HISTORY_STATE_GROUP_IDS = np.repeat(
-    np.arange(3, dtype=np.int32),
-    [NUM_PUBLIC_SLOTS, NUM_FIELD_ROWS, NUM_HISTORY_REGISTERS],
+    np.arange(NUM_HISTORY_STATE_GROUPS, dtype=np.int32),
+    [NUM_PUBLIC_SLOTS, NUM_FIELD_ROWS, NUM_ACTIVE_SLOTS, NUM_HISTORY_REGISTERS],
 )
 
 
@@ -70,11 +82,12 @@ class TokenType(IntEnum):
     it the sum could not tell an item's embedding from an ability's. They are
     not rows of the trunk's sequence -- that is `SequenceGroup`.
 
-    The four moves share one type: movesets are unordered. Public entities
-    carry TWO state tokens: a persistent one (hp, status, level, ...; it
-    survives switching) and an active-only one (volatiles, boosts,
-    typechange, trapped, ...) masked out for benched entities, so "not
-    applicable" is an ABSENT token rather than a default-valued vector.
+    The four moves share one type: movesets are unordered. A public
+    entity's state token is the persistent one (hp, status, level, ...; it
+    survives switching). ACTIVE_STATE types the active-only token (volatiles,
+    boosts, typechange, trapped, ...), which is NOT pooled: it is the content
+    of the ACTIVE_STATE sequence rows and of the history's active-slot rows
+    (`EntitySumPool.typed`), one per active slot rather than one per entity.
 
     No UNSPECIFIED/PAD/UNK sentinels: these are table rows, not a vocabulary
     with an "unknown" case, so a reserved id is a never-indexed embedding
@@ -100,7 +113,7 @@ assert max(TokenType) == NUM_TOKEN_TYPES - 1, "TokenType ids must be contiguous 
 PUBLIC_TOKEN_TYPES = np.array(
     [TokenType.SPECIES, TokenType.ABILITY, TokenType.ITEM]
     + 4 * [TokenType.MOVE]
-    + [TokenType.LEARNSET, TokenType.PUBLIC_STATE, TokenType.ACTIVE_STATE],
+    + [TokenType.LEARNSET, TokenType.PUBLIC_STATE],
     dtype=np.int32,
 )
 PRIVATE_TOKEN_TYPES = np.array(
@@ -121,10 +134,13 @@ class SequenceGroup(IntEnum):
     individual revealed moves no longer coexist with anything as separate
     rows, so a move-token x species-token comparison across two mons can only
     happen inside a pooled vector (LESSONS.md 13). MY sixteen candidate moves
-    stay their own rows and the four entity-derived target rows are built
-    from the opposing actives, so the matchup direction a decision actually
-    turns on keeps both operands. If matchup reasoning proves to be the
-    deficit the fix is explicit matchup rows, not re-unpacking attributes.
+    stay their own rows, and the readout pairs each against every row of the
+    opponent's team under its belief about who stands opposite
+    (`OpponentTeamPairing`), so the matchup direction a decision actually
+    turns on keeps both operands. The target rows carry no pokemon
+    (2026-09-21): the occupant of a slot may not be who the move lands on. If
+    matchup reasoning proves to be the deficit the fix is explicit matchup
+    rows, not re-unpacking attributes.
     """
 
     # Ordered by tier, which is also the layout order: the public tier (what
@@ -156,14 +172,14 @@ class SequenceGroup(IntEnum):
     PRIVILEGED_REGISTER = 14
     PUBLIC_CLS = 15
     VALUE_CLS = 16
-    # The state value row (2026-09-20): reads the 15 public STATE rows
-    # (PUBLIC_ENTITY + FIELD) and itself, read by nothing. Those rows read the
-    # whole public tier inside the trunk, so its information is everything
-    # public; what the narrow read set buys is a value that is a function of
-    # exactly the rows the consequence model predicts. A group added after a
-    # lineage exists takes the LAST value: the per-group parameter leaves are
-    # extended by row at a merge (rl/online/artifact.py GROUP_AXIS_LEAVES).
-    STATE_VALUE_CLS = 17
+    # Public tier, numbered last because they joined a live lineage: the
+    # per-group parameter leaves are resized by row at a merge
+    # (rl/online/artifact.py GROUP_AXIS_LEAVES), so old groups keep their id.
+    # ACTIVE_STATE is the current active-only state of each active slot;
+    # HISTORY_ACTIVE_STATE the history encoder's recurrent state of the same
+    # four slots.
+    ACTIVE_STATE = 17
+    HISTORY_ACTIVE_STATE = 18
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -178,9 +194,11 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.PUBLIC_ENTITY, NUM_PUBLIC_SLOTS),
     (SequenceGroup.TARGET_SLOT, len(TARGET_SLOT_INDICES)),
     (SequenceGroup.FIELD, NUM_FIELD_ROWS),
+    (SequenceGroup.ACTIVE_STATE, NUM_ACTIVE_SLOTS),
     (SequenceGroup.HISTORY_FIELD, NUM_FIELD_ROWS),
     (SequenceGroup.INFO, 1),
     (SequenceGroup.HISTORY_ENTITY, NUM_PUBLIC_SLOTS),
+    (SequenceGroup.HISTORY_ACTIVE_STATE, NUM_ACTIVE_SLOTS),
     (SequenceGroup.HISTORY_REGISTER, NUM_HISTORY_REGISTERS),
     (SequenceGroup.PUBLIC_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
     (SequenceGroup.CLS, 1),
@@ -192,7 +210,6 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.PRIVILEGED_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
     (SequenceGroup.PUBLIC_CLS, 1),
     (SequenceGroup.VALUE_CLS, 1),
-    (SequenceGroup.STATE_VALUE_CLS, 1),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -219,23 +236,20 @@ HISTORY_ENTITY_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ENTITY]
 HISTORY_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_REGISTER]
 VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
 PUBLIC_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.PUBLIC_CLS].start
-STATE_VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.STATE_VALUE_CLS].start
 PUBLIC_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PUBLIC_REGISTER]
 PRIVATE_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVATE_REGISTER]
 PRIVILEGED_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVILEGED_REGISTER]
 FIELD_ROWS = SEQUENCE_SLICES[SequenceGroup.FIELD]
+ACTIVE_STATE_ROWS = SEQUENCE_SLICES[SequenceGroup.ACTIVE_STATE]
+HISTORY_ACTIVE_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ACTIVE_STATE]
 
 assert (
-    NUM_SEQUENCE_ROWS == 82 + NUM_HISTORY_REGISTERS + 3 * NUM_TRUNK_REGISTERS_PER_TIER
+    NUM_SEQUENCE_ROWS
+    == 81
+    + NUM_HISTORY_REGISTERS
+    + 3 * NUM_TRUNK_REGISTERS_PER_TIER
+    + 2 * NUM_ACTIVE_SLOTS
 ), NUM_SEQUENCE_ROWS
-assert SequenceGroup.STATE_VALUE_CLS == NUM_SEQUENCE_GROUPS - 1
-# The rows the state value row reads and the consequence model predicts.
-PUBLIC_STATE_ROWS = np.concatenate(
-    [
-        np.arange(NUM_SEQUENCE_ROWS)[PUBLIC_ROWS],
-        np.arange(NUM_SEQUENCE_ROWS)[FIELD_ROWS],
-    ]
-)
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
 assert MOVE_ROWS.stop - MOVE_ROWS.start == len(MOVE_INDICES)
 assert TARGET_ROWS.stop - TARGET_ROWS.start == len(TARGET_SLOT_INDICES)
@@ -268,8 +282,6 @@ assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 #   PUBLIC_CLS -- reads the PUBLIC tier and itself, read by NOTHING: the
 #     public critic's row, a value of the common-knowledge state that a
 #     human replay could also label.
-#   STATE_VALUE_CLS -- reads PUBLIC_STATE_ROWS and itself, read by NOTHING
-#     (VALUE_CLS included, so the privileged critic is unchanged by it).
 # Leak-freedom is transitive by induction over blocks: a row's content after
 # block b is a function of its in-edges' contents at block b-1 (plus its own
 # residual), and a row's in-edges never rise above its own tier at any
@@ -287,6 +299,8 @@ PUBLIC_TIER_GROUPS = frozenset(
         SequenceGroup.HISTORY_ENTITY,
         SequenceGroup.HISTORY_REGISTER,
         SequenceGroup.PUBLIC_REGISTER,
+        SequenceGroup.ACTIVE_STATE,
+        SequenceGroup.HISTORY_ACTIVE_STATE,
     }
 )
 _is_public = np.isin(SEQUENCE_GROUP_IDS, [int(group) for group in PUBLIC_TIER_GROUPS])
@@ -297,23 +311,14 @@ _is_value_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_value_cls[VALUE_CLS_ROW] = True
 _is_public_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_public_cls[PUBLIC_CLS_ROW] = True
-_is_state_value_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
-_is_state_value_cls[STATE_VALUE_CLS_ROW] = True
-_is_public_state = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
-_is_public_state[PUBLIC_STATE_ROWS] = True
-_policy_readable = ~(_is_secret | _is_value_cls | _is_public_cls | _is_state_value_cls)
+_policy_readable = ~(_is_secret | _is_value_cls | _is_public_cls)
 _is_private = _policy_readable & ~_is_public
 SEQUENCE_READ_MASK = np.zeros((NUM_SEQUENCE_ROWS, NUM_SEQUENCE_ROWS), dtype=bool)
 SEQUENCE_READ_MASK[np.ix_(_is_public, _is_public)] = True
 SEQUENCE_READ_MASK[np.ix_(_is_private, _policy_readable)] = True
 SEQUENCE_READ_MASK[np.ix_(_is_secret, _policy_readable | _is_secret)] = True
 SEQUENCE_READ_MASK[np.ix_(_is_public_cls, _is_public | _is_public_cls)] = True
-SEQUENCE_READ_MASK[np.ix_(_is_value_cls, ~(_is_public_cls | _is_state_value_cls))] = (
-    True
-)
-SEQUENCE_READ_MASK[
-    np.ix_(_is_state_value_cls, _is_public_state | _is_state_value_cls)
-] = True
+SEQUENCE_READ_MASK[np.ix_(_is_value_cls, ~_is_public_cls)] = True
 assert not SEQUENCE_READ_MASK[
     np.ix_(_is_public, ~_is_public)
 ].any(), "leak: a public row may attend outside the public tier"
@@ -326,13 +331,6 @@ assert not SEQUENCE_READ_MASK[:, _is_value_cls][
 assert not SEQUENCE_READ_MASK[:, _is_public_cls][
     ~_is_public_cls
 ].any(), "leak: PUBLIC_CLS must have out-degree 0"
-assert not SEQUENCE_READ_MASK[:, _is_state_value_cls][
-    ~_is_state_value_cls
-].any(), "leak: STATE_VALUE_CLS must have out-degree 0"
-assert (
-    np.flatnonzero(SEQUENCE_READ_MASK[STATE_VALUE_CLS_ROW])
-    == np.sort(np.append(PUBLIC_STATE_ROWS, STATE_VALUE_CLS_ROW))
-).all(), "STATE_VALUE_CLS reads the public state rows and itself, nothing else"
 PUBLIC_TIER_ROWS = np.flatnonzero(_is_public)
 PRIVATE_TIER_ROWS = np.flatnonzero(_is_private)
 
@@ -354,7 +352,6 @@ LEARNER_ONLY_GROUPS = frozenset(
         SequenceGroup.PRIVILEGED_REGISTER,
         SequenceGroup.PUBLIC_CLS,
         SequenceGroup.VALUE_CLS,
-        SequenceGroup.STATE_VALUE_CLS,
     }
 )
 POLICY_READABLE_ROWS = np.flatnonzero(_policy_readable)
@@ -386,10 +383,8 @@ assert SEQUENCE_READ_MASK[np.ix_(PRIVATE_TIER_ROWS, POLICY_READABLE_ROWS)].all()
 assert SEQUENCE_READ_MASK[np.ix_(POLICY_READABLE_ROWS, PUBLIC_TIER_ROWS)].all()
 
 # Public rows 0-5 are mine and 6-11 theirs, actives first, so my active i is
-# public row i and theirs is row NUM_PUBLIC_SLOTS // 2 + i. The four
-# entity-derived target slots (ALLY_i_TARGET, ENEMY_i_TARGET) read those rows,
-# which is what lets a move score against the actual mon it would hit.
-NUM_ACTIVES_PER_SIDE = 2
+# public row i and theirs is row NUM_PUBLIC_SLOTS // 2 + i: the rows the
+# ACTIVE_STATE rows and the readout's my-active operand are read from.
 MY_ACTIVE_PUBLIC_ROWS = np.arange(NUM_ACTIVES_PER_SIDE)
 OPP_ACTIVE_PUBLIC_ROWS = NUM_PUBLIC_SLOTS // 2 + np.arange(NUM_ACTIVES_PER_SIDE)
 
@@ -399,9 +394,7 @@ OPP_ACTIVE_PUBLIC_ROWS = NUM_PUBLIC_SLOTS // 2 + np.arange(NUM_ACTIVES_PER_SIDE)
 IS_WILDCARD_MOVE_SLOT = np.isin(MOVE_INDICES, WILDCARD_MOVE_INDICES)
 assert IS_WILDCARD_MOVE_SLOT.sum() == len(WILDCARD_MOVE_INDICES)
 
-# Where inside the 17 target rows the four entity-derived targets sit. These
-# rows add the entity they name, which is what lets a move score against the
-# actual pokemon it would hit rather than a bare positional slot.
+# Where inside the 17 target rows the four active-slot targets sit.
 _target_row_of = {int(slot): row for row, slot in enumerate(TARGET_SLOT_INDICES)}
 ALLY_TARGET_ROWS = np.array(
     [_target_row_of[int(slot)] for slot in ALLY_TARGET_INDICES], dtype=np.int32

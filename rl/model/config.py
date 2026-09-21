@@ -127,34 +127,6 @@ def get_player_model_config(
         len(CAT_VF_SUPPORT),
     )
     cfg.public_value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-    # The state value head (2026-09-20): same shape, reading STATE_VALUE_CLS,
-    # the row that attends over the 15 public state rows alone. Learner-only.
-    cfg.state_value_head = ConfigDict()
-    cfg.state_value_head.mlp = ConfigDict()
-    cfg.state_value_head.mlp.layer_sizes = (
-        2 * entity_size,
-        entity_size,
-        len(CAT_VF_SUPPORT),
-    )
-    cfg.state_value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
-    # The consequence model (rl/model/consequence.py, 2026-09-20): learner-
-    # only. `rank` is the pair form's bilinear width; the sampler is a small
-    # trunk of its OWN -- plain residual, never the nGPT form, because
-    # project_trunk_kernels only re-projects encoder/trunk/blocks and a
-    # normalised block left unprojected is a different function every step.
-    cfg.consequence = ConfigDict()
-    cfg.consequence.rank = entity_size
-    cfg.consequence.trunk = ConfigDict()
-    cfg.consequence.trunk.num_blocks = 2
-    cfg.consequence.trunk.num_heads = num_heads
-    cfg.consequence.trunk.qk_size = encoder_qkv_size
-    cfg.consequence.trunk.v_size = encoder_qkv_size
-    cfg.consequence.trunk.model_size = entity_size
-    cfg.consequence.trunk.hidden_size = encoder_hidden_size
-    cfg.consequence.trunk.use_bias = encoder_use_bias
-    cfg.consequence.trunk.qk_layer_norm = encoder_qk_layer_norm
-    cfg.consequence.trunk.normalised_residual = False
-    cfg.consequence.trunk.residual_alpha_init = 1 / cfg.consequence.trunk.num_blocks
     # The PBRS potential channel's value head (2026-09-11): learner-only and
     # built only when the learner's player_potential_strength > 0 (main.py
     # sets `enabled`). One scalar in unit potential units, zero at init so a

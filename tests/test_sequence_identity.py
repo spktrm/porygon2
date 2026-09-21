@@ -16,7 +16,10 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import TargetSlot
 from rl.model.constants import (
+    ACTIVE_STATE_ROWS,
+    HISTORY_ACTIVE_ROWS,
     HISTORY_ENTITY_ROWS,
+    NUM_ACTIVE_SLOTS,
     NUM_HISTORY_REGISTERS,
     NUM_PRIVATE_SLOTS,
     NUM_PUBLIC_SLOTS,
@@ -98,6 +101,16 @@ def test_same_side_and_position_are_identical_across_entity_representations(env_
     np.testing.assert_array_equal(rows[OPP_PRIVATE_ROWS][3], rows[PUBLIC_ROWS][6])
     assert not np.array_equal(rows[PRIVATE_ROWS][2], rows[OPP_PRIVATE_ROWS][3])
     assert not np.array_equal(rows[PRIVATE_ROWS][2], rows[PRIVATE_ROWS][0])
+
+
+def test_active_slot_rows_carry_the_identity_of_the_slot_they_describe(env_step):
+    rows = identity_rows(env_step)
+    # The fixture's actives: mine at public rows 0 (first) and 1 (second),
+    # theirs at rows 6 and 7 -- the active-slot order.
+    occupants = rows[PUBLIC_ROWS][jnp.asarray([0, 1, 6, 7])]
+    np.testing.assert_array_equal(rows[ACTIVE_STATE_ROWS], occupants)
+    np.testing.assert_array_equal(rows[HISTORY_ACTIVE_ROWS], occupants)
+    assert len({tuple(np.asarray(row)) for row in rows[ACTIVE_STATE_ROWS]}) == 4
 
 
 def test_history_shares_current_public_position_and_fields_get_side_only(env_step):
@@ -197,6 +210,7 @@ def test_rl_history_inputs_ignore_snapshots_but_preserve_aligned_memory(env_step
     field_state = jnp.ones((1, 3, row_width))
     snapshots = jnp.full_like(slot_states, 1000)
     registers = jnp.ones((1, NUM_HISTORY_REGISTERS, row_width))
+    actives = jnp.full((1, NUM_ACTIVE_SLOTS, row_width), 2.0)
     history_output = object()
     order = jnp.asarray([2, 0, 1, 3, 4, 5, 8, 7, 6, 9, 10, -1])
     info = env_step.info.at[
@@ -212,20 +226,24 @@ def test_rl_history_inputs_ignore_snapshots_but_preserve_aligned_memory(env_step
                 field_state,
                 nodes,
                 registers,
+                actives,
                 history_output,
             )
         )
         return Encoder._history_inputs(encoder, batched_env, None, None)
 
-    rows, valid, field, register_rows, output = read_inputs(slot_states, snapshots)
+    rows, valid, field, register_rows, active_rows, output = read_inputs(
+        slot_states, snapshots
+    )
     np.testing.assert_array_equal(register_rows, registers)
+    np.testing.assert_array_equal(active_rows, actives)
     assert output is history_output
     np.testing.assert_array_equal(rows[0, :-1], slot_states[0, order[:-1]])
     np.testing.assert_array_equal(valid[0], order >= 0)
     np.testing.assert_array_equal(field, field_state)
     changed_snapshots = read_inputs(slot_states, snapshots * -100)
     for actual, expected in zip(
-        changed_snapshots[:-1], (rows, valid, field, registers), strict=True
+        changed_snapshots[:-1], (rows, valid, field, registers, actives), strict=True
     ):
         np.testing.assert_array_equal(actual, expected)
     changed_memory = read_inputs(slot_states + 10, snapshots)[0]

@@ -13,6 +13,7 @@ from rl.model.constants import (
     HISTORY_REGISTER_ROWS,
     HISTORY_REGISTER_STATE_ROWS,
     HISTORY_SLOT_STATE_ROWS,
+    NUM_ACTIVE_SLOTS,
     NUM_FIELD_ROWS,
     NUM_HISTORY_REGISTERS,
     NUM_HISTORY_STATE_ROWS,
@@ -60,6 +61,7 @@ def _recur_apply(module, tree, rows, touched, valid, memory, inner):
         rows,
         jnp.zeros_like(rows),
         touched,
+        jnp.ones((rows.shape[0], NUM_ACTIVE_SLOTS), jnp.bool_),
         valid,
         memory,
         inner,
@@ -87,6 +89,7 @@ def recurrence():
             rows,
             jnp.zeros_like(rows),
             touched,
+            jnp.ones((STEPS, NUM_ACTIVE_SLOTS), jnp.bool_),
             valid,
             initial,
             inner,
@@ -117,7 +120,7 @@ def test_layer_two_memory_is_isolated_and_layer_one_is_read_by_every_row(
     that the attention still reads across rows."""
     params, apply, rows, valid, initial, inner = recurrence
     states, probs, _, final, _ = apply(params, rows, valid, initial)
-    assert probs.shape == (STEPS, 2, 19, 19)
+    assert probs.shape == (STEPS, 2, NUM_HISTORY_STATE_ROWS, NUM_HISTORY_STATE_ROWS)
     assert states.shape == (STEPS, NUM_HISTORY_STATE_ROWS, WIDTH)
     assert final.dtype == jnp.float32
     np.testing.assert_allclose(probs.sum(-1), 1, atol=1e-6)
@@ -212,6 +215,7 @@ def test_registers_are_queries_only():
         rows,
         jnp.zeros_like(rows),
         touched,
+        jnp.ones((STEPS, NUM_ACTIVE_SLOTS), jnp.bool_),
         valid,
         initial,
         inner,
@@ -246,6 +250,9 @@ def history_case():
         history_field=field,
         node_embedding_cache=content,
         node_identity_cache=jnp.zeros_like(content),
+        active_state_cache=content * 3,
+        active_slot_ids=jnp.zeros(STEPS, jnp.int32),
+        active_identities=jnp.zeros((NUM_ACTIVE_SLOTS, WIDTH)),
         edge_embedding_cache=content * 2,
         edge_slot_ids=jnp.zeros(STEPS, jnp.int32),
         edge_major_args=jnp.zeros(STEPS, jnp.int32),
@@ -311,7 +318,10 @@ def test_field_only_events_update_shared_memory_and_packed_padding_is_inert(
     )
     np.testing.assert_array_equal(base.slot_snapshots, padded.slot_snapshots)
     assert not np.allclose(base.slot_snapshots, output.slot_snapshots)
-    assert output.step_attention_probs.shape[-2:] == (19, 19)
+    assert output.step_attention_probs.shape[-2:] == (
+        NUM_HISTORY_STATE_ROWS,
+        NUM_HISTORY_STATE_ROWS,
+    )
 
 
 def test_history_registers_are_policy_readable_and_cannot_read_private_rows():

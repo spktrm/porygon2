@@ -138,9 +138,18 @@ def test_a_new_sequence_group_extends_the_per_group_leaves() -> None:
     # The control: an unlisted leaf with the same growth is NOT half-loaded.
     assert np.all(encoder["other_table"] == 0)
     assert kept_fresh == ["/params/encoder/other_table (shape (4, 3) -> (5, 3))"]
-    # A listed leaf that SHRANK, or whose row width changed, is not extended.
-    _, shrunk, _, none_extended = merge_params(_grouped(3, 0.0), loaded)
-    assert none_extended == [] and len(shrunk) == 3
+    # A removed LAST group truncates the listed leaves to the shared rows; the
+    # unlisted leaf falls back to fresh init as before.
+    narrower, shrunk, _, truncated = merge_params(_grouped(3, 0.0), loaded)
+    narrowed = narrower["params"]["encoder"]
+    assert narrowed["sequence_group_bias"].shape == (3, 3)
+    assert np.all(narrowed["sequence_group_bias"] == 1)
+    assert np.all(narrowed["other_table"] == 0)
+    assert len(truncated) == 2 and len(shrunk) == 1
+    # A listed leaf whose row width changed is not resized.
+    wider = jax.tree.map(lambda leaf: jnp.zeros((4, 5)), loaded)
+    _, reinitialised, _, none_resized = merge_params(wider, loaded)
+    assert none_resized == [] and len(reinitialised) == 3
 
     optimiser = optax.adam(1e-3)
     opt_state = merge_opt_state(optimiser.init(fresh), optimiser.init(loaded))

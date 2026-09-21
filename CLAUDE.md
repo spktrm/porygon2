@@ -51,13 +51,18 @@ TypeScript game service speaking protobuf over websockets.
 - `rl/environment/` — `interfaces.py` (all pytree dataclasses),
   `utils.py` (`process_state` proto→numpy decode, geometric buckets for the
   inference path, `clip_history_windows_tail` joint tail-windowing).
-- `rl/model/` — ONE sequence of 92 rows, one row per THING (2026-08-29),
+- `rl/model/` — ONE sequence of 99 rows, one row per THING (2026-08-29),
   ordered by read tier (2026-09-15).
   `constants.py`: the layout — `SEQUENCE_LAYOUT` is the single source, every
   offset and named slice derives from it, and a head never carries a literal;
   `SEQUENCE_READ_MASK` and the comment above it define the four read tiers.
   `encoder.py`: the feature embedders, the entity-local pools (the same ones
-  the packed history cache uses), `SequenceNormalisation` at BOTH ends of
+  the packed history cache uses) — an entity vector holds what SURVIVES a
+  switch; what a switch clears (volatiles, boosts, type change, trapped) is
+  the active SLOT's state and is never pooled (2026-09-21): it is the 4
+  ACTIVE_STATE rows, one per active slot per side, built by
+  `_embed_active_state` for the board and the history cache alike —
+  `SequenceNormalisation` at BOTH ends of
   the trunk (rows enter and leave at RMS 1 x a per-group scale; the
   group-L2 panels read the raw trunk output before the output norm), and
   `_assemble_sequence`, split out from
@@ -70,7 +75,11 @@ TypeScript game service speaking protobuf over websockets.
   `history_encoder.py`: `HistorySequenceStep` — two input-gated minGRU layers
   (`GatedLinearCell`) with the step attention between them; no attention
   reads its own layer's memory, so both are `lax.associative_scan`s and
-  there is no loop recurrence (deleted 2026-09-18). History is
+  there is no loop recurrence (deleted 2026-09-18). Its step sequence is
+  12 entity slots, the field triple, 4 active-slot rows (written by the
+  state token of whichever entity an event touched while it held the slot;
+  their states enter the trunk as HISTORY_ACTIVE_STATE) and the registers.
+  History is
   aligned to requests by REQUEST_COUNT VALUE (trailing windows are
   therefore safe). `player_model.py`: three modules — encoder, action
   readout, critic. `heads.py`: `FlatActionReadout` — ONE pair form (bilinear
@@ -81,29 +90,17 @@ TypeScript game service speaking protobuf over websockets.
   two-factor stall. The critic reads the CLS row and nothing else; the
   privileged critic reads VALUE_CLS, whose learner-only partition carries
   the opponent's sheet latents from the same private embedder; the public
-  critic (`public_v_head`) reads PUBLIC_CLS, a value of the public tier alone;
-  the state value head reads STATE_VALUE_CLS. A sequence group added to a
-  live lineage takes the LAST enum value, and `merge_params` extends the
-  per-group leaves by row (`GROUP_AXIS_LEAVES`, `rl/online/artifact.py`).
-  `consequence.py` (2026-09-20): the action-conditioned consequence model —
-  from the taken cell's source/target rows, predict the CHANGE of the 16
-  `CONSEQUENCE_ROWS` (the 15 public state rows + STATE_VALUE_CLS) by the next
-  request; `PairConsequence` has an additional state-row operand, with a CLS-only
-  conditioning twin as the control,
-  `ConsequenceSampler` a noise-input generator under the energy score.
-  Learner-only, singles-only, run as a SEPARATE apply
-  (`PlayerModel.consequences`, the train state's `consequence_fn`).
-  Its `observable_outcomes` linear decoder (2026-09-21) predicts execution,
-  public HP changes and fainting from the policy's existing source–target
-  interaction and scalar features (`FlatActionReadout.chosen_pair_features`),
-  with no separate state input. The old latent heads remain observers.
-  Targets come from `rl/environment/consequence_labels.py`;
-  `rl/online/training/observable_consequence.py` owns losses and telemetry.
-  `player_observable_shared_grad` scales gradients into BOTH the policy
-  projections and encoder, independently of the old latent gradient knob.
+  critic (`public_v_head`) reads PUBLIC_CLS, a value of the public tier alone.
+  A sequence group is added to or removed from a live lineage at the LAST
+  enum value, and `merge_params` resizes the per-group leaves by row
+  (`GROUP_AXIS_LEAVES`, `rl/online/artifact.py`).
+  The action-conditioned consequence model (`consequence.py`, its
+  observable-outcomes decoder, the STATE_VALUE_CLS row and state value
+  head) was REMOVED 2026-09-21 after two failed shaping attempts (tag
+  `pre-consequence-model-removal-2026-09-21`, LESSONS "Removal ledger —
+  2026-09-21 consequence model").
   The public event world model (`world_model.py`, `event_search.py`,
-  trained offline on human replays) was REMOVED 2026-09-20, replaced by the
-  action-conditioned consequence model plan (tag
+  trained offline on human replays) was REMOVED 2026-09-20 (tag
   `pre-event-world-model-removal-2026-09-20`, LESSONS "Removal ledger —
   2026-09-20 event world model").
   The LATENT world model (`transition.py`, `search.py`, `mcts.py`), the
@@ -123,12 +120,7 @@ TypeScript game service speaking protobuf over websockets.
   controller. `league_ops.py`: checkpoint-pacing gate, snapshot
   publication, payoff readouts. `diagnostics.py`: RAM attribution.
   `targets.py`: v-trace/Retrace (f32 recursions). `loss.py`,
-  `controllers.py`, `telemetry.py`. `consequence.py`: the consequence
-  model's targets (both ends stop-gradient, rows followed through
-  PUBLIC_ORDER), its two losses' wiring and panels;
-  `player_consequence_trunk_grad` scales its gradient into the trunk (0 =
-  observer), and its params sit in their own optimiser partition
-  (`artifact.player_optimiser`) so they cannot move the trunk's global clip. `action_telemetry.py`: the readers over
+  `controllers.py`, `telemetry.py`. `action_telemetry.py`: the readers over
   the action axis that call loss/targets callables (legal-cell support,
   the switch-logit JVPs, the paired advantage audit) — observers only.
   `learner.py`: construction, the loop,
@@ -180,10 +172,8 @@ TypeScript game service speaking protobuf over websockets.
   reading itself and everything below it: PUBLIC (what both players see) <
   PRIVATE (my request truth; PUBLIC | PRIVATE is the policy's information
   set) < SECRET (the opponent's request truth + the privileged registers) <
-  VALUE_CLS, with PUBLIC_CLS reading the PUBLIC tier alone, STATE_VALUE_CLS
-  (2026-09-20) reading only the 15 public state rows (`PUBLIC_STATE_ROWS`:
-  PUBLIC_ENTITY + FIELD) — the one row that does not read the whole public
-  tier — and all three of those CLS rows read by nothing, VALUE_CLS included. Every policy-readable row therefore has zero in-edges
+  VALUE_CLS, with PUBLIC_CLS reading the PUBLIC tier alone and both CLS rows
+  read by nothing. Every policy-readable row therefore has zero in-edges
   from the learner-only partition (SECRET + VALUE_CLS) at every trunk block,
   transitively leak-free by induction and pinned by
   `tests/test_privileged_partition.py`. Privileged
@@ -412,7 +402,7 @@ the grep targets.
 | cleanup | 2026-08-21 cleanup pass · 09-12 comment sweep (445 narration lines, 50 false claims, evidence migrated out of the code) |
 | policy objective + exploration | 2026-08-22 R-NaD · 08-26 NashPG transition · 08-26 support anchor · 08-26 anchor phase 3 · 08-27 factorised objective · 08-28 entropy floor · 08-30 NashPG-verbatim bracket · 08-31 zero-avoider restored (carries the algebra for why NO entropy coefficient holds a floor) |
 | model architecture | 08-25 privileged critic · 08-25 head redesign · 08-28 audit + input-read redesign · 08-29 flat trunk · 08-31 grid retired + modality-marginal KL · 09-01 centralised value + belief code · 09-02 entity_index_tag · 09-02 history encoder restructure · 09-03 entity attention pool → masked sum · 09-12 opp code + belief SSL + dynamics rows removed (in the 09-12 removal ledger) |
-| stochastic transition + search | 09-05 Step 1 (mean head priced) · 09-05 Step 2 (latent model) · 09-05 hidden-token belief label · 09-06 Step 3 (search) · 09-06 Step 3b (B and D) · 09-06 Step 3b D result + posterior sampling + event probe · 09-07 latent actions · 09-08 MCTS + interval model · 09-09 search eval actor removed · 09-20 thresholded eval slot → argmax · 09-20 event world model removed · 09-12 removal ledger (explored; open to revisit) |
+| stochastic transition + search | 09-05 Step 1 (mean head priced) · 09-05 Step 2 (latent model) · 09-05 hidden-token belief label · 09-06 Step 3 (search) · 09-06 Step 3b (B and D) · 09-06 Step 3b D result + posterior sampling + event probe · 09-07 latent actions · 09-08 MCTS + interval model · 09-09 search eval actor removed · 09-20 thresholded eval slot → argmax · 09-20 event world model removed · 09-21 consequence model removed · 09-12 removal ledger (explored; open to revisit) |
 | performance | 09-01 flash attention (declined, with the crossover number) · 09-01 GRU scan · 09-02 actor-side history carry · 09-03 gpu_lock retired, actors on the CPU |
 | probes | 08-27 capacity falsification (separation probe) |
 

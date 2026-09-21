@@ -15,8 +15,6 @@ from rl.environment.data import (
     NUM_SWITCH_CELLS,
 )
 from rl.environment.interfaces import (
-    ConsequenceInputs,
-    ConsequenceOutput,
     HistoryCarry,
     PlayerActorInput,
     PlayerActorOutput,
@@ -27,19 +25,12 @@ from rl.environment.interfaces import (
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
-from rl.model.consequence import (
-    CONSEQUENCE_NOISE_SIZE,
-    CONSEQUENCE_ROWS,
-    ConsequenceModel,
-)
 from rl.model.constants import (
     CLS_ROW,
     MOVE_ROWS,
     PRIVATE_ROWS,
     PUBLIC_CLS_ROW,
     PUBLIC_ROWS,
-    SEQUENCE_GROUP_IDS,
-    STATE_VALUE_CLS_ROW,
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
@@ -51,7 +42,6 @@ from rl.model.heads import (
     ReadoutRows,
     RegressionValueLogitHead,
     SlotConditioning,
-    chosen_bank_rows,
     compute_policy_metrics,
     sample_categorical,
 )
@@ -97,12 +87,6 @@ class Porygon2PlayerModel(nn.Module):
         # The public critic (2026-09-15): the same head over PUBLIC_CLS, a
         # value of the common-knowledge state alone. Learner-only likewise.
         self.public_value_head = CategoricalValueLogitHead(self.cfg.public_value_head)
-        # The state value head (2026-09-20): the same head over STATE_VALUE_CLS,
-        # a value read through the 15 public state rows. Learner-only likewise.
-        self.state_value_head = CategoricalValueLogitHead(self.cfg.state_value_head)
-        # The consequence model (2026-09-20): learner-only, singles only.
-        if self.cfg.train and self.cfg.num_decision_slots == 1:
-            self.consequence = ConsequenceModel(self.cfg.consequence)
         # The PBRS potential channel's value (2026-09-11): learner-only, and
         # absent unless the channel runs, so strength 0 keeps today's tree.
         if self.cfg.potential_head.enabled:
@@ -439,9 +423,6 @@ class Porygon2PlayerModel(nn.Module):
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.privileged_value_head(sequence[VALUE_CLS_ROW]),
                 "public_value_head": self.public_value_head(sequence[PUBLIC_CLS_ROW]),
-                "state_value_head": self.state_value_head(
-                    sequence[self.encoder.local_row(STATE_VALUE_CLS_ROW)]
-                ),
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
                 "trunk_out_group_l2_sum": group_l2_sum,
@@ -463,88 +444,12 @@ class Porygon2PlayerModel(nn.Module):
                 learner_only["potential_head"] = self.potential_head(
                     jax.lax.stop_gradient(sequence[CLS_ROW])
                 )
-            if self.cfg.num_decision_slots == 1:
-                learner_only["consequence_inputs"] = self.consequence_inputs(
-                    sequence, row_valid, actor_output.action_head.action_index
-                )
-                pair_features = self.action_head.chosen_pair_features(
-                    self.readout_rows(sequence, row_valid, env_step),
-                    actor_output.action_head.action_index,
-                )
-                learner_only["consequence_inputs"] = learner_only[
-                    "consequence_inputs"
-                ].replace(action_features=pair_features)
-                if self.is_initializing():
-                    # A submodule's params exist only once it has been called,
-                    # and the learner's forward never calls this one.
-                    self.consequence(
-                        learner_only["consequence_inputs"],
-                        jnp.zeros(CONSEQUENCE_NOISE_SIZE, sequence.dtype),
-                    )
-                    self.consequence.observable(pair_features)
         return PlayerActorOutput(
             action_head=action_head,
             # The CLS row, and only the CLS row.
             value_head=self.value_head(sequence[CLS_ROW]),
             history_carry=history_carry,
             **learner_only,
-        )
-
-    def consequence_inputs(
-        self, sequence: jax.Array, row_valid: jax.Array, action_cell: jax.Array
-    ) -> ConsequenceInputs:
-        source_row, target_row = chosen_bank_rows(
-            sequence[PRIVATE_ROWS],
-            sequence[MOVE_ROWS],
-            sequence[TARGET_ROWS],
-            action_cell,
-        )
-        return ConsequenceInputs(
-            state_rows=sequence[CONSEQUENCE_ROWS],
-            state_valid=row_valid[CONSEQUENCE_ROWS],
-            source_row=source_row,
-            target_row=target_row,
-            cls_row=sequence[CLS_ROW],
-        )
-
-    def consequences(
-        self, inputs: ConsequenceInputs, noise: jax.Array
-    ) -> ConsequenceOutput:
-        """One decision, one noise draw. A method of its own so the learner
-        applies it separately from `__call__`.
-
-        The heads emit a CHANGE; what is returned is the predicted NEXT rows in
-        the trunk's own output form -- current rows plus the change, through
-        the trunk's output normalisation (2026-09-20). A prediction is thereby
-        constrained to the manifold real rows live on, so it can be scored
-        against the real next rows at a FIXED scale (the live per-batch
-        normaliser it replaced was gamed by the trunk inflating its rows'
-        step-to-step change), and the state value head reads a predicted row
-        that looks like the rows it was trained on. The current rows enter
-        under stop_gradient: gradient reaches the trunk through the heads'
-        inputs, never through an identity path from `now` to the prediction."""
-        changes = self.consequence(inputs, noise)
-        now = jax.lax.stop_gradient(inputs.state_rows)
-        group_ids = jnp.asarray(SEQUENCE_GROUP_IDS[CONSEQUENCE_ROWS])
-
-        def as_trunk_output(change: jax.Array) -> jax.Array:
-            return self.encoder.output_normalisation.moved(
-                now, change, inputs.state_valid, group_ids
-            )
-
-        def implied_value(predicted_rows: jax.Array) -> jax.Array:
-            value_row = jax.lax.stop_gradient(predicted_rows[-1])
-            return self.state_value_head(value_row).expectation
-
-        mean = as_trunk_output(changes.mean)
-        sample = as_trunk_output(changes.sample)
-        return ConsequenceOutput(
-            mean=mean,
-            state_only_mean=as_trunk_output(changes.state_only_mean),
-            sample=sample,
-            mean_value=implied_value(mean),
-            sample_value=implied_value(sample),
-            observable_logits=self.consequence.observable(inputs.action_features),
         )
 
     def __call__(

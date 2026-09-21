@@ -10998,3 +10998,192 @@ label counts 104/1197/548; update_skipped=0; encoder/action-head gradient norms
 2.227/.1515. Both shared observable and old latent gradients were zero in this
 warm-up, as configured. This verifies restart and finite training, not the
 experiment's later usefulness or acceptance hold.
+
+
+## Removal ledger — 2026-09-21 consequence model, observable-outcomes decoder and the state value row
+
+User decision 2026-09-21: remove all of it. Revert handle for every row:
+tag `pre-consequence-model-removal-2026-09-21` (commit 62ff630, a snapshot of
+the whole working tree as run in lmtinoz5; the mechanism was never committed
+before that, so the tag is the only copy).
+
+| mechanism | what it was | the number it leaves behind |
+|---|---|---|
+| `rl/model/consequence.py` (`PairConsequence`, `state_only_pair`, `ConsequenceSampler`), `rl/online/training/consequence.py`, `loss.consequence_mean_loss` / `consequence_energy_loss`, `PlayerModel.consequences` / `consequence_inputs`, `SequenceNormalisation.moved`, the `consequence` optimiser partition (`artifact.player_optimiser`), 7 `player_consequence_*` knobs | predict the change of the 15 public state rows + the value row by the next request, target = the same trunk one step later under stop-gradient | two shaping attempts with the FULL gradient (live-normalised, then fixed-scale output-form) inflated the state rows and left every fixed-label instrument flat ("Step 4 verdict", "Step 4b verdict" above); the relaxation afterwards cost ~60k steps of clipped training ("Aftermath" above). As an observer the mean head sat at ~55% of copy on the entity rows (last logged: 1.72 against 3.10) and its imagined value gap never beat copy |
+| `observable_outcomes` decoder, `FlatActionReadout.chosen_pair_features`, `rl/online/training/observable_consequence.py`, `rl/environment/consequence_labels.py`, 4 `player_observable_*` knobs | execution / public HP change / faint decoded from the policy's own pair features, shared gradient ramped over 356,282-366,282 | run stopped at 373,244, ~7k steps after the ramp completed -- no acceptance hold was read. Last logged HP error 0.0529 against 0.0503 for copying (one batch, not a window): no evidence it beat copy |
+| `SequenceGroup.STATE_VALUE_CLS` (row 91 of 92), `state_value_cls_embedding`, `state_value_head`, `loss_v_win_state`, `player_state_value_head_loss_coef`, `PUBLIC_STATE_ROWS` | a value row reading only PUBLIC_ENTITY + FIELD, read by nothing; existed to give the consequence model a value that was a function of exactly the rows it predicted | layout back to 91 rows and the read-tier text to two CLS rows. Its R2 read .54-.65 against the main critic's .59-.68 over 152k-334k (the "Aftermath" table above), .02-.05 under it in every window: the narrow read set cost a little and bought nothing once its consumer was gone |
+| `rl/probes/consequence_calibration.py`, `observable_calibration.py`, `consequence_lag.py`; `tests/test_consequence_loss.py`, `test_consequence_isolation.py`, `test_observable_consequence.py`; the two "4b" wandb sections | called the deleted heads or read `consequence_inputs` | the lag probe's reading (lag-2 / lag-1 change ratio, 1.41 = random walk; successive-change cosine) is the instrument to rebuild first if rows are ever shaped by their own future again |
+
+KEPT: `rl/probes/sleep_turns.py` and the tactical cohort's sleep sub-cohorts,
+`rl/probes/consequence_probe.py` (the fixed-label and information-retention
+probes -- they read trunk rows, not the heads; status retention .59 and the
+"own move executed" read .53-.67 are still the open instruments),
+`GROUP_AXIS_LEAVES`.
+
+`merge_params` change that rides with it: a `GROUP_AXIS_LEAVES` leaf whose
+leading axis SHRANK is now truncated to the shared rows instead of falling
+back to fresh init. Without it, loading a 92-row lmtinoz5 checkpoint into the
+91-row model would re-initialise the trained bias and norm scale of every
+group. Sound for the same reason the extension was: the group came off the
+LAST enum value.
+
+Checkpoint compatibility: an lmtinoz5 checkpoint carries a `consequence`
+subtree, `state_value_cls_embedding`, `state_value_head` and a two-partition
+(`multi_transform`) optimiser state. Params merge (the three subtrees are
+dropped, the group leaves truncated); the optimiser state does NOT -- a
+different container shape raises in `merge_opt_state` -- so a relaunch from
+it is a params-mode merge with a fresh optimiser, as lmtinoz5 itself was.
+
+What the failure says for a next attempt (not landed): both shaping failures
+shared a target that was the same trunk's output, so whatever the gradient
+wrote into a row reappeared in the next target. A target taken from a slow
+copy of the PRE-trunk entity encoder removes that loop; untested.
+
+
+## Addition ledger — 2026-09-21 active-slot state rows (the transient token leaves the entity pool)
+
+User decision 2026-09-21. What a switch clears -- volatiles, boosts, type
+change, trapped, newly switched, being called back, toxic turns -- was one
+token of ten in the public entity's masked sum, masked off on the bench. It is
+now a row of its own per active SLOT, on the board and in the history encoder.
+Not structure-only: every number downstream of a public entity moves.
+
+| mechanism | what | why |
+|---|---|---|
+| `SequenceGroup.ACTIVE_STATE` (4 rows, public tier: mine first / second, theirs first / second), `Encoder._embed_active_state`, `EntitySumPool.typed` | the row is `public_transient_linear(features) + token_bias[ACTIVE_STATE]` -- the SAME token the pool used to sum, with the same field identity, so both trained leaves carry over at a merge and `TokenType.ACTIVE_STATE` stays an indexed row. Valid only while the slot is occupied; identity = the slot's side + position (`identity.active_slot_identities`) | the state belongs to the slot, not the entity (Baton Pass hands it to the next occupant); the entity row becomes switch-invariant (the active's pooled sum no longer carries a tenth token the bench copy lacks); the content enters the trunk at RMS 1 instead of as one term of a ten-token sum; precedent: side conditions are already FIELD rows |
+| `PUBLIC_TOKEN_TYPES` loses `ACTIVE_STATE` (10 -> 9 tokens) | the public pool's static divisor is sqrt(9), not sqrt(10) | the trunk input is RMS-normalised so only the history event projection sees the ~5% scale change |
+| history step rows 19 -> 23: `HISTORY_ACTIVE_STATE_ROWS` (4), cells `active_inner_cell` / `active_cell`, `group_identity` 3 -> 4 rows, `HistoryCarry.active_states`, `PerSlotHistoryOutput.active_snapshots` | per step, each active-slot row's input is the mean state token of the events whose entity held that slot (`active_slot_index` from the cache row's side + position; benched entities fall in a dump segment); written only when touched, like the entity slots; read by the step attention with the slot's identity | the history's entity snapshots lose the token with the shared embedder, so the slot state needs its own memory or history forgets boosts and volatiles entirely |
+| `SequenceGroup.HISTORY_ACTIVE_STATE` (4 rows, public tier) | the history active-slot states as of the request, beside HISTORY_ENTITY / HISTORY_FIELD / HISTORY_REGISTER | the trunk reads the recurrent slot state the same way it reads the others |
+
+Layout 91 -> 99 rows, public sequence 55 -> 63, actor sequence 81 -> 89. Both
+groups take the LAST enum values (17, 18) and sit inside the public prefix of
+the layout.
+
+At a params merge from a pre-change checkpoint: the two groups' bias and norm
+scale rows extend (`GROUP_AXIS_LEAVES`) -- with ONE EXCEPTION that the launch
+below hit; `public_transient_linear` and
+`token_bias` load unchanged; the two new cells are fresh; the history
+encoder's `initial_memory` (19 -> 23 rows, registers move from 15:19 to 19:23),
+`initial_inner_memory` (15 -> 19) and `group_identity` (3 -> 4, register id
+2 -> 3) change shape and RE-INITIALISE -- the learned start state of every
+history row is lost. Not preserved deliberately: the row order changed, so a
+by-row extension would load registers' h0 into the active rows.
+
+No baseline exists for what this buys: no probe reads volatiles or boosts
+today. The retention probe (`rl/probes/consequence_probe.py`) reads status
+.59 / hp .85 from the public entity rows; status is NON-volatile and stays in
+the persistent token, so this change is not aimed at that number. First read
+owed: boosts / volatiles retention from the ACTIVE_STATE rows, pre- and
+post-trunk.
+
+Tests: `test_active_only_state_is_its_slot_row_and_not_the_entity_row` (a
+boost + volatile moves the slot's row and leaves the entity and target rows
+bit-identical; on a benched entity it is read by nothing; control: the bench
+entity's hp still moves its row),
+`test_an_event_writes_the_active_slot_its_entity_holds_and_no_other`,
+`test_active_slot_rows_carry_the_identity_of_the_slot_they_describe`.
+`test_trunk_on_the_public_sequence_reproduces_the_full_public_rows` now runs
+under f32 matmuls: at 99 vs 63 rows TF32 rounding differed between the two
+GEMM shapes by more than the 1e-3 tolerance on one near-zero element.
+
+### Launch — run 154dgogq, 2026-09-21 14:22 (params merge from lmtinoz5 ckpt_00373244, fresh league)
+
+`ckpts/gen9` renamed to `ckpts/gen9-lmtinoz5-consequence-20260921`;
+`bash start.sh --load-mode params --init-ckpt
+ckpts/gen9-lmtinoz5-consequence-20260921/ckpt_00373244`. Fresh optimiser, fresh
+league, new wandb run. Merge audit (`runtime/learner_20260921_142203.log`):
+kept fresh -- `initial_inner_memory` (15 -> 19), `initial_memory` (19 -> 23),
+`active_cell`, `active_inner_cell`, `group_identity` (3 -> 4); dropped --
+`state_value_cls_embedding`, `consequence`, `state_value_head`; resized along
+the group axis 18 -> 19 -- both `group_scale` leaves and `sequence_group_bias`.
+Stepping at ~5 batches/s ten minutes in, no errors, learner resident 7.0 GB.
+
+**A merge defect this launch exposed, NOT corrected in the run.** The
+checkpoint has 18 groups (STATE_VALUE_CLS = 17); the model has 19 (ACTIVE_STATE
+= 17, HISTORY_ACTIVE_STATE = 18). The by-row rule therefore loaded
+STATE_VALUE_CLS's trained row into ACTIVE_STATE instead of a fresh one; only
+HISTORY_ACTIVE_STATE started fresh. Size of what was inherited (row L2 norm,
+width 256): group bias 1.11 (other groups' median 1.36, and a row's content has
+norm 16, so ~7% of the row), input scale deviation 0.92, output scale
+deviation 1.55 (~0.06-0.10 per channel). Nothing ever read STATE_VALUE_CLS, so
+to every reader the direction is simply novel, as a random init would be; the
+cost is a non-zero start where zeros were intended, judged too small to abort
+a run for. The rule's precondition is now written beside `GROUP_AXIS_LEAVES`:
+add OR remove at the last enum value between a checkpoint and its loader, never
+both. The clean route next time is two merges, or truncating the three leaves
+in a copy of the checkpoint first.
+
+
+## Removal ledger — 2026-09-21 the active's entity vector leaves the target rows
+
+User decision 2026-09-21. `Encoder._public_parts` no longer adds the occupying
+pokemon's public vector into the four active-slot target rows (ALLY_1 / ALLY_2
+/ ENEMY_1 / ENEMY_2): all 17 target rows are slot identities with no pokemon
+content. `PublicRowInputs` loses `ally_active_rows` / `ally_active_valid` /
+`enemy_active_rows` / `enemy_active_valid`. No parameter changes; 99 rows.
+Revert handle: the two `.at[...].add(...)` blocks in the snapshot commit's
+`_public_parts` (tag `pre-consequence-model-removal-2026-09-21`).
+
+**Why.** The slot's occupant is not necessarily who the move lands on: the
+opponent may switch. The occupant was counted twice in a move's logit -- once
+unconditionally through the target operand, once as the "stays in" outcome of
+`OpponentTeamPairing`'s belief. With the adds gone, who stands opposite reaches
+a move's logit directly only through that belief-weighted term.
+
+**Priced BEFORE the change** (lmtinoz5 `ckpt_00373244` run through the snapshot
+code it was trained with, 240-game tactical cohort, 6,134 decisions with a real
+choice; every term recomputed from the post-trunk rows and the head's kernels,
+sum checked against the head's real output to 0.065 = bf16 rounding). Spread =
+std over the block's legal cells; within-block ablation removes the term's
+variation and keeps its mean, so the move-versus-switch balance is untouched.
+
+| term | spread | within-block KL | top choice changes |
+|---|---|---|---|
+| move: move x target pair | 0.73 | 0.168 | 26% |
+| move: their team, matchup under belief | 0.55 | 0.095 | 20% |
+| move: move alone | 0.51 | 0.069 | 18% |
+| move: target alone | 0.23 | 0.020 | 6% |
+| move: their team, row score | 0.04 | 0.001 | 1% |
+| switch: their team, matchup under belief | 0.45 | 0.058 | 9% |
+| switch: candidate x my active pair | 0.22 | 0.007 | 3% |
+| switch: candidate alone | 0.13 | 0.003 | 2% |
+| switch: their team, row score | 0.03 | 0.000 | 0% |
+| switch: my active alone | 0.00 | 0.000 | 0% |
+
+Full-logit spread 1.28 (moves) / 0.56 (switches); switch mass 0.212. The two
+"alone" target scores ARE the modality balance: zeroing `move_target_score`
+moves switch mass +0.54, `switch_target_score` -0.07. The move block's belief
+puts 0.62 on the opponent's CURRENT active on average (uniform over their alive
+rows is about 0.2): sharp, and mostly "they stay in".
+
+**The direct price of this deletion on that trained model, at the instant of
+the change** (same checkpoint, the two adds removed, nothing retrained): KL from
+the intact policy 0.35 mean / 0.07 median / 1.24 at the 90th percentile; the
+most likely cell changes in 31% of decisions; the move x target pair's spread
+0.73 -> 0.41 and its within-block KL 0.168 -> 0.056; switch mass 0.212 -> 0.235.
+So the hard-wired operand was doing about two thirds of the strongest move
+term's work, and the merged run has to relearn it through the trunk and the
+belief term. The user took the change with these numbers in hand.
+
+**Judge it on:** the policy's mass on immune moves (.148 against .389 uniform)
+and the move row's post-trunk matchup read (.658), both 2026-09-10 and both
+taken BEFORE the belief term existed; and a belief observer that does not exist
+yet -- the belief's mass on the row that is actually opposite next turn, which
+the log gives in hindsight. Known gaps: doubles (the belief is not per target
+slot, and the occupant was what told ENEMY_1 from ENEMY_2 beyond position); the
+opponent's slot state (Substitute, boosts) is in no direct path of a move's
+logit -- it lives only in the ACTIVE_STATE rows.
+
+`rl/probes/separation_probe.py`'s two target-row controls are no longer
+input-side controls on checkpoints from this change on (comment updated).
+The measurement script was a scratch file and is not in the repo.
+
+### Launch — run a1vmz8fc, 2026-09-21 15:28 (supersedes 154dgogq, which ran ~1 hour)
+
+Params merge from `ckpts/merge-sources/lmtinoz5_00373244_17_groups` -- the
+lmtinoz5 checkpoint with the three per-group leaves truncated to 17 rows, so
+the audit reads `rows 17 -> 19` and BOTH new groups start from fresh init (the
+154dgogq defect, corrected). Same five fresh subtrees and three dropped ones.
+Fresh league, fresh optimiser. Carries the target-row deletion above. 154dgogq
+set aside at `ckpts/gen9-154dgogq-active-slot-rows-20260921` (stopped
+gracefully at step 11,754).

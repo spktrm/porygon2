@@ -46,17 +46,25 @@ class EntitySumPool(nn.Module):
     """
 
     num_token_types: int
+    features: int
 
-    @nn.compact
+    def setup(self):
+        self.token_bias = self.param(
+            "token_bias",
+            nn.initializers.zeros_init(),
+            (self.num_token_types, self.features),
+        )
+
+    def typed(self, tokens: jax.Array, token_types: jax.Array) -> jax.Array:
+        """Tokens with their field identity added: what the sum pools, and what
+        a token that is a sequence row of its own (the active-only state)
+        carries in place of being pooled."""
+        return tokens + self.token_bias[token_types].astype(tokens.dtype)
+
     def __call__(
         self, tokens: jax.Array, token_mask: jax.Array, token_types: jax.Array
     ) -> jax.Array:
-        token_bias = self.param(
-            "token_bias",
-            nn.initializers.zeros_init(),
-            (self.num_token_types, tokens.shape[-1]),
-        )
-        tokens = tokens + token_bias[token_types].astype(tokens.dtype)
+        tokens = self.typed(tokens, token_types)
         weights = token_mask.astype(tokens.dtype)[..., None]
         num_tokens = tokens.shape[-2]
         return jnp.sum(tokens * weights, axis=-2) / jnp.sqrt(num_tokens).astype(
@@ -104,25 +112,6 @@ class SequenceNormalisation(nn.Module):
         )
         normalised = normalised * (1 + scale.astype(sequence.dtype)[group_ids])
         return jnp.where(row_valid[..., None], normalised, 0)
-
-    def moved(
-        self,
-        outputs: jax.Array,
-        change: jax.Array,
-        row_valid: jax.Array,
-        group_ids: jax.Array,
-    ) -> jax.Array:
-        """Rows that are already this normalisation's OUTPUTS, moved by
-        `change` and put back in output form: the scale is divided out first,
-        so a zero change returns the rows themselves rather than rows with the
-        scale applied twice. The scale is held under stop_gradient -- a caller
-        scoring its own rows against real ones at an absolute scale could
-        otherwise lower its loss by shrinking the scale both share."""
-        scale = jax.lax.stop_gradient(self.get_variable("params", "group_scale"))
-        scale = 1 + scale.astype(outputs.dtype)[group_ids]
-        return jnp.where(
-            row_valid[..., None], unit_rms(outputs / scale + change) * scale, 0
-        )
 
 
 def unit_rms(x: jax.Array) -> jax.Array:

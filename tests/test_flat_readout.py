@@ -77,7 +77,7 @@ def _init() -> tuple[FlatActionReadout, dict, ReadoutRows]:
 
 
 def test_sequence_layout_is_derived_and_contiguous() -> None:
-    assert NUM_SEQUENCE_ROWS == 92
+    assert NUM_SEQUENCE_ROWS == 99
     assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
     covered = []
     for group, sl in SEQUENCE_SLICES.items():
@@ -410,41 +410,3 @@ def test_an_invalid_row_is_inert() -> None:
         np.asarray(trunk.apply(params, sequence, live, READ_MASK)),
         np.asarray(trunk.apply(params, perturbed, live, READ_MASK)),
     )
-
-
-def test_observable_features_are_the_existing_policy_pair_terms():
-    head = _readout()
-    rows = _rows(jax.random.key(71))
-    params = jax.jit(head.init)(jax.random.key(72), rows)
-    params = jax.tree.map(lambda leaf: leaf + 0.1, params)
-    before = jax.jit(head.apply)(params, rows)
-    features = jax.jit(
-        lambda variables, cell: head.apply(
-            variables, rows, cell, method="chosen_pair_features"
-        )
-    )
-    move_cell = MOVE_CELL_OFFSET + 2 * NUM_TARGET_SLOTS + 3
-    for cell, source, target, block in (
-        (move_cell, rows.move[2], rows.target[3], "move"),
-        (1, rows.private[1], rows.public[0], "switch"),
-    ):
-        leaves = params["params"]
-        expected = jnp.concatenate(
-            (
-                (source @ leaves[f"{block}_query"]["kernel"])
-                * (target @ leaves[f"{block}_key"]["kernel"])
-                / np.sqrt(WIDTH),
-                source @ leaves[f"{block}_score"]["kernel"],
-                target @ leaves[f"{block}_target_score"]["kernel"],
-            )
-        )
-        np.testing.assert_allclose(
-            features(params, jnp.asarray(cell)), expected, rtol=1e-5, atol=1e-5
-        )
-    np.testing.assert_array_equal(features(params, jnp.asarray(OTHER_CELL_OFFSET)), 0)
-    np.testing.assert_array_equal(jax.jit(head.apply)(params, rows), before)
-    gradient = jax.jit(
-        jax.grad(lambda variables: features(variables, jnp.asarray(move_cell)).sum())
-    )(params)
-    assert jnp.abs(gradient["params"]["move_query"]["kernel"]).max() > 0
-    assert jnp.abs(gradient["params"]["move_key"]["kernel"]).max() > 0

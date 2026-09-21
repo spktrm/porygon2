@@ -13,8 +13,12 @@ from rl.environment.protos.features_pb2 import (
 )
 from rl.environment.protos.service_pb2 import TargetSlot
 from rl.model.constants import (
+    ACTIVE_STATE_ROWS,
+    HISTORY_ACTIVE_ROWS,
     HISTORY_ENTITY_ROWS,
     MOVE_ROWS,
+    NUM_ACTIVE_SLOTS,
+    NUM_ACTIVES_PER_SIDE,
     NUM_SEQUENCE_ROWS,
     OPP_PRIVATE_ROWS,
     PRIVATE_ROWS,
@@ -74,6 +78,29 @@ TARGET_POSITION_WEIGHTS = np.asarray(
 )
 
 
+# The active-slot rows, mine then theirs, first position then second -- the
+# order `ACTIVE_STATE` and the history's active-slot rows share.
+ACTIVE_SLOT_SIDES = np.repeat([SIDE_MINE, SIDE_OPPONENT], NUM_ACTIVES_PER_SIDE)
+ACTIVE_SLOT_POSITIONS = np.tile([FIRST_ACTIVE_POSITION, SECOND_ACTIVE_POSITION], 2)
+
+
+def active_slot_identities(
+    side_embeddings: jax.Array, position_embeddings: jax.Array
+) -> jax.Array:
+    return (
+        side_embeddings[ACTIVE_SLOT_SIDES] + position_embeddings[ACTIVE_SLOT_POSITIONS]
+    )
+
+
+def active_slot_index(sides: jax.Array, positions: jax.Array) -> jax.Array:
+    """The active-slot row an entity with this side and position occupies;
+    NUM_ACTIVE_SLOTS for a benched one."""
+    matches = (sides[..., None] == ACTIVE_SLOT_SIDES) & (
+        positions[..., None] == ACTIVE_SLOT_POSITIONS
+    )
+    return jnp.where(matches.any(axis=-1), matches.argmax(axis=-1), NUM_ACTIVE_SLOTS)
+
+
 def field_identities(side_embeddings: jax.Array) -> jax.Array:
     return jnp.stack(
         (
@@ -121,8 +148,9 @@ def public_identities(
 ) -> jax.Array:
     """The full-layout identity table with only the public tier's rows
     set: entity and history-entity rows carry their own side and
-    position, the target rows their fixed side/position mixes, the field
-    triples the side pair. Written once for the request path and the
+    position, the target rows their fixed side/position mixes, the
+    active-slot rows their slot's side and position, the field triples the
+    side pair. Written once for the request path and the
     per-event path."""
     identities = jnp.zeros(
         (NUM_SEQUENCE_ROWS, side_embeddings.shape[-1]), side_embeddings.dtype
@@ -139,6 +167,10 @@ def public_identities(
         @ position_embeddings
     )
     identities = identities.at[TARGET_ROWS].set(targets)
+    for rows in (ACTIVE_STATE_ROWS, HISTORY_ACTIVE_ROWS):
+        identities = identities.at[rows].set(
+            active_slot_identities(side_embeddings, position_embeddings)
+        )
     for group in (SequenceGroup.FIELD, SequenceGroup.HISTORY_FIELD):
         identities = identities.at[SEQUENCE_SLICES[group]].set(
             field_identities(side_embeddings)

@@ -46,15 +46,17 @@ class HistoryCarry:
     exactly as it always has (the learner, the offline tools and any caller
     sending a full window never build one); with leaves present, `valid`
     selects between the carried state and h0 per call, so a False carry is
-    also the from-scratch function. slot_states (12, D) and field_states
-    (3, D), plus register_states (4, D), are f32 -- the scan's own recursion state, taken before the
-    compute-dtype cast; node_snapshots (12, D) is the compute dtype.
+    also the from-scratch function. slot_states (12, D), field_states (3, D),
+    active_states (4, D) and register_states (4, D) are f32 -- the scan's own
+    recursion state, taken before the compute-dtype cast; node_snapshots
+    (12, D) is the compute dtype.
     """
 
     slot_states: ArrayLike = ()
     field_states: ArrayLike = ()
+    active_states: ArrayLike = ()
     register_states: ArrayLike = ()
-    # Layer-1 memory of the stacked recurrence (15, D) f32; () under loop.
+    # Layer-1 memory of the stacked recurrence (event rows, D) f32.
     inner_states: ArrayLike = ()
     node_snapshots: ArrayLike = ()
     valid: ArrayLike = ()
@@ -121,38 +123,6 @@ class PlayerPolicyHeadOutput(PolicyHeadOutput):
 
 
 @dataclass
-class ConsequenceInputs:
-    """One decision's inputs to the consequence model (rl/model/consequence.py):
-    the 16 current rows it predicts the change of and their validity, the
-    taken cell's source and target readout rows, CLS, and the policy's
-    source–target interaction features for observed-outcome prediction."""
-
-    state_rows: ArrayLike = ()
-    state_valid: ArrayLike = ()
-    source_row: ArrayLike = ()
-    target_row: ArrayLike = ()
-    cls_row: ArrayLike = ()
-    action_features: ArrayLike = ()
-
-
-@dataclass
-class ConsequenceOutput:
-    """From `ConsequenceModel`: predicted CHANGES of the 16 rows. From
-    `PlayerModel.consequences`: the predicted NEXT rows in the trunk's output
-    form. Each (16, D): the pair-form mean, its state-only control and one
-    sample; plus the state value head's expectation on the value row each
-    prediction implies (telemetry, under stop_gradient). `observable_logits`
-    instead decodes fixed-meaning self-play outcomes from policy pair features."""
-
-    mean: ArrayLike = ()
-    state_only_mean: ArrayLike = ()
-    sample: ArrayLike = ()
-    mean_value: ArrayLike = ()
-    sample_value: ArrayLike = ()
-    observable_logits: ArrayLike = ()
-
-
-@dataclass
 class PlayerActorOutput:
     value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
@@ -167,20 +137,12 @@ class PlayerActorOutput:
     public_value_head: CategoricalValueHeadOutput = field(
         default_factory=CategoricalValueHeadOutput
     )
-    # Learner-only (2026-09-20): the state value head over STATE_VALUE_CLS.
-    state_value_head: CategoricalValueHeadOutput = field(
-        default_factory=CategoricalValueHeadOutput
-    )
     # Learner-only (2026-09-11): the potential channel's value, in unit
     # potential units (targets.compute_player_targets). Built only when
     # player_potential_strength > 0.
     potential_head: RegressionValueHeadOutput = field(
         default_factory=RegressionValueHeadOutput
     )
-    # Learner-only (2026-09-20): what the consequence model conditions on,
-    # handed back so train_step can run it as a separate apply with its own
-    # noise -- the four other forwards then need no rng.
-    consequence_inputs: ConsequenceInputs = field(default_factory=ConsequenceInputs)
     # Trunk row homogeneity per step (rl/model/trunk.py row_homogeneity):
     # mean off-diagonal cosine and participation ratio over the valid rows
     # of the trunk's output. The over-smoothing instrument; learner-only.

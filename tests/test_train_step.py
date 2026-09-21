@@ -95,29 +95,6 @@ def test_train_step_smoke() -> None:
 
     assert int(new_player_state.step_count) == 1
     assert "player_fresh_voluntary_switch_frac" in logs
-    # The consequence heads start AT the copy predictor: both zero-init output
-    # factors give a zero change, and a zero change put back through the
-    # trunk's output normalisation IS the current row (to bf16's resolution),
-    # so each loss reads what copying scores under the same fixed scale.
-    assert int(logs["player_consequence_transitions"]) > 0
-    for name in ("public_entity", "field", "state_value"):
-        copy = float(logs[f"player_consequence_copy_loss_{name}"])
-        assert copy > 0
-        np.testing.assert_allclose(
-            float(logs[f"player_consequence_mean_loss_{name}"]), copy, rtol=2e-2
-        )
-        np.testing.assert_allclose(
-            float(logs[f"player_consequence_sampler_loss_{name}"]),
-            float(logs[f"player_consequence_copy_energy_{name}"]),
-            rtol=2e-2,
-        )
-    np.testing.assert_allclose(
-        float(logs["player_consequence_value_gap_sampler"]),
-        float(logs["player_consequence_value_gap_copy"]),
-        # The same head on the same row in two differently fused bf16
-        # programs: equal to bf16's resolution, not bit for bit.
-        atol=2e-3,
-    )
     assert not any("pair_value" in key or "pair_population" in key for key in logs)
     for key in (
         "player_loss_pg",
