@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from ml_collections import ConfigDict
 
-from rl.environment.data import NUM_ACTION_CELLS
+from rl.environment.data import NUM_ACTION_CELLS, NUM_SWITCH_CELLS, OTHER_CELL_OFFSET
 from rl.environment.interfaces import (
     CategoricalValueHeadOutput,
     PolicyHeadOutput,
@@ -56,15 +56,15 @@ class ReadoutRows(NamedTuple):
 class HeadParams(NamedTuple):
     """Per-CALL sampling knobs, traced (a new value never recompiles).
 
-    `prune_threshold` (2026-09-09) is DeepNash's FineTuning threshold: legal
-    cells whose probability is below it are removed from the SAMPLED
-    distribution and the rest renormalised (rl/model/utils.py
-    prune_log_policy). 0.0, the training actors' value, is bit-identical
-    to sampling the policy as trained; only the `thresholded` eval slot
-    sets it. The policy's metrics always read the untouched policy."""
+    `greedy` plays the player policy's most likely legal cell instead of
+    sampling it (rl/model/utils.py sampling_log_policy). False, the
+    training actors' value, is bit-identical to sampling the policy as
+    trained; only the `argmax` eval slot sets it. The policy's metrics
+    always read the untouched policy, and the builder heads read `temp`
+    alone."""
 
     temp: float = 1.0
-    prune_threshold: float = 0.0
+    greedy: bool = False
 
 
 class PolicyMetrics(NamedTuple):
@@ -379,6 +379,38 @@ class FlatActionReadout(nn.Module):
     """
 
     cfg: ConfigDict
+
+    def chosen_pair_features(self, rows: ReadoutRows, action_cell: jax.Array):
+        source, target = chosen_bank_rows(
+            rows.private, rows.move, rows.target, action_cell
+        )
+        leaving, _ = rows.my_active(0)
+
+        def features(block, target_row):
+            def projection(row, role):
+                params = self.get_variable("params", f"{block}_{role}")
+                return nn.Dense(
+                    params["kernel"].shape[-1],
+                    use_bias=False,
+                    dtype=row.dtype,
+                    parent=None,
+                ).apply({"params": params}, row)
+
+            interaction = projection(source, "query") * projection(target_row, "key")
+            return jnp.concatenate(
+                (
+                    interaction / math.sqrt(self.cfg.qk_size),
+                    projection(source, "score"),
+                    projection(target_row, "target_score"),
+                )
+            )
+
+        pair = jnp.where(
+            action_cell < NUM_SWITCH_CELLS,
+            features("switch", leaving[0]),
+            features("move", target),
+        )
+        return jnp.where(action_cell < OTHER_CELL_OFFSET, pair, 0)
 
     @nn.compact
     def __call__(

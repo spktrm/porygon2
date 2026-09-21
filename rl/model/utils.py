@@ -40,6 +40,42 @@ def legal_log_policy(logits: jax.Array, legal_actions: jax.Array) -> jax.Array:
     return jnp.where(legal_actions, log_policy, 0.0)
 
 
+def sampling_log_policy(
+    log_policy: jax.Array, legal_actions: jax.Array, greedy: bool
+) -> jax.Array:
+    """The distribution an actor draws from, as log-probabilities with
+    illegal cells at the dtype's min so the sampler can never draw one.
+    `greedy` replaces the policy with the point mass on its most likely
+    legal cell (ties to the lowest index), so the same sampler returns the
+    argmax and a gathered log-probability is that of the play actually
+    made: 0."""
+    chex.assert_equal_shape((log_policy, legal_actions), dims=-1)
+    dtype_min = jnp.finfo(log_policy.dtype).min
+    masked_log_policy = jnp.where(legal_actions, log_policy, dtype_min)
+    best_cell = jnp.argmax(masked_log_policy, axis=-1, keepdims=True)
+    is_best_cell = jnp.arange(log_policy.shape[-1]) == best_cell
+    point_mass = jnp.where(is_best_cell, 0.0, dtype_min).astype(log_policy.dtype)
+    return jnp.where(greedy, point_mass, masked_log_policy)
+
+
+def renormalise_kept(
+    log_policy: jax.Array, legal_actions: jax.Array, kept: jax.Array
+) -> jax.Array:
+    """The policy restricted to `kept` (a subset of the legal cells, never
+    empty) and renormalised, in the sampling form: removed and illegal cells
+    at the dtype's min, so exp() at a gathered cell is exactly the restricted
+    probability. A row in which nothing was removed is returned untouched
+    rather than renormalised, so a no-op prune is bit-identical on every
+    legal cell."""
+    chex.assert_equal_shape((log_policy, legal_actions, kept), dims=-1)
+    dtype_min = jnp.finfo(log_policy.dtype).min
+    kept_log_policy = jnp.where(kept, log_policy, dtype_min)
+    log_kept_mass = jax.nn.logsumexp(kept_log_policy, axis=-1, keepdims=True)
+    nothing_removed = (kept == legal_actions).all(axis=-1, keepdims=True)
+    renormalised = jnp.where(nothing_removed, log_policy, log_policy - log_kept_mass)
+    return jnp.where(kept, renormalised, dtype_min)
+
+
 def prune_log_policy(
     log_policy: jax.Array, legal_actions: jax.Array, threshold: float
 ) -> jax.Array:
@@ -59,12 +95,7 @@ def prune_log_policy(
     policy = jnp.where(legal_actions, jnp.exp(log_policy), 0.0)
     max_policy = policy.max(axis=-1, keepdims=True)
     kept = legal_actions & ((policy >= threshold) | (max_policy < threshold))
-    dtype_min = jnp.finfo(log_policy.dtype).min
-    kept_log_policy = jnp.where(kept, log_policy, dtype_min)
-    log_kept_mass = jax.nn.logsumexp(kept_log_policy, axis=-1, keepdims=True)
-    nothing_removed = (kept == legal_actions).all(axis=-1, keepdims=True)
-    renormalised = jnp.where(nothing_removed, log_policy, log_policy - log_kept_mass)
-    return jnp.where(kept, renormalised, dtype_min)
+    return renormalise_kept(log_policy, legal_actions, kept)
 
 
 def get_num_params(vars: Params, n: int = 3) -> dict[str, dict[str, float]]:

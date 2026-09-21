@@ -28,7 +28,7 @@ def _tree(extra: dict[str, jax.Array] | None = None, scale: float = 1.0) -> dict
 def test_merge_params_reports_added_and_dropped() -> None:
     fresh = _tree({"new_leaf": jnp.zeros((4,))}, scale=0.0)
     loaded = _tree({"old_leaf": jnp.ones((5,))}, scale=1.0)
-    merged, kept_fresh, dropped = merge_params(fresh, loaded)
+    merged, kept_fresh, dropped, _ = merge_params(fresh, loaded)
     assert kept_fresh == ["/params/encoder/new_leaf"]
     assert dropped == ["/params/encoder/old_leaf"]
     assert "old_leaf" not in merged["params"]["encoder"]
@@ -49,7 +49,7 @@ def test_merge_keeps_an_added_subtree_fresh_everywhere() -> None:
     fresh["params"]["added_control"] = {"Dense_0": {"kernel": jnp.full((2, 2), 0.25)}}
     loaded = _tree({}, scale=1.0)
     loaded["params"]["old_head"] = {"Dense_0": {"kernel": jnp.full((3, 2), 7.0)}}
-    merged, kept_fresh, dropped = merge_params(fresh, loaded)
+    merged, kept_fresh, dropped, _ = merge_params(fresh, loaded)
     assert kept_fresh == ["/params/renamed_head", "/params/added_control"]
     assert dropped == ["/params/old_head"]
     assert "old_head" not in merged["params"]
@@ -103,3 +103,46 @@ def test_merge_opt_state_identity_when_trees_agree() -> None:
         jax.tree_util.tree_leaves(merged), jax.tree_util.tree_leaves(loaded)
     ):
         assert np.array_equal(merged_leaf, loaded_leaf)
+
+
+def _grouped(groups: int, value: float) -> dict:
+    return {
+        "params": {
+            "encoder": {
+                "sequence_group_bias": jnp.full((groups, 3), value),
+                "input_normalisation": {"group_scale": jnp.full((groups, 3), value)},
+                "other_table": jnp.full((groups, 3), value),
+            }
+        }
+    }
+
+
+def test_a_new_sequence_group_extends_the_per_group_leaves() -> None:
+    """One more SequenceGroup grows the leading axis of the per-group leaves;
+    the trained rows of the old groups survive and only the new row is fresh,
+    in the params and in the Adam moments alike."""
+    fresh = _grouped(5, 0.0)
+    loaded = _grouped(4, 1.0)
+    merged, kept_fresh, _, extended = merge_params(fresh, loaded)
+    encoder = merged["params"]["encoder"]
+    for leaf in (
+        encoder["sequence_group_bias"],
+        encoder["input_normalisation"]["group_scale"],
+    ):
+        assert leaf.shape == (5, 3)
+        assert np.all(leaf[:4] == 1) and np.all(leaf[4:] == 0)
+    assert extended == [
+        "/params/encoder/sequence_group_bias (rows 4 -> 5)",
+        "/params/encoder/input_normalisation/group_scale (rows 4 -> 5)",
+    ]
+    # The control: an unlisted leaf with the same growth is NOT half-loaded.
+    assert np.all(encoder["other_table"] == 0)
+    assert kept_fresh == ["/params/encoder/other_table (shape (4, 3) -> (5, 3))"]
+    # A listed leaf that SHRANK, or whose row width changed, is not extended.
+    _, shrunk, _, none_extended = merge_params(_grouped(3, 0.0), loaded)
+    assert none_extended == [] and len(shrunk) == 3
+
+    optimiser = optax.adam(1e-3)
+    opt_state = merge_opt_state(optimiser.init(fresh), optimiser.init(loaded))
+    moments = opt_state[0].mu["params"]["encoder"]["sequence_group_bias"]
+    assert moments.shape == (5, 3)

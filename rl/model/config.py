@@ -127,56 +127,38 @@ def get_player_model_config(
         len(CAT_VF_SUPPORT),
     )
     cfg.public_value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The state value head (2026-09-20): same shape, reading STATE_VALUE_CLS,
+    # the row that attends over the 15 public state rows alone. Learner-only.
+    cfg.state_value_head = ConfigDict()
+    cfg.state_value_head.mlp = ConfigDict()
+    cfg.state_value_head.mlp.layer_sizes = (
+        2 * entity_size,
+        entity_size,
+        len(CAT_VF_SUPPORT),
+    )
+    cfg.state_value_head.category_values = jnp.asarray(CAT_VF_SUPPORT, dtype=cfg.dtype)
+    # The consequence model (rl/model/consequence.py, 2026-09-20): learner-
+    # only. `rank` is the pair form's bilinear width; the sampler is a small
+    # trunk of its OWN -- plain residual, never the nGPT form, because
+    # project_trunk_kernels only re-projects encoder/trunk/blocks and a
+    # normalised block left unprojected is a different function every step.
+    cfg.consequence = ConfigDict()
+    cfg.consequence.rank = entity_size
+    cfg.consequence.trunk = ConfigDict()
+    cfg.consequence.trunk.num_blocks = 2
+    cfg.consequence.trunk.num_heads = num_heads
+    cfg.consequence.trunk.qk_size = encoder_qkv_size
+    cfg.consequence.trunk.v_size = encoder_qkv_size
+    cfg.consequence.trunk.model_size = entity_size
+    cfg.consequence.trunk.hidden_size = encoder_hidden_size
+    cfg.consequence.trunk.use_bias = encoder_use_bias
+    cfg.consequence.trunk.qk_layer_norm = encoder_qk_layer_norm
+    cfg.consequence.trunk.normalised_residual = False
+    cfg.consequence.trunk.residual_alpha_init = 1 / cfg.consequence.trunk.num_blocks
     # The PBRS potential channel's value head (2026-09-11): learner-only and
     # built only when the learner's player_potential_strength > 0 (main.py
     # sets `enabled`). One scalar in unit potential units, zero at init so a
     # merge starts the channel at W = 0 in params, target and reg alike.
-    # The event world model (rl/model/world_model.py): an observer of the
-    # trunk's public output rows, trained by the offline world-model trainer
-    # and read by the eval actor's search. Off by default: the learner's
-    # tree carries no world-model leaves unless enabled.
-    cfg.world_model = ConfigDict()
-    cfg.world_model.enabled = False
-    cfg.world_model.model_size = entity_size
-    cfg.world_model.decoder = ConfigDict()
-    cfg.world_model.decoder.num_blocks = 2
-    cfg.world_model.decoder.num_heads = num_heads
-    cfg.world_model.decoder.qk_size = encoder_qkv_size
-    cfg.world_model.decoder.v_size = encoder_qkv_size
-    cfg.world_model.decoder.model_size = entity_size
-    cfg.world_model.decoder.hidden_size = encoder_hidden_size
-    cfg.world_model.decoder.use_bias = encoder_use_bias
-    cfg.world_model.decoder.qk_layer_norm = encoder_qk_layer_norm
-    cfg.world_model.flow = ConfigDict()
-    cfg.world_model.flow.block = ConfigDict()
-    cfg.world_model.flow.block.num_blocks = 2
-    cfg.world_model.flow.block.num_heads = num_heads
-    cfg.world_model.flow.block.qk_size = encoder_qkv_size
-    cfg.world_model.flow.block.v_size = encoder_qkv_size
-    cfg.world_model.flow.block.model_size = entity_size
-    cfg.world_model.flow.block.hidden_size = encoder_hidden_size
-    cfg.world_model.flow.block.use_bias = encoder_use_bias
-    cfg.world_model.flow.block.qk_layer_norm = encoder_qk_layer_norm
-    # Euler steps per imagined event; set by the open-loop read at 1/2/4/8.
-    cfg.world_model.flow_steps = 4
-    # Group-scale floor for the normalised difference (the 1e-2 floor the
-    # delta grounding head carried: an all-static group is floored, never
-    # divided by zero).
-    cfg.world_model.scale_floor = 1e-2
-
-    # Depth-1 sampled event rollouts on the eval actor (rl/model/event_search.py):
-    # for each legal cell, `num_samples` rollouts to the next own decision,
-    # the public critic at the leaf, Q / temp added to the readout's logits.
-    # Needs cfg.world_model.enabled; value_blind consumes the same rollouts
-    # and adds nothing -- the matched control arm.
-    cfg.search = ConfigDict()
-    cfg.search.enabled = False
-    cfg.search.num_samples = 8
-    cfg.search.max_cells = 16
-    cfg.search.max_events = 8
-    cfg.search.temp = 1.0
-    cfg.search.value_blind = False
-
     cfg.potential_head = ConfigDict()
     cfg.potential_head.enabled = False
     cfg.potential_head.zero_init_output = True

@@ -16,7 +16,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rl.model.config import get_player_model_config
 from rl.model.constants import (
     HISTORY_ENTITY_ROWS,
     NUM_SEQUENCE_ROWS,
@@ -28,6 +27,8 @@ from rl.model.constants import (
     SEQUENCE_SLICES,
 )
 from rl.model.trunk import TrunkBlock
+from rl.online.artifact import player_model_config_for
+from rl.online.config import get_learner_config
 
 ROOT = Path("runtime/type-probe-switch/attention")
 DEPTH_ROOT = Path("runtime/type-probe-switch/depth")
@@ -97,7 +98,7 @@ def groups_and_rows():
 
 
 def capture(params, sequence, valid):
-    block = TrunkBlock(get_player_model_config(9, train=True).encoder.trunk)
+    block = TrunkBlock(player_model_config_for(get_learner_config()).encoder.trunk)
     read_mask = jnp.asarray(SEQUENCE_READ_MASK)
 
     def step(current, block_params):

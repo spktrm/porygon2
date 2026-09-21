@@ -1,9 +1,15 @@
 # ruff: noqa: E402 -- load deployment environment before model imports.
+import os
+
 from dotenv import load_dotenv
 
 from constants import NUM_HISTORY  # noqa: E402
 
 load_dotenv()
+# The default actor device is the CPU, and even --device gpu must fit beside
+# a live learner: without this JAX reserves 75% of the card at backend init,
+# which the rl imports below already trigger.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 import argparse
 import secrets
 from typing import Literal

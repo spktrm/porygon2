@@ -137,7 +137,7 @@ class Agent:
         # head_params is a per-CALL argument of the jitted step (a traced
         # pytree of scalars, one trace regardless of value), not baked in
         # via functools.partial: the eval slots pass their own HeadParams
-        # (main.py -- the thresholded slot's prune_threshold), which a
+        # (main.py -- temp, the argmax slot's greedy), which a
         # baked-in python float would turn into one recompile per value.
         self._player_apply_fn = player_apply_fn or _no_apply
         self._builder_apply_fn = builder_apply_fn or _no_apply

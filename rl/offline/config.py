@@ -8,8 +8,8 @@ from rl.config.common import AdamWConfig, BaseTrainingConfig
 @chex.dataclass(frozen=True)
 class Porygon2OfflineConfig(BaseTrainingConfig):
     """The offline trainer (rl/offline/train.py): the player model's public
-    path frozen from a learner checkpoint, the public critic (and, with
-    world_model, the event world model) trained on the replay shards."""
+    path frozen from a learner checkpoint, the public critic trained on the
+    replay shards."""
 
     dataset_dir: str = "replays/shards"
     holdout_modulus: int = 20
@@ -27,11 +27,11 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # imports the model package (~0.7 GB); 8 decode the corpus in ~20 s.
     decode_workers: int = 8
     # The learner checkpoint whose encoder + public critic are the frozen
-    # substrate (required); resume_from restarts a world-model run.
+    # substrate (required); resume_from restarts an offline run.
     trunk_ckpt: str | None = None
     resume_from: str | None = None
-    # Joint: the offline losses also train the encoder (Step 6 of the
-    # world-model plan); off = observer, the trunk never moves.
+    # Joint: the offline loss also trains the encoder; off = observer, the
+    # trunk never moves.
     joint: bool = False
     # The trunk form the checkpoint was trained under (the learner's
     # player_trunk_normalised_residual); the model config's default is off.
@@ -39,29 +39,15 @@ class Porygon2OfflineConfig(BaseTrainingConfig):
     # Param subtrees left at their fresh init instead of the checkpoint's
     # (e.g. "encoder/history_encoder" when the checkpoint's form differs).
     fresh_subtrees: tuple[str, ...] = ()
-    # Off = the critic alone: public_value_head on every valid event state.
-    world_model: bool = True
     num_steps: int = 240000
     learning_rate: float = 3e-4
     lr_final_fraction: float = 0.1
     clip_gradient: float = 10.0
     adam: AdamWConfig = AdamWConfig(b1=0.9, b2=0.999, eps=1e-8, weight_decay=1e-2)
-    kind_loss_weight: float = 1.0
-    actor_loss_weight: float = 1.0
-    move_loss_weight: float = 1.0
-    target_loss_weight: float = 1.0
-    touched_loss_weight: float = 1.0
-    flow_loss_weight: float = 1.0
-    mean_loss_weight: float = 1.0
-    terminal_loss_weight: float = 1.0
     # The head's parameters receive no other gradient, so under Adam this
     # weight is a no-op up to eps (scale invariance): the head's noise
     # lever is its learning rate. Kept at 1 so the logged loss is the CE.
     public_value_loss_weight: float = 1.0
-    # EMA of the per-group RMS difference the flow is scaled by.
-    scale_momentum: float = 0.99
-    # Samples per state for the eval-only imagined-value reads.
-    eval_samples: int = 8
     log_interval_steps: int = 200
     eval_interval_steps: int = 5000
     eval_batches: int = 256

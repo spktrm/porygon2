@@ -49,4 +49,5 @@ viz/
 **/.DS_Store
 docs/
 service/dist-offline/
+service/dist-bench/
 env-py311-retired/

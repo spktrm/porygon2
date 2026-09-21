@@ -94,7 +94,7 @@ def carry_params(
         from rl.online.artifact import merge_params
 
         restored = checkpoint_lib.load_component(trained, "player", "params")["params"]
-        encoder, kept_fresh, _ = merge_params(
+        encoder, kept_fresh, _, _ = merge_params(
             params["params"]["encoder"], restored["encoder"]
         )
         assert not any("history_encoder" in path for path in kept_fresh), kept_fresh

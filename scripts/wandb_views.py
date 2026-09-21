@@ -2,7 +2,7 @@
 
 Creates/refreshes two views:
   - pokemon-rl         -> "Signal health"  (training-run diagnostics)
-  - pokemon-rl-offline -> "Event world model"  (rl/offline/train.py)
+  - pokemon-rl-offline -> "Offline critic"  (rl/offline/train.py)
 
 Panel keys mirror what rl/online/main.py and the offline trainer log; when
 metrics are added or renamed, update the sections here and re-run. Each run without
@@ -94,21 +94,23 @@ def lp(title, y, x=None, regex=None, smooth=0.9, log_y=False, range_y=None):
     return wr.LinePlot(**{k: v for k, v in kwargs.items() if v is not None})
 
 
-# Both eval slots use the live player's published parameters at T=1.
-# Thresholding is an evaluation intervention; V-trace uses the full policy.
+# Every eval slot uses the live player's published parameters. The argmax
+# and T=0.5 slots are evaluation interventions; V-trace uses the full
+# policy at T=1.
 SH = "EvalActor-simpleheuristic"
 PLAIN_T1_ACTOR = f"{SH}-plain-t1-0"
-THRESHOLDED_ACTOR = f"{SH}-thresholded-1"
-EVAL_ACTORS = (PLAIN_T1_ACTOR, THRESHOLDED_ACTOR)
+ARGMAX_ACTOR = f"{SH}-argmax-1"
+PLAIN_T05_ACTOR = f"{SH}-plain-t05-2"
+EVAL_ACTORS = (PLAIN_T1_ACTOR, ARGMAX_ACTOR, PLAIN_T05_ACTOR)
 
 
-def threshold_winrate_panel():
+def eval_slate_winrate_panel():
     """One canonical comparison in the overview and eval-slate sections:
     the policy as sampled by the training actors against the same policy
-    thresholded at sampling. Actor-side averages (200-game half-life,
+    played at its argmax and sharpened to T=0.5. Actor-side averages (200-game half-life,
     reset on restart), no additional UI smoothing."""
     return lp(
-        "Smoothed win rate · T=1 plain vs thresholded (200-game half-life)",
+        "Smoothed win rate · T=1 plain, argmax, T=0.5 plain (200-game half-life)",
         [f"smoothed-wr-{actor}" for actor in EVAL_ACTORS],
         x="lifetime_step",
         smooth=0,
@@ -127,22 +129,22 @@ def rl_sections():
             name="0 · At a glance",
             is_open=True,
             panels=[
-                threshold_winrate_panel(),
+                eval_slate_winrate_panel(),
                 lp(
-                    "Smoothed alive-mon margin · T=1 plain vs thresholded (200-game half-life)",
+                    "Smoothed alive-mon margin · eval slate (200-game half-life)",
                     [f"smoothed-margin-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
-                    "Main-parameter payoff · T=1 (sparse games, UI-smoothed)",
+                    "Main-parameter payoff · eval slate (sparse games, UI-smoothed)",
                     [f"main-payoff-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0.9,
                     range_y=(-1, 1),
                 ),
                 lp(
-                    "Eval games since restart · T=1 plain and thresholded",
+                    "Eval games since restart · eval slate",
                     [f"games-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
@@ -180,12 +182,18 @@ def rl_sections():
                         "player_value_head_r2",
                         "player_priv_value_head_r2",
                         "player_public_value_head_r2",
+                        "player_state_value_head_r2",
                     ],
                     range_y=(-1, 1),
                 ),
                 lp(
                     "Process RSS (MB)",
                     ["diag_rss_mb", "diag_node_rss_mb"],
+                    smooth=0,
+                ),
+                lp(
+                    "GPU memory, allocator peak / in use (MB)",
+                    ["diag_gpu_peak_mb", "diag_gpu_in_use_mb"],
                     smooth=0,
                 ),
             ],
@@ -514,25 +522,25 @@ def rl_sections():
             ],
         ),
         ws.Section(
-            name="3c · Eval slate · T=1 plain vs thresholded",
+            name="3c · Eval slate · T=1 plain, argmax, T=0.5 plain",
             is_open=True,
             panels=[
-                threshold_winrate_panel(),
+                eval_slate_winrate_panel(),
                 lp(
-                    "Eval games since restart · T=1 plain vs thresholded",
+                    "Eval games since restart · per slot",
                     [f"games-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0,
                 ),
                 lp(
-                    "Voluntary switches per offered decision · T=1 plain vs thresholded",
+                    "Voluntary switches per offered decision · per slot",
                     [f"switch-frac-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0.95,
                     range_y=(0, 1),
                 ),
                 lp(
-                    "Eval ms per decision · T=1 plain vs thresholded (CPU)",
+                    "Eval ms per decision · per slot (CPU)",
                     [f"ms-per-step-{actor}" for actor in EVAL_ACTORS],
                     x="lifetime_step",
                     smooth=0.9,
@@ -556,6 +564,7 @@ def rl_sections():
                         "player_loss_v_win",
                         "player_loss_v_win_priv",
                         "player_loss_v_win_public",
+                        "player_loss_v_win_state",
                     ],
                 ),
                 lp(
@@ -661,6 +670,127 @@ def rl_sections():
                 lp(
                     "Win returns",
                     ["player_win_returns_sum", "player_win_returns_min"],
+                ),
+            ],
+        ),
+        ws.Section(
+            name="4b · Observable self-play consequences",
+            is_open=True,
+            panels=[
+                lp("Outcome prediction losses", [], regex="^player_observable_.*loss$"),
+                lp(
+                    "HP change error versus copy",
+                    ["player_observable_hp_mae", "player_observable_hp_copy_mae"],
+                ),
+                lp(
+                    "Execution and faint probability error",
+                    [],
+                    regex="^player_observable_.*brier$",
+                ),
+                lp("Recall by outcome class", [], regex="^player_observable_.*recall$"),
+                lp("Observed label counts", [], regex="^player_observable_.*count$"),
+                lp(
+                    "Shared policy-feature gradient ramp",
+                    ["player_observable_shared_grad_live"],
+                ),
+                lp(
+                    "Shared gradient norms",
+                    [
+                        "player_encoder_gradient_norm",
+                        "player_action_head_gradient_norm",
+                    ],
+                ),
+                lp(
+                    "Gradient clipping", ["player_clip_binds", "player_clip_multiplier"]
+                ),
+            ],
+        ),
+        ws.Section(
+            # The consequence model (rl/model/consequence.py). Both losses
+            # are over a FIXED per-group scale: an exact prediction scores 0
+            # and copying scores what the copy panel shows. Prediction gains are SUPPORTING evidence only: the target
+            # moves with the trunk, so usefulness is judged on the frozen
+            # tactical cohort and the fixed-label probes, never here.
+            name="4b · Consequence model",
+            is_open=True,
+            panels=[
+                lp(
+                    "Losses at a fixed scale (lower is better; compare to copy below)",
+                    [
+                        "player_consequence_mean_loss",
+                        "player_consequence_state_only_loss",
+                        "player_consequence_sampler_loss",
+                    ],
+                ),
+                lp("Mean head by group", [], regex="^player_consequence_mean_loss_"),
+                lp("Sampler by group", [], regex="^player_consequence_sampler_loss_"),
+                lp(
+                    # State-only loss minus the action-conditioned loss:
+                    # above 0 = the action's own rows carry the consequence.
+                    "Action-conditioned gain by group (higher is better)",
+                    [],
+                    regex="^player_consequence_action_gain_",
+                ),
+                lp(
+                    # 1 = calibrated dispersion, 0 = the sampler ignores its
+                    # noise (the under-dispersion fallback trigger is < 0.5).
+                    "Sampler spread / skill by group",
+                    [],
+                    regex="^player_consequence_spread_over_skill_",
+                    range_y=(0, 1.5),
+                ),
+                lp(
+                    # |V(predicted value row) - V(real next row)| for the
+                    # taken action; `copy` is |V(t+1) - V(t)|. Lower is better.
+                    "Imagined value gap: sampler / mean head / copy",
+                    [
+                        "player_consequence_value_gap_sampler",
+                        "player_consequence_value_gap_mean",
+                        "player_consequence_value_gap_copy",
+                    ],
+                ),
+                lp(
+                    "Imagined value gap by behaviour probability of the action",
+                    [],
+                    regex="^player_consequence_value_gap_sampler_p",
+                ),
+                lp(
+                    # The collapse watch: a trunk that makes its rows easier to
+                    # predict by moving them less shows up as a falling norm.
+                    "True change norm by group",
+                    [],
+                    regex="^player_consequence_change_norm_",
+                ),
+                lp(
+                    "Predicted / true change RMS by group (abort above 3)",
+                    [],
+                    regex="^player_consequence_predicted_rms_ratio_",
+                ),
+                lp(
+                    # What COPYING the current row scores under the same fixed
+                    # scale (about 1 before shaping). Rising = the trunk is
+                    # inflating its rows' step-to-step change.
+                    "Copy predictor's loss by group (the inflation gauge)",
+                    [],
+                    regex="^player_consequence_copy_loss_",
+                    log_y=True,
+                ),
+                lp("Transitions per batch", ["player_consequence_transitions"]),
+                lp(
+                    # 0 = the trunk is only observed, 1 = full shaping.
+                    "Trunk gradient scale (live, under its ramp)",
+                    ["player_consequence_trunk_grad_live"],
+                    range_y=(0, 1),
+                ),
+                lp(
+                    # The encoder's gradient with the consequence losses in it
+                    # once the ramp starts; its observer-phase median is 2.21.
+                    "Encoder / consequence-heads gradient norm",
+                    [
+                        "player_encoder_gradient_norm",
+                        "player_consequence_gradient_norm",
+                    ],
+                    log_y=True,
                 ),
             ],
         ),
@@ -857,6 +987,13 @@ def rl_sections():
                 lp(
                     "Gradient / param norm (aggregate)",
                     ["player_gradient_norm", "player_param_norm"],
+                ),
+                lp(
+                    # What clip_by_global_norm multiplies every leaf by, and
+                    # how often it binds: any added loss moves both.
+                    "Global clip multiplier / bind fraction",
+                    ["player_clip_multiplier", "player_clip_binds"],
+                    range_y=(0, 1),
                 ),
                 lp(
                     # Column-block rms of the three state kernels (public
@@ -1109,75 +1246,13 @@ def members(stem):
 
 
 def offline_sections():
-    """The offline trainer (rl/offline/train.py): the public critic and the
-    event world model on the replay export."""
-    kinds = ["move", "switch", "drag", "cant", "faint", "residual", "end"]
+    """The offline trainer (rl/offline/train.py): the public critic on the
+    replay export."""
     return [
         ws.Section(
-            name="0 · Grammar (held-out)",
+            name="0 · Public critic (held-out)",
             is_open=True,
             panels=[
-                lp("Nats per token", ["eval_nats_per_token", "nats_per_token"]),
-                lp("NLL by kind", [f"eval_nll_kind_{k}" for k in kinds]),
-                lp(
-                    "Position losses",
-                    [
-                        f"eval_loss_{p}"
-                        for p in ("kind", "actor", "move", "target", "touched")
-                    ],
-                ),
-                lp("Actor accuracy", ["eval_actor_acc_mine", "eval_actor_acc_theirs"]),
-                lp(
-                    "Move accuracy (side x revealed)",
-                    [
-                        "eval_move_acc_mine_revealed",
-                        "eval_move_acc_mine_unrevealed",
-                        "eval_move_acc_theirs_revealed",
-                        "eval_move_acc_theirs_unrevealed",
-                    ],
-                ),
-                lp(
-                    "Touched F1 / new-turn accuracy",
-                    ["eval_touched_f1", "eval_new_turn_acc"],
-                ),
-            ],
-        ),
-        ws.Section(
-            name="1 · Latent flow vs mean control",
-            is_open=True,
-            panels=[
-                lp("Flow loss (copy = 1)", ["eval_loss_flow", "loss_flow"]),
-                lp(
-                    "Mean control loss (copy = 1)",
-                    ["eval_loss_mean_control", "loss_mean_control"],
-                ),
-                lp("Flow loss by group", [], regex="^eval_flow_loss_"),
-                lp("Untouched delta fraction", ["eval_untouched_delta_frac"]),
-                lp(
-                    "Untouched delta fraction by kind",
-                    [],
-                    regex="^eval_untouched_delta_frac_",
-                ),
-                lp("Delta scale by group", [], regex="^delta_scale_", log_y=True),
-                lp("out_proj RMS", ["out_proj_rms"], log_y=True),
-            ],
-        ),
-        ws.Section(
-            name="2 · Value reads",
-            is_open=True,
-            panels=[
-                lp(
-                    "Imagined value R2 (sample mean vs real next)",
-                    [
-                        "eval_imagined_value_r2",
-                        "eval_imagined_value_r2_faint",
-                        "eval_imagined_value_r2_nonfaint",
-                    ],
-                ),
-                lp(
-                    "Value CRPS (flow) vs |err| (control)",
-                    ["eval_value_crps", "eval_value_crps_mean_control"],
-                ),
                 lp(
                     "Public critic R2 (all / boundary / mid-turn)",
                     [
@@ -1194,14 +1269,11 @@ def offline_sections():
                         "eval_public_value_r2_final",
                     ],
                 ),
-                lp(
-                    "Public value loss / terminal loss",
-                    ["eval_loss_public_value", "eval_loss_terminal"],
-                ),
+                lp("Public value loss", ["eval_loss_public_value"]),
             ],
         ),
         ws.Section(
-            name="3 · Train side",
+            name="1 · Train side",
             panels=[
                 lp("Train loss", ["loss"]),
                 lp("Gradient norm", ["gradient_norm"], log_y=True),
@@ -1286,7 +1358,7 @@ def main():
         requests.append(
             (
                 "pokemon-rl-offline",
-                "Event world model",
+                "Offline critic",
                 offline_sections(),
                 None,
                 None,

@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from rl.environment.consequence_labels import observed_consequences
 from rl.environment.data import (
     CAT_VF_SUPPORT,
     PackedSetFeature,
@@ -20,6 +21,7 @@ from rl.environment.protos.features_pb2 import (
     FieldFeature,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
+from rl.model.consequence import CONSEQUENCE_NOISE_SIZE
 from rl.model.constants import (
     SequenceGroup,
 )
@@ -36,6 +38,11 @@ from rl.online.training.action_telemetry import (
     switch_loss_telemetry,
     voluntary_switch_telemetry,
 )
+from rl.online.training.consequence import (
+    consequence_terms,
+    live_trunk_gradient,
+    scale_trunk_gradient,
+)
 from rl.online.training.loss import (
     appo_policy_loss,
     backward_kl_loss,
@@ -46,6 +53,11 @@ from rl.online.training.loss import (
     mse_value_loss,
     policy_gradient_loss,
     uniform_kl_rows,
+)
+from rl.online.training.observable_consequence import (
+    observable_gradient,
+    observable_terms,
+    scale_features,
 )
 from rl.online.training.targets import (
     compute_builder_targets,
@@ -458,6 +470,16 @@ def train_step(
             ),
             value_mask,
         )
+        # The state value head: the same labels and mask a fourth time, read
+        # through the 15 public state rows alone.
+        learner_state_value_head = learner_player_pred.state_value_head
+        loss_v_win_state = average(
+            optax.softmax_cross_entropy(
+                logits=learner_state_value_head.logits.astype(jnp.float32),
+                labels=player_targets.win_returns.astype(jnp.float32),
+            ),
+            value_mask,
+        )
         # The PBRS potential channel's head (2026-09-11): regressed on its
         # own channel returns over live nonterminal rows (its value is forced
         # 0 on done rows, so their label carries nothing). Coefficient 1:
@@ -613,6 +635,56 @@ def train_step(
                 config,
             )
         )
+        consequence_trunk_gradient = live_trunk_gradient(
+            player_state.step_count, config
+        )
+        observable_shared_gradient = observable_gradient(
+            player_state.step_count, config
+        )
+        consequence_inputs = scale_trunk_gradient(
+            learner_player_pred.consequence_inputs, consequence_trunk_gradient
+        ).replace(
+            action_features=scale_features(
+                learner_player_pred.consequence_inputs.action_features,
+                observable_shared_gradient,
+            )
+        )
+        consequence_outputs = player_state.consequence_fn(
+            params,
+            consequence_inputs,
+            jax.random.normal(
+                batch.rng_key,
+                (config.player_consequence_draws,)
+                + acted_mask.shape
+                + (CONSEQUENCE_NOISE_SIZE,),
+            ),
+        )
+        loss_consequence, consequence_logs = consequence_terms(
+            consequence_outputs,
+            learner_player_pred.consequence_inputs,
+            player_transitions.env_output.info,
+            acted_mask,
+            learner_state_value_head.expectation,
+            player_transitions.agent_output.actor_output.action_head.log_prob,
+            config,
+        )
+        observable_targets = observed_consequences(
+            player_transitions.env_output,
+            player_history,
+            player_packed_history,
+            player_transitions.agent_output.actor_output.action_head.action_index,
+            acted_mask,
+        )
+        loss_observable, observable_logs = observable_terms(
+            consequence_outputs.observable_logits[0], observable_targets
+        )
+        loss_consequence = (
+            loss_consequence + config.player_observable_coef * loss_observable
+        )
+        consequence_logs.update(observable_logs)
+        consequence_logs["player_observable_shared_grad_live"] = (
+            observable_shared_gradient
+        )
         loss = (
             config.player_pg_coef
             * (
@@ -625,15 +697,20 @@ def train_step(
             + config.player_value_head_loss_coef * loss_v_win
             + config.player_priv_value_head_loss_coef * loss_v_win_priv
             + config.player_public_value_head_loss_coef * loss_v_win_public
+            + config.player_state_value_head_loss_coef * loss_v_win_state
             # The potential channel's head, unscaled (see above).
             + loss_potential
+            + loss_consequence
         )
 
         return loss, dict(
             **pg_logs,
+            **consequence_logs,
+            player_consequence_trunk_grad_live=consequence_trunk_gradient,
             player_loss_v_win=loss_v_win,
             player_loss_v_win_priv=loss_v_win_priv,
             player_loss_v_win_public=loss_v_win_public,
+            player_loss_v_win_state=loss_v_win_state,
             # Trunk over-smoothing (cosine up / participation down = rows
             # converging); the offline per-block twin is
             # rl/probes/trunk_homogeneity.py.
@@ -716,6 +793,11 @@ def train_step(
                 value_target=player_targets.win_returns @ cat_vf_support,
                 mask=value_mask,
             ),
+            player_state_value_head_r2=calculate_r2(
+                value_prediction=learner_state_value_head.expectation,
+                value_target=player_targets.win_returns @ cat_vf_support,
+                mask=value_mask,
+            ),
             # Mean absolute priv-minus-deploy expectation gap: what the
             # privileged input is worth, re-measured live.
             player_priv_value_gap=average(
@@ -747,6 +829,7 @@ def train_step(
         config.player_trunk_normalised_residual,
     )
     training_logs.update(player_logs)
+    player_gradient_norm = optax.global_norm(player_grads)
     training_logs.update(
         dict(
             player_reg_ema_rate=reference_update_rate,
@@ -756,7 +839,15 @@ def train_step(
             ),
             player_loss=player_loss_val,
             player_param_norm=optax.global_norm(player_state.params),
-            player_gradient_norm=optax.global_norm(player_grads),
+            player_gradient_norm=player_gradient_norm,
+            # The factor clip_by_global_norm (rl/online/artifact.py) applies
+            # to EVERY leaf: any added loss moves it, stop-gradient or not.
+            player_clip_multiplier=jnp.minimum(
+                1.0, config.player_clip_gradient / (player_gradient_norm + 1e-12)
+            ),
+            player_clip_binds=(
+                player_gradient_norm > config.player_clip_gradient
+            ).astype(jnp.float32),
             # Head learning readouts: the rms of the pointer kernels
             # against their known init, and per-subtree grad norms
             # (pre-clip).

@@ -10,12 +10,13 @@ import jax.numpy as jnp
 from ml_collections import ConfigDict
 
 from rl.environment.data import (
-    CAT_VF_SUPPORT,
     CELL_MODALITY_MASK,
     NUM_MODALITY_FEATURES,
     NUM_SWITCH_CELLS,
 )
 from rl.environment.interfaces import (
+    ConsequenceInputs,
+    ConsequenceOutput,
     HistoryCarry,
     PlayerActorInput,
     PlayerActorOutput,
@@ -25,15 +26,20 @@ from rl.environment.interfaces import (
 )
 from rl.environment.protos.features_pb2 import EntityPublicNodeFeature
 from rl.environment.utils import get_ex_player_step
-from rl.model import event_search
 from rl.model.config import get_player_model_config
+from rl.model.consequence import (
+    CONSEQUENCE_NOISE_SIZE,
+    CONSEQUENCE_ROWS,
+    ConsequenceModel,
+)
 from rl.model.constants import (
     CLS_ROW,
     MOVE_ROWS,
     PRIVATE_ROWS,
-    PUBLIC_CLS_LOCAL_ROW,
     PUBLIC_CLS_ROW,
     PUBLIC_ROWS,
+    SEQUENCE_GROUP_IDS,
+    STATE_VALUE_CLS_ROW,
     TARGET_ROWS,
     VALUE_CLS_ROW,
 )
@@ -45,12 +51,12 @@ from rl.model.heads import (
     ReadoutRows,
     RegressionValueLogitHead,
     SlotConditioning,
+    chosen_bank_rows,
     compute_policy_metrics,
     sample_categorical,
 )
 from rl.model.trunk import row_homogeneity
-from rl.model.utils import get_num_params, prune_log_policy
-from rl.model.world_model import EventWorldModel
+from rl.model.utils import get_num_params, sampling_log_policy
 
 
 def actor_params_view(variables):
@@ -65,10 +71,6 @@ def actor_params_view(variables):
     # The optional doubles readout is an actor consumer too.
     if "slot_conditioning" in variables["params"]:
         required.append("slot_conditioning")
-    # The searching eval actor reads the world model and the public critic.
-    for name in ("world_model", "public_value_head"):
-        if name in variables["params"]:
-            required.append(name)
     return {"params": {name: variables["params"][name] for name in required}}
 
 
@@ -95,12 +97,16 @@ class Porygon2PlayerModel(nn.Module):
         # The public critic (2026-09-15): the same head over PUBLIC_CLS, a
         # value of the common-knowledge state alone. Learner-only likewise.
         self.public_value_head = CategoricalValueLogitHead(self.cfg.public_value_head)
+        # The state value head (2026-09-20): the same head over STATE_VALUE_CLS,
+        # a value read through the 15 public state rows. Learner-only likewise.
+        self.state_value_head = CategoricalValueLogitHead(self.cfg.state_value_head)
+        # The consequence model (2026-09-20): learner-only, singles only.
+        if self.cfg.train and self.cfg.num_decision_slots == 1:
+            self.consequence = ConsequenceModel(self.cfg.consequence)
         # The PBRS potential channel's value (2026-09-11): learner-only, and
         # absent unless the channel runs, so strength 0 keeps today's tree.
         if self.cfg.potential_head.enabled:
             self.potential_head = RegressionValueLogitHead(self.cfg.potential_head)
-        if self.cfg.world_model.enabled:
-            self.world_model = EventWorldModel(self.cfg.world_model, name="world_model")
         if self.cfg.num_decision_slots == 2:
             # Doubles only: params appear in the tree only when the module
             # is called, so singles checkpoints are unaffected.
@@ -158,8 +164,7 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        prune_threshold: float = 0.0,
-        logit_bonus: jax.Array | None = None,
+        greedy: bool = False,
     ):
         """Dispatch on decision slots: singles = one flat categorical over
         the block cells (the historical path, unchanged); doubles = two head-level
@@ -167,10 +172,10 @@ class Porygon2PlayerModel(nn.Module):
         choice — the trunk is forwarded once either way."""
         if self.cfg.num_decision_slots == 2:
             return self._forward_two_slots(
-                sequence_rows, valid_mask, head, train, temp, prune_threshold
+                sequence_rows, valid_mask, head, train, temp, greedy
             )
         return self._forward_single_slot(
-            sequence_rows, valid_mask, head, train, temp, prune_threshold, logit_bonus
+            sequence_rows, valid_mask, head, train, temp, greedy
         )
 
     def _legal_logits(
@@ -193,9 +198,8 @@ class Porygon2PlayerModel(nn.Module):
         valid_mask: jax.Array,
         given_index: jax.Array | None,
         temp: float,
-        prune_threshold: float = 0.0,
+        greedy: bool = False,
         decision_slot: int = 0,
-        logit_bonus: jax.Array | None = None,
     ):
         """Score one decision's cells and pick an action.
 
@@ -205,21 +209,19 @@ class Porygon2PlayerModel(nn.Module):
         actor actually did; None samples.
 
         Behaviour policy mu == pi, with illegal cells at the dtype's min so
-        the sampler can never draw one. `prune_threshold` removes the
-        legal cells below it from mu ONLY (rl/model/utils.py
-        prune_log_policy; 0.0 is bit-identical): the metrics read pi
+        the sampler can never draw one. `greedy` collapses mu ONLY onto
+        pi's most likely legal cell (rl/model/utils.py
+        sampling_log_policy; False is bit-identical): the metrics read pi
         untouched, and the stored log_prob is mu's, so an eval slot
-        sampling the thresholded policy reports what it sampled.
+        playing the argmax reports what it played.
         """
         flat_valid = valid_mask
         pi_logits = self._legal_logits(sequence_rows, valid_mask, temp, decision_slot)
-        if logit_bonus is not None:
-            pi_logits = jnp.where(valid_mask, pi_logits + logit_bonus, pi_logits)
         # prior=None is uniform over legal cells -- which is exactly what the
         # flat readout's all-zero init produces, so the init policy and the
         # metric anchor are the same distribution.
         metrics = compute_policy_metrics(logits=pi_logits, valid_mask=flat_valid)
-        log_mu = prune_log_policy(metrics.log_policy, flat_valid, prune_threshold)
+        log_mu = sampling_log_policy(metrics.log_policy, flat_valid, greedy)
         if given_index is not None:
             action_index = given_index
         else:
@@ -234,8 +236,7 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        prune_threshold: float = 0.0,
-        logit_bonus: jax.Array | None = None,
+        greedy: bool = False,
     ):
         if train:
             given_index = head.action_index
@@ -246,8 +247,7 @@ class Porygon2PlayerModel(nn.Module):
             valid_mask,
             given_index,
             temp,
-            prune_threshold,
-            logit_bonus=logit_bonus,
+            greedy,
         )
         learner_only = {}
         if self.cfg.train:
@@ -286,7 +286,7 @@ class Porygon2PlayerModel(nn.Module):
         head: PolicyHeadOutput,
         train: bool,
         temp: float,
-        prune_threshold: float = 0.0,
+        greedy: bool = False,
     ):
         """Doubles: valid_mask is (2, NUM_ACTION_CELLS) per-slot masks and, in train,
         head.action_index is (2,). One trunk pass serves both decisions —
@@ -309,7 +309,7 @@ class Porygon2PlayerModel(nn.Module):
         else:
             stage1_given = None
         flat_valid_1, metrics_1, index_1, log_prob_1 = self._score_and_sample(
-            sequence_rows, valid_mask[0], stage1_given, temp, None, prune_threshold
+            sequence_rows, valid_mask[0], stage1_given, temp, None, greedy
         )
 
         cond_rows = self.slot_conditioning(sequence_rows, index_1)
@@ -324,7 +324,7 @@ class Porygon2PlayerModel(nn.Module):
             stage2_given,
             temp,
             None,
-            prune_threshold,
+            greedy,
             decision_slot=1,
         )
 
@@ -371,118 +371,6 @@ class Porygon2PlayerModel(nn.Module):
             normalized_entropy=normalized_entropy,
             magnet_kl=metrics_1.magnet_kl + metrics_2.magnet_kl,
         )
-
-    def _search_bonus(
-        self, sequence: jax.Array, row_valid: jax.Array, env_step: PlayerEnvOutput
-    ) -> tuple[jax.Array, dict[str, jax.Array]]:
-        """Depth-1 sampled event rollouts (rl/model/event_search.py) from
-        this request's public rows: one declared action per enumerated
-        legal cell, Q from the public critic at the rollouts' leaves, the
-        bonus Q / temp on the legal cells (zero on the value-blind arm)."""
-        cfg = self.cfg.search
-        public_index = jnp.asarray(self.encoder.search_public_rows())
-        public_rows = sequence[public_index]
-        public_valid = row_valid[public_index]
-        legal = env_step.action_mask
-        cells = jnp.nonzero(legal, size=cfg.max_cells, fill_value=0)[0]
-        num_legal = legal.sum()
-        cell_valid = jnp.arange(cfg.max_cells) < num_legal
-        overflow = num_legal > cfg.max_cells
-        root = event_search.root_info(env_step)
-        declared_kind, declared_arg = jax.vmap(
-            functools.partial(
-                event_search.declared_from_cell, env_step=env_step, root=root
-            )
-        )(cells)
-        world = self.world_model
-        if self.is_initializing():
-            # Parameters are created on first use; created inside the
-            # rollout's scan they leak as tracers, so touch every reader
-            # once outside it at init.
-            blank = event_search.blank_tokens()
-            world.decode(
-                public_rows,
-                public_valid,
-                jnp.asarray(0),
-                jnp.asarray(0),
-                blank,
-                jnp.asarray(True),
-            )
-            world.imagine(
-                public_rows,
-                blank,
-                jnp.ones(public_rows.shape[0], jnp.bool_),
-                world.delta_scale,
-                self.make_rng("sampling"),
-            )
-            world.terminal_outcome(public_rows)
-            self.public_value_head(public_rows[PUBLIC_CLS_LOCAL_ROW])
-
-        def search_fns(module) -> event_search.EventSearchFns:
-            """The readers bound to `module` -- the transformed module
-            inside a lifted scan, `self` outside it."""
-            model = module.world_model
-
-            def value_fn(rows):
-                return module.public_value_head(rows[PUBLIC_CLS_LOCAL_ROW]).expectation
-
-            def terminal_fn(rows):
-                probs = jax.nn.softmax(model.terminal_outcome(rows))
-                return probs @ jnp.asarray(CAT_VF_SUPPORT, jnp.float32)
-
-            return event_search.EventSearchFns(
-                decode_fn=lambda rows, kind, arg, tokens, mine: model.decode(
-                    rows, public_valid, kind, arg, tokens, mine
-                ),
-                imagine_fn=lambda rows, tokens, mask, rng: model.imagine(
-                    rows, tokens, mask, model.delta_scale, rng
-                ),
-                value_fn=value_fn,
-                terminal_fn=terminal_fn,
-            )
-
-        budget = event_search.RolloutBudget(max_events=cfg.max_events, temp=1.0)
-
-        def lifted_scan(step, init, keys):
-            def body(module, carry, key):
-                return step(search_fns(module), carry, key)
-
-            return nn.scan(
-                body,
-                variable_broadcast="params",
-                split_rngs={"params": False},
-                in_axes=0,
-                out_axes=0,
-            )(self, init, keys)
-
-        q, _ = event_search.q_values(
-            public_rows,
-            declared_kind,
-            declared_arg,
-            cell_valid,
-            root,
-            search_fns(self),
-            budget,
-            cfg.num_samples,
-            self.make_rng("sampling"),
-            scan=lifted_scan,
-        )
-        cell_bonus = event_search.search_bonus(q, cell_valid, cfg.temp, cfg.value_blind)
-        bonus = (
-            jnp.zeros(legal.shape, jnp.float32)
-            .at[cells]
-            .add(jnp.where(cell_valid, cell_bonus, 0.0))
-        )
-        bonus = jnp.where(overflow, 0.0, bonus)
-        base = self._legal_logits(
-            self.readout_rows(sequence, row_valid, env_step), legal, 1.0
-        )
-        diagnostics = event_search.search_diagnostics(base, bonus, legal)
-        return bonus, {
-            "search_root_kl": diagnostics["search_root_kl"],
-            "search_bonus_gap": diagnostics["search_bonus_gap"],
-            "search_overflow": overflow,
-        }
 
     @staticmethod
     def readout_rows(
@@ -531,20 +419,13 @@ class Porygon2PlayerModel(nn.Module):
         history_stats and history_carry are per TRAJECTORY (the history is
         shared across the requests); closed over rather than mapped, so the
         vmap in __call__ broadcasts them to one copy per step."""
-        logit_bonus = None
-        search_outputs = {}
-        if self.cfg.search.enabled:
-            logit_bonus, search_outputs = self._search_bonus(
-                sequence, row_valid, env_step
-            )
         action_head = self._forward_action_head(
             self.readout_rows(sequence, row_valid, env_step),
             env_step.action_mask,
             actor_output.action_head,
             train=self.cfg.train,
             temp=head_params.temp,
-            prune_threshold=head_params.prune_threshold,
-            logit_bonus=logit_bonus,
+            greedy=head_params.greedy,
         )
         learner_only = {}
         if self.cfg.train:
@@ -558,6 +439,9 @@ class Porygon2PlayerModel(nn.Module):
                 # The privileged critic: VALUE_CLS, and only VALUE_CLS.
                 "priv_value_head": self.privileged_value_head(sequence[VALUE_CLS_ROW]),
                 "public_value_head": self.public_value_head(sequence[PUBLIC_CLS_ROW]),
+                "state_value_head": self.state_value_head(
+                    sequence[self.encoder.local_row(STATE_VALUE_CLS_ROW)]
+                ),
                 "trunk_row_cosine": row_cosine,
                 "trunk_row_participation": row_participation,
                 "trunk_out_group_l2_sum": group_l2_sum,
@@ -579,13 +463,88 @@ class Porygon2PlayerModel(nn.Module):
                 learner_only["potential_head"] = self.potential_head(
                     jax.lax.stop_gradient(sequence[CLS_ROW])
                 )
+            if self.cfg.num_decision_slots == 1:
+                learner_only["consequence_inputs"] = self.consequence_inputs(
+                    sequence, row_valid, actor_output.action_head.action_index
+                )
+                pair_features = self.action_head.chosen_pair_features(
+                    self.readout_rows(sequence, row_valid, env_step),
+                    actor_output.action_head.action_index,
+                )
+                learner_only["consequence_inputs"] = learner_only[
+                    "consequence_inputs"
+                ].replace(action_features=pair_features)
+                if self.is_initializing():
+                    # A submodule's params exist only once it has been called,
+                    # and the learner's forward never calls this one.
+                    self.consequence(
+                        learner_only["consequence_inputs"],
+                        jnp.zeros(CONSEQUENCE_NOISE_SIZE, sequence.dtype),
+                    )
+                    self.consequence.observable(pair_features)
         return PlayerActorOutput(
             action_head=action_head,
             # The CLS row, and only the CLS row.
             value_head=self.value_head(sequence[CLS_ROW]),
             history_carry=history_carry,
-            **search_outputs,
             **learner_only,
+        )
+
+    def consequence_inputs(
+        self, sequence: jax.Array, row_valid: jax.Array, action_cell: jax.Array
+    ) -> ConsequenceInputs:
+        source_row, target_row = chosen_bank_rows(
+            sequence[PRIVATE_ROWS],
+            sequence[MOVE_ROWS],
+            sequence[TARGET_ROWS],
+            action_cell,
+        )
+        return ConsequenceInputs(
+            state_rows=sequence[CONSEQUENCE_ROWS],
+            state_valid=row_valid[CONSEQUENCE_ROWS],
+            source_row=source_row,
+            target_row=target_row,
+            cls_row=sequence[CLS_ROW],
+        )
+
+    def consequences(
+        self, inputs: ConsequenceInputs, noise: jax.Array
+    ) -> ConsequenceOutput:
+        """One decision, one noise draw. A method of its own so the learner
+        applies it separately from `__call__`.
+
+        The heads emit a CHANGE; what is returned is the predicted NEXT rows in
+        the trunk's own output form -- current rows plus the change, through
+        the trunk's output normalisation (2026-09-20). A prediction is thereby
+        constrained to the manifold real rows live on, so it can be scored
+        against the real next rows at a FIXED scale (the live per-batch
+        normaliser it replaced was gamed by the trunk inflating its rows'
+        step-to-step change), and the state value head reads a predicted row
+        that looks like the rows it was trained on. The current rows enter
+        under stop_gradient: gradient reaches the trunk through the heads'
+        inputs, never through an identity path from `now` to the prediction."""
+        changes = self.consequence(inputs, noise)
+        now = jax.lax.stop_gradient(inputs.state_rows)
+        group_ids = jnp.asarray(SEQUENCE_GROUP_IDS[CONSEQUENCE_ROWS])
+
+        def as_trunk_output(change: jax.Array) -> jax.Array:
+            return self.encoder.output_normalisation.moved(
+                now, change, inputs.state_valid, group_ids
+            )
+
+        def implied_value(predicted_rows: jax.Array) -> jax.Array:
+            value_row = jax.lax.stop_gradient(predicted_rows[-1])
+            return self.state_value_head(value_row).expectation
+
+        mean = as_trunk_output(changes.mean)
+        sample = as_trunk_output(changes.sample)
+        return ConsequenceOutput(
+            mean=mean,
+            state_only_mean=as_trunk_output(changes.state_only_mean),
+            sample=sample,
+            mean_value=implied_value(mean),
+            sample_value=implied_value(sample),
+            observable_logits=self.consequence.observable(inputs.action_features),
         )
 
     def __call__(

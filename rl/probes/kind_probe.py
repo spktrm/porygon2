@@ -45,7 +45,6 @@ from rl.environment.protos.features_pb2 import (  # noqa: E402
     EntityRevealedNodeFeature,
     MovesetFeature,
 )
-from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.constants import CLS_ROW  # noqa: E402
 from rl.model.constants import (
     ENEMY_TARGET_ROWS,
@@ -57,6 +56,8 @@ from rl.model.constants import (
 )
 from rl.model.player_model import get_player_model  # noqa: E402
 from rl.offline import harness  # noqa: E402
+from rl.online.artifact import player_model_config_for
+from rl.online.config import get_learner_config
 from rl.online.training.batching import stack_batch  # noqa: E402
 from rl.probes.separation_probe import (  # noqa: E402
     _ridge_accuracy,
@@ -330,7 +331,7 @@ def main(argv=None):
 
     chunks = harness.flatten(harness.load(args.games_pkl))
     tables = TypeTables(args.data_dir)
-    net = get_player_model(get_player_model_config(9, train=True))
+    net = get_player_model(player_model_config_for(get_learner_config()))
     if args.ckpt:
         variables = harness.load_params(args.ckpt)
         source = args.ckpt

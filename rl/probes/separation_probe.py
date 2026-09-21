@@ -72,7 +72,6 @@ from rl.environment.protos.features_pb2 import (
     MovesetFeature,
 )
 from rl.environment.protos.service_pb2 import ModalityEnum
-from rl.model.config import get_player_model_config
 from rl.model.constants import (
     ALLY_TARGET_ROWS,
     ENEMY_TARGET_ROWS,
@@ -86,6 +85,8 @@ from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.model.utils import open_zero_init_paths
 from rl.offline import harness
+from rl.online.artifact import player_model_config_for
+from rl.online.config import get_learner_config
 from rl.online.training.batching import stack_batch
 
 logger = logging.getLogger(__name__)
@@ -1055,7 +1056,7 @@ def main(argv=None):
 
     chunks = harness.flatten(harness.load(args.games_pkl))
     (batch,), held = pick_batches(chunks, args.batch, pool=1)
-    net = get_player_model(get_player_model_config(9, train=True))
+    net = get_player_model(player_model_config_for(get_learner_config()))
     if args.ckpt:
         variables = harness.load_params(args.ckpt)
         opened = variables

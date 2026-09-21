@@ -127,7 +127,7 @@ def test_checkpoint_representation_not_collapsed(
     from rl.online.artifact import merge_params
 
     fresh = network.init(jax.random.key(0), actor_input, actor_output, HeadParams())
-    _, kept_fresh, _ = merge_params(fresh, ckpt_live_params)
+    _, kept_fresh, _, _ = merge_params(fresh, ckpt_live_params)
     if kept_fresh:
         pytest.skip(
             f"checkpoint predates the current architecture "

@@ -28,8 +28,10 @@ from rl.model.constants import (
     PRIVILEGED_REGISTER_ROWS,
     PUBLIC_CLS_ROW,
     PUBLIC_REGISTER_ROWS,
+    PUBLIC_STATE_ROWS,
     PUBLIC_TIER_ROWS,
     SEQUENCE_READ_MASK,
+    STATE_VALUE_CLS_ROW,
     VALUE_CLS_ROW,
 )
 from rl.model.trunk import Trunk
@@ -57,7 +59,7 @@ _POLICY_READABLE = np.array(
         row not in range(OPP_PRIVATE_ROWS.start, OPP_PRIVATE_ROWS.stop)
         and row
         not in range(PRIVILEGED_REGISTER_ROWS.start, PRIVILEGED_REGISTER_ROWS.stop)
-        and row not in (VALUE_CLS_ROW, PUBLIC_CLS_ROW)
+        and row not in (VALUE_CLS_ROW, PUBLIC_CLS_ROW, STATE_VALUE_CLS_ROW)
         for row in range(NUM_SEQUENCE_ROWS)
     ]
 )
@@ -73,7 +75,11 @@ def test_read_mask_partition_is_leak_free_by_construction() -> None:
     assert not SEQUENCE_READ_MASK[_POLICY_READABLE][:, VALUE_CLS_ROW].any()
     assert not SEQUENCE_READ_MASK[np.ix_(PUBLIC_TIER_ROWS, PRIVATE_TIER_ROWS)].any()
     assert SEQUENCE_READ_MASK[np.ix_(PRIVATE_TIER_ROWS, _POLICY_READABLE)].all()
-    assert SEQUENCE_READ_MASK[:, PUBLIC_TIER_ROWS].all()
+    # Every row reads the whole public tier except STATE_VALUE_CLS, whose read
+    # set is a strict subset of it by design.
+    full_readers = np.arange(NUM_SEQUENCE_ROWS) != STATE_VALUE_CLS_ROW
+    assert SEQUENCE_READ_MASK[np.ix_(full_readers, PUBLIC_TIER_ROWS)].all()
+    assert np.isin(PUBLIC_STATE_ROWS, PUBLIC_TIER_ROWS).all()
     assert SEQUENCE_READ_MASK[VALUE_CLS_ROW, _POLICY_READABLE].all()
     assert len(PUBLIC_TIER_ROWS) + len(PRIVATE_TIER_ROWS) == _POLICY_READABLE.sum()
     # PUBLIC_CLS: in-edges from the public tier and itself only, out-degree 0.
@@ -170,6 +176,44 @@ def test_value_cls_is_read_by_nothing() -> None:
     np.testing.assert_array_equal(base[others], moved[others])
     # Control: its own output moves (it reads itself).
     assert not np.allclose(base[VALUE_CLS_ROW], moved[VALUE_CLS_ROW])
+
+
+def test_state_value_cls_reads_the_public_state_rows_and_is_read_by_nothing() -> None:
+    reads = np.flatnonzero(SEQUENCE_READ_MASK[STATE_VALUE_CLS_ROW])
+    np.testing.assert_array_equal(
+        reads, np.sort(np.r_[PUBLIC_STATE_ROWS, STATE_VALUE_CLS_ROW])
+    )
+    assert len(PUBLIC_STATE_ROWS) == 15
+    others = np.arange(NUM_SEQUENCE_ROWS) != STATE_VALUE_CLS_ROW
+    assert not SEQUENCE_READ_MASK[others, STATE_VALUE_CLS_ROW].any()
+
+    trunk = Trunk(_trunk_cfg())
+    sequence = jax.random.normal(jax.random.key(6), (NUM_SEQUENCE_ROWS, WIDTH))
+    valid = jnp.ones(NUM_SEQUENCE_ROWS, bool)
+    params = trunk.init(jax.random.key(7), sequence, valid, READ_MASK)
+
+    def run(rows):
+        return np.asarray(trunk.apply(params, rows, valid, READ_MASK), dtype=np.float32)
+
+    base = run(sequence)
+    # Nothing reads it: every other row is BIT-identical, the privileged
+    # critic's row included.
+    own = run(sequence.at[STATE_VALUE_CLS_ROW].add(10.0))
+    np.testing.assert_array_equal(base[others], own[others])
+    assert not np.allclose(base[STATE_VALUE_CLS_ROW], own[STATE_VALUE_CLS_ROW])
+    # Private and secret content cannot reach it at any depth.
+    hidden = sequence.at[PRIVATE_TIER_ROWS].add(10.0)
+    hidden = hidden.at[OPP_PRIVATE_ROWS].add(10.0)
+    np.testing.assert_array_equal(
+        base[STATE_VALUE_CLS_ROW], run(hidden)[STATE_VALUE_CLS_ROW]
+    )
+    # The controls: a public state row reaches it directly, and a public row
+    # OUTSIDE its read set reaches it through the rows it does read.
+    direct = run(sequence.at[PUBLIC_STATE_ROWS[0]].add(10.0))
+    assert not np.allclose(base[STATE_VALUE_CLS_ROW], direct[STATE_VALUE_CLS_ROW])
+    outside = np.setdiff1d(PUBLIC_TIER_ROWS, PUBLIC_STATE_ROWS)[0]
+    indirect = run(sequence.at[outside].add(10.0))
+    assert not np.allclose(base[STATE_VALUE_CLS_ROW], indirect[STATE_VALUE_CLS_ROW])
 
 
 @pytest.mark.gpu

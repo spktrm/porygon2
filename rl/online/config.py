@@ -318,6 +318,50 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     player_priv_value_head_loss_coef: float = 1.0
     # The public critic: the same labels again, over the public tier only.
     player_public_value_head_loss_coef: float = 1.0
+    # The state value head: the same labels again, read through the 15
+    # public state rows (STATE_VALUE_CLS). 0 leaves the row untrained.
+    player_state_value_head_loss_coef: float = 1.0
+    # The consequence model (rl/model/consequence.py, rl/online/training/
+    # consequence.py). `trunk_grad` scales the gradient its losses send into
+    # the trunk: 0 = the heads learn and the trunk is only observed (they sit
+    # in their own optimiser partition, so they do not move the trunk's
+    # global-norm clip either); 1 = full shaping. The coefficients only
+    # matter once trunk_grad > 0 -- under Adam, in a partition of their own,
+    # the heads' updates are scale-free -- and are set from the measured
+    # gradient ratio, not from another loss's history.
+    # 2026-09-20, run lmtinoz5 at step 119,788, FIXED-SCALE form (rl/probes/
+    # consequence_calibration.py): per unit coefficient the mean loss sends a
+    # median 4.48 into the encoder and the sampler 0.90, against the policy +
+    # value losses' median 2.20. Both are inflated by the rows still carrying
+    # the first Step 4's 2-4x change (their steady-state values were 0.34 and
+    # 0.33), so 0.05 and 0.12 are ~10% and ~5% of the reference NOW and will
+    # fall as the rows deflate: RECALIBRATE once
+    # player_consequence_copy_loss_field reads below 2.
+    # History: 1.0 over steps 24k-107k under the live-normalised loss failed
+    # its acceptance (LESSONS "Step 4 verdict"); 0 over 107k-120k.
+    # 0 again from step ~147k (2026-09-20): the fixed-scale form inflated the
+    # entity rows too and tripped the clip abort (LESSONS "Step 4b verdict").
+    player_consequence_trunk_grad: float = 0.0
+    # The scale actually applied ramps linearly from 0 at `ramp_start_step`
+    # to `trunk_grad` over `ramp_steps` learner steps. It is computed INSIDE
+    # the jit from the train state's traced step count -- a host-varied
+    # static scalar would compile (and retain) an executable per value.
+    player_consequence_ramp_start_step: int = 120000
+    player_consequence_ramp_steps: int = 10000
+    player_consequence_mean_coef: float = 0.05
+    player_consequence_sampler_coef: float = 0.12
+    player_consequence_draws: int = 2
+    # The FIXED scales the consequence losses are divided by, per row group
+    # (public_entity, field, state_value): the mean change norm of each over
+    # run lmtinoz5's observer phase, steps 16k-24k, BEFORE any shaping. Fixed
+    # on purpose -- the live per-batch normaliser they replace was gamed.
+    player_consequence_scales: tuple[float, float, float] = (3.45, 3.28, 2.84)
+    # Shared gradient reaches the policy projections AND encoder. The
+    # decoder learns during the observer warm-up; calibration is in LESSONS.
+    player_observable_coef: float = 0.05
+    player_observable_shared_grad: float = 1.0
+    player_observable_ramp_start_step: int = 356282
+    player_observable_ramp_steps: int = 10000
     # True routes the v-trace value bootstraps -- and therefore
     # pg_advantages -- through the privileged head. False is the exact
     # deployable-head estimator, the live fallback: the
@@ -385,9 +429,6 @@ class Porygon2LearnerConfig(BaseTrainingConfig):
     # against the 206k snapshot .55 -> .33, so the pre-registered rule
     # (above .10, halve) applies. 0 removes the term.
     player_uniform_kl_coef: float = 0.01
-    # Evaluation only: prune low-probability actions in the thresholded slot.
-    # Training actors and V-trace always use the full legal distribution.
-    player_prune_threshold: float = 0.005
     # Weight on pre-update live parameters per accepted optimiser update.
     # FootsiesGym's fixed example uses 6e-4 / 16; 0 freezes the magnet.
     player_reg_ema_rate: float = 3.75e-5

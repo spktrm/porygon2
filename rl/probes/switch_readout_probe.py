@@ -18,10 +18,11 @@ import optax
 
 
 def extract(args):
-    from rl.model.config import get_player_model_config
     from rl.model.constants import CLS_ROW, PRIVATE_ROWS, PUBLIC_ROWS
     from rl.model.player_model import get_player_model
     from rl.offline import harness
+    from rl.online.artifact import player_model_config_for
+    from rl.online.config import get_learner_config
     from rl.online.training.batching import stack_batch
     from rl.probes.separation_probe import (
         _assembled_and_encoded_fn,
@@ -39,7 +40,7 @@ def extract(args):
     for game_index, side in enumerate(sides):
         chunks.extend(side)
         game_ids.extend([game_index] * len(side))
-    net = get_player_model(get_player_model_config(9, train=True))
+    net = get_player_model(player_model_config_for(get_learner_config()))
     variables = jax.device_put(harness.load_params(args.ckpt))
     apply_both = jax.jit(
         jax.vmap(

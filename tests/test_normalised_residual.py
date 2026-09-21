@@ -237,7 +237,7 @@ def test_projection_puts_every_embedding_space_vector_on_the_unit_sphere() -> No
         np.testing.assert_array_equal(np.asarray(leaf), np.asarray(after))
 
     # A tree without the trunk path is returned untouched.
-    other = {"params": {"world_model": {"trunk": {"blocks": fresh_blocks}}}}
+    other = {"params": {"another_module": {"trunk": {"blocks": fresh_blocks}}}}
     jax.tree.map(np.testing.assert_array_equal, project_trunk_kernels(other), other)
 
 

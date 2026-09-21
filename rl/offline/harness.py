@@ -28,6 +28,7 @@ forever — stragglers are dropped, not waited on, and the count is logged.
 from __future__ import annotations
 
 import concurrent.futures as cf
+import functools
 import logging
 import os
 import pickle
@@ -45,6 +46,7 @@ from rl.environment.data import CAT_VF_SUPPORT
 from rl.environment.env import SinglePlayerSyncEnvironment
 from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput, Trajectory
 from rl.environment.protos.features_pb2 import InfoFeature
+from rl.environment.utils import get_ex_player_step
 from rl.model.config import get_player_model_config
 from rl.model.constants import (
     IS_WILDCARD_CELL,
@@ -56,7 +58,7 @@ from rl.model.heads import HeadParams
 from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent, resolve_actor_device
-from rl.online.artifact import player_model_config_for
+from rl.online.artifact import merge_params, player_model_config_for
 from rl.online.config import Porygon2LearnerConfig, get_learner_config
 from rl.online.player_actor import PlayerActor
 from rl.online.training.batching import stack_batch
@@ -117,22 +119,37 @@ class OfflineContext:
     run_state: _RunState = field(default_factory=_RunState)
 
 
+@functools.cache
+def _fresh_learner_params():
+    """A fresh init of the CURRENT learner model, once per process."""
+    network = get_player_model(player_model_config_for(get_learner_config()))
+    example_input, example_output = jax.tree.map(
+        lambda leaf: jnp.asarray(leaf[:, 0]), get_ex_player_step()
+    )
+    return jax.jit(network.init)(
+        jax.random.key(0), example_input, example_output, HeadParams()
+    )
+
+
 def load_params(ckpt_dir: str, which: str = "params"):
-    """Load the live player parameters or the EMA `reg_params` reference."""
-    return checkpoint.load_component(ckpt_dir, "player", which)
-
-
-def load_search_params(ckpt_dir: str, world_model_dir: str):
-    """The learner checkpoint's params with the world-model artifact's
-    `world_model` and `public_value_head` subtrees in place of its own -- the
-    public critic the artifact trained on replays is the one the
-    rollouts price with."""
-    variables = load_params(ckpt_dir)
-    artifact = checkpoint.load_component(world_model_dir, "player", "params")
-    params = dict(variables["params"])
-    for name in ("world_model", "public_value_head"):
-        params[name] = artifact["params"][name]
-    return {**variables, "params": params}
+    """Load the live player parameters or the EMA `reg_params` reference,
+    merged by path onto a fresh init of the current model -- a checkpoint
+    from before a layout change lacks the new leaves and has shorter
+    per-group tables, and a raw apply of it fails or, worse, indexes a group
+    row that is not there (JAX clamps the gather silently). What stayed at
+    its fresh init is logged: a probe reading of those leaves is a reading of
+    noise, not of the checkpoint."""
+    loaded = checkpoint.load_component(ckpt_dir, "player", which)
+    merged, kept_fresh, _, extended = merge_params(_fresh_learner_params(), loaded)
+    if kept_fresh or extended:
+        logger.info(
+            "%s: %d subtrees at fresh init %s; %d group tables extended",
+            ckpt_dir,
+            len(kept_fresh),
+            kept_fresh[:6],
+            len(extended),
+        )
+    return merged
 
 
 def play_games(
@@ -148,7 +165,6 @@ def play_games(
     side_filters: dict[int, ActorInputFilter] | None = None,
     temperature: float = 1.0,
     device: str | None = None,
-    search_arm: str | None = None,
 ) -> list[list[Trajectory]]:
     """Plays n_games games, `pairs` at a time, and returns one chunk list
     per PARAMS-DRIVEN side in completion order: `opponent="self"` is
@@ -173,18 +189,6 @@ def play_games(
         actor_config.encoder.trunk.normalised_residual = (
             ctx.config.player_trunk_normalised_residual
         )
-    if search_arm is not None:
-        # The searching actor (plan Step 4): `params` must carry the
-        # world-model artifact's subtrees (load_search_params); "blind"
-        # consumes the same rollouts and adds nothing.
-        if search_arm not in ("search", "blind"):
-            raise ValueError(
-                f"search_arm must be 'search' or 'blind', got {search_arm!r}"
-            )
-        actor_config.encoder.with_public_cls = True
-        actor_config.world_model.enabled = True
-        actor_config.search.enabled = True
-        actor_config.search.value_blind = search_arm == "blind"
     actor_net = get_player_model(actor_config)
     agent = Agent(
         actor_net.apply,
@@ -298,6 +302,16 @@ def dump(sides, path: str) -> None:
         pickle.dump(sides, f)
 
 
+# `search` went 2026-09-12 with the latent world model; the three event
+# search diagnostics went 2026-09-20 with the event world model.
+_RETIRED_ACTOR_OUTPUT_FIELDS = (
+    "search",
+    "search_root_kl",
+    "search_bonus_gap",
+    "search_overflow",
+)
+
+
 class _Retired:
     """Decodes a pickled instance of a class that no longer exists."""
 
@@ -322,13 +336,14 @@ def load(path: str):
     for side in sides:
         for chunk in side:
             actor_output = chunk.player_transitions.agent_output.actor_output
-            if "search" in actor_output.__dict__:
-                object.__delattr__(actor_output, "search")
+            for name in _RETIRED_ACTOR_OUTPUT_FIELDS:
+                if name in actor_output.__dict__:
+                    object.__delattr__(actor_output, name)
     return sides
 
 
 def encode_policy_rows(module, actor_input, actor_output):
-    """One chunk -> the post-trunk policy-readable rows (T, 73, D) and
+    """One chunk -> the post-trunk policy-readable rows (T, rows, D) and
     their validity. Bound as a flax `method=` on the player module (the
     probes' shared read)."""
     encoder = module.encoder

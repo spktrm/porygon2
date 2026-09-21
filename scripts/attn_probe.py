@@ -96,11 +96,12 @@ def main():
     import jax
 
     from rl.environment.utils import get_ex_player_step
-    from rl.model.config import get_player_model_config
     from rl.model.heads import HeadParams
     from rl.model.player_model import get_player_model
+    from rl.online.artifact import player_model_config_for
+    from rl.online.config import get_learner_config
 
-    net = get_player_model(get_player_model_config(generation=9, train=True))
+    net = get_player_model(player_model_config_for(get_learner_config()))
     ai, ao = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
     params = pickle.loads(open(os.path.join(ckpt, "player/params"), "rb").read())
 

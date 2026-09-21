@@ -12,15 +12,33 @@ import { TrainablePlayerAI } from "../server/runner";
 import { Action as ProtoAction, StepRequest } from "../../protos/service_pb";
 import { generateTeamFromArray } from "../server/state";
 
+// Before anything reads process.env: RL_SERVER_URL below is one of its keys.
+const dotenvResult = dotenv.config({
+    path: path.resolve(__dirname, "../../../.env"),
+});
+if (dotenvResult.error) {
+    console.error(
+        "Error loading .env file. Please ensure it exists and is configured correctly.",
+        dotenvResult.error,
+    );
+    process.exit(1);
+}
+
 const RL_SERVER_URL = process.env.RL_SERVER_URL || "http://localhost:8001";
 
 const server = "ws://localhost:8000/showdown/websocket";
+// Derived from the server rather than set beside it: the timer must never be
+// off on a ladder we do not own (pokeagent, the main server), and on a local
+// server the opponent is a person at the keyboard who should not be timed.
+const timerRequired = !["localhost", "127.0.0.1", "[::1]"].includes(
+    new URL(server).hostname,
+);
 const MAX_BATTLES = 5;
 const smogonFormat = "gen9randombattle";
 
 function cookieFetch(action: Action, cookie?: string): Promise<string> {
     const headers = cookie
-        ? { "Set-Cookie": cookie, ...action.headers }
+        ? { Cookie: cookie, ...action.headers }
         : action.headers;
 
     return new Promise<string>((resolve, reject) => {
@@ -109,7 +127,8 @@ class Connection {
         };
     }
 
-    close(): void {
+    close(onClosed?: () => void): void {
+        if (onClosed) this.ws.once("close", onClosed);
         this.ws.close();
     }
 
@@ -143,6 +162,8 @@ class Battle {
     player: TrainablePlayerAI;
     prevMessage: string | undefined;
     active: boolean;
+    private timerRequested: boolean;
+    private ended: boolean;
 
     constructor(roomId: string, conn: Connection, username: string) {
         this.battleId = roomId;
@@ -150,8 +171,8 @@ class Battle {
         this.active = true;
         this.username = username;
         this.prevMessage = undefined;
-
-        this.conn.send(`${this.battleId}|/timer on`);
+        this.timerRequested = false;
+        this.ended = false;
 
         this.stream = new ClientStream();
         this.player = new TrainablePlayerAI(
@@ -180,8 +201,16 @@ class Battle {
                     method: "POST",
                     body: state.serializeBinary(),
                 });
+                if (!response.ok) {
+                    throw new Error(
+                        `RL server /step returned ${response.status}: ${await response.text()}`,
+                    );
+                }
 
                 const { cell } = await response.json();
+                if (!Number.isInteger(cell)) {
+                    throw new Error(`RL server /step returned cell ${cell}`);
+                }
                 const stepRequest = new StepRequest();
 
                 const protoAction = new ProtoAction();
@@ -197,11 +226,46 @@ class Battle {
     }
 
     public async receive(message: string): Promise<void> {
-        this.stream.write(message);
+        if (this.ended) return;
+
+        // The sim's player stream carries no ">roomid" header line, and the
+        // player's chunk-level checks (|error|) assume there is none.
+        let chunk = message;
+        if (chunk.startsWith(">")) {
+            chunk = chunk.slice(chunk.indexOf("\n") + 1);
+        }
+        const cmds = chunk
+            .split("\n")
+            .map((line) => line.slice(1).split("|")[0]);
+
+        // The first updatesearch names the room WITHOUT its private suffix and
+        // before we have joined it, so a room message is the first point at
+        // which the server accepts the command; and whoever turns the timer
+        // off afterwards gets it turned back on.
+        const timerMissing =
+            !this.timerRequested || cmds.includes("inactiveoff");
+        if (timerRequired && timerMissing) {
+            this.timerRequested = true;
+            this.conn.send(`${this.battleId}|/timer on`);
+        }
+
+        this.stream.write(chunk);
+
+        // The sim ends the player stream with the battle; a Showdown room
+        // does not, and the player only leaves its loop on the next chunk or
+        // the end of the stream.
+        if (cmds.includes("win") || cmds.includes("tie")) {
+            this.ended = true;
+            this.stream.pushEnd();
+        }
     }
 
     public getBattleId(): string {
         return this.battleId;
+    }
+
+    public forfeit() {
+        this.conn.send(`${this.battleId}|/forfeit`);
     }
 
     public leave() {
@@ -265,16 +329,25 @@ class User {
     createNewBattle(roomId: string) {
         const battle = new Battle(roomId, this.connection, this.username!);
         this.battles.addBattle(roomId, battle);
-        battle.start().then(() => {
-            battle.leave();
-            if (this.numBattles >= MAX_BATTLES) {
-                console.log("Reached maximum number of battles, logging out.");
-                this.logout().then(() => {
-                    this.connection.close();
-                    process.exit(0);
-                });
-            }
-        });
+        battle
+            .start()
+            .catch((err) => {
+                console.error(`Battle ${battle.getBattleId()} failed:`, err);
+                battle.forfeit();
+            })
+            .then(() => {
+                battle.leave();
+                if (this.numBattles >= MAX_BATTLES) {
+                    console.log(
+                        "Reached maximum number of battles, logging out.",
+                    );
+                    this.logout()
+                        .catch((err) => console.error("Logout failed:", err))
+                        .then(() => {
+                            this.connection.close(() => process.exit(0));
+                        });
+                }
+            });
     }
 
     async receiveBattleData(roomId: string, data: string): Promise<void> {
@@ -328,11 +401,10 @@ class User {
     async logout(): Promise<void> {
         if (!this.username) return;
         const action = Actions.logout({ username: this.username });
-        cookieFetch(action).then((response) => {
-            const cmd = action.onResponse(response);
-            if (cmd) this.send(cmd);
-        });
         this.username = undefined;
+        const response = await cookieFetch(action);
+        const cmd = action.onResponse(response);
+        if (cmd) this.send(cmd);
     }
 
     async send(message: string): Promise<void> {
@@ -381,7 +453,14 @@ class User {
         if (searchState === undefined) return;
 
         const { searching, games } = searchState;
-        if (searching.length === 0 && games === null && !this.searchUpdated) {
+        // numBattles counts battles STARTED, so the last battle's trailing
+        // games:null must not queue one more that the exit then abandons.
+        if (
+            searching.length === 0 &&
+            games === null &&
+            !this.searchUpdated &&
+            this.numBattles < MAX_BATTLES
+        ) {
             this.search(smogonFormat);
             this.searchUpdated = true;
             return;
@@ -416,27 +495,16 @@ async function waitForServer(waitTimeout: number = 1000) {
                 break;
             }
         } catch {
-            console.log("Waiting for RL server to be ready...");
-            await new Promise((resolve) => setTimeout(resolve, waitTimeout));
-            continue;
+            // Not listening yet.
         }
+        console.log("Waiting for RL server to be ready...");
+        await new Promise((resolve) => setTimeout(resolve, waitTimeout));
     }
 }
 
 waitForServer().then(() => {
     const connection = new Connection();
     const user = new User(connection);
-
-    const result = dotenv.config({
-        path: path.resolve(__dirname, "../../../.env"),
-    });
-    if (result.error) {
-        console.error(
-            "Error loading .env file. Please ensure it exists and is configured correctly.",
-            result.error,
-        );
-        process.exit(1);
-    }
 
     connection.open((data) => {
         console.log(data);

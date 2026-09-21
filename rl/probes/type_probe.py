@@ -52,7 +52,6 @@ from rl.environment.protos.features_pb2 import (
     EntityRevealedNodeFeature,
     MovesetFeature,
 )
-from rl.model.config import get_player_model_config
 from rl.model.constants import (
     _BANK_MOVE_OFFSET,
     CELL_BANK_SRC,
@@ -66,6 +65,8 @@ from rl.model.constants import (
 from rl.model.heads import HeadParams
 from rl.model.player_model import get_player_model
 from rl.offline import harness
+from rl.online.artifact import player_model_config_for
+from rl.online.config import get_learner_config
 from rl.online.training.batching import stack_batch
 from rl.probes.separation_probe import (
     _assembled_and_encoded_fn,
@@ -632,7 +633,7 @@ def main(argv=None):
     if args.max_sides:
         sides = sides[: args.max_sides]
     chunks = harness.flatten(sides)
-    net = get_player_model(get_player_model_config(9, train=True))
+    net = get_player_model(player_model_config_for(get_learner_config()))
     variables = harness.load_params(args.ckpt)
     tables = TypeTables(args.data_dir)
     run_probe_e(

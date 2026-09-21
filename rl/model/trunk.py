@@ -21,17 +21,8 @@ from rl.model.modules import (
     MultiHeadAttention,
     RMSNorm,
     create_attention_mask,
+    unit_rms,
 )
-
-
-def unit_rms(x: jax.Array) -> jax.Array:
-    """Each row rescaled to RMS 1 in `modules.RMSNorm`'s arithmetic (variance
-    in f32, the rsqrt cast back to the row's dtype) without its scale: the
-    normalised residual stream then shares the RMS-1 convention every row
-    enters at (modules.SequenceNormalisation), so the zeros-init pre-norms
-    stay identity at init. A zero row stays zero."""
-    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
-    return x * jax.lax.rsqrt(variance + 1e-6).astype(x.dtype)
 
 
 class TrunkBlock(nn.Module):

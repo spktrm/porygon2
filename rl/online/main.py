@@ -204,7 +204,7 @@ def eval_game_logs(
     - switch-frac: voluntary switches per decision that offered one (the
       action mask legalises a switch cell AND a non-switch cell) -- the
       axis the BR probes located the exploit on; higher is not better by
-      itself, it is read `thresholded` against `plain-t1`;
+      itself, it is read `argmax` against `plain-t1`;
     - ms-per-step: unroll wall time per real step.
     """
     transitions = eval_trajectory.player_transitions
@@ -541,27 +541,27 @@ def main(args: argparse.Namespace):
         )
 
     learning_agent = make_agent()
-    # The eval slate: two slots against the same baseline,
-    # both the EMA params at temp 1.0 -- the temperature the training
+    # The eval slate: three slots against the same baseline, all on the EMA
+    # params. The first two sample at temp 1.0 -- the temperature the training
     # actors sample at, and the only one comparable across head
     # parameterisations (the flat readout's single division vs the
     # hierarchical head's two). `plain-t1` samples the policy
-    # exactly as the training actors do; `thresholded` samples it with
-    # every legal cell below player_prune_threshold removed and the rest
-    # renormalised -- the distribution the learner's v-trace ratios are
-    # built on, sampled nowhere else. wr(thresholded) - wr(plain-t1) on
-    # the same checkpoint prices the threshold in play.
+    # exactly as the training actors do; `argmax` plays its most likely
+    # legal cell every decision (the builder still samples), so
+    # wr(argmax) - wr(plain-t1) on the same checkpoint prices everything
+    # the policy puts off its mode. `plain-t05`
+    # sharpens the player's sampling alone (the builder stays at 1.0), so
+    # wr(plain-t05) - wr(plain-t1) prices the policy's own ranking against
+    # its sampling noise; it is NOT comparable across head
+    # parameterisations. New slots are APPENDED: the slot index is part of
+    # the wandb series name.
     eval_slate = (
         (make_agent(HeadParams(temp=1.0), HeadParams(temp=1.0)), "-plain-t1"),
         (
-            make_agent(
-                HeadParams(
-                    temp=1.0, prune_threshold=learner_config.player_prune_threshold
-                ),
-                HeadParams(temp=1.0),
-            ),
-            "-thresholded",
+            make_agent(HeadParams(temp=1.0, greedy=True), HeadParams(temp=1.0)),
+            "-argmax",
         ),
+        (make_agent(HeadParams(temp=0.5), HeadParams(temp=1.0)), "-plain-t05"),
     )
     # One timing sink shared by every training actor, its env and the
     # server; the learner drains it (actor_stats_log_steps).
@@ -569,7 +569,7 @@ def main(args: argparse.Namespace):
     # Under "gpu": one batched-inference server for ALL training
     # PlayerActors (rl/online/inference.py), same apply_fn and default
     # HeadParams as learning_agent — eval actors stay on their agents'
-    # direct path (the thresholded slot's HeadParams differ, and 2
+    # direct path (their HeadParams differ from the server's, and a few
     # low-volume threads don't warrant a second server), and builder actors too
     # (one team-build per game vs ~35 player steps). Under "cpu" there is
     # no server: every actor

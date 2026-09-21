@@ -22,6 +22,7 @@ it catches is invisible in any test that only checks values.
 """
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 from flax.traverse_util import flatten_dict
@@ -120,6 +121,48 @@ def test_forward_computes_in_bf16_except_where_precision_is_paid_for(
     ), "allowlisted as f32 but no longer f32 — delete the entry:\n  " + "\n  ".join(
         stale
     )
+
+
+def test_consequence_model_computes_in_bf16() -> None:
+    """The learner's forward never calls the consequence heads (they run as an
+    apply of their own), so the capture above cannot see them."""
+    from rl.environment.utils import get_ex_player_step
+    from rl.model.consequence import CONSEQUENCE_NOISE_SIZE
+    from rl.model.heads import HeadParams
+    from rl.model.player_model import get_player_model
+    from tests.conftest import session_player_model_config
+
+    actor_input, actor_output = jax.tree.map(lambda x: x[:, 0], get_ex_player_step())
+    net = get_player_model(session_player_model_config())
+
+    def trace(params):
+        prediction = net.apply(params, actor_input, actor_output, HeadParams())
+        one_step = jax.tree.map(lambda leaf: leaf[0], prediction.consequence_inputs)
+        return net.apply(
+            params,
+            one_step,
+            jnp.zeros(CONSEQUENCE_NOISE_SIZE, jnp.float32),
+            method="consequences",
+            capture_intermediates=True,
+        )
+
+    params = jax.eval_shape(
+        lambda: net.init(jax.random.PRNGKey(0), actor_input, actor_output, HeadParams())
+    )
+    outputs, state = jax.eval_shape(trace, params)
+    dtypes = {}
+    for path, value in flatten_dict(state["intermediates"]).items():
+        if not isinstance(value, tuple):
+            value = (value,)
+        for arr in value:
+            if hasattr(arr, "dtype"):
+                dtypes["/".join(map(str, path))] = arr.dtype
+    assert len(dtypes) > 8, f"only {len(dtypes)} activations captured"
+    assert any(name.startswith("consequence/sampler/trunk") for name in dtypes)
+    f32 = sorted(name for name, dtype in dtypes.items() if dtype == np.float32)
+    assert not f32, "f32 activations in the consequence model:\n  " + "\n  ".join(f32)
+    assert outputs.mean.dtype == jnp.bfloat16
+    assert outputs.sample.dtype == jnp.bfloat16
 
 
 def test_history_telemetry_paths_match_shared_sequence(abstract_forward):

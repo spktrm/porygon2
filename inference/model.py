@@ -1,3 +1,5 @@
+import threading
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -13,11 +15,12 @@ from rl.environment.utils import (
     get_ex_player_step,
 )
 from rl.model.builder_model import get_builder_model
-from rl.model.config import get_builder_model_config, get_player_model_config
+from rl.model.config import get_builder_model_config
 from rl.model.heads import HeadParams
 from rl.model.player_model import actor_params_view, get_player_model
 from rl.model.utils import ParamsContainer
 from rl.online.agent import Agent, resolve_actor_device
+from rl.online.artifact import player_model_config_for
 from rl.online.config import get_learner_config
 
 np.set_printoptions(precision=2, suppress=True)
@@ -50,8 +53,8 @@ class InferenceModel:
         if device is None:
             device = self._learner_config.player_actor_device
         actor_device, actor_dtype = resolve_actor_device(device)
-        self._player_model_config = get_player_model_config(
-            self._learner_config.generation, train=False, dtype=actor_dtype
+        self._player_model_config = player_model_config_for(
+            self._learner_config, train=False, dtype=actor_dtype
         )
         self._builder_model_config = get_builder_model_config(
             self._learner_config.generation, train=False, dtype=actor_dtype
@@ -69,6 +72,8 @@ class InferenceModel:
             player_params_view=actor_params_view,
         )
         self._rng_key = jax.device_put(jax.random.key(seed), actor_device)
+        # /step and /reset run on threadpool threads.
+        self._rng_lock = threading.Lock()
 
         if not fpath:
             fpath = checkpoint.most_recent_ckpt_dir(f"./ckpts/gen{generation}")
@@ -94,7 +99,8 @@ class InferenceModel:
         print("model initialized!")
 
     def split_rng(self, num_splits: int = 1) -> tuple[jax.Array]:
-        self._rng_key, *subkeys = jax.random.split(self._rng_key, num_splits + 1)
+        with self._rng_lock:
+            self._rng_key, *subkeys = jax.random.split(self._rng_key, num_splits + 1)
         if num_splits == 1:
             return subkeys[0]
         return tuple(subkeys)

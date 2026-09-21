@@ -56,7 +56,6 @@ from rl.model.constants import (
     OPP_ACTIVE_PUBLIC_ROWS,
     POLICY_READABLE_ROWS,
     PRIVATE_TOKEN_TYPES,
-    PUBLIC_CLS_ROW,
     PUBLIC_SEQUENCE_ROWS,
     PUBLIC_TOKEN_TYPES,
     SEQUENCE_GROUP_IDS,
@@ -242,6 +241,9 @@ class Encoder(nn.Module):
         )
         self.public_cls_embedding = self.param(
             "public_cls_embedding", embedding_init, (1, entity_size)
+        )
+        self.state_value_cls_embedding = self.param(
+            "state_value_cls_embedding", embedding_init, (1, entity_size)
         )
         register_shape = (NUM_TRUNK_REGISTERS_PER_TIER, entity_size)
         self.public_register_embeddings = self.param(
@@ -1005,10 +1007,12 @@ class Encoder(nn.Module):
                         self.value_cls_embedding.astype(dtype),
                         jnp.ones(1, dtype=jnp.bool_),
                     ),
+                    SequenceGroup.STATE_VALUE_CLS: (
+                        self.state_value_cls_embedding.astype(dtype),
+                        jnp.ones(1, dtype=jnp.bool_),
+                    ),
                 }
             )
-        elif self.cfg.get("with_public_cls", False):
-            parts[SequenceGroup.PUBLIC_CLS] = self._public_cls_part()
         identities = sequence_identities(
             env_step,
             self.side_bias(jnp.arange(2)),
@@ -1290,21 +1294,11 @@ class Encoder(nn.Module):
             return PUBLIC_SEQUENCE_ROWS
         if self.cfg.train:
             return np.arange(NUM_SEQUENCE_ROWS)
-        if self.cfg.get("with_public_cls", False):
-            # The searching actor reads the public critic's row too; it
-            # reads only public rows and nothing reads it, so the policy's
-            # information set is unchanged.
-            return np.concatenate([POLICY_READABLE_ROWS, [PUBLIC_CLS_ROW]])
         return POLICY_READABLE_ROWS
 
     def local_row(self, row: int) -> int:
         """Where a layout row sits in this forward's kept sequence."""
         return int(np.flatnonzero(self.kept_rows() == row)[0])
-
-    def search_public_rows(self) -> np.ndarray:
-        """The world model's 55 rows, as indices into this forward's kept
-        sequence (identity on the learner and public-only paths)."""
-        return np.array([self.local_row(int(row)) for row in PUBLIC_SEQUENCE_ROWS])
 
     def group_ids(self) -> jax.Array:
         """The SequenceGroup of every kept row: the index into both norms'

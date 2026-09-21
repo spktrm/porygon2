@@ -12,8 +12,8 @@ def test_unpushed_never_pushes() -> None:
 
 
 def test_eval_username_never_pushes_even_without_the_flag() -> None:
-    # The `thresholded` slot samples a distribution no training actor
-    # uses; its env username alone must keep it out of replay.
+    # The `argmax` slot plays a distribution no training actor uses; its
+    # env username alone must keep it out of replay.
     username = f"{EVAL_USERNAME_PREFIX}-simpleheuristic-1:0002"
     assert not should_push_trajectory(False, True, username)
 

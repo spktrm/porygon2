@@ -1,15 +1,12 @@
-"""DeepNash-style thresholding of a sampled policy (rl/model/utils.py
-prune_log_policy): the one definition both the `thresholded` eval slot
-and the learner's v-trace ratio read."""
+"""DeepNash-style thresholding of a policy (rl/model/utils.py
+prune_log_policy): the one definition the thresholded v-trace ratio and
+the uniform-KL screen read."""
 
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 
-from rl.environment.interfaces import PlayerActorInput, PlayerActorOutput
-from rl.model.utils import legal_log_policy, prune_log_policy
+from rl.model.utils import legal_log_policy, prune_log_policy, renormalise_kept
 
 DTYPE_MIN = jnp.finfo(jnp.float32).min
 
@@ -83,54 +80,19 @@ def test_removed_cell_has_zero_gradient_through_its_own_logit() -> None:
     assert abs(gradient[0]) > 0.1 and abs(gradient[3]) > 0.1
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_real_actor_default_head_params_are_bit_identical(
-    real_model_and_trajectory: tuple[
-        nn.Module, dict, PlayerActorInput, PlayerActorOutput
-    ],
-) -> None:
-    from rl.model.heads import HeadParams
-    from rl.model.player_model import get_player_model
-    from rl.model.utils import open_zero_init_paths
-    from tests.conftest import session_player_model_config
-
-    _, variables, actor_input, actor_output = real_model_and_trajectory
-    variables = open_zero_init_paths(variables, ["action_head"])
-    actor_input = actor_input.replace(
-        env=jax.tree.map(lambda leaf: leaf[:4], actor_input.env)
-    )
-    actor_output = jax.tree.map(lambda leaf: leaf[:4], actor_output)
-    apply_model = jax.jit(
-        get_player_model(session_player_model_config(train=False)).apply
-    )
-    rngs = {"sampling": jax.random.key(9)}
-    plain = apply_model(variables, actor_input, actor_output, HeadParams(), rngs=rngs)
-    explicit = apply_model(
-        variables,
-        actor_input,
-        actor_output,
-        HeadParams(prune_threshold=0.0),
-        rngs=rngs,
-    )
-    for expected, actual in zip(
-        jax.tree.leaves(plain), jax.tree.leaves(explicit), strict=True
-    ):
-        np.testing.assert_array_equal(expected, actual)
-    # Positive control: a threshold that bites changes the sampled
-    # distribution (the stored log_prob is mu's) but no policy metric.
-    thresholded = apply_model(
-        variables,
-        actor_input,
-        actor_output,
-        HeadParams(prune_threshold=0.1),
-        rngs=rngs,
-    )
-    assert np.any(
-        np.asarray(thresholded.action_head.log_prob)
-        != np.asarray(plain.action_head.log_prob)
-    )
+def test_renormalise_kept_takes_any_kept_set() -> None:
+    log_policy, legal = _row([0.6, 0.004, 0.0, 0.396])
+    by_threshold = np.asarray(prune_log_policy(log_policy, legal, 0.005))
+    same_set = jnp.asarray([True, False, False, True])
     np.testing.assert_array_equal(
-        np.asarray(thresholded.action_head.entropy),
-        np.asarray(plain.action_head.entropy),
+        np.asarray(renormalise_kept(log_policy, legal, same_set)), by_threshold
     )
+    # The control: a kept set no threshold can produce (the MOST likely cell
+    # removed) gives a different distribution, renormalised over what is left.
+    without_the_mode = jnp.asarray([False, True, False, True])
+    restricted = np.asarray(renormalise_kept(log_policy, legal, without_the_mode))
+    assert restricted[0] == DTYPE_MIN
+    np.testing.assert_allclose(
+        np.exp(restricted[[1, 3]]), [0.004 / 0.4, 0.396 / 0.4], rtol=1e-5
+    )
+    assert not np.array_equal(restricted, by_threshold)

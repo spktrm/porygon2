@@ -13,6 +13,8 @@ import sys
 import threading
 import time
 
+import jax
+
 from rl.online.training.run_state import RunState
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,13 @@ def log_memory_diagnostics(run_state: RunState, league, logs: dict) -> None:
                     logs["diag_os_threads"] = int(line.split()[1])
     except Exception:
         pass  # non-Linux — skip, same posture as _available_memory_fraction
+
+    # The allocator's high-water mark, which stays meaningful under
+    # preallocation (bytes_in_use does not). None off the GPU.
+    device_memory = jax.local_devices()[0].memory_stats()
+    if device_memory is not None:
+        logs["diag_gpu_peak_mb"] = device_memory["peak_bytes_in_use"] / 2**20
+        logs["diag_gpu_in_use_mb"] = device_memory["bytes_in_use"] / 2**20
 
     py_threads = threading.enumerate()
     logs["diag_py_threads"] = len(py_threads)

@@ -26,7 +26,6 @@ Or upload existing local shards (replays/shards/{format_id}/ -> volume):
 Train offline (args after --cli go verbatim to rl.offline.train):
     modal run --detach scripts/modal_train.py::train_offline \
         --cli "--trunk-ckpt ckpts/gen9/ckpt_00373138 --num-steps 30000"
-    ... --cli "--trunk-ckpt ckpts/gen9/ckpt_00373138 --no-world-model"
 
 Train the RL agent (self-contained — the self-play policy's losses read
 nothing trained on replays):
@@ -248,8 +247,7 @@ def train_offline(cli: str = ""):
     Shards are read from the replays volume ({dataset_dir}/{format_id}/,
     default replays/shards) and artifacts written to the ckpts volume
     (ckpts/offline/...). Pass anything rl.offline.train accepts:
-    --trunk-ckpt is required, --no-world-model trains the critic alone,
-    --resume-from restarts an offline run."""
+    --trunk-ckpt is required, --resume-from restarts an offline run."""
     os.chdir(REPO_REMOTE)
     args = shlex.split(cli)
 

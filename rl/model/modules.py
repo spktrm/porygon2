@@ -105,6 +105,35 @@ class SequenceNormalisation(nn.Module):
         normalised = normalised * (1 + scale.astype(sequence.dtype)[group_ids])
         return jnp.where(row_valid[..., None], normalised, 0)
 
+    def moved(
+        self,
+        outputs: jax.Array,
+        change: jax.Array,
+        row_valid: jax.Array,
+        group_ids: jax.Array,
+    ) -> jax.Array:
+        """Rows that are already this normalisation's OUTPUTS, moved by
+        `change` and put back in output form: the scale is divided out first,
+        so a zero change returns the rows themselves rather than rows with the
+        scale applied twice. The scale is held under stop_gradient -- a caller
+        scoring its own rows against real ones at an absolute scale could
+        otherwise lower its loss by shrinking the scale both share."""
+        scale = jax.lax.stop_gradient(self.get_variable("params", "group_scale"))
+        scale = 1 + scale.astype(outputs.dtype)[group_ids]
+        return jnp.where(
+            row_valid[..., None], unit_rms(outputs / scale + change) * scale, 0
+        )
+
+
+def unit_rms(x: jax.Array) -> jax.Array:
+    """Each row rescaled to RMS 1 in `RMSNorm`'s arithmetic (variance in f32,
+    the rsqrt cast back to the row's dtype) without its scale: the trunk's
+    normalised residual stream then shares the RMS-1 convention every row
+    enters at (SequenceNormalisation), so the zeros-init pre-norms stay
+    identity at init. A zero row stays zero."""
+    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    return x * jax.lax.rsqrt(variance + 1e-6).astype(x.dtype)
+
 
 def activation_fn(array: jax.Array) -> jax.Array:
     return nn.gelu(array)

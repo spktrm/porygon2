@@ -12,7 +12,6 @@ import jax.numpy as jnp
 import numpy as np
 from flax import linen as nn
 
-from rl.model.config import get_player_model_config
 from rl.model.constants import (
     CLS_ROW,
     PRIVATE_ROWS,
@@ -22,6 +21,8 @@ from rl.model.constants import (
     SequenceGroup,
 )
 from rl.model.trunk import TrunkBlock
+from rl.online.artifact import player_model_config_for
+from rl.online.config import get_learner_config
 from rl.probes.switch_depth_probe import ROOT as DEPTH_ROOT
 from rl.probes.switch_depth_probe import split_masks
 from rl.probes.switch_readout_probe import fit_readout
@@ -32,7 +33,7 @@ ARMS = ("baseline", "info", "cls", "info_cls", "field", "mass_control", "skip")
 
 
 def apply_intervention(params, sequence, valid, arm):
-    block = TrunkBlock(get_player_model_config(9, train=True).encoder.trunk)
+    block = TrunkBlock(player_model_config_for(get_learner_config()).encoder.trunk)
     original_mask = jnp.asarray(SEQUENCE_READ_MASK)
     info_rows = SEQUENCE_SLICES[SequenceGroup.INFO]
     sources = jnp.zeros(sequence.shape[-2], bool).at[CLS_ROW].set(True)

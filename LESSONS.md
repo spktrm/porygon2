@@ -1604,6 +1604,15 @@ change or restart was performed for this review. Evidence:
 
 ### Uniform KL target raised to 16% — 2026-09-13
 
+**Superseded by later user-directed experiments.** The September 17 fresh
+normalised-residual lineage and September 18 entropy-off experiment use
+uniform KL .01 and their own acceptance/fallback criteria. This historical
+16% calibration must not retune those runs; executed switch frequency and
+policy switch mass are distinct measurements. On September 20 the stale
+heartbeat was found still active. Its pause request timed out and the saved
+automation status remained ACTIVE; no training setting or process changed.
+Operational record: `runtime/uniform-kl-target16-20260913/superseded-status.json`.
+
 The user explicitly replaced the former switching ceiling with a **16%
 target**, requesting a smart coefficient estimate and minimum restarts.
 Fresh main-side T=1 protocol windows completing 12:56:42–13:06:21 UTC were
@@ -10446,3 +10455,546 @@ hold would judge recovery); LayerNorm Scaling (the signature is block-1
 dominance, not inert deep blocks); skip paths (moot if the cosine
 recovers); weight decay as the control (superseded by the reference
 mechanism). Local plan: `docs/normalised-residual-2026-09-17.md`.
+
+## Removal ledger — 2026-09-20 thresholded eval slot → argmax
+
+The `thresholded` eval slot (2026-09-09 ledger above) is replaced in place
+by an `argmax` slot: slate index 1 now plays the player policy's most
+likely legal cell every decision, the builder still sampling at T=1.
+Series `EvalActor-simpleheuristic-thresholded-1` ends at the restart that
+carries this and `EvalActor-simpleheuristic-argmax-1` begins; the other two
+slots keep their names and indices.
+
+The number it leaves behind, run fxlpapwf at lifetime step 640,274, 6,317
+games per slot since the restart, 200-game half-life smoothed win rate
+against the simple heuristic: plain-t1 .429, thresholded .396, plain-t05
+.513. With 2026-09-09's .586 against .526 that is two lineages in which
+removing the sub-.005 cells cost three to six points rather than gaining
+any, while sharpening to T=.5 gained eight — the mass worth pricing is the
+policy's off-mode mass as a whole, which is what wr(argmax) - wr(plain-t1)
+reads.
+
+Removed: `HeadParams.prune_threshold` and its plumbing through
+`_score_and_sample`, and the config field `player_prune_threshold` (the
+slot was its only reader since the 2026-09-14 removal of training target
+pruning). Added: the traced `HeadParams.greedy` and
+`rl/model/utils.py sampling_log_policy`, which hands the same categorical
+sampler the point mass on the best legal cell, so the stored log_prob is 0
+and no `where` sits on the action index; False is bit-identical to the old
+threshold-0 path on every cell (`tests/test_greedy_sampling.py`).
+`prune_log_policy` stays for `targets.thresholded_target_ratio` and
+`rl/probes/uniform_kl_screen.py`. Revert handle: the commit before this one
+on `normalised-residual`.
+
+## Removal ledger — 2026-09-20 event world model (replaced, not falsified)
+
+The public event world model of 2026-09-16 (major-arg decoder, rectified
+flow over the scaled difference of the 55 public output rows, mean control,
+depth-1 sampled event rollouts on a searching eval actor, all trained
+OFFLINE on human replays over a frozen trunk) is removed and replaced by the
+action-conditioned consequence model (user decisions 2026-09-20: trunk
+outputs as targets, gradients through the trunk, a value row inside the
+trunk, an energy-score noise-input sampler, a deploy-time prune; plan
+`~/.claude/plans/plan-this-out-whatever-groovy-floyd.md`). It shaped
+nothing (frozen trunk), was never on for an online actor, and its search
+read was never confirmed. Its banked numbers stay the reference: flow 0.28
+vs mean control 0.61 on touched rows (copy = 1), imagined-value R2 0.84,
+CRPS 0.046 vs the control's 0.057, `untouched_delta_frac` 0.70.
+
+The second scoped exception to the self-play-only rule narrows with it:
+human replays now train the public critic and nothing else.
+
+Tag `pre-event-world-model-removal-2026-09-20` on cb21015 (branch
+`normalised-residual`). Recovery for any row:
+`git checkout pre-event-world-model-removal-2026-09-20 -- <paths>`; the
+removal is the commit carrying this ledger.
+
+| mechanism | paths deleted / edited | recovery |
+|---|---|---|
+| `EventWorldModel` (decoder, `LatentFlow`, `MeanStep`, `delta_scale`, `pooled_group_loss`, `group_delta_scale`, `update_rows` + the grammar masks) | `rl/model/world_model.py`, `tests/test_world_model.py`; `cfg.world_model` in `rl/model/config.py`; the setup branch in `rl/model/player_model.py` | `git checkout <tag> -- rl/model/world_model.py tests/test_world_model.py` + the config block |
+| event search (`EventSearchFns`, `rollout`, `q_values`, `search_bonus`, the value-blind arm) and its actor binding | `rl/model/event_search.py`, `tests/test_event_search.py`, `tests/test_search_binding.py`; `_search_bonus`, `logit_bonus` and the two optional names in `actor_params_view` (`rl/model/player_model.py`); `cfg.search`; `with_public_cls` / `search_public_rows` (`rl/model/encoder.py`; `local_row` stays); the three `search_*` leaves of `PlayerActorOutput` (the cohort loader's shim drops them from older pickles) | `git checkout <tag> -- rl/model/event_search.py tests/test_event_search.py tests/test_search_binding.py` |
+| the offline world-model trainer half | `world_model_terms`, `world_model_metrics`, `with_delta_scale`, `TrainerState.scale` + its EMA, `--world-model`, the rng / sample threading (`rl/offline/train.py`); `world_model`, the eight loss weights, `scale_momentum`, `eval_samples` (`rl/offline/config.py`); `joint` moved from `cfg.world_model.joint` to an `OfflineTrainer` field | `git checkout <tag> -- rl/offline/train.py rl/offline/config.py` |
+| the three-arm search read | `rl/offline/search_ablation.py`; `harness.load_search_params`, `play_games(search_arm=)` | `git checkout <tag> -- rl/offline/search_ablation.py rl/offline/harness.py` |
+| wandb "Event world model" view | `offline_sections` is now the "Offline critic" view; the old view is NOT auto-pruned (the prune matches by name) | the tag's `scripts/wandb_views.py` |
+
+Verified: the offline critic's 26 pooled terms and its total loss on a fixed
+two-trajectory batch are bit-identical before and after (hex float compare);
+the online learner never referenced any of it. `actor_params_view` no longer
+carries `public_value_head` into actor param trees (it rode along only for
+the searching actor; no actor forward calls it).
+
+## Consequence model, Step 1: instruments and baselines — 2026-09-20
+
+All reads on `ckpts/gen9/ckpt_00640274` (run fxlpapwf), games against the
+service's SimpleHeuristic at sampling temperature 0.5 through
+`rl.probes.tactical_cohort collect`, params `params`.
+
+### Cohorts (frozen, with battle logs)
+
+| root | played | kept | seed | note |
+|---|---|---|---|---|
+| `runtime/tactical-cohort-20260920` | 240 | 240 | 909 | replaces the 2026-09-09 cohort, which has no logs and is from ckpt_02014000 (old lineage) |
+| `runtime/sleep-cohort-20260920` | 2400 | 202 | 920 | `--sleep-only`: games with at least one turn begun asleep |
+| `runtime/sleep-cohort-20260920b` | 4000 | 326 | 921 | same |
+
+Throughput: 240 games in 58 s at `--pairs 4` (~4 games/s), so the plan's
+17,550-game confirmation is roughly 75 minutes, not days.
+
+### The sleep failure, measured
+
+From the logs alone (`rl/probes/sleep_turns.py`, hindsight labels): about 8%
+of games have a turn begun asleep. Over the two sleep cohorts, 2,982 asleep
+decisions reached a move attempt and **67.6% were wasted** (0.677 of 1,143
+and 0.676 of 1,839). In the first sleep cohort: 765 ordinary moves wasted
+while still asleep, 348 ordinary moves executed on the waking turn, 13
+successful sleep-usable moves, 5 where Sleep Talk worked and the called move
+failed, 9 waking failures, 0 asleep failures.
+
+Most asleep decisions have NO sleep-usable move legal: only 269 of the
+~3,000 do (62 games). So "Sleep Talk" is a small corner of a larger
+wasted-turn problem whose other exit is a switch.
+
+Policy mass at T = 1 where a sleep-usable move is legal (lower is better in
+both rows; whole-game bootstrap 95% intervals):
+
+| sub-cohort (hindsight) | cohort | states | ordinary moves | sleep-usable moves |
+|---|---|---|---|---|
+| STAYED_ASLEEP | sleep | 63 | 0.816 [0.775, 0.861] | 0.097 [0.073, 0.116] |
+| WOKE | sleep | 25 | 0.830 [0.786, 0.880] | 0.090 [0.061, 0.113] |
+| STAYED_ASLEEP | sleep b | 123 | 0.874 [0.847, 0.895] | 0.082 [0.070, 0.097] |
+| WOKE | sleep b | 43 | 0.892 [0.868, 0.913] | 0.071 [0.057, 0.089] |
+
+The policy does not separate the two sub-cohorts at all, although the
+`SLEEP_TURNS` feature nearly does it alone: pooled, STAYED_ASLEEP is 105
+states at `SLEEP_TURNS` 0 and 78 at 1 (3 at 2); WOKE is 55 at 2 (8 at 0, 4
+at 1, 1 at 3). Sleep-usable mass by stratum is flat, 0.07–0.09.
+
+### Fixed-label consequence probe (`rl/probes/consequence_probe.py`)
+
+Logistic probes, balanced class weights, split by game (30% held out),
+balanced accuracy (0.5 = nothing). "action" = the taken cell's source and
+target readout rows; "state" = the CLS row.
+
+| label | cohort | test n | positive | action | state | both |
+|---|---|---|---|---|---|---|
+| own move executed (vs a CANT) | tactical | 1349 | 0.979 | 0.526 | 0.556 | 0.532 |
+| own move executed | sleep | 1406 | 0.908 | 0.666 | 0.660 | 0.659 |
+| opponent active hp moved | tactical | 1863 | 0.621 | 0.800 | 0.742 | 0.801 |
+| opponent active hp moved | sleep | 1792 | 0.583 | 0.728 | 0.713 | 0.736 |
+| any faint | tactical | 1863 | 0.370 | 0.774 | 0.763 | 0.772 |
+| moved first | tactical | 1125 | 0.499 | 0.666 | 0.616 | 0.667 |
+
+Reading: whether the chosen move will execute is close to unreadable from
+the rows the policy scores it with, and the action rows add nothing over the
+state (the plan's diagnosis 1 is NOT falsified). Damage and speed order are
+partly readable, with a modest action-conditioned gain (+0.06, +0.05).
+Unweighted accuracy of the hp probe falls with the behaviour probability of
+the taken action (0.62 below 0.05, 0.72 for 0.05–0.2, 0.85 for 0.2–0.5, 0.82
+above 0.5) — the support effect the plan's Step 5 has to respect.
+
+### Information-retention probes (public entity rows)
+
+| feature | tactical | sleep |
+|---|---|---|
+| hp, 5 fixed bins | 0.847 | 0.837 |
+| status, 7 classes | 0.588 | 0.597 |
+| fainted | 1.000 | 1.000 |
+
+Status is weakly carried by the public entity rows (chance is 1/7 = 0.14,
+but 0.59 is far from hp's 0.85). That is a candidate root of the sleep
+failure, and these are the Step 4 abort references (a drop of more than 0.05).
+
+### Value prior for the 15-row reader
+
+Ridge regression to the game outcome, held-out games: mean of the 15 public
+state rows R² 0.074 (sleep) / −0.063 (tactical); CLS row 0.200 / 0.148. A
+linear read of a mean pool is a floor, not the bar — the planned row attends
+over six blocks — but it says the 15 rows' outputs are not value-shaped today.
+
+### Not done in Step 1
+
+The frozen pair-form latent probe and the touched / untouched delta split
+with the measured bf16 floor. The learner now logs `player_clip_multiplier`,
+`player_clip_binds`, `diag_gpu_peak_mb`, `diag_gpu_in_use_mb` and a
+peak-device-memory line per precompiled lattice combo (measured after a real
+execution; the plan's `memory_analysis()` would have cost a second compile
+per shape).
+
+## Addition ledger — 2026-09-20 state value row (consequence model, Step 2 code; NOT yet launched)
+
+| mechanism | what | why |
+|---|---|---|
+| `SequenceGroup.STATE_VALUE_CLS` (row 91 of 92, appended LAST in the enum and the layout) | reads `PUBLIC_STATE_ROWS` (12 PUBLIC_ENTITY + 3 FIELD) and itself; read by nothing, VALUE_CLS included, so the privileged critic and rows 0-90's sub-mask are unchanged; learner-only; `state_value_cls_embedding` beside `public_cls_embedding` | user decision 2026-09-20: a value that is a function of exactly the rows the consequence model predicts. It is the one row that does NOT read the whole public tier; its information is still everything public, because the 15 rows read the tier inside the trunk |
+| `state_value_head` + `loss_v_win_state` (`player_state_value_head_loss_coef` 1.0; 0 = the row untrained) + `player_state_value_head_r2`, `player_loss_v_win_state` | the public critic's CE on `win_returns` under `value_mask`, a fourth time | an INTERVENTION, not a probe: a second public value loss sends gradient through the 15 rows and enters the global clip |
+| `GROUP_AXIS_LEAVES` in `merge_params` (now a 4-tuple: merged, kept_fresh, dropped, extended) | `sequence_group_bias` and the two `group_scale` leaves extend along their leading axis at a merge instead of falling back to fresh init | without it, adding ONE group silently re-initialises the trained bias and norm scale of EVERY group. Named paths only; an unlisted leaf with the same growth stays fresh (the test's control). Adam moments extend through `merge_opt_state` |
+
+Tests: `test_state_value_cls_reads_the_public_state_rows_and_is_read_by_nothing`
+(perturbing the row moves nothing else; private + secret perturbations do
+not reach it; controls: a public state row reaches it directly, a public row
+outside its read set reaches it through the rows it reads),
+`test_a_new_sequence_group_extends_the_per_group_leaves`. The old assertion
+"every row reads the whole public tier" is now "every row but
+STATE_VALUE_CLS". An offline-trainer overlay of a pre-2026-09-20 trunk needs
+`--fresh-subtrees encoder/state_value_cls_embedding`.
+
+Acceptance (pre-registered in the plan, read after the merged relaunch):
+state R2 at 20k >= the frozen pooled-15-row probe's prior (R2 0.07 linear,
+CLS 0.20 — a floor), with main value R2, entropy, actor KL and the clip-bind
+fraction inside fxlpapwf's band.
+
+
+## Addition ledger — 2026-09-20 consequence model (Step 3 code; trunk gradient 0; NOT yet launched)
+
+| mechanism | what | why |
+|---|---|---|
+| `rl/model/consequence.py`: `PairConsequence` (`pair`, and `state_only_pair` as the control), `ConsequenceSampler` (2-block plain-residual `Trunk` of its own, 32-d noise added into the one conditioning vector, zero-init `out_proj`), `public_row_alignment`, `CONSEQUENCE_ROWS` (16) | predicts the CHANGE of the 15 public state rows + STATE_VALUE_CLS from the taken cell's source/target rows (+ CLS for the sampler) | the pair form is no more expressive than the readout's bilinear, so "Sleep Talk AND asleep" has to be IN the move row for the loss to fall; an MLP head would absorb it. Layers are named by role (`source_query`, `state_conditioning`), never by counter |
+| a SEPARATE apply: `PlayerModel.consequences` + `Porygon2PlayerTrainState.consequence_fn`; `__call__` hands back `consequence_inputs` (learner-only) and touches the heads once at init | the noise enters in `train_step` from `Batch.rng_key` | the learner's other three forwards, the harness and `real_model_apply` need no rng and no gating |
+| `rl/online/training/loss.py`: `consequence_mean_loss` (squared), `consequence_energy_loss`, `smoothed_norm`, `_pooled_group_ratio` | per-group ratios of pooled sums against the stop-gradient pooled true change, floored at 0.1 x the measured mean (entity 3.34, field 2.90 on ckpt_00640274; mean squares 19.5 / 12.1; rows have norm 13-16) | squared for the mean head: an unsquared norm's optimum is the median, i.e. the copy predictor on minority outcomes. `sqrt(v^2 + eps^2) - eps` for the sampler: the two draws are EQUAL at init and the plain norm's gradient there is 0/0 -- the non-finite gate would have skipped every update forever |
+| `rl/online/training/consequence.py`: `consequence_targets`, `scale_trunk_gradient`, `consequence_terms` | targets `sg(next gathered by PUBLIC_ORDER) - sg(now)` in f32; mask = acted at t, valid at both ends, identity matched. `acted_mask` alone is the transition mask (it is never true on a chunk's final row); `value_mask[1:]` would have dropped a real transition per chunk | a live `now` would be a slowness force on the public rows |
+| `artifact.player_optimiser` / `optimiser_partitions` | `optax.multi_transform`: the same clip + AdamW chain twice, over the model and over the `consequence` subtree | ONE global-norm clip over the tree lets a stop-gradient head change the multiplier applied to the trunk (the PBRS / transition-model coupling, which I repeated in this plan's first draft). Pinned on optimiser UPDATES with the clip binding; the control (one shared chain) fails. **The optimiser state's structure changes, so a CHECKPOINT-mode resume of a pre-2026-09-20 checkpoint no longer loads; the planned relaunch is a params-mode merge** |
+| `harness.load_params` | merges the checkpoint onto a fresh init of the current learner model and logs what stayed fresh | a pre-2026-09-20 checkpoint lacks `state_value_cls_embedding` and has 17-row group tables; a raw apply fails, or clamps the group gather silently |
+
+Contracts pinned: both heads ARE the copy predictor at init (the smoke test
+reads all three losses as 1.000 and the sampler's imagined-value gap equal to
+the copy gap); copy 1 / exact 0 / negated 4 (mean) and ~2 (energy); finite
+gradients where the draws coincide, with the plain norm as the failing
+control; the two-mode target, where draws on the modes beat the mean under
+the energy score and LOSE under squared error; an empty group left out and a
+still group floored; alignment through a reorder with -1 never matched;
+every consequence activation bf16 (a trace of its own -- the learner forward
+never calls the heads).
+
+Not built (deviations from the plan, stated): the policy + value cotangent
+norm at the trunk output as the comparator for the consequence losses'
+cotangent (it needs a second backward through the trunk per step); Step 4's
+coefficient calibration will need a one-batch offline script instead. The
+value row's floor (0.3) is a placeholder until the row exists in a run.
+
+## Consequence model, Step 4: shaping on — 2026-09-20 (run lmtinoz5, DATED OBJECTIVE CHANGE at learner step 24,000)
+
+An intervention, not a probe: from step 24,000 the consequence losses send
+gradient into the trunk, ramping linearly to full strength at 34,000
+(`player_consequence_trunk_grad` 1.0, `player_consequence_ramp_start_step`
+24000, `player_consequence_ramp_steps` 10000). The ramp is a TRACED scalar of
+the train state's step count (`consequence.live_trunk_gradient`, panel
+`player_consequence_trunk_grad_live`) -- a host-varied static scalar would
+compile and retain an executable per value. Relaunched in CHECKPOINT mode
+from ckpt_00023359, so the wandb run, step counts and league continue.
+
+**Calibration** (`rl/probes/consequence_calibration.py`, ckpt_00023359, 12
+batches of 4 cohort chunks, encoder-subtree gradient norm per UNIT
+coefficient at full trunk gradient): mean loss median 0.343 (0.21-0.57),
+sampler median 0.328 but mean 0.60 and max 2.76 -- one batch in twelve at 8x
+its median. Reference, the policy + value losses' own encoder gradient norm
+over the observer phase: median 2.21 (p25 1.66, p75 3.10, p95 6.39). So
+`player_consequence_mean_coef` 0.65 (~10% of the reference) and
+`player_consequence_sampler_coef` 0.35 (~5%, held down for its tail; the
+plan said ~10% each). Historical coefficients were not used.
+
+**Observer-phase read, lifetime 10k-20k vs fxlpapwf's last 40k** (Step 2
+acceptance MET): value R2 main .656 vs .655, public .634 vs .633, privileged
+.678 vs .678; the new state value R2 .62 (the linear pooled prior was .07);
+entropy 1.088 vs 1.140; gradient norm 3.83 vs 3.76; the clip never bound.
+Consequence losses at 20k (copy = 1): mean .685, state-only .712, sampler
+.57; spread/skill .95-1.03. Imagined value gap: mean head .114, copy .119,
+sampler .135 -- the mean head barely beats copying and the sampler is worse,
+though its gap averages only 2 draws, which inflates it. UNRESOLVED: learner
+5.10 steps/s vs fxlpapwf's 6.09 at its end but 5.11 at fxlpapwf's own
+10k-20k; actor inference 34 ms vs 22 ms with an unchanged actor graph; no
+VRAM baseline was taken on the old tree (peak now 2309 MB).
+
+**The within-lineage BEFORE reads (ckpt_00023359) -- the numbers Step 4 is
+judged against, and a warning about the instrument.** 23k steps of ordinary
+training with the trunk only observed already moved the sleep cohort:
+
+| read (T = 1, lower is better) | fxlpapwf 640k | lmtinoz5 23k |
+|---|---|---|
+| STAYED_ASLEEP ordinary-move mass, sleep cohort | 0.816 [0.775, 0.861] | 0.710 [0.659, 0.774] |
+| STAYED_ASLEEP ordinary-move mass, sleep cohort b | 0.874 [0.847, 0.895] | 0.738 [0.675, 0.789] |
+| WOKE sleep-usable mass, sleep cohort | 0.090 [0.061, 0.113] | 0.129 [0.062, 0.202] |
+| WOKE sleep-usable mass, sleep cohort b | 0.071 [0.057, 0.089] | 0.111 [0.083, 0.140] |
+| ineffective confident mass, tactical cohort | 0.179 | 0.147 [0.117, 0.177] |
+
+Both sleep numbers moved together (less ordinary mass where it stayed
+asleep, MORE Sleep Talk where it woke) with no consequence gradient at all --
+a 0.1 drift is within what this lineage does unaided, so Step 4's cohort
+acceptance is read against THESE values, and a fall in the first number that
+comes with a rise in the second is not a pass.
+
+Fixed-label probes are unchanged, as they should be with the trunk only
+observed (balanced accuracy, action / state): own move executed .529/.588
+tactical, .674/.683 sleep; opponent hp moved .805/.736 and .737/.705; moved
+first .663/.624 and .659/.662. Retention: hp .867 / .845 (was .847 / .837);
+STATUS .493 / .632 (was .588 / .597) -- the status probe moves +-0.1 between
+reads with no intervention, so the plan's "drop > 0.05" abort is inside its
+noise: use hp for that abort and read status only pooled over cohorts.
+
+**Abort conditions (any one over a 2k window -> knob back to 0):** encoder
+gradient norm median above ~3x its observer median of 2.21 (the plan's
+"consequence share > 30%" cannot be read directly -- once the ramp starts the
+consequence gradient is mixed into the encoder's); clip-bind fraction above 0
+sustained (it was 0 throughout the hold); predicted / true change RMS > 3 in
+any group; hp retention drop > 0.05; entropy or actor KL outside the band;
+the non-finite gate firing. Acceptance is the plan's: a 50k hold at full
+strength, judged on the sleep cohorts, the fixed-label probes and win rate.
+
+## Consequence model, Step 4 verdict — 2026-09-20: acceptance NOT met, knob back to 0 at step 107,494
+
+Run lmtinoz5, `player_consequence_trunk_grad` ramped 0 -> 1 over learner steps
+24k-34k and held at 1 to 107,494 (73k steps at full strength, mean coef 0.65,
+sampler coef 0.35). Read on ckpt_00107494 against the within-lineage baseline
+ckpt_00023359, same frozen cohorts, probes refit from scratch.
+
+| read | before (23k) | full strength (107k) | verdict |
+|---|---|---|---|
+| STAYED_ASLEEP ordinary-move mass, T=1 (lower is better), sleep cohort | 0.710 [0.659, 0.774] | 0.818 [0.795, 0.851] | WORSE, intervals disjoint |
+| same, sleep cohort b | 0.738 [0.675, 0.789] | 0.868 [0.837, 0.894] | WORSE, intervals disjoint |
+| WOKE sleep-usable mass (lower is better) | 0.129 / 0.111 | 0.089 / 0.072 | lower, but it moved WITH the row above: less Sleep Talk everywhere, no separation |
+| STAYED_ASLEEP switch ("other") mass | 0.158 / 0.148 | 0.087 / 0.055 | the mass went back onto ordinary moves |
+| tactical ineffective-confident mass (lower is better) | 0.147 [0.117, 0.177] | 0.193 [0.140, 0.242] | worse, intervals overlap |
+| probe: own move executed, action rows (balanced accuracy) | 0.529 tactical / 0.674 sleep | 0.592 / 0.715 | small rise |
+| probe: own move executed, state only | 0.588 / 0.683 | 0.598 / 0.682 | flat -- so the action rows gained ~+0.03 over the state on the sleep cohort, nothing on the tactical one |
+| probe: opponent hp moved, action rows | 0.805 / 0.737 | 0.815 / 0.766 | small rise |
+| probe: any faint | 0.774 / 0.794 | 0.806 / 0.810 | small rise |
+| retention: hp | 0.867 / 0.845 | 0.889 / 0.867 | no information lost |
+| eval vs SimpleHeuristic (online slate) | T=1 .359 (n=320), argmax .605, T=.5 .542 | T=1 .417 (n=1337), argmax .602, T=.5 .541 | unharmed; T=1 up ~6 points |
+
+Both sleep numbers again moved TOGETHER (as they did, in the other direction,
+over the 23k observer steps): the policy still does not use `SLEEP_TURNS` to
+tell the turn it stays asleep from the turn it wakes. The cohort metric
+wanders +-0.1 with ordinary training, so neither movement is attributable to
+the consequence model -- but the acceptance asked for a fall in the first
+with no rise in the second, and the first ROSE.
+
+**The normaliser was gamed.** Training panels over the hold: consequence mean
+/ sampler loss 0.68 / 0.58 -> 0.53 / 0.51 while the action-conditioned gain
+stayed +0.05 and the imagined value gap stayed 0.113 vs copy 0.120 -- and the
+TRUE change norm of the predicted rows inflated with row L2 pinned near 16:
+public_entity 3.45 -> 7.74, field 3.28 -> 14.39, value row flat at 2.7.
+`rl/probes/consequence_lag.py` on steady triples (no reorder): lag-1 change
+entity 1.30 -> 3.54, field 1.42 -> 10.69 (7.5x), value 1.54 -> 1.46; lag-2 /
+lag-1 1.43 / 1.45 / 1.40 (a random walk is 1.41) -> 1.28 / 1.18 / 1.34; cosine
+of successive changes ~0 -> -0.10 entity, -0.22 field. Not a pure alternation
+(that would be ratio << 1, cosine -1) but roughly half of the field rows'
+change is now TRANSIENT per-step content (independent per-step content gives
+ratio 1.0 and cosine -0.5). Mechanism: the target is a stop-gradient, so the
+losses cannot inflate it directly -- but gradient reaches the 16 STATE rows as
+INPUTS, and a state row that already carries what it is about to change by
+lowers the numerator while the (stop-gradient, per-batch) denominator grows
+with it. The value row, which the state value loss anchors, did not inflate.
+
+**The clip abort tripped and was not acted on**: bind fraction 0.016 in the
+hold -> 0.235 at 36-40k -> 0.015 at 52-60k -> 0.11-0.17 at 70-90k; encoder
+gradient median 2.2 -> 5.1 -> 2.1 -> 3.7. A pre-registered abort that nobody
+is watching is not an abort; next time the condition is checked at a
+scheduled read.
+
+**Not the consequence model's doing, but measured here:** offline T=1, 400
+games each: fxlpapwf ckpt_00640274 0.403 +- 0.025, lmtinoz5 ckpt_00023359
+0.345 +- 0.024 -- the merged restart itself (optimiser reset, fresh league,
+the new state-value gradient) cost a few points before any shaping.
+
+**Next, if the direction is kept (not landed):** send gradient through the
+ACTION rows only (source / target) and hold the 16 state rows and CLS under
+stop-gradient. That is where the policy reads a consequence from, it is what
+diagnosis 2 asked for, and it removes the route the inflation took. Also a
+fixed (config) normaliser instead of the live per-batch one.
+
+## Consequence model, Step 4b: predictions constrained to the trunk's output form, fixed scale — 2026-09-20 (run lmtinoz5, DATED OBJECTIVE CHANGE at learner step 120,000)
+
+User decision 2026-09-20 after the Step 4 verdict: keep the FULL gradient
+(through the 16 state rows and CLS as well as the action rows -- the
+action-rows-only variant was offered and declined) and constrain the
+prediction to be of the same form as the trunk output.
+
+| change | what | why |
+|---|---|---|
+| `SequenceNormalisation.moved` (+ `unit_rms` rehomed from trunk.py to modules.py, re-exported) | rows that are already the normalisation's outputs, moved by a change and put back in output form; the group scale is divided out first (so a ZERO change returns the rows themselves, not rows with the scale applied twice) and held under stop_gradient | under an absolute error, a caller able to move the scale real rows share could lower its loss by shrinking it |
+| `PlayerModel.consequences` returns predicted NEXT ROWS | `output_normalisation.moved(sg(now), change, ...)` for the mean head, the state-only control and each sample; the state value head reads the predicted value row directly | a prediction is confined to the manifold real rows live on, and the value head reads rows that look like the ones it was trained on (the old `now + change` had any norm) |
+| `consequence_mean_loss` / `consequence_energy_loss` over FIXED `player_consequence_scales` (3.45, 3.28, 2.84 = the mean change norms of the observer phase, steps 16k-24k) | the live per-batch denominator and its floors are gone; `pooled_group_mean` | the live denominator was the thing gamed. Pinned by `test_a_bigger_true_change_cannot_lower_the_loss`, whose control (error over the batch's own change) falls 64-fold on the same inputs |
+| panels `player_consequence_copy_loss_<group>` / `_copy_energy_<group>` | what copying the current row scores under the same fixed scale | copy no longer scores 1 by construction; this gauge IS the inflation watch (about 1 before shaping) |
+
+What this does NOT remove, stated before launch: with the full gradient
+reaching the state rows, an ABSOLUTE error rewards rows that change less --
+the opposite pressure to the one the ratio created. The instruments for it
+are the hp retention probe, the copy-loss gauge falling well below 1, and the
+fixed-label probes.
+
+Knob off, 107k -> 120k: the inflation DECAYED unaided (the three groups'
+change norms fell in every 4k window), which confirms the shaping caused it
+and that it reverses.
+
+Calibration on ckpt_00119788 (unit coefficients, encoder gradient norm):
+mean loss median 4.48 (3.26-5.49), sampler 0.90 (0.65-1.00), reference 2.20.
+Both are inflated by the rows still changing 2-4x their pre-shaping amount
+(steady-state 0.34 / 0.33), so `player_consequence_mean_coef` 0.05 and
+`player_consequence_sampler_coef` 0.12 are ~10% / ~5% NOW and fall as the
+rows deflate. Pre-registered: recalibrate when
+`player_consequence_copy_loss_field` < 2. Ramp 0 -> 1 over learner steps
+120,000-130,000. Aborts as before (encoder gradient median > 3x 2.2, clip
+binding sustained above its hold level, hp retention drop > 0.05, entropy /
+KL out of band, non-finite gate) -- to be CHECKED at the scheduled reads at
+full strength (130k) and every ~25k after, not left unwatched.
+
+## Consequence model, Step 4b verdict — 2026-09-20: the fixed-scale form inflated the rows too; knob back to 0 at step 151,905
+
+Run lmtinoz5, predictions constrained to the trunk's output form, fixed
+`player_consequence_scales`, FULL gradient (user's call), ramp 120k-130k, read
+on wandb at 146.7k (17k steps at full strength; coefs 0.05 / 0.12).
+
+| panel (4k-10k windows) | knob 0.25 | knob 0.75 | full, 130-140k | full, 140-147k |
+|---|---|---|---|---|
+| copy loss, entity rows (about 1 before any shaping) | 4.77 | 6.48 | 7.19 | 7.73 |
+| mean-head loss, entity rows | 2.68 | 3.61 | 3.90 | 4.13 |
+| copy loss, field rows | 17.89 | 17.55 | 15.82 | 15.55 |
+| copy loss, value row | 1.33 | 1.30 | 1.27 | 1.23 |
+| clip-bind fraction (hold level ~0.02) | 0.108 | 0.229 | 0.143 | 0.136 |
+| encoder gradient norm, median (reference 2.2) | 3.55 | 4.84 | 3.65 | 3.81 |
+| imagined value gap, mean head / sampler / copy | .115/.138/.121 | .115/.138/.122 | .113/.135/.119 | .117/.139/.124 |
+
+- The entity rows inflated AGAIN as the knob rose, under a loss with no live
+  denominator to game, while the mean head's loss ROSE in absolute terms and
+  stayed at ~54% of copy. So the first verdict's mechanism was incomplete: the
+  inflation is not (only) a normaliser being gamed. The gradient is a
+  semi-gradient -- through the inputs only, the target a stop-gradient of the
+  SAME trunk one step later -- so each step writes more of "what happens next"
+  into the state rows, and the next target then carries more step-specific
+  content too. Shaping state rows by their own future amplifies transient
+  content whatever the normaliser; with squared error it also feeds itself
+  (bigger error, bigger gradient). With the knob at 0 the change decays.
+- `player_consequence_action_gain_public_entity` read +0.40 against +0.05: a
+  UNIT artefact of the larger losses. Relative to copy it is ~5% before and
+  after -- the action's own rows carry no more about consequences.
+- The predicted-row-in-output-form did not improve the value read (the mean
+  head 5% better than copy, the sampler worse, as before).
+- Eval unharmed and unhelped: T=1 .403 (n=335) vs .419 over the first Step 4,
+  argmax .587 vs .597, T=.5 .527 vs .544. Entropy, KL, value R2 in band.
+- The pre-registered clip abort TRIPPED (0.14 sustained vs a hold of ~0.02)
+  and this time was acted on at the first scheduled read.
+
+Two losses, full gradient both times, the same rows inflated and the same
+fixed-target instruments flat: the mechanism, not a coefficient. What is left
+untried is gradient through the ACTION rows only (offered twice, declined in
+favour of the full gradient), or keeping the consequence model as an observer.
+From 151,905 the run trains normally with `player_consequence_trunk_grad` 0
+(user: "turn it and train normally overnight"); the heads keep learning as
+observers, so the panels stay live.
+
+## Aftermath of the consequence shaping: a history-encoder gradient episode with the knob OFF — 2026-09-21 (run lmtinoz5, steps ~190k-270k)
+
+Knob at 0 from 151,905 (verified: config saved 22:56:23, learner started
+22:58:10, `player_consequence_trunk_grad_live` max 0.000 in every window
+since). The inflation decayed as expected -- copy loss entity 7.7 -> 2.0,
+field 15.3 -> 4.4 by 300k-334k -- but the unwinding was not quiet:
+
+| window | history-encoder gradient (median) | total (median) | clip-bind fraction | value R2 main / state |
+|---|---|---|---|---|
+| 152k-180k | 0.49 | 2.54 | 0.07 | .684 / .644 |
+| 190k-200k | 4.02 | 5.76 | 0.32 | .673 / .647 |
+| 210k-220k | 16.5 | 19.3 | 0.78 | .593 / .540 |
+| 230k-240k | 54.1 | 58.0 | 0.92 | .639 / .622 |
+| 250k-270k | 10.3 | 11.5 | 0.55 | .645 / .621 |
+| 300k-334k | 0.77 | 2.64 | 0.09 | .649 / .614 |
+
+The consequence heads were not the source (their own gradient norm stayed
+0.13-0.16, and they sit in their own optimiser partition); the action head's
+stayed 0.15-0.17. It is the HISTORY ENCODER's gradient, 100x its normal 0.5,
+peaking ~80k steps after the shaping stopped and gone by 300k, over exactly
+the span in which the inflated rows relaxed. fxlpapwf, same history encoder,
+never showed anything like it in 680k steps (worst 40k-window median 1.3,
+clip-bind 0.19). With the clip binding on 80-90% of steps at a multiplier
+down to ~0.17, the whole model trained at a fraction of its learning rate
+for ~60k steps. Value R2 dipped (.59 / .54 at 210k-220k) and recovered; eval
+did not fall during it (T=1 .47, argmax .61-.64, T=.5 .56-.59) and T=1 reads
+.40 over 300k-334k, inside the .31-.47 range it has wandered through all run.
+Attribution is by timing only -- no control. The cost of a failed shaping
+experiment is therefore not just the steps it ran for: budget for the
+relaxation too, and read the history encoder's gradient after turning one off.
+
+## Observable self-play consequences — 2026-09-21, checkpoint-preserving restart
+
+User authorised replacing latent shaping with observed execution / HP-change /
+fainting prediction, stopping and restarting with the same optimiser and weights.
+Graceful shutdown saved `ckpts/gen9/ckpt_00355282` (lmtinoz5). The latent heads
+and their weights remain in place as observers (`player_consequence_trunk_grad=0`).
+No search or new value target is introduced.
+
+The target is now an observed transition: own MOVE versus CANT when an attempt
+is present; per-identity public HP delta; newly fainted entities. Unobserved
+attempts, duplicate/unrevealed identities and unmatched endpoints are masked.
+Terminal next observations are included; bootstrap-only last rows are not acted
+transitions. HP uses 21 bins over [-1, 1] with adjacent-bin interpolation; the
+other two tasks use Bernoulli log loss. Average the three present task losses,
+without rare-class weighting that would change their probability meanings.
+
+`FlatActionReadout.chosen_pair_features` reads the EXISTING query/key/scalar
+kernels for the taken move or switch; its linear decoder is
+`consequence/observable_outcomes`. Switches use the public leaving row, exactly
+as the policy does. The opponent-team term is not part of these features.
+There is no private decoder trunk, CLS or additional state-row operand.
+`player_observable_shared_grad` reaches the existing action-head projections
+AND encoder; it is not merely a trunk knob. Observable targets cannot move with
+the encoder. This does not guarantee the policy uses the learned distinctions.
+
+**Resume defect caught before relaunch:** `merge_opt_state` previously routed
+`PartitionState.inner_states` through `merge_params`, which treats each nested
+MaskedState tuple as an incompatible leaf and retains its freshly initialised
+value. Thus checkpoint mode silently reset both partitioned Adam chains.
+The merge now recursively descends dictionaries and tuples, retaining matching
+array leaves and counters, and zero-initialising only new moment leaves.
+The new regression test uses the REAL partitioned optimiser, nonzero moments
+and counters. An audit against 00355282 verified every existing parameter,
+moment and counter exactly. New decoder leaves alone start fresh.
+
+**Prelaunch calibration:** `rl.probes.observable_calibration`, checkpoint
+00355282, tactical cohort 20260920, CUDA: fit only the fresh decoder for 200
+Adam steps on four games, using the checkpoint counter and configured epsilon /
+coefficient; measure unit-coefficient gradients on four separate games.
+Encoder norms .05486 / .05568; action-head norms .11162 / .11235. With coefficient
+.05 these are ~.0028 / .0056. This is an EARLY decoder calibration, not a mature
+head bound; online gradient and drift panels remain necessary. Validation loss
+1.4459 / 1.4457, execution Brier .235, faint Brier .2463 / .2445, HP MAE
+.08285 / .07604 versus copy .08321 / .07682. These are initial reference numbers, not useful prediction.
+
+**Schedule and acceptance, registered before restart:** decoder learns from
+restart; shared gradient stays zero until 356282, ramps to 1 by 366282, then
+hold 10k steps. At 356282 and 366282 inspect class counts/recall, HP error versus
+copy, action-head/encoder gradient norms and clipping. At 376282 compare the
+fixed sleep/tactical cohorts with the restart checkpoint: require improved
+execution balanced accuracy on held-out games AND reduced ineffective action
+mass without losing HP retention by >.05. No usefulness claim from training
+loss alone. If clipping exceeds .15 over a 1k-update window (recent baseline
+.062), or encoder/action-head median gradients exceed 3x the observer window,
+set ONLY `player_observable_shared_grad=0`, retaining decoder learning and
+checkpoint state. These are scheduled-read conditions, not an automatic guard.
+
+**Force accounting:** this is a cross-entropy gradient through shared features,
+not an analytic shift to policy logits. Output-logit derivatives are bounded;
+parameter gradients depend on decoder weights and feature Jacobians, so are
+not globally bounded before the existing norm clip. There is no new explicit
+penalty opposing policy-logit mean drift (AdamW decay is zero); fitting the
+auxiliary labels is not a guarantee of bounded policy-logit offsets. Existing
+applied-delta / logit panels and action-head gradient norms must judge that
+risk. Existing Adam momentum is preserved, including its potential lag during
+the ramp; no new stiff logit equilibrium or log-probability singularity is
+introduced. The shared query/key/scalar and encoder routes are measured.
+
+Fallback is the observable shared-gradient knob at zero. Fixed teachers were
+explicitly declined by the user. The prior full-state latent shaping remains
+off; its two inflation verdicts above are not superseded by this experiment.
+
+Validation: fast suite passed with CUDA required as the default (CPU remains
+available for the actor-specific tests); full GPU train-step smoke plus all
+five observable contracts passed. GPU checkpoint audit matched every existing
+weight, moment and counter exactly. Initial sandbox checks silently fell back
+to CPU; those were superseded by the explicit-CUDA validation and calibration.
+
+Restart verified in `runtime/learner_20260921_101830.log`: loaded step 355282,
+frame count 72369990, original league and W&B lmtinoz5. Exactly one new subtree
+in each parameter tree: `consequence/observable_outcomes`. The two preflight
+shapes (64,192)/(64,256) compiled and executed in 101.9s/55.7s; the live (48,128)
+shape then ran. At step 355302: observable loss 1.47284; execution/HP/faint
+label counts 104/1197/548; update_skipped=0; encoder/action-head gradient norms
+2.227/.1515. Both shared observable and old latent gradients were zero in this
+warm-up, as configured. This verifies restart and finite training, not the
+experiment's later usefulness or acceptance hold.

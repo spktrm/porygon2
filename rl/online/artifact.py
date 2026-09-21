@@ -124,6 +124,11 @@ class Porygon2PlayerTrainState(train_state.TrainState):
     # and is never optimised, published or used by actors.
     old_policy_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
+    # (params, ConsequenceInputs (T, B, ...), noise (draws, T, B, size)) ->
+    # ConsequenceOutput (draws, T, B, ...): the consequence model as an apply
+    # of its own, so the learner's other forwards carry no rng.
+    consequence_fn: Callable | None = struct.field(pytree_node=False, default=None)
+
     step_count: jax.Array = struct.field(
         default_factory=lambda: jnp.array(0, dtype=jnp.int32), pytree_node=True
     )
@@ -167,6 +172,66 @@ def player_model_config_for(
     return model_config
 
 
+CONSEQUENCE_PARTITION = "consequence"
+MODEL_PARTITION = "model"
+
+
+def optimiser_partitions(variables: Params) -> Params:
+    """Which optimiser chain owns each leaf: the consequence model's own, or
+    the model's."""
+
+    def label(path, _):
+        if any(getattr(key, "key", None) == CONSEQUENCE_PARTITION for key in path):
+            return CONSEQUENCE_PARTITION
+        return MODEL_PARTITION
+
+    return jax.tree_util.tree_map_with_path(label, variables)
+
+
+def player_optimiser(config: Porygon2LearnerConfig) -> optax.GradientTransformation:
+    """Two copies of the same chain over disjoint leaves. `clip_by_global_norm`
+    spans whatever it is given, so ONE chain over the whole tree would let the
+    consequence heads' gradients change the multiplier applied to the trunk --
+    an intervention on the trunk's update with zero gradient reach (the
+    coupling LESSONS records for PBRS and the removed transition model). In a
+    partition of their own they cannot; what their losses send INTO the trunk
+    (player_consequence_trunk_grad > 0) lands on the model's leaves and is
+    clipped with them, as it should be."""
+
+    def chain() -> optax.GradientTransformation:
+        return optax.chain(
+            optax.clip_by_global_norm(config.player_clip_gradient),
+            optax.adamw(
+                learning_rate=config.player_learning_rate,
+                b1=config.player_adam.b1,
+                b2=config.player_adam.b2,
+                eps=config.player_adam.eps,
+                weight_decay=config.player_adam.weight_decay,
+            ),
+        )
+
+    return optax.multi_transform(
+        {MODEL_PARTITION: chain(), CONSEQUENCE_PARTITION: chain()},
+        optimiser_partitions,
+    )
+
+
+def consequence_apply_fn(player_network: nn.Module) -> Callable:
+    """(params, ConsequenceInputs (T, B, ...), noise (draws, T, B, size)) ->
+    ConsequenceOutput (draws, T, B, ...). The mean heads do not depend on the
+    noise, so under the draw vmap they are computed once."""
+
+    def chunk_consequences(params, inputs, noise):
+        def one_step(step_inputs, step_noise):
+            return player_network.apply(
+                params, step_inputs, step_noise, method="consequences"
+            )
+
+        return jax.vmap(jax.vmap(one_step), in_axes=(None, 0))(inputs, noise)
+
+    return jax.vmap(chunk_consequences, in_axes=(None, 1, 2), out_axes=2)
+
+
 def create_train_state(
     player_network: nn.Module,
     builder_network: nn.Module,
@@ -195,16 +260,7 @@ def create_train_state(
         # nGPT normalises the matrices before the first step as well as
         # after every update.
         initial_player_params = project_trunk_kernels(initial_player_params)
-    player_optimizer = optax.chain(
-        optax.clip_by_global_norm(config.player_clip_gradient),
-        optax.adamw(
-            learning_rate=config.player_learning_rate,
-            b1=config.player_adam.b1,
-            b2=config.player_adam.b2,
-            eps=config.player_adam.eps,
-            weight_decay=config.player_adam.weight_decay,
-        ),
-    )
+    player_optimizer = player_optimiser(config)
     player_train_state = Porygon2PlayerTrainState.create(
         apply_fn=jax.vmap(
             player_network.apply,
@@ -216,6 +272,7 @@ def create_train_state(
         # Neither copy can alias the donated live parameters.
         reg_params=jax.tree.map(jnp.copy, initial_player_params),
         old_policy_params=jax.tree.map(jnp.copy, initial_player_params),
+        consequence_fn=consequence_apply_fn(player_network),
         tx=player_optimizer,
     )
 
@@ -660,18 +717,36 @@ def load_from_checkpoint(
     )
 
 
-def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str], list[str]]:
+# Leaves with one row per SequenceGroup. A group added to the layout grows
+# their leading axis, and the plain shape rule would then re-initialise the
+# trained row of EVERY group; these alone extend instead. Named, never
+# inferred: a grown `blocks` axis or embedding table half-loading silently
+# would be a different model. Sound only while new groups take the LAST enum
+# value (asserted in rl/model/constants.py), so old rows keep their index.
+GROUP_AXIS_LEAVES = (
+    "/encoder/sequence_group_bias",
+    "/encoder/input_normalisation/group_scale",
+    "/encoder/output_normalisation/group_scale",
+)
+
+
+def merge_params(
+    fresh: Params, loaded: Params
+) -> tuple[Params, list[str], list[str], list[str]]:
     """Overlay checkpoint params onto a freshly initialized tree.
 
     Keys present in both trees with matching leaf shapes take the loaded
     (trained) value; keys only in the fresh tree (newly added modules) keep
     their random/zero init; keys only in the checkpoint (removed modules)
-    are dropped; shape mismatches fall back to fresh init. Returns the
-    merged tree plus the paths that kept their fresh initialization and
-    the paths dropped, so a resume across architecture changes is auditable.
+    are dropped; shape mismatches fall back to fresh init, except a
+    `GROUP_AXIS_LEAVES` leaf whose leading axis grew, which keeps its loaded
+    rows and takes fresh init for the new ones. Returns the merged tree plus
+    the paths that kept their fresh initialization, the paths dropped and
+    the paths extended, so a resume across architecture changes is auditable.
     """
     kept_fresh: list[str] = []
     dropped: list[str] = []
+    extended: list[str] = []
 
     def _merge(fresh_node, loaded_node, path: str):
         if isinstance(fresh_node, Mapping):
@@ -692,17 +767,33 @@ def merge_params(fresh: Params, loaded: Params) -> tuple[Params, list[str], list
         loaded_shape = getattr(loaded_node, "shape", None)
         if fresh_shape is not None and fresh_shape == loaded_shape:
             return loaded_node
+        if (
+            path.endswith(GROUP_AXIS_LEAVES)
+            and loaded_shape is not None
+            and fresh_shape is not None
+            and loaded_shape[1:] == fresh_shape[1:]
+            and loaded_shape[0] < fresh_shape[0]
+        ):
+            extended.append(f"{path} (rows {loaded_shape[0]} -> {fresh_shape[0]})")
+            return np.concatenate(
+                (np.asarray(loaded_node), np.asarray(fresh_node)[loaded_shape[0] :]),
+                axis=0,
+            )
         kept_fresh.append(f"{path} (shape {loaded_shape} -> {fresh_shape})")
         return fresh_node
 
-    return _merge(fresh, loaded, ""), kept_fresh, dropped
+    return _merge(fresh, loaded, ""), kept_fresh, dropped, extended
 
 
 def _merged(label: str, fresh: Params, loaded: Params) -> Params:
     """merge_params with its audit printed: which paths kept fresh init and
     which were dropped, under `label`, or nothing when the trees agree."""
-    merged, kept_fresh, dropped = merge_params(fresh, loaded)
-    for verb, paths in (("kept fresh init", kept_fresh), ("dropped", dropped)):
+    merged, kept_fresh, dropped, extended = merge_params(fresh, loaded)
+    for verb, paths in (
+        ("kept fresh init", kept_fresh),
+        ("dropped", dropped),
+        ("extended along the group axis", extended),
+    ):
         if paths:
             tqdm.write(f"{label}: {len(paths)} subtrees {verb}:")
             for path in paths:
@@ -710,11 +801,12 @@ def _merged(label: str, fresh: Params, loaded: Params) -> Params:
     return merged
 
 
-def merge_opt_state(fresh, loaded):
+def merge_opt_state(fresh, loaded, path=""):
     """Overlay a checkpoint optimiser state onto a fresh one by param path.
 
     optax states are (named) tuples whose param-shaped members are
-    Mappings: every Mapping node merges exactly as params do -- a leaf
+    Mappings: recurse through partition dictionaries as well as tuples;
+    param leaves merge by path -- a leaf
     added since the checkpoint keeps its fresh ZERO moments, a removed one
     is dropped -- and every other leaf (the step counts) is the
     checkpoint's. A container shape the two disagree on is a different
@@ -725,7 +817,12 @@ def merge_opt_state(fresh, loaded):
             raise ValueError(
                 f"optimiser state mismatch: {type(loaded)} for a param tree"
             )
-        merged, _, _ = merge_params(fresh, loaded)
+        merged = {}
+        for key, fresh_child in fresh.items():
+            if key in loaded:
+                merged[key] = merge_opt_state(fresh_child, loaded[key], f"{path}/{key}")
+            else:
+                merged[key] = fresh_child
         return merged
     if isinstance(fresh, tuple):
         if not isinstance(loaded, tuple) or len(fresh) != len(loaded):
@@ -734,12 +831,15 @@ def merge_opt_state(fresh, loaded):
                 f"vs {type(loaded).__name__}[{len(loaded)}]"
             )
         merged = [
-            merge_opt_state(fresh_child, loaded_child)
+            merge_opt_state(fresh_child, loaded_child, path)
             for fresh_child, loaded_child in zip(fresh, loaded)
         ]
         if hasattr(fresh, "_fields"):
             return type(fresh)(*merged)
         return tuple(merged)
+    if hasattr(fresh, "shape"):
+        merged, _, _, _ = merge_params({path: fresh}, {path: loaded})
+        return merged[path]
     return loaded
 
 

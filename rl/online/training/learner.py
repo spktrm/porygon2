@@ -501,6 +501,17 @@ class Learner:
                 self.config,
             )
             logger.info("Compiled (%d, %d) in %.1fs.", t_c, h_c, time.time() - start)
+            # The lattice ascends, so the high-water mark after each combo is
+            # that shape's own peak: the number a new head's VRAM cost is
+            # read against, from a real execution rather than an estimate.
+            device_memory = jax.local_devices()[0].memory_stats()
+            if device_memory is not None:
+                logger.info(
+                    "Peak device memory after (%d, %d): %.0f MB",
+                    t_c,
+                    h_c,
+                    device_memory["peak_bytes_in_use"] / 2**20,
+                )
 
     def _train_step(self, run_state: RunState, batch: Batch) -> dict:
         """Runs the JAX update, rebinding the result onto run_state."""

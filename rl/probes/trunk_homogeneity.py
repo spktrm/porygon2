@@ -27,11 +27,12 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
-from rl.model.config import get_player_model_config  # noqa: E402
 from rl.model.constants import SEQUENCE_LAYOUT, SEQUENCE_SLICES  # noqa: E402
 from rl.model.player_model import get_player_model  # noqa: E402
 from rl.model.trunk import row_homogeneity  # noqa: E402
 from rl.offline import harness  # noqa: E402
+from rl.online.artifact import player_model_config_for
+from rl.online.config import get_learner_config
 from rl.online.training.batching import stack_batch  # noqa: E402
 from rl.probes.separation_probe import actor_input_of, fresh_variables  # noqa: E402
 
@@ -42,16 +43,29 @@ GROUPS = [group for group, rows in SEQUENCE_LAYOUT if rows > 1]
 
 
 def _sequences(module, actor_input):
-    """(assembled input, trunk output) for one chunk; the per-block
-    residuals ride out in the "intermediates" collection."""
+    """(assembled input, its row_valid, encoder output) for one chunk; the
+    per-block residuals ride out in the "intermediates" collection."""
     encoder = module.encoder
-    assembled, _ = encoder.assembled_sequence(
+    assembled, row_valid = encoder.assembled_sequence(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
-    trunk_out, *_ = encoder(
+    encoder_out, *_ = encoder(
         actor_input.env, actor_input.packed_history, actor_input.history
     )
-    return assembled, trunk_out
+    return assembled, row_valid, encoder_out
+
+
+def _output_normalised(module, rows, row_valid):
+    """The encoder's output norm over a (T, rows, width) block output. The
+    encoder returns its rows AFTER this norm, and participation is not
+    invariant to it (it rescales each row and each group), so the sown
+    final block only matches the encoder's output through it."""
+    encoder = module.encoder
+    return jax.vmap(
+        lambda step_rows, step_valid: encoder.output_normalisation(
+            step_rows, step_valid, encoder.group_ids()
+        )
+    )(rows, row_valid)
 
 
 def valid_steps(done: np.ndarray) -> np.ndarray:
@@ -64,23 +78,35 @@ def make_reader(net):
     (blocks + 1, T, B): block 0 is the assembled input."""
 
     def per_chunk(variables, actor_input):
-        (assembled, trunk_out), mutated = net.apply(
+        (assembled, row_valid, encoder_out), mutated = net.apply(
             variables, actor_input, method=_sequences, mutable=["intermediates"]
         )
         residual = mutated["intermediates"]["encoder"]["trunk"]["blocks"]["residual"][0]
+        final_normalised = net.apply(
+            variables,
+            residual[:, -1].astype(encoder_out.dtype),
+            row_valid,
+            method=_output_normalised,
+        )
         stack = jnp.concatenate([assembled.astype(jnp.float32)[:, None], residual], 1)
         readings = {"all": row_homogeneity(stack)}
         for group in GROUPS:
             readings[group.name] = row_homogeneity(stack[:, :, SEQUENCE_SLICES[group]])
-        return readings, trunk_out
+        return readings, (final_normalised, encoder_out)
 
-    batched = jax.jit(jax.vmap(per_chunk, in_axes=(None, 1), out_axes=(2, 1)))
+    batched = jax.jit(jax.vmap(per_chunk, in_axes=(None, 1), out_axes=(2, (1, 1))))
     direct = jax.jit(jax.vmap(row_homogeneity, in_axes=1, out_axes=1))
 
     def read(variables, batch):
-        readings, trunk_out = batched(variables, actor_input_of(batch))
+        readings, (final_normalised, encoder_out) = batched(
+            variables, actor_input_of(batch)
+        )
         readings = jax.tree.map(lambda x: np.asarray(x).transpose(1, 0, 2), readings)
-        return readings, np.asarray(direct(trunk_out)[1])
+        return (
+            readings,
+            np.asarray(direct(final_normalised)[1]),
+            np.asarray(direct(encoder_out)[1]),
+        )
 
     return read
 
@@ -93,14 +119,14 @@ def run(net, variables, chunks, batch_size: int):
     checked = False
     for start in range(0, len(chunks), batch_size):
         batch = stack_batch(chunks[start : start + batch_size])
-        readings, direct_participation = read(dev_variables, batch)
+        readings, sown_participation, direct_participation = read(dev_variables, batch)
         valid = valid_steps(np.asarray(batch.player_transitions.env_output.done))
         if not checked:
-            # The sown final block IS the trunk's output -- the read's own
-            # positive control against a stale or mis-indexed collection.
-            _, final_participation = readings["all"]
+            # The sown final block, through the output norm, IS the
+            # encoder's output -- the read's own positive control against a
+            # stale or mis-indexed collection.
             assert np.allclose(
-                final_participation[-1], direct_participation, equal_nan=True
+                sown_participation, direct_participation, rtol=1e-3, equal_nan=True
             )
             checked = True
         for name, (cosine, participation) in readings.items():
@@ -145,7 +171,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO)
 
     chunks = harness.flatten(harness.load(args.games_pkl))
-    net = get_player_model(get_player_model_config(9, train=True))
+    net = get_player_model(player_model_config_for(get_learner_config()))
     if args.ckpt:
         variables = harness.load_params(args.ckpt)
         source = args.ckpt

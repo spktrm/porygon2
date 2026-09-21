@@ -156,6 +156,14 @@ class SequenceGroup(IntEnum):
     PRIVILEGED_REGISTER = 14
     PUBLIC_CLS = 15
     VALUE_CLS = 16
+    # The state value row (2026-09-20): reads the 15 public STATE rows
+    # (PUBLIC_ENTITY + FIELD) and itself, read by nothing. Those rows read the
+    # whole public tier inside the trunk, so its information is everything
+    # public; what the narrow read set buys is a value that is a function of
+    # exactly the rows the consequence model predicts. A group added after a
+    # lineage exists takes the LAST value: the per-group parameter leaves are
+    # extended by row at a merge (rl/online/artifact.py GROUP_AXIS_LEAVES).
+    STATE_VALUE_CLS = 17
 
 
 NUM_SEQUENCE_GROUPS = len(SequenceGroup)
@@ -184,6 +192,7 @@ SEQUENCE_LAYOUT = (
     (SequenceGroup.PRIVILEGED_REGISTER, NUM_TRUNK_REGISTERS_PER_TIER),
     (SequenceGroup.PUBLIC_CLS, 1),
     (SequenceGroup.VALUE_CLS, 1),
+    (SequenceGroup.STATE_VALUE_CLS, 1),
 )
 
 _offsets = np.cumsum([0] + [rows for _, rows in SEQUENCE_LAYOUT])
@@ -210,14 +219,23 @@ HISTORY_ENTITY_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_ENTITY]
 HISTORY_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.HISTORY_REGISTER]
 VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.VALUE_CLS].start
 PUBLIC_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.PUBLIC_CLS].start
+STATE_VALUE_CLS_ROW = SEQUENCE_SLICES[SequenceGroup.STATE_VALUE_CLS].start
 PUBLIC_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PUBLIC_REGISTER]
 PRIVATE_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVATE_REGISTER]
 PRIVILEGED_REGISTER_ROWS = SEQUENCE_SLICES[SequenceGroup.PRIVILEGED_REGISTER]
 FIELD_ROWS = SEQUENCE_SLICES[SequenceGroup.FIELD]
 
 assert (
-    NUM_SEQUENCE_ROWS == 81 + NUM_HISTORY_REGISTERS + 3 * NUM_TRUNK_REGISTERS_PER_TIER
+    NUM_SEQUENCE_ROWS == 82 + NUM_HISTORY_REGISTERS + 3 * NUM_TRUNK_REGISTERS_PER_TIER
 ), NUM_SEQUENCE_ROWS
+assert SequenceGroup.STATE_VALUE_CLS == NUM_SEQUENCE_GROUPS - 1
+# The rows the state value row reads and the consequence model predicts.
+PUBLIC_STATE_ROWS = np.concatenate(
+    [
+        np.arange(NUM_SEQUENCE_ROWS)[PUBLIC_ROWS],
+        np.arange(NUM_SEQUENCE_ROWS)[FIELD_ROWS],
+    ]
+)
 assert len(SEQUENCE_GROUP_IDS) == NUM_SEQUENCE_ROWS
 assert MOVE_ROWS.stop - MOVE_ROWS.start == len(MOVE_INDICES)
 assert TARGET_ROWS.stop - TARGET_ROWS.start == len(TARGET_SLOT_INDICES)
@@ -250,6 +268,8 @@ assert PRIVATE_ROWS.stop - PRIVATE_ROWS.start == len(RESERVE_ENTITY_INDICES)
 #   PUBLIC_CLS -- reads the PUBLIC tier and itself, read by NOTHING: the
 #     public critic's row, a value of the common-knowledge state that a
 #     human replay could also label.
+#   STATE_VALUE_CLS -- reads PUBLIC_STATE_ROWS and itself, read by NOTHING
+#     (VALUE_CLS included, so the privileged critic is unchanged by it).
 # Leak-freedom is transitive by induction over blocks: a row's content after
 # block b is a function of its in-edges' contents at block b-1 (plus its own
 # residual), and a row's in-edges never rise above its own tier at any
@@ -277,14 +297,23 @@ _is_value_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_value_cls[VALUE_CLS_ROW] = True
 _is_public_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
 _is_public_cls[PUBLIC_CLS_ROW] = True
-_policy_readable = ~(_is_secret | _is_value_cls | _is_public_cls)
+_is_state_value_cls = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
+_is_state_value_cls[STATE_VALUE_CLS_ROW] = True
+_is_public_state = np.zeros(NUM_SEQUENCE_ROWS, dtype=bool)
+_is_public_state[PUBLIC_STATE_ROWS] = True
+_policy_readable = ~(_is_secret | _is_value_cls | _is_public_cls | _is_state_value_cls)
 _is_private = _policy_readable & ~_is_public
 SEQUENCE_READ_MASK = np.zeros((NUM_SEQUENCE_ROWS, NUM_SEQUENCE_ROWS), dtype=bool)
 SEQUENCE_READ_MASK[np.ix_(_is_public, _is_public)] = True
 SEQUENCE_READ_MASK[np.ix_(_is_private, _policy_readable)] = True
 SEQUENCE_READ_MASK[np.ix_(_is_secret, _policy_readable | _is_secret)] = True
 SEQUENCE_READ_MASK[np.ix_(_is_public_cls, _is_public | _is_public_cls)] = True
-SEQUENCE_READ_MASK[np.ix_(_is_value_cls, ~_is_public_cls)] = True
+SEQUENCE_READ_MASK[np.ix_(_is_value_cls, ~(_is_public_cls | _is_state_value_cls))] = (
+    True
+)
+SEQUENCE_READ_MASK[
+    np.ix_(_is_state_value_cls, _is_public_state | _is_state_value_cls)
+] = True
 assert not SEQUENCE_READ_MASK[
     np.ix_(_is_public, ~_is_public)
 ].any(), "leak: a public row may attend outside the public tier"
@@ -297,6 +326,13 @@ assert not SEQUENCE_READ_MASK[:, _is_value_cls][
 assert not SEQUENCE_READ_MASK[:, _is_public_cls][
     ~_is_public_cls
 ].any(), "leak: PUBLIC_CLS must have out-degree 0"
+assert not SEQUENCE_READ_MASK[:, _is_state_value_cls][
+    ~_is_state_value_cls
+].any(), "leak: STATE_VALUE_CLS must have out-degree 0"
+assert (
+    np.flatnonzero(SEQUENCE_READ_MASK[STATE_VALUE_CLS_ROW])
+    == np.sort(np.append(PUBLIC_STATE_ROWS, STATE_VALUE_CLS_ROW))
+).all(), "STATE_VALUE_CLS reads the public state rows and itself, nothing else"
 PUBLIC_TIER_ROWS = np.flatnonzero(_is_public)
 PRIVATE_TIER_ROWS = np.flatnonzero(_is_private)
 
@@ -318,11 +354,12 @@ LEARNER_ONLY_GROUPS = frozenset(
         SequenceGroup.PRIVILEGED_REGISTER,
         SequenceGroup.PUBLIC_CLS,
         SequenceGroup.VALUE_CLS,
+        SequenceGroup.STATE_VALUE_CLS,
     }
 )
 POLICY_READABLE_ROWS = np.flatnonzero(_policy_readable)
 # The public-only sequence: the public tier (a layout prefix, asserted) plus
-# PUBLIC_CLS -- the rows the event world model and the public critic read.
+# PUBLIC_CLS -- the rows the public critic reads.
 # Closed under the read mask, so the trunk on these rows alone reproduces
 # the learner's public rows.
 PUBLIC_SEQUENCE_ROWS = np.concatenate([PUBLIC_TIER_ROWS, [PUBLIC_CLS_ROW]])

@@ -18,9 +18,10 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from rl.model.config import get_player_model_config
 from rl.model.constants import PRIVATE_ROWS, PUBLIC_ROWS, SEQUENCE_READ_MASK
 from rl.model.trunk import TrunkBlock
+from rl.online.artifact import player_model_config_for
+from rl.online.config import get_learner_config
 from rl.probes.switch_readout_probe import fit_readout, initial_params, logits, metrics
 from rl.probes.type_probe import _OPP_ROW
 
@@ -31,7 +32,7 @@ LABELS = ("offensive", "defensive")
 
 def trunk_depths(params, sequence, valid):
     """Apply the actual checkpoint blocks; return depths 0 through 6."""
-    block = TrunkBlock(get_player_model_config(9, train=True).encoder.trunk)
+    block = TrunkBlock(player_model_config_for(get_learner_config()).encoder.trunk)
     read_mask = jnp.asarray(SEQUENCE_READ_MASK)
 
     def step(current, block_params):
@@ -70,7 +71,7 @@ def extract(args):
     for game_index, side in enumerate(sides):
         chunks.extend(side)
         games.extend([game_index] * len(side))
-    net = get_player_model(get_player_model_config(9, train=True))
+    net = get_player_model(player_model_config_for(get_learner_config()))
     variables = harness.load_params(CHECKPOINT)
     trunk_params = variables["params"]["encoder"]["trunk"]["blocks"]
 

@@ -10,6 +10,11 @@ or an Encore (no alternative damaging move) is excluded from the primary
 count by construction. Whole-game bootstrap intervals, since states within
 a game are not independent.
 
+A second read, where the cohort has its logs: the turns our active Pokemon
+began asleep with a `sleepUsable` move legal, split in HINDSIGHT by whether
+it stayed asleep or woke (rl/probes/sleep_turns.py), with the policy's mass
+on ordinary moves, sleep-usable moves and everything else.
+
 Two commands. `collect` plays the cohort ONCE against the service's
 SimpleHeuristic at T=.5 with fixed seeds and pickles it — fixed forever
 after, so every checkpoint is read on the same contexts. Point
@@ -34,6 +39,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 import numpy as np
 
 from rl.environment.protos.features_pb2 import (
+    EntityPublicNodeFeature,
     EntityRevealedNodeFeature,
     InfoFeature,
     MovesetFeature,
@@ -42,9 +48,16 @@ from rl.environment.utils import acted_rows
 from rl.model.constants import (
     _BANK_MOVE_OFFSET,
     CELL_BANK_SRC,
+    MY_ACTIVE_PUBLIC_ROWS,
     OPP_ACTIVE_PUBLIC_ROWS,
 )
 from rl.offline import harness
+from rl.probes.sleep_turns import (
+    SleepTurn,
+    read_sleep_decisions,
+    sleep_summary,
+    sleep_usable_moves,
+)
 from rl.probes.type_probe import (
     IMMUNE,
     TypeTables,
@@ -54,14 +67,16 @@ from rl.probes.type_probe import (
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path("runtime/tactical-cohort")
-GAMES_PATH = ROOT / "games.pkl"
-LOGS_DIR = ROOT / "logs"
+ROOT = "runtime/tactical-cohort"
 TAG = "tactical-cohort"
 _ABILITY = EntityRevealedNodeFeature.ENTITY_REVEALED_NODE_FEATURE__ABILITY
 _MOVE_ID = MovesetFeature.MOVESET_FEATURE__MOVE_ID
 _TURN = InfoFeature.INFO_FEATURE__TURN
 _OPP_ROW = int(OPP_ACTIVE_PUBLIC_ROWS[0])
+_MY_ROW = int(MY_ACTIVE_PUBLIC_ROWS[0])
+_SLEEP_TURNS = EntityPublicNodeFeature.ENTITY_PUBLIC_NODE_FEATURE__SLEEP_TURNS
+_NUM_MOVE_SLOTS = 16
+_SLEEP_MASSES = ("ordinary", "sleep_usable", "other")
 # Moves whose type is decided at run time, and abilities that retype or
 # bypass immunities: the chart cannot label them, so they are left out.
 DYNAMIC_MOVES = {
@@ -124,10 +139,12 @@ def immunity_events(path: Path):
 
 
 def collect(arguments):
-    ROOT.mkdir(parents=True, exist_ok=True)
-    if GAMES_PATH.exists() and not arguments.overwrite:
+    root = Path(arguments.root)
+    games_path = root / "games.pkl"
+    root.mkdir(parents=True, exist_ok=True)
+    if games_path.exists() and not arguments.overwrite:
         raise SystemExit(
-            f"{GAMES_PATH} exists; the cohort is frozen (--overwrite to rebuild)"
+            f"{games_path} exists; the cohort is frozen (--overwrite to rebuild)"
         )
     parameters = harness.load_params(arguments.checkpoint)
     sides = harness.play_games(
@@ -140,13 +157,28 @@ def collect(arguments):
         temperature=0.5,
         device=arguments.device,
     )
-    harness.dump(sides, str(GAMES_PATH))
-    (ROOT / "provenance.json").write_text(
+    game_ids = list(range(len(sides)))
+    if arguments.sleep_only:
+        # Asleep turns are rare (16 of 240 games, 2026-09-20), so a cohort
+        # for that read keeps only the games that have one. `game_ids`
+        # carries the played index, which is what names a game's log.
+        game_ids = [
+            game_id
+            for game_id in game_ids
+            if any(
+                read_sleep_decisions(path)
+                for path in (root / "logs").glob(f"*{TAG}-g{game_id}_*")
+            )
+        ]
+        sides = [sides[game_id] for game_id in game_ids]
+    harness.dump(sides, str(games_path))
+    (root / "provenance.json").write_text(
         json.dumps(
             dict(
                 checkpoint=arguments.checkpoint,
                 parameters="params",
                 games=len(sides),
+                game_ids=game_ids,
                 requested=arguments.games,
                 temperature=0.5,
                 seed=arguments.seed,
@@ -155,7 +187,7 @@ def collect(arguments):
             indent=2,
         )
     )
-    logger.info("cohort frozen: %d games at %s", len(sides), GAMES_PATH)
+    logger.info("cohort frozen: %d games at %s", len(sides), games_path)
 
 
 def _sharpen(log_policy, legal, temperature):
@@ -165,8 +197,82 @@ def _sharpen(log_policy, legal, temperature):
     return policy / np.maximum(policy.sum(axis=-1, keepdims=True), 1e-30)
 
 
+def _game_bootstrap(values, game_ids, rng, draws):
+    """95% interval of the mean under whole-game resampling (states within a
+    game are not independent); None with fewer than two games."""
+    unique_games = np.unique(game_ids)
+    if len(unique_games) < 2:
+        return None
+    samples = []
+    for _ in range(draws):
+        drawn = rng.choice(unique_games, size=len(unique_games), replace=True)
+        counts = {}
+        for game in drawn:
+            counts[game] = counts.get(game, 0) + 1
+        weights = np.asarray([counts.get(game, 0) for game in game_ids])
+        if weights.sum() == 0:
+            continue
+        samples.append(float((values * weights).sum() / weights.sum()))
+    return [float(np.quantile(samples, 0.025)), float(np.quantile(samples, 0.975))]
+
+
+def _sleep_cells(tables, moveset, legal):
+    """Legal cells split by what they play: a move flagged `sleepUsable`, any
+    other move, or anything that is not a move (a switch)."""
+    cells = {name: np.zeros(legal.shape, bool) for name in _SLEEP_MASSES}
+    for cell in np.flatnonzero(legal):
+        source = int(CELL_BANK_SRC[cell]) - _BANK_MOVE_OFFSET
+        move = None
+        if 0 <= source < _NUM_MOVE_SLOTS:
+            move = tables.move_of_enum.get(int(moveset[source, _MOVE_ID]))
+        if move is None:
+            cells["other"][cell] = True
+        elif move["name"] in sleep_usable_moves():
+            cells["sleep_usable"][cell] = True
+        else:
+            cells["ordinary"][cell] = True
+    return cells
+
+
+def _sleep_result(sleep_states, sleep_logged, rng, draws, temperatures):
+    """HINDSIGHT sub-cohorts (rl/probes/sleep_turns.py): ordinary-move mass
+    where the Pokemon STAYED asleep and sleep-usable mass where it WOKE are
+    both lower-is-better and read as a pair -- the policy cannot see which
+    turn it is in, so neither optimum is 0, and indiscriminate Sleep Talk
+    shows as the second rising. `collected_outcomes` is the collecting
+    policy's own record, not the read checkpoint's."""
+    result = dict(
+        sleep_states=len(sleep_states),
+        collected_outcomes=sleep_summary(sleep_logged),
+    )
+    for label in SleepTurn:
+        selected = [state for state in sleep_states if state["sleep"] == label.value]
+        result[f"sleep_states_{label.value}"] = len(selected)
+        if not selected or label == SleepTurn.AMBIGUOUS:
+            continue
+        game_ids = np.asarray([state["game"] for state in selected])
+        for temperature in temperatures:
+            for name in _SLEEP_MASSES:
+                key = f"mass_{name}_t{temperature}"
+                values = np.asarray([state[key] for state in selected])
+                result[f"sleep_{label.value}_{key}"] = float(values.mean())
+                result[f"sleep_{label.value}_{key}_ci95"] = _game_bootstrap(
+                    values, game_ids, rng, draws
+                )
+        for sleep_turns in sorted({state["sleep_turns"] for state in selected}):
+            stratum = [
+                state for state in selected if state["sleep_turns"] == sleep_turns
+            ]
+            result[f"sleep_{label.value}_turns{sleep_turns}_states"] = len(stratum)
+    return result
+
+
 def read(arguments):
-    sides = harness.load(str(GAMES_PATH))
+    root = Path(arguments.root)
+    logs_dir = root / "logs"
+    sides = harness.load(str(root / "games.pkl"))
+    provenance = json.loads((root / "provenance.json").read_text())
+    played_ids = provenance.get("game_ids", list(range(len(sides))))
     parameters = harness.load_params(arguments.checkpoint)
     tables = TypeTables("data/data")
     enums = json.loads(Path("data/data/data.json").read_text())
@@ -177,16 +283,23 @@ def read(arguments):
         chunks.extend(side)
         game_of_chunk.extend([game_id] * len(side))
     events = {}
-    if LOGS_DIR.exists():
+    sleep_by_turn = {}
+    if logs_dir.exists():
         for game_id in range(len(sides)):
-            paths = list(LOGS_DIR.glob(f"*{TAG}-g{game_id}_*"))
+            paths = list(logs_dir.glob(f"*{TAG}-g{played_ids[game_id]}_*"))
             if len(paths) == 1:
                 events[game_id] = immunity_events(paths[0])
+                sleep_by_turn[game_id] = {
+                    decision.turn: decision
+                    for decision in read_sleep_decisions(paths[0])
+                }
 
     temperatures = (1.0, 0.5)
     # Per state: game, immune mass at each temperature, the immunity reason.
     states = []
     confirmed = []
+    sleep_states = []
+    sleep_seen = set()
     index = 0
     for prediction, batch in harness.forward(parameters, chunks, batch=4):
         env = batch.player_transitions.env_output
@@ -251,6 +364,35 @@ def read(arguments):
             game_id = game_of_chunk[index + column]
             if game_id not in events:
                 continue
+            turn = int(env.info[time_index, column, _TURN])
+            decision = sleep_by_turn[game_id].get(turn)
+            # A turn's first request is the decision the log's turn records;
+            # a forced switch later in the same turn is not.
+            if decision is not None and (game_id, turn) not in sleep_seen:
+                sleep_seen.add((game_id, turn))
+                cells = _sleep_cells(
+                    tables,
+                    env.my_moveset[time_index, column],
+                    legal[time_index, column],
+                )
+                if cells["sleep_usable"].any():
+                    state = dict(
+                        game=game_id,
+                        turn=turn,
+                        sleep=decision.sleep.value,
+                        action=decision.action.value,
+                        sleep_turns=int(
+                            env.public_team[time_index, column, _MY_ROW, _SLEEP_TURNS]
+                        ),
+                    )
+                    for temperature in temperatures:
+                        for name in _SLEEP_MASSES:
+                            state[f"mass_{name}_t{temperature}"] = float(
+                                policies[temperature][time_index, column][
+                                    cells[name]
+                                ].sum()
+                            )
+                    sleep_states.append(state)
             source = (
                 int(CELL_BANK_SRC[int(taken[time_index, column])]) - _BANK_MOVE_OFFSET
             )
@@ -261,7 +403,6 @@ def read(arguments):
             )
             if move is None or move["category"] == "Status":
                 continue
-            turn = int(env.info[time_index, column, _TURN])
             if any(
                 event["turn"] == turn and event["move"] == move["name"]
                 for event in events[game_id]
@@ -293,7 +434,6 @@ def read(arguments):
     )
     rng = np.random.default_rng(arguments.seed)
     game_ids = np.asarray([state["game"] for state in states])
-    unique_games = np.unique(game_ids)
     for temperature in temperatures:
         masses = np.asarray([state[f"mass_t{temperature}"] for state in states])
         key = f"ineffective_confident_mass_t{temperature}"
@@ -301,31 +441,33 @@ def read(arguments):
             result[key] = float(masses.mean())
         else:
             result[key] = None
-        if len(unique_games) > 1:
-            samples = []
-            for _ in range(arguments.bootstrap):
-                drawn = rng.choice(unique_games, size=len(unique_games), replace=True)
-                counts = {}
-                for game in drawn:
-                    counts[game] = counts.get(game, 0) + 1
-                weights = np.asarray([counts.get(game, 0) for game in game_ids])
-                if weights.sum() == 0:
-                    continue
-                samples.append(float((masses * weights).sum() / weights.sum()))
-            result[f"{key}_ci95"] = [
-                float(np.quantile(samples, 0.025)),
-                float(np.quantile(samples, 0.975)),
-            ]
+        interval = _game_bootstrap(masses, game_ids, rng, arguments.bootstrap)
+        if interval is not None:
+            result[f"{key}_ci95"] = interval
         for reason in ("type", "revealed_ability"):
             selected = np.asarray([reason in state["reasons"] for state in states])
             if selected.any():
                 result[f"{key}_{reason}"] = float(masses[selected].mean())
                 result[f"states_{reason}"] = int(selected.sum())
+    sleep_logged = [
+        decision for by_turn in sleep_by_turn.values() for decision in by_turn.values()
+    ]
+    result.update(
+        _sleep_result(
+            sleep_states, sleep_logged, rng, arguments.bootstrap, temperatures
+        )
+    )
     if arguments.out:
         Path(arguments.out).parent.mkdir(parents=True, exist_ok=True)
         Path(arguments.out).write_text(
             json.dumps(
-                dict(result, state_records=states, confirmed=confirmed), indent=2
+                dict(
+                    result,
+                    state_records=states,
+                    confirmed=confirmed,
+                    sleep_records=sleep_states,
+                ),
+                indent=2,
             )
         )
     print(json.dumps(result, indent=2))
@@ -335,13 +477,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     collector = commands.add_parser("collect")
+    collector.add_argument("--root", default=ROOT)
     collector.add_argument("--checkpoint", required=True)
     collector.add_argument("--games", type=int, default=240)
     collector.add_argument("--pairs", type=int, default=4)
     collector.add_argument("--seed", type=int, default=909)
     collector.add_argument("--device", default="gpu")
     collector.add_argument("--overwrite", action="store_true")
+    collector.add_argument("--sleep-only", action="store_true")
     reader = commands.add_parser("read")
+    reader.add_argument("--root", default=ROOT)
     reader.add_argument("--checkpoint", required=True)
     reader.add_argument("--out", default=None)
     reader.add_argument("--seed", type=int, default=0)
